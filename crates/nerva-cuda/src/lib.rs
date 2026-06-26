@@ -56,6 +56,8 @@ pub struct CudaSmokeSummary {
     pub gpu_name: Option<String>,
     pub driver_version: Option<i32>,
     pub runtime_version: Option<i32>,
+    pub compute_capability_major: Option<i32>,
+    pub compute_capability_minor: Option<i32>,
     pub device_arena_bytes: usize,
     pub pinned_host_bytes: usize,
     pub kernel_value: Option<u32>,
@@ -71,11 +73,13 @@ impl CudaSmokeSummary {
             SmokeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"gpu_name\":{},\"driver_version\":{},\"runtime_version\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"kernel_value\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"gpu_name\":{},\"driver_version\":{},\"runtime_version\":{},\"compute_capability_major\":{},\"compute_capability_minor\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"kernel_value\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             json_opt_str(self.gpu_name.as_deref()),
             json_opt_i32(self.driver_version),
             json_opt_i32(self.runtime_version),
+            json_opt_i32(self.compute_capability_major),
+            json_opt_i32(self.compute_capability_minor),
             self.device_arena_bytes,
             self.pinned_host_bytes,
             json_opt_u32(self.kernel_value),
@@ -90,6 +94,8 @@ impl CudaSmokeSummary {
             gpu_name: None,
             driver_version: None,
             runtime_version: cuda_runtime_version(),
+            compute_capability_major: None,
+            compute_capability_minor: None,
             device_arena_bytes: 0,
             pinned_host_bytes: 0,
             kernel_value: None,
@@ -104,6 +110,8 @@ impl CudaSmokeSummary {
             gpu_name: None,
             driver_version: None,
             runtime_version: cuda_runtime_version(),
+            compute_capability_major: None,
+            compute_capability_minor: None,
             device_arena_bytes: 0,
             pinned_host_bytes: 0,
             kernel_value: None,
@@ -396,7 +404,7 @@ fn run_smoke() -> Result<CudaSmokeSummary, SmokeError> {
         )));
     }
 
-    let _compute_capability = compute_capability(&driver, device)?;
+    let (compute_capability_major, compute_capability_minor) = compute_capability(&driver, device)?;
 
     let mut name_buf = [0 as c_char; 128];
     let result = unsafe { (driver.cu_device_get_name)(name_buf.as_mut_ptr(), 128, device) };
@@ -455,6 +463,8 @@ fn run_smoke() -> Result<CudaSmokeSummary, SmokeError> {
             gpu_name: Some(gpu_name),
             driver_version: Some(driver_version),
             runtime_version: cuda_runtime_version(),
+            compute_capability_major: Some(compute_capability_major),
+            compute_capability_minor: Some(compute_capability_minor),
             device_arena_bytes: 4,
             pinned_host_bytes: 4,
             kernel_value: Some(value),
@@ -708,6 +718,8 @@ mod tests {
         let summary = CudaSmokeSummary::unavailable("no cuda");
         let json = summary.to_json();
         assert!(json.contains("\"status\":\"unavailable\""));
+        assert!(json.contains("\"compute_capability_major\":null"));
+        assert!(json.contains("\"compute_capability_minor\":null"));
         assert!(json.contains("\"hot_path_allocations\":0"));
     }
 

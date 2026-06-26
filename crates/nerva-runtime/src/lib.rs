@@ -117,6 +117,7 @@ pub struct CapabilitySnapshot {
     pub cuda_status: &'static str,
     pub cuda_error: Option<String>,
     pub cuda_visible_devices: Option<String>,
+    pub cuda_compute_capability: Option<String>,
     pub hip: CapabilityState,
     pub hip_visible_devices: Option<String>,
     pub nvidia_driver_version: Option<String>,
@@ -131,7 +132,7 @@ pub struct CapabilitySnapshot {
 impl CapabilitySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
+            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
             host_arch_to_str(self.host_arch),
             self.target_os,
             self.target_arch,
@@ -141,6 +142,7 @@ impl CapabilitySnapshot {
             self.cuda_status,
             json_opt_string(self.cuda_error.as_deref()),
             json_opt_string(self.cuda_visible_devices.as_deref()),
+            json_opt_string(self.cuda_compute_capability.as_deref()),
             self.hip.as_str(),
             json_opt_string(self.hip_visible_devices.as_deref()),
             json_opt_string(self.nvidia_driver_version.as_deref()),
@@ -1698,6 +1700,7 @@ impl Runtime {
             nerva_cuda::SmokeStatus::Unavailable => "unavailable",
             nerva_cuda::SmokeStatus::Failed => "failed",
         };
+        let cuda_compute_capability = cuda_compute_capability(&cuda_smoke);
 
         CapabilitySnapshot {
             host_arch: host_arch(),
@@ -1709,6 +1712,7 @@ impl Runtime {
             cuda_status,
             cuda_error: cuda_smoke.error,
             cuda_visible_devices: env::var("CUDA_VISIBLE_DEVICES").ok(),
+            cuda_compute_capability,
             hip: CapabilityState::Unsupported,
             hip_visible_devices: env::var("HIP_VISIBLE_DEVICES").ok(),
             nvidia_driver_version: read_trimmed_first_line("/proc/driver/nvidia/version"),
@@ -3158,6 +3162,13 @@ pub fn cuda_smoke() -> nerva_cuda::CudaSmokeSummary {
     nerva_cuda::smoke()
 }
 
+fn cuda_compute_capability(summary: &nerva_cuda::CudaSmokeSummary) -> Option<String> {
+    Some(format!(
+        "{}.{}",
+        summary.compute_capability_major?, summary.compute_capability_minor?
+    ))
+}
+
 fn transport_matrix_request(
     requested_path: TransportMatrixRequestedPath,
     bytes: usize,
@@ -3755,6 +3766,7 @@ mod tests {
         assert!(json.contains("\"target_os\":\"linux\""));
         assert!(json.contains("\"kernel_release\""));
         assert!(json.contains("\"fabric\":\"DiscreteExplicit\""));
+        assert!(json.contains("\"cuda_compute_capability\""));
         assert!(json.contains("\"gpu_direct_rdma\":\"DEGRADED_TO_PINNED_HOST\""));
         assert!(json.contains("\"topology\""));
         assert!(json.contains("\"cpu_count\""));
@@ -3772,6 +3784,7 @@ mod tests {
             cuda_status: "failed",
             cuda_error: Some("quote\" slash\\ newline\n".to_string()),
             cuda_visible_devices: Some("0,1".to_string()),
+            cuda_compute_capability: Some("8.9".to_string()),
             hip: CapabilityState::Unsupported,
             hip_visible_devices: Some("2".to_string()),
             nvidia_driver_version: Some("driver\\version".to_string()),
@@ -3799,6 +3812,7 @@ mod tests {
         assert!(json.contains("quote\\\" slash\\\\ newline\\n"));
         assert!(json.contains("kernel\\\" release"));
         assert!(json.contains("driver\\\\version"));
+        assert!(json.contains("\"cuda_compute_capability\":\"8.9\""));
         assert!(json.contains("\"cpu_online\":\"0-1\""));
     }
 

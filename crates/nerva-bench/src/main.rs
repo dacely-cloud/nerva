@@ -1444,6 +1444,7 @@ mod tests {
         assert!(json.contains("\"cargo_encoded_rustflags\""));
         assert!(json.contains("\"capabilities\""));
         assert!(json.contains("\"target_os\":\"linux\""));
+        assert!(json.contains("\"cuda_compute_capability\""));
         assert!(json.contains("\"topology\""));
         assert!(json.contains("\"summary\""));
         assert!(json.contains("\"observed_token_hash\""));
