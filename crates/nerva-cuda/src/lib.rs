@@ -3,6 +3,7 @@
 //! Rust owns the public capability surface. Native CUDA code owns direct
 //! Runtime API calls and kernel launch mechanics.
 
+pub mod attention;
 pub mod block;
 pub mod decode;
 pub mod graph;

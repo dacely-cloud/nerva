@@ -32,6 +32,11 @@ impl AcceptanceReport {
         });
     }
 
+    pub(crate) fn push_audit_result(&mut self, name: &'static str, result: (bool, String)) {
+        let (passed, details) = result;
+        self.push(name, passed, details);
+    }
+
     pub(crate) fn passed(&self) -> bool {
         !self.checks.is_empty() && self.checks.iter().all(|check| check.passed)
     }

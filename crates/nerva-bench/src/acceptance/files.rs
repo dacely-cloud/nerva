@@ -90,12 +90,13 @@ pub(crate) fn safetensors_file_prefetch_acceptance() -> Result<(bool, String), S
             .map_err(|err| format!("safetensors header generation failed: {err:?}"))?;
     let shard_name = "model.safetensors";
     let index = single_shard_index_json(&manifest, shard_name);
-    let shard_plan = nerva_model::weights::safetensors::plan_safetensors_shards_for_manifest(
-        &index,
-        &[nerva_model::weights::safetensors::SafetensorsShardHeader::new(shard_name, &header)],
-        &manifest,
-    )
-    .map_err(|err| format!("safetensors shard planning failed: {err:?}"))?;
+    let shard_plan =
+        nerva_model::weights::safetensors::planner::plan_safetensors_shards_for_manifest(
+            &index,
+            &[nerva_model::weights::safetensors::SafetensorsShardHeader::new(shard_name, &header)],
+            &manifest,
+        )
+        .map_err(|err| format!("safetensors shard planning failed: {err:?}"))?;
 
     let dir =
         std::env::temp_dir().join(format!("nerva-acceptance-prefetch-{}", std::process::id()));

@@ -1,3 +1,4 @@
+use nerva_cuda::attention::{CudaTieredAttentionSummary, tiered_attention_smoke};
 use nerva_cuda::block::{
     CudaLoadedTinyBlockSummary, CudaTinyBlockSummary, loaded_tiny_block_smoke, tiny_block_smoke,
 };
@@ -11,6 +12,10 @@ pub fn cuda_tiny_block_smoke() -> CudaTinyBlockSummary {
 
 pub fn cuda_loaded_tiny_block_smoke() -> CudaLoadedTinyBlockSummary {
     loaded_tiny_block_smoke()
+}
+
+pub fn cuda_tiered_attention_smoke() -> CudaTieredAttentionSummary {
+    tiered_attention_smoke()
 }
 
 pub fn cuda_greedy_sampler_smoke() -> CudaGreedySamplerSummary {

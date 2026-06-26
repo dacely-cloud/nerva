@@ -11,6 +11,7 @@ pub(crate) fn dispatch(
         Some("cuda-graph") => Some(run_graph(args)),
         Some("cuda-block") => Some(run_block()),
         Some("cuda-loaded-block") => Some(run_loaded_block()),
+        Some("cuda-attention") => Some(run_attention()),
         Some("cuda-sampler") => Some(run_sampler()),
         Some("cuda-tiny-decode") => Some(run_tiny_decode(args)),
         _ => None,
@@ -57,6 +58,11 @@ fn run_block() -> ExitCode {
 
 fn run_loaded_block() -> ExitCode {
     let summary = nerva_runtime::engine::cuda::cuda_loaded_tiny_block_smoke();
+    print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
+}
+
+fn run_attention() -> ExitCode {
+    let summary = nerva_runtime::engine::cuda::cuda_tiered_attention_smoke();
     print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
 }
 
