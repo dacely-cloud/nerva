@@ -36,6 +36,10 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("hip_amd_gpu_count="));
     assert!(json.contains("hip_kfd_present="));
     assert!(json.contains("hip_amdgpu_loaded="));
+    assert!(json.contains("dma_buf_export="));
+    assert!(json.contains("dma_buf_kernel_present="));
+    assert!(json.contains("dma_buf_nvidia_driver_present="));
+    assert!(json.contains("dma_buf_cuda_vmm_export_symbols_present="));
     assert!(json.contains("\"synthetic_transaction\""));
     assert!(json.contains("\"synthetic_device_token\""));
     assert!(json.contains("\"critical_path_observability\""));

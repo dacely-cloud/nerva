@@ -1,5 +1,6 @@
 use std::{env, fs};
 
+use crate::capabilities::dma_buf::{discover_dma_buf_export_evidence, dma_buf_export_capability};
 use crate::capabilities::hip::{discover_hip_evidence, hip_runtime_usable};
 use crate::capabilities::linux::read_trimmed_first_line;
 use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState};
@@ -32,10 +33,13 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
     let rdma_core_loaded = module_loaded("ib_core");
     let mlx5_core_loaded = module_loaded("mlx5_core");
     let nvidia_peer_memory_module = detect_nvidia_peer_memory_module();
+    let dma_buf_evidence = discover_dma_buf_export_evidence();
+    let dma_buf_export = dma_buf_export_capability(&dma_buf_evidence);
     let gpu_direct_rdma = gpu_direct_rdma_capability(
         cuda,
         topology.rdma_device_count,
         nvidia_peer_memory_module.as_deref(),
+        dma_buf_export,
     );
     let cxl = cxl_capability(topology.cxl_device_count, topology.cxl_memory_device_count);
     let fabric = detected_memory_fabric(cxl);
@@ -70,7 +74,11 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
         pinned_host_staging: CapabilityState::SupportedUnverified,
         gpu_direct_rdma,
         amd_peerdirect,
-        dma_buf_export: CapabilityState::Unsupported,
+        dma_buf_export,
+        dma_buf_kernel_present: dma_buf_evidence.kernel_dma_buf_present,
+        dma_buf_nvidia_driver_present: dma_buf_evidence.nvidia_driver_present,
+        dma_buf_nvidia_capability_entries: dma_buf_evidence.nvidia_capability_entries,
+        dma_buf_cuda_vmm_export_symbols_present: dma_buf_evidence.cuda_vmm_export_symbols_present,
         cxl,
         topology,
     }
@@ -124,10 +132,11 @@ pub(crate) fn gpu_direct_rdma_capability(
     cuda: CapabilityState,
     rdma_device_count: usize,
     nvidia_peer_memory_module: Option<&str>,
+    dma_buf_export: CapabilityState,
 ) -> CapabilityState {
-    if cuda == CapabilityState::SupportedAndVerified
-        && rdma_device_count > 0
-        && nvidia_peer_memory_module.is_some()
+    let nvidia_export_path =
+        nvidia_peer_memory_module.is_some() || dma_buf_export != CapabilityState::Unsupported;
+    if cuda == CapabilityState::SupportedAndVerified && rdma_device_count > 0 && nvidia_export_path
     {
         CapabilityState::SupportedUnverified
     } else {

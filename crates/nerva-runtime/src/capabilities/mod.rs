@@ -1,4 +1,5 @@
 pub mod discovery;
+pub mod dma_buf;
 pub mod hip;
 pub mod json;
 pub mod linux;

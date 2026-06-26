@@ -79,25 +79,46 @@ fn topology_helpers_parse_linux_id_and_pci_class_values() {
         gpu_direct_rdma_capability(
             CapabilityState::SupportedAndVerified,
             2,
-            Some("nvidia_peermem")
+            Some("nvidia_peermem"),
+            CapabilityState::Unsupported,
         ),
         CapabilityState::SupportedUnverified
     );
     assert_eq!(
-        gpu_direct_rdma_capability(CapabilityState::Unsupported, 2, Some("nvidia_peermem")),
+        gpu_direct_rdma_capability(
+            CapabilityState::Unsupported,
+            2,
+            Some("nvidia_peermem"),
+            CapabilityState::SupportedUnverified,
+        ),
         CapabilityState::DegradedToPinnedHost
     );
     assert_eq!(
         gpu_direct_rdma_capability(
             CapabilityState::SupportedAndVerified,
             0,
-            Some("nv_peer_mem")
+            Some("nv_peer_mem"),
+            CapabilityState::Unsupported,
         ),
         CapabilityState::DegradedToPinnedHost
     );
     assert_eq!(
-        gpu_direct_rdma_capability(CapabilityState::SupportedAndVerified, 2, None),
+        gpu_direct_rdma_capability(
+            CapabilityState::SupportedAndVerified,
+            2,
+            None,
+            CapabilityState::Unsupported,
+        ),
         CapabilityState::DegradedToPinnedHost
+    );
+    assert_eq!(
+        gpu_direct_rdma_capability(
+            CapabilityState::SupportedAndVerified,
+            2,
+            None,
+            CapabilityState::SupportedUnverified,
+        ),
+        CapabilityState::SupportedUnverified
     );
 
     assert_eq!(cxl_capability(0, 0), CapabilityState::Unsupported);

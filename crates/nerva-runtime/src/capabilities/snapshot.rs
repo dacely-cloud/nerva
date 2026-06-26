@@ -104,6 +104,10 @@ pub struct CapabilitySnapshot {
     pub gpu_direct_rdma: CapabilityState,
     pub amd_peerdirect: CapabilityState,
     pub dma_buf_export: CapabilityState,
+    pub dma_buf_kernel_present: bool,
+    pub dma_buf_nvidia_driver_present: bool,
+    pub dma_buf_nvidia_capability_entries: usize,
+    pub dma_buf_cuda_vmm_export_symbols_present: bool,
     pub cxl: CapabilityState,
     pub topology: TopologySnapshot,
 }
@@ -111,7 +115,7 @@ pub struct CapabilitySnapshot {
 impl CapabilitySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_pci_bus_id\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"hip_runtime_present\":{},\"hip_runtime_version\":{},\"hip_amd_gpu_count\":{},\"hip_kfd_present\":{},\"hip_amdgpu_loaded\":{},\"nvidia_driver_version\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"nvidia_peer_memory_module\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
+            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_pci_bus_id\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"hip_runtime_present\":{},\"hip_runtime_version\":{},\"hip_amd_gpu_count\":{},\"hip_kfd_present\":{},\"hip_amdgpu_loaded\":{},\"nvidia_driver_version\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"nvidia_peer_memory_module\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"dma_buf_kernel_present\":{},\"dma_buf_nvidia_driver_present\":{},\"dma_buf_nvidia_capability_entries\":{},\"dma_buf_cuda_vmm_export_symbols_present\":{},\"cxl\":\"{}\",\"topology\":{}}}",
             host_arch_to_str(self.host_arch),
             self.target_os,
             self.target_arch,
@@ -139,6 +143,10 @@ impl CapabilitySnapshot {
             self.gpu_direct_rdma.as_str(),
             self.amd_peerdirect.as_str(),
             self.dma_buf_export.as_str(),
+            self.dma_buf_kernel_present,
+            self.dma_buf_nvidia_driver_present,
+            self.dma_buf_nvidia_capability_entries,
+            self.dma_buf_cuda_vmm_export_symbols_present,
             self.cxl.as_str(),
             self.topology.to_json(),
         )

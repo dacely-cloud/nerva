@@ -28,7 +28,7 @@ pub(crate) fn push_capability_provenance(report: &mut AcceptanceReport, runtime:
         "capability_provenance",
         capability_passed,
         format!(
-            "target={}-{} kernel_present={} fabric={:?} cxl={:?} cxl_devices={} cxl_memory_devices={} cxl_regions={} hip={:?} hip_runtime_present={} hip_runtime_version={} hip_amd_gpu_count={} hip_kfd_present={} hip_amdgpu_loaded={} amd_peerdirect={:?} pinned_host_staging={:?} gpu_direct_rdma={:?} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} topology_cpu_count={}",
+            "target={}-{} kernel_present={} fabric={:?} cxl={:?} cxl_devices={} cxl_memory_devices={} cxl_regions={} hip={:?} hip_runtime_present={} hip_runtime_version={} hip_amd_gpu_count={} hip_kfd_present={} hip_amdgpu_loaded={} amd_peerdirect={:?} pinned_host_staging={:?} gpu_direct_rdma={:?} dma_buf_export={:?} dma_buf_kernel_present={} dma_buf_nvidia_driver_present={} dma_buf_nvidia_capability_entries={} dma_buf_cuda_vmm_export_symbols_present={} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} topology_cpu_count={}",
             capabilities.target_os,
             capabilities.target_arch,
             capabilities.kernel_release.is_some(),
@@ -49,6 +49,11 @@ pub(crate) fn push_capability_provenance(report: &mut AcceptanceReport, runtime:
             capabilities.amd_peerdirect,
             capabilities.pinned_host_staging,
             capabilities.gpu_direct_rdma,
+            capabilities.dma_buf_export,
+            capabilities.dma_buf_kernel_present,
+            capabilities.dma_buf_nvidia_driver_present,
+            capabilities.dma_buf_nvidia_capability_entries,
+            capabilities.dma_buf_cuda_vmm_export_symbols_present,
             capabilities.rdma_core_loaded,
             capabilities.mlx5_core_loaded,
             capabilities
