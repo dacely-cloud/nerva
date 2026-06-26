@@ -18,7 +18,7 @@ impl TransportMatrixRequestedPath {
 impl TransportCapabilityMatrixEntry {
     pub fn to_json(self) -> String {
         format!(
-            "{{\"requested_path\":\"{}\",\"size_bytes\":{},\"mode\":\"{}\",\"source_tier\":\"{}\",\"destination_tier\":\"{}\",\"selected_path\":\"{}\",\"class\":\"{}\",\"capability_result\":\"{}\",\"estimated_visible_ns\":{},\"metric_source\":\"estimated_model\",\"effective_payload_bandwidth_bps\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copy\":{},\"per_token_registration\":{},\"registration_cache_hit\":{},\"queue_depth\":{},\"credit_stall_ns\":{}}}",
+            "{{\"requested_path\":\"{}\",\"size_bytes\":{},\"mode\":\"{}\",\"source_tier\":\"{}\",\"destination_tier\":\"{}\",\"selected_path\":\"{}\",\"class\":\"{}\",\"capability_result\":\"{}\",\"estimated_visible_ns\":{},\"visible_non_overlapped_ns\":{},\"metric_source\":\"estimated_model\",\"effective_payload_bandwidth_bps\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copy\":{},\"per_token_registration\":{},\"registration_cache_hit\":{},\"queue_depth\":{},\"credit_stall_ns\":{}}}",
             self.requested_path.as_str(),
             self.size_bytes,
             self.mode.as_str(),
@@ -28,7 +28,10 @@ impl TransportCapabilityMatrixEntry {
             self.class.as_str(),
             self.capability_result.as_str(),
             self.estimated_visible_ns,
+            self.visible_non_overlapped_ns,
             self.effective_payload_bandwidth_bps,
+            self.host_event_wait_ns,
+            self.gpu_idle_ns,
             self.estimated_cpu_core_ns,
             self.dram_read_bytes,
             self.dram_write_bytes,
@@ -61,7 +64,7 @@ impl TransportCapabilityMatrixSummary {
         }
         entries.push(']');
         format!(
-            "{{\"status\":\"{}\",\"sizes\":{},\"entries_count\":{},\"decode_entries\":{},\"prefill_entries\":{},\"gpu_direct_entries\":{},\"host_staged_entries\":{},\"cpu_produced_entries\":{},\"mapped_pinned_entries\":{},\"supported_verified_entries\":{},\"supported_unverified_entries\":{},\"degraded_to_pinned_host_entries\":{},\"unsupported_entries\":{},\"total_estimated_visible_ns\":{},\"p50_estimated_visible_ns\":{},\"p95_estimated_visible_ns\":{},\"p99_estimated_visible_ns\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"registration_cache_hits\":{},\"credit_stall_ns\":{},\"hot_path_allocations\":{},\"error\":{},\"entries\":{}}}",
+            "{{\"status\":\"{}\",\"sizes\":{},\"entries_count\":{},\"decode_entries\":{},\"prefill_entries\":{},\"gpu_direct_entries\":{},\"host_staged_entries\":{},\"cpu_produced_entries\":{},\"mapped_pinned_entries\":{},\"total_payload_bytes\":{},\"supported_verified_entries\":{},\"supported_unverified_entries\":{},\"degraded_to_pinned_host_entries\":{},\"unsupported_entries\":{},\"total_estimated_visible_ns\":{},\"visible_non_overlapped_ns\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"p50_estimated_visible_ns\":{},\"p95_estimated_visible_ns\":{},\"p99_estimated_visible_ns\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"registration_cache_hits\":{},\"registration_cache_hit_rate_per_mille\":{},\"max_queue_depth\":{},\"estimated_nic_utilization_per_mille\":{},\"credit_stall_ns\":{},\"hot_path_allocations\":{},\"error\":{},\"entries\":{}}}",
             status,
             self.sizes,
             self.entries.len(),
@@ -71,11 +74,15 @@ impl TransportCapabilityMatrixSummary {
             self.host_staged_entries,
             self.cpu_produced_entries,
             self.mapped_pinned_entries,
+            self.total_payload_bytes,
             self.supported_verified_entries,
             self.supported_unverified_entries,
             self.degraded_to_pinned_host_entries,
             self.unsupported_entries,
             self.total_estimated_visible_ns,
+            self.visible_non_overlapped_ns,
+            self.host_event_wait_ns,
+            self.gpu_idle_ns,
             self.p50_estimated_visible_ns,
             self.p95_estimated_visible_ns,
             self.p99_estimated_visible_ns,
@@ -90,6 +97,9 @@ impl TransportCapabilityMatrixSummary {
             self.pageable_copies,
             self.per_token_registrations,
             self.registration_cache_hits,
+            self.registration_cache_hit_rate_per_mille,
+            self.max_queue_depth,
+            self.estimated_nic_utilization_per_mille,
             self.credit_stall_ns,
             self.hot_path_allocations,
             json_opt_static_str(self.error),

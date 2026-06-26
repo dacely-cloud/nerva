@@ -35,6 +35,7 @@ pub(crate) fn transport_capability_matrix_summary(
         .iter()
         .filter(|entry| entry.class == TransportPathClass::MappedPinned)
         .count() as u64;
+    let total_payload_bytes = entries.iter().map(|entry| entry.size_bytes).sum::<usize>();
     let supported_verified_entries = entries
         .iter()
         .filter(|entry| entry.capability_result == CapabilityState::SupportedAndVerified)
@@ -55,6 +56,15 @@ pub(crate) fn transport_capability_matrix_summary(
         .iter()
         .map(|entry| entry.estimated_visible_ns)
         .sum::<u64>();
+    let visible_non_overlapped_ns = entries
+        .iter()
+        .map(|entry| entry.visible_non_overlapped_ns)
+        .sum::<u64>();
+    let host_event_wait_ns = entries
+        .iter()
+        .map(|entry| entry.host_event_wait_ns)
+        .sum::<u64>();
+    let gpu_idle_ns = entries.iter().map(|entry| entry.gpu_idle_ns).sum::<u64>();
     let explicit_copy_bytes = entries
         .iter()
         .map(|entry| entry.explicit_copy_bytes)
@@ -96,6 +106,15 @@ pub(crate) fn transport_capability_matrix_summary(
         .iter()
         .filter(|entry| entry.registration_cache_hit)
         .count() as u64;
+    let registration_cache_hit_rate_per_mille =
+        ratio_per_mille(registration_cache_hits, entries.len() as u64);
+    let max_queue_depth = entries
+        .iter()
+        .map(|entry| entry.queue_depth)
+        .max()
+        .unwrap_or(0);
+    let estimated_nic_utilization_per_mille =
+        ratio_per_mille(nic_tx_bytes as u64, total_payload_bytes as u64);
     let credit_stall_ns = entries
         .iter()
         .map(|entry| entry.credit_stall_ns)
@@ -114,11 +133,15 @@ pub(crate) fn transport_capability_matrix_summary(
         host_staged_entries,
         cpu_produced_entries,
         mapped_pinned_entries,
+        total_payload_bytes,
         supported_verified_entries,
         supported_unverified_entries,
         degraded_to_pinned_host_entries,
         unsupported_entries,
         total_estimated_visible_ns,
+        visible_non_overlapped_ns,
+        host_event_wait_ns,
+        gpu_idle_ns,
         p50_estimated_visible_ns,
         p95_estimated_visible_ns,
         p99_estimated_visible_ns,
@@ -133,9 +156,20 @@ pub(crate) fn transport_capability_matrix_summary(
         pageable_copies,
         per_token_registrations,
         registration_cache_hits,
+        registration_cache_hit_rate_per_mille,
+        max_queue_depth,
+        estimated_nic_utilization_per_mille,
         credit_stall_ns,
         hot_path_allocations,
         error: None,
+    }
+}
+
+fn ratio_per_mille(numerator: u64, denominator: u64) -> u64 {
+    if denominator == 0 {
+        0
+    } else {
+        numerator.saturating_mul(1_000) / denominator
     }
 }
 

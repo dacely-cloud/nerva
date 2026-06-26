@@ -68,6 +68,8 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"transport_pinned_fallback\""));
     assert!(json.contains("\"transport_backend_contract\""));
     assert!(json.contains("\"transport_capability_matrix\""));
+    assert!(json.contains("registration_cache_hit_rate_per_mille=1000"));
+    assert!(json.contains("estimated_nic_utilization_per_mille=1000"));
     assert!(json.contains("\"transport_registration_cache\""));
     assert!(json.contains("\"transport_registration_lifecycle\""));
     assert!(json.contains("\"stage_pipeline_activation_only\""));

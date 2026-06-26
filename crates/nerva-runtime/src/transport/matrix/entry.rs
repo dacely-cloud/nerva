@@ -52,10 +52,13 @@ pub(crate) fn build_entries(
                 class: decision.class,
                 capability_result,
                 estimated_visible_ns: decision.estimated_visible_ns,
+                visible_non_overlapped_ns: decision.estimated_visible_ns,
                 effective_payload_bandwidth_bps: effective_payload_bandwidth_bps(
                     decision.request.bytes,
                     decision.estimated_visible_ns,
                 ),
+                host_event_wait_ns: decision.estimated_visible_ns,
+                gpu_idle_ns: 0,
                 estimated_cpu_core_ns: resource.estimated_cpu_core_ns,
                 dram_read_bytes: resource.dram_read_bytes,
                 dram_write_bytes: resource.dram_write_bytes,

@@ -19,12 +19,25 @@ fn transport_capability_matrix_reports_required_sizes_and_degradation() {
     assert_eq!(summary.supported_unverified_entries, 6);
     assert_eq!(summary.supported_verified_entries, 6);
     assert_eq!(summary.unsupported_entries, 0);
+    assert!(summary.total_payload_bytes > 0);
     assert_eq!(summary.pageable_copies, 0);
     assert_eq!(summary.per_token_registrations, 0);
     assert_eq!(
         summary.registration_cache_hits,
         summary.entries.len() as u64
     );
+    assert_eq!(summary.registration_cache_hit_rate_per_mille, 1_000);
+    assert_eq!(summary.estimated_nic_utilization_per_mille, 1_000);
+    assert_eq!(
+        summary.visible_non_overlapped_ns,
+        summary.total_estimated_visible_ns
+    );
+    assert_eq!(
+        summary.host_event_wait_ns,
+        summary.total_estimated_visible_ns
+    );
+    assert_eq!(summary.gpu_idle_ns, 0);
+    assert!(summary.max_queue_depth >= 4);
     assert_eq!(summary.credit_stall_ns, 0);
     assert_eq!(summary.hot_path_allocations, 0);
     assert!(summary.explicit_copy_bytes > 0);
@@ -43,6 +56,19 @@ fn transport_capability_matrix_reports_required_sizes_and_degradation() {
             .iter()
             .all(|entry| entry.effective_payload_bandwidth_bps > 0)
     );
+    assert!(
+        summary
+            .entries
+            .iter()
+            .all(|entry| entry.visible_non_overlapped_ns == entry.estimated_visible_ns)
+    );
+    assert!(
+        summary
+            .entries
+            .iter()
+            .all(|entry| entry.host_event_wait_ns == entry.estimated_visible_ns)
+    );
+    assert!(summary.entries.iter().all(|entry| entry.gpu_idle_ns == 0));
     assert!(summary.entries.iter().all(|entry| entry.queue_depth > 0));
     assert!(
         summary
@@ -57,11 +83,16 @@ fn transport_capability_matrix_reports_required_sizes_and_degradation() {
     assert!(json.contains("\"metric_source\":\"estimated_model\""));
     assert!(json.contains("\"p95_estimated_visible_ns\""));
     assert!(json.contains("\"effective_payload_bandwidth_bps\""));
+    assert!(json.contains("\"visible_non_overlapped_ns\""));
+    assert!(json.contains("\"host_event_wait_ns\""));
+    assert!(json.contains("\"gpu_idle_ns\""));
     assert!(json.contains("\"estimated_cpu_core_ns\""));
     assert!(json.contains("\"dram_read_bytes\""));
     assert!(json.contains("\"dram_write_bytes\""));
     assert!(json.contains("\"pcie_tx_bytes\""));
     assert!(json.contains("\"pcie_rx_bytes\""));
     assert!(json.contains("\"registration_cache_hits\""));
+    assert!(json.contains("\"registration_cache_hit_rate_per_mille\""));
+    assert!(json.contains("\"estimated_nic_utilization_per_mille\""));
     assert!(json.contains("\"credit_stall_ns\""));
 }
