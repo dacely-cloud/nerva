@@ -1283,6 +1283,7 @@ pub struct TransportCapabilityMatrixEntry {
     pub class: TransportPathClass,
     pub capability_result: CapabilityState,
     pub estimated_visible_ns: u64,
+    pub effective_payload_bandwidth_bps: u64,
     pub explicit_copy_bytes: usize,
     pub nic_tx_bytes: usize,
     pub nic_rx_bytes: usize,
@@ -1293,7 +1294,7 @@ pub struct TransportCapabilityMatrixEntry {
 impl TransportCapabilityMatrixEntry {
     pub fn to_json(self) -> String {
         format!(
-            "{{\"requested_path\":\"{}\",\"size_bytes\":{},\"mode\":\"{}\",\"source_tier\":\"{}\",\"destination_tier\":\"{}\",\"selected_path\":\"{}\",\"class\":\"{}\",\"capability_result\":\"{}\",\"estimated_visible_ns\":{},\"metric_source\":\"estimated_model\",\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copy\":{},\"per_token_registration\":{}}}",
+            "{{\"requested_path\":\"{}\",\"size_bytes\":{},\"mode\":\"{}\",\"source_tier\":\"{}\",\"destination_tier\":\"{}\",\"selected_path\":\"{}\",\"class\":\"{}\",\"capability_result\":\"{}\",\"estimated_visible_ns\":{},\"metric_source\":\"estimated_model\",\"effective_payload_bandwidth_bps\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copy\":{},\"per_token_registration\":{}}}",
             self.requested_path.as_str(),
             self.size_bytes,
             self.mode.as_str(),
@@ -1303,6 +1304,7 @@ impl TransportCapabilityMatrixEntry {
             self.class.as_str(),
             self.capability_result.as_str(),
             self.estimated_visible_ns,
+            self.effective_payload_bandwidth_bps,
             self.explicit_copy_bytes,
             self.nic_tx_bytes,
             self.nic_rx_bytes,
@@ -1328,6 +1330,9 @@ pub struct TransportCapabilityMatrixSummary {
     pub degraded_to_pinned_host_entries: u64,
     pub unsupported_entries: u64,
     pub total_estimated_visible_ns: u64,
+    pub p50_estimated_visible_ns: u64,
+    pub p95_estimated_visible_ns: u64,
+    pub p99_estimated_visible_ns: u64,
     pub explicit_copy_bytes: usize,
     pub nic_tx_bytes: usize,
     pub nic_rx_bytes: usize,
@@ -1527,7 +1532,7 @@ impl TransportCapabilityMatrixSummary {
         }
         entries.push(']');
         format!(
-            "{{\"status\":\"{}\",\"sizes\":{},\"entries_count\":{},\"decode_entries\":{},\"prefill_entries\":{},\"gpu_direct_entries\":{},\"host_staged_entries\":{},\"cpu_produced_entries\":{},\"mapped_pinned_entries\":{},\"supported_verified_entries\":{},\"supported_unverified_entries\":{},\"degraded_to_pinned_host_entries\":{},\"unsupported_entries\":{},\"total_estimated_visible_ns\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"hot_path_allocations\":{},\"error\":{},\"entries\":{}}}",
+            "{{\"status\":\"{}\",\"sizes\":{},\"entries_count\":{},\"decode_entries\":{},\"prefill_entries\":{},\"gpu_direct_entries\":{},\"host_staged_entries\":{},\"cpu_produced_entries\":{},\"mapped_pinned_entries\":{},\"supported_verified_entries\":{},\"supported_unverified_entries\":{},\"degraded_to_pinned_host_entries\":{},\"unsupported_entries\":{},\"total_estimated_visible_ns\":{},\"p50_estimated_visible_ns\":{},\"p95_estimated_visible_ns\":{},\"p99_estimated_visible_ns\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"hot_path_allocations\":{},\"error\":{},\"entries\":{}}}",
             status,
             self.sizes,
             self.entries.len(),
@@ -1542,6 +1547,9 @@ impl TransportCapabilityMatrixSummary {
             self.degraded_to_pinned_host_entries,
             self.unsupported_entries,
             self.total_estimated_visible_ns,
+            self.p50_estimated_visible_ns,
+            self.p95_estimated_visible_ns,
+            self.p99_estimated_visible_ns,
             self.explicit_copy_bytes,
             self.nic_tx_bytes,
             self.nic_rx_bytes,
@@ -1832,6 +1840,10 @@ impl Runtime {
                     class: decision.class,
                     capability_result,
                     estimated_visible_ns: decision.estimated_visible_ns,
+                    effective_payload_bandwidth_bps: effective_payload_bandwidth_bps(
+                        decision.request.bytes,
+                        decision.estimated_visible_ns,
+                    ),
                     explicit_copy_bytes: decision.explicit_copy_bytes,
                     nic_tx_bytes: decision.nic_tx_bytes,
                     nic_rx_bytes: decision.nic_rx_bytes,
@@ -3234,6 +3246,9 @@ fn transport_capability_matrix_summary(
         .filter(|entry| entry.capability_result == CapabilityState::Unsupported)
         .count() as u64;
     let total_estimated_visible_ns = entries.iter().map(|entry| entry.estimated_visible_ns).sum();
+    let p50_estimated_visible_ns = percentile_estimated_visible_ns(&entries, 50);
+    let p95_estimated_visible_ns = percentile_estimated_visible_ns(&entries, 95);
+    let p99_estimated_visible_ns = percentile_estimated_visible_ns(&entries, 99);
     let explicit_copy_bytes = entries.iter().map(|entry| entry.explicit_copy_bytes).sum();
     let nic_tx_bytes = entries.iter().map(|entry| entry.nic_tx_bytes).sum();
     let nic_rx_bytes = entries.iter().map(|entry| entry.nic_rx_bytes).sum();
@@ -3258,6 +3273,9 @@ fn transport_capability_matrix_summary(
         degraded_to_pinned_host_entries,
         unsupported_entries,
         total_estimated_visible_ns,
+        p50_estimated_visible_ns,
+        p95_estimated_visible_ns,
+        p99_estimated_visible_ns,
         explicit_copy_bytes,
         nic_tx_bytes,
         nic_rx_bytes,
@@ -3266,6 +3284,31 @@ fn transport_capability_matrix_summary(
         hot_path_allocations,
         error: None,
     }
+}
+
+fn percentile_estimated_visible_ns(
+    entries: &[TransportCapabilityMatrixEntry],
+    percentile: u64,
+) -> u64 {
+    if entries.is_empty() {
+        return 0;
+    }
+    let mut values = entries
+        .iter()
+        .map(|entry| entry.estimated_visible_ns)
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    let rank = div_ceil_u64(percentile.saturating_mul(values.len() as u64), 100).saturating_sub(1)
+        as usize;
+    values[rank.min(values.len() - 1)]
+}
+
+fn effective_payload_bandwidth_bps(bytes: usize, latency_ns: u64) -> u64 {
+    if latency_ns == 0 {
+        return 0;
+    }
+    let bps = (bytes as u128).saturating_mul(1_000_000_000) / latency_ns as u128;
+    bps.min(u64::MAX as u128) as u64
 }
 
 fn make_transport_decision(
@@ -3689,10 +3732,22 @@ mod tests {
         assert_eq!(summary.hot_path_allocations, 0);
         assert!(summary.explicit_copy_bytes > 0);
         assert!(summary.total_estimated_visible_ns > 0);
+        assert!(summary.p50_estimated_visible_ns > 0);
+        assert!(summary.p95_estimated_visible_ns >= summary.p50_estimated_visible_ns);
+        assert!(summary.p99_estimated_visible_ns >= summary.p95_estimated_visible_ns);
+        assert!(
+            summary
+                .entries
+                .iter()
+                .all(|entry| entry.effective_payload_bandwidth_bps > 0)
+        );
         let json = summary.to_json();
         assert!(json.contains("\"requested_path\":\"A_GPU_DIRECT_RDMA\""));
         assert!(json.contains("\"size_bytes\":32768"));
         assert!(json.contains("\"capability_result\":\"DEGRADED_TO_PINNED_HOST\""));
+        assert!(json.contains("\"metric_source\":\"estimated_model\""));
+        assert!(json.contains("\"p95_estimated_visible_ns\""));
+        assert!(json.contains("\"effective_payload_bandwidth_bps\""));
     }
 
     #[test]

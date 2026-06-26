@@ -666,12 +666,13 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
                 && summary.per_token_registrations == 0
                 && summary.hot_path_allocations == 0,
             format!(
-                "sizes={} entries={} host_staged={} gpu_direct={} degraded_to_pinned_host={} pageable_copies={} per_token_registrations={} hot_path_allocations={}",
+                "sizes={} entries={} host_staged={} gpu_direct={} degraded_to_pinned_host={} p95_estimated_visible_ns={} pageable_copies={} per_token_registrations={} hot_path_allocations={}",
                 summary.sizes,
                 summary.entries.len(),
                 summary.host_staged_entries,
                 summary.gpu_direct_entries,
                 summary.degraded_to_pinned_host_entries,
+                summary.p95_estimated_visible_ns,
                 summary.pageable_copies,
                 summary.per_token_registrations,
                 summary.hot_path_allocations,
