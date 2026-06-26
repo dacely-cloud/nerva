@@ -46,6 +46,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"dpdk_udp_activation_protocol\""));
     assert!(json.contains("\"kernel_udp_loopback_baseline\""));
     assert!(json.contains("\"kernel_udp_measured_matrix\""));
+    assert!(json.contains("\"measured_transport_selector\""));
     assert!(json.contains("\"transport_pinned_fallback\""));
     assert!(json.contains("\"transport_backend_contract\""));
     assert!(json.contains("\"transport_capability_matrix\""));

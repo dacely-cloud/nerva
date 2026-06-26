@@ -49,6 +49,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     transport::dpdk_udp::push_dpdk_udp_protocol(&mut report, &runtime);
     transport::kernel_udp::push_kernel_udp_baseline(&mut report, &runtime);
     transport::kernel_udp::push_kernel_udp_matrix(&mut report, &runtime);
+    transport::measured::push_measured_transport_selector(&mut report, &runtime);
     transport::path::push_transport_path(&mut report, &runtime);
     transport::contract::push_transport_contract(&mut report, &runtime);
     transport::matrix::push_transport_matrix(&mut report, &runtime);

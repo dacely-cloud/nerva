@@ -3,6 +3,7 @@ mod dpdk_udp;
 mod fabric;
 mod kernel_udp;
 mod matrix;
+mod measured;
 mod path_probe;
 mod planner;
 mod registration;

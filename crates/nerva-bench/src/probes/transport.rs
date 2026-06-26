@@ -60,6 +60,15 @@ pub(crate) fn run_kernel_udp_matrix_probe() -> Result<String, String> {
     Ok(summary.to_json())
 }
 
+pub(crate) fn run_measured_transport_selector_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let summary = runtime
+        .run_measured_transport_selector_probe()
+        .map_err(|err| format!("measured transport selector probe failed: {err:?}"))?;
+    Ok(summary.to_json())
+}
+
 pub(crate) fn run_transport_matrix_probe() -> Result<String, String> {
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;

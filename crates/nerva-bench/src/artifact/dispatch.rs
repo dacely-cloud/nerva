@@ -164,6 +164,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "dpdk-udp" => transport::run_dpdk_udp_probe(),
         "kernel-udp" => transport::run_kernel_udp_probe(),
         "kernel-udp-matrix" => transport::run_kernel_udp_matrix_probe(),
+        "measured-transport" => transport::run_measured_transport_selector_probe(),
         "transport" => transport::run_transport_probe(),
         "transport-contract" => transport::run_transport_contract_probe(),
         "transport-matrix" => transport::run_transport_matrix_probe(),

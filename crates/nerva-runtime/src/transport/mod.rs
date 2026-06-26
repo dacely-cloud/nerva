@@ -5,6 +5,7 @@ pub mod fabric;
 pub mod json;
 pub mod kernel_udp;
 pub mod matrix;
+pub mod measured;
 pub mod path;
 pub mod probe;
 pub mod registration;
