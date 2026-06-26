@@ -1,4 +1,4 @@
-use nerva_core::types::block::GlobalBlockAddress;
+use nerva_core::types::block::address::GlobalBlockAddress;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::AllocationId;
 use nerva_core::types::memory::MemoryTier;

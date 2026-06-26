@@ -1,8 +1,8 @@
-use nerva_core::types::block::ResidencyState;
+use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::id::DeviceOrdinal;
 
 use crate::engine::runtime::{Runtime, RuntimeConfig};
-use crate::execution::plan::plan_execution_transaction;
+use crate::execution::plan::planner::plan_execution_transaction;
 use crate::execution::probe::reference_transaction_fixture;
 use crate::execution::summary::ExecutionTransactionStatus;
 

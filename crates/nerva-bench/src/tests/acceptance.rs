@@ -29,6 +29,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"vllm_token_identity_parity\""));
     assert!(json.contains("\"cuda_tiered_attention\""));
     assert!(json.contains("\"kv_residency_tiering\""));
+    assert!(json.contains("\"fabric_topology_affinity\""));
     assert!(json.contains("\"transport_pinned_fallback\""));
     assert!(json.contains("\"transport_capability_matrix\""));
     assert!(json.contains("\"stage_pipeline_activation_only\""));

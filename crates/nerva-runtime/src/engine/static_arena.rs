@@ -1,4 +1,4 @@
-use nerva_core::types::block::ResidencyState;
+use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::Result;
 use nerva_core::types::memory::MemoryTier;
 use nerva_memory::arena::kind::ArenaKind;

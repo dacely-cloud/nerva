@@ -1,8 +1,9 @@
 use crate::common::shape::TransformerBlockShape;
 use crate::tiny::output::TinyGreedyDecodeStatus;
-use crate::tiny::precision::{
-    TinyPrecisionGreedyDecodeScratch, TinyPrecisionGreedyDecodeStatus, tiny_precision_cycle_model,
-    tiny_precision_greedy_decode_smoke,
+use crate::tiny::precision::output::TinyPrecisionGreedyDecodeStatus;
+use crate::tiny::precision::scratch::TinyPrecisionGreedyDecodeScratch;
+use crate::tiny::precision::smoke::{
+    tiny_precision_cycle_model, tiny_precision_greedy_decode_smoke,
 };
 use crate::tiny::scratch::TinyGreedyDecodeScratch;
 use crate::tiny::smoke::{tiny_cycle_model, tiny_greedy_decode_smoke};

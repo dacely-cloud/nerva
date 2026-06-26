@@ -1,5 +1,6 @@
 use crate::types::arch::{HostArch, ensure_supported_linux_host, host_arch};
-use crate::types::block::{BlockKind, ResidentBlock};
+use crate::types::block::resident::ResidentBlock;
+use crate::types::block::taxonomy::BlockKind;
 use crate::types::error::NervaError;
 use crate::types::id::{DeviceOrdinal, MemoryDomainId, ReplicaId, ResidentBlockId};
 use crate::types::memory::MemoryTier;

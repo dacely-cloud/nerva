@@ -10,6 +10,12 @@ pub(crate) fn run_transport_probe() -> Result<String, String> {
     Ok(summary.to_json())
 }
 
+pub(crate) fn run_fabric_topology_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    Ok(runtime.run_fabric_topology_probe().to_json())
+}
+
 pub(crate) fn run_transport_matrix_probe() -> Result<String, String> {
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;

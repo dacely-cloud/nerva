@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use nerva_core::types::block::{BlockKind, GlobalBlockAddress, ResidencyState, ResidentBlock};
+use nerva_core::types::block::address::GlobalBlockAddress;
+use nerva_core::types::block::residency::ResidencyState;
+use nerva_core::types::block::resident::ResidentBlock;
+use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::{AllocationId, LayoutId, MemoryDomainId, ResidentBlockId};

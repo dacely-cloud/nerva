@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use nerva_core::types::block::ResidencyState;
+use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::AllocationId;
 use nerva_memory::registry::BlockRegistry;

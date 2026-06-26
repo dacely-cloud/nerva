@@ -8,125 +8,11 @@ use crate::types::memory::{MemoryFabricKind, MemoryTier};
 use crate::types::ownership::{AccessPolicy, CoherencePolicy, ExecutionOwner, MutationSemantics};
 use crate::types::shape::BlockShape;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum BlockKind {
-    Weight,
-    KvPage,
-    Activation,
-    Logits,
-    TokenState,
-    SamplerState,
-    Workspace,
-    Queue,
-    TransportBuffer,
-    Ledger,
-    Metadata,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum ResidencyState {
-    Unmapped,
-    Allocated,
-    Prefetching,
-    Ready,
-    InUse,
-    Draining,
-    Evicting,
-    Invalid,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Lifetime {
-    Static,
-    Request,
-    Token,
-    Scratch,
-    External,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Hotness {
-    Cold,
-    Warm,
-    Hot,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct GlobalBlockAddress {
-    pub domain: MemoryDomainId,
-    pub allocation: AllocationId,
-    pub offset: u64,
-}
-
-impl GlobalBlockAddress {
-    pub const fn unmapped() -> Self {
-        Self {
-            domain: MemoryDomainId(0),
-            allocation: AllocationId(0),
-            offset: 0,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResidencySet {
-    replicas: Vec<ReplicaId>,
-}
-
-impl ResidencySet {
-    pub fn empty() -> Self {
-        Self {
-            replicas: Vec::new(),
-        }
-    }
-
-    pub fn single(replica: ReplicaId) -> Self {
-        Self {
-            replicas: vec![replica],
-        }
-    }
-
-    pub fn contains(&self, replica: ReplicaId) -> bool {
-        self.replicas.contains(&replica)
-    }
-
-    pub fn add(&mut self, replica: ReplicaId) {
-        if !self.contains(replica) {
-            self.replicas.push(replica);
-        }
-    }
-
-    pub fn replicas(&self) -> &[ReplicaId] {
-        &self.replicas
-    }
-}
-
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub struct BlockFlags {
-    bits: u32,
-}
-
-impl BlockFlags {
-    pub const PREFETCHABLE: u32 = 1 << 0;
-    pub const EVICTABLE: u32 = 1 << 1;
-    pub const TRANSPORT_REGISTERED: u32 = 1 << 2;
-
-    pub const fn empty() -> Self {
-        Self { bits: 0 }
-    }
-
-    pub const fn from_bits(bits: u32) -> Self {
-        Self { bits }
-    }
-
-    pub const fn bits(self) -> u32 {
-        self.bits
-    }
-
-    pub const fn contains(self, flag: u32) -> bool {
-        (self.bits & flag) == flag
-    }
-}
+use super::address::GlobalBlockAddress;
+use super::defaults::{default_hotness, default_lifetime, default_mutation_semantics};
+use super::flags::BlockFlags;
+use super::residency::{ResidencySet, ResidencyState};
+use super::taxonomy::{BlockKind, Hotness, Lifetime};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResidentBlock {
@@ -175,9 +61,7 @@ impl ResidentBlock {
                 allocation: AllocationId(id.0),
                 offset: 0,
             },
-            residency: ResidencySet {
-                replicas: vec![replica],
-            },
+            residency: ResidencySet::single(replica),
             authoritative_copy: replica,
             version: 0,
             memory_domain: domain,
@@ -261,44 +145,5 @@ impl ResidentBlock {
             });
         }
         Ok(())
-    }
-}
-
-const fn default_mutation_semantics(kind: BlockKind) -> MutationSemantics {
-    match kind {
-        BlockKind::Weight => MutationSemantics::Immutable,
-        BlockKind::KvPage => MutationSemantics::AppendOnly,
-        BlockKind::Activation | BlockKind::Logits | BlockKind::Workspace => {
-            MutationSemantics::Ephemeral
-        }
-        BlockKind::TokenState
-        | BlockKind::SamplerState
-        | BlockKind::Queue
-        | BlockKind::Ledger
-        | BlockKind::Metadata
-        | BlockKind::TransportBuffer => MutationSemantics::SingleWriter,
-    }
-}
-
-const fn default_lifetime(kind: BlockKind) -> Lifetime {
-    match kind {
-        BlockKind::Weight => Lifetime::Static,
-        BlockKind::KvPage
-        | BlockKind::TokenState
-        | BlockKind::SamplerState
-        | BlockKind::Queue
-        | BlockKind::Ledger
-        | BlockKind::Metadata
-        | BlockKind::TransportBuffer => Lifetime::Request,
-        BlockKind::Activation | BlockKind::Logits => Lifetime::Token,
-        BlockKind::Workspace => Lifetime::Scratch,
-    }
-}
-
-const fn default_hotness(tier: MemoryTier) -> Hotness {
-    match tier {
-        MemoryTier::Vram | MemoryTier::SharedHbmOrLpddr => Hotness::Hot,
-        MemoryTier::PinnedDram | MemoryTier::Dram | MemoryTier::Cxl => Hotness::Warm,
-        MemoryTier::Disk => Hotness::Cold,
     }
 }

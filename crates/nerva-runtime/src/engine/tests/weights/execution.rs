@@ -1,4 +1,4 @@
-use nerva_core::types::block::ResidencyState;
+use nerva_core::types::block::residency::ResidencyState;
 use nerva_ledger::types::fallback::FallbackClass;
 
 use crate::engine::residency::ResidencyBudget;

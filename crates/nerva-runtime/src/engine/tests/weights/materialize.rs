@@ -1,4 +1,4 @@
-use nerva_core::types::block::BlockKind;
+use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::NervaError;
 use nerva_core::types::id::{LayoutId, ResidentBlockId};
 use nerva_core::types::memory::MemoryTier;

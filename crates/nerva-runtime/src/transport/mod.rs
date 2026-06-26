@@ -1,4 +1,5 @@
 pub mod estimate;
+pub mod fabric;
 pub mod json;
 pub mod matrix;
 pub mod path;

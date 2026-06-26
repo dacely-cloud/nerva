@@ -1,4 +1,6 @@
-use nerva_core::types::block::{BlockKind, GlobalBlockAddress, ResidentBlock};
+use nerva_core::types::block::address::GlobalBlockAddress;
+use nerva_core::types::block::resident::ResidentBlock;
+use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::id::{AllocationId, MemoryDomainId, ResidentBlockId};
 use nerva_core::types::memory::MemoryTier;
 

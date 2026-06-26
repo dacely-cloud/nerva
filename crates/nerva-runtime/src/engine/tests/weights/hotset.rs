@@ -1,4 +1,4 @@
-use nerva_core::types::block::ResidencyState;
+use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::memory::MemoryTier;
 
 use crate::engine::residency::ResidencyBudget;

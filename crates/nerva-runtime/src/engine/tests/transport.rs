@@ -4,6 +4,7 @@ use nerva_core::types::ownership::ExecutionOwner;
 
 use crate::capabilities::snapshot::CapabilityState;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
+use crate::transport::fabric::summary::FabricTopologyStatus;
 use crate::transport::matrix::types::TransportCapabilityMatrixStatus;
 use crate::transport::path::{
     TransferMode, TransportPathClass, TransportPathKind, TransportPathRequest,
@@ -114,6 +115,24 @@ fn transport_path_probe_reports_explicit_fallback_without_hot_allocations() {
     assert_eq!(summary.hot_path_allocations, 0);
     assert!(summary.explicit_copy_bytes > 0);
     assert!(summary.to_json().contains("\"pinned_host_paths\":6"));
+}
+
+#[test]
+fn fabric_topology_probe_reports_sysfs_affinity_without_false_direct_claims() {
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let summary = runtime.run_fabric_topology_probe();
+
+    assert_eq!(summary.status, FabricTopologyStatus::Ok);
+    assert_eq!(summary.evidence_source, "linux_sysfs");
+    assert_eq!(summary.rdma_devices, summary.rdma_affinity.len() as u64);
+    assert!(summary.rdma_with_pci_path <= summary.rdma_devices);
+    assert_eq!(summary.false_direct_claims, 0);
+    assert!(summary.gpu_direct_verified || summary.degraded_to_pinned_host);
+    assert!(summary.passed());
+    let json = summary.to_json();
+    assert!(json.contains("\"evidence_source\":\"linux_sysfs\""));
+    assert!(json.contains("\"rdma_affinity\""));
+    assert!(json.contains("\"false_direct_claims\":0"));
 }
 
 #[test]

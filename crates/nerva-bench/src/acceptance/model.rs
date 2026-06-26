@@ -65,8 +65,8 @@ pub(crate) fn push_precision_and_cuda_blocks(report: &mut AcceptanceReport) {
     }
 
     match (
-        nerva_model::tiny::precision::tiny_precision_greedy_decode_smoke(DType::F16, 8),
-        nerva_model::tiny::precision::tiny_precision_greedy_decode_smoke(DType::BF16, 8),
+        nerva_model::tiny::precision::smoke::tiny_precision_greedy_decode_smoke(DType::F16, 8),
+        nerva_model::tiny::precision::smoke::tiny_precision_greedy_decode_smoke(DType::BF16, 8),
     ) {
         (Ok(f16), Ok(bf16)) => report.push(
             "precision_tiny_model_greedy_parity",

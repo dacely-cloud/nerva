@@ -4,7 +4,7 @@ use crate::kv::page::{KvPageSpec, KvPrefixKey};
 use crate::kv::pool::KvPagePool;
 use crate::kv::residency::types::{KvResidencyAction, KvResidencyPlanner, KvResidencyPolicy};
 use crate::registry::BlockRegistry;
-use nerva_core::types::block::ResidencyState;
+use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::memory::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::token::TokenLedger;

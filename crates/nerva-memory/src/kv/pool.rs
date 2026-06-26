@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use nerva_core::types::block::BlockKind;
+use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::arena::kind::AllocationPhase;

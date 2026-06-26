@@ -33,6 +33,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     model::push_kernel_contracts(&mut report);
 
     transport::kv::push_kv_residency(&mut report, &runtime);
+    transport::fabric::push_fabric_topology(&mut report, &runtime);
     transport::path::push_transport_path(&mut report, &runtime);
     transport::matrix::push_transport_matrix(&mut report, &runtime);
     transport::stage::push_stage_pipeline(&mut report, &runtime);

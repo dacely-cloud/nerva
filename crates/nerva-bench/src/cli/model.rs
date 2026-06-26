@@ -97,10 +97,12 @@ fn run_tiny_precision_model(args: &mut impl Iterator<Item = String>) -> ExitCode
 }
 
 pub(crate) fn precision_model_pair_json(steps: usize) -> Result<String, String> {
-    let f16 = nerva_model::tiny::precision::tiny_precision_greedy_decode_smoke(DType::F16, steps)
-        .map_err(|err| format!("tiny FP16 precision model failed: {err:?}"))?;
-    let bf16 = nerva_model::tiny::precision::tiny_precision_greedy_decode_smoke(DType::BF16, steps)
-        .map_err(|err| format!("tiny BF16 precision model failed: {err:?}"))?;
+    let f16 =
+        nerva_model::tiny::precision::smoke::tiny_precision_greedy_decode_smoke(DType::F16, steps)
+            .map_err(|err| format!("tiny FP16 precision model failed: {err:?}"))?;
+    let bf16 =
+        nerva_model::tiny::precision::smoke::tiny_precision_greedy_decode_smoke(DType::BF16, steps)
+            .map_err(|err| format!("tiny BF16 precision model failed: {err:?}"))?;
     let passed = f16.passed() && bf16.passed() && f16.output_hash == bf16.output_hash;
     Ok(format!(
         "{{\"status\":\"{}\",\"steps\":{},\"passed\":{},\"f16\":{},\"bf16\":{}}}",

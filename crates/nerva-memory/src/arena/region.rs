@@ -1,4 +1,4 @@
-use nerva_core::types::block::GlobalBlockAddress;
+use nerva_core::types::block::address::GlobalBlockAddress;
 use nerva_core::types::memory::MemoryTier;
 
 use crate::arena::kind::ArenaKind;
