@@ -72,6 +72,40 @@ impl CapabilityState {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TopologySnapshot {
+    pub cpu_online: Option<String>,
+    pub cpu_count: usize,
+    pub numa_node_count: usize,
+    pub pci_device_count: usize,
+    pub pci_gpu_count: usize,
+    pub pci_network_count: usize,
+    pub pci_nvme_count: usize,
+    pub block_device_count: usize,
+    pub nvme_block_device_count: usize,
+    pub rdma_device_count: usize,
+    pub iommu_group_count: usize,
+}
+
+impl TopologySnapshot {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"cpu_online\":{},\"cpu_count\":{},\"numa_node_count\":{},\"pci_device_count\":{},\"pci_gpu_count\":{},\"pci_network_count\":{},\"pci_nvme_count\":{},\"block_device_count\":{},\"nvme_block_device_count\":{},\"rdma_device_count\":{},\"iommu_group_count\":{}}}",
+            json_opt_string(self.cpu_online.as_deref()),
+            self.cpu_count,
+            self.numa_node_count,
+            self.pci_device_count,
+            self.pci_gpu_count,
+            self.pci_network_count,
+            self.pci_nvme_count,
+            self.block_device_count,
+            self.nvme_block_device_count,
+            self.rdma_device_count,
+            self.iommu_group_count,
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapabilitySnapshot {
     pub host_arch: HostArch,
@@ -91,12 +125,13 @@ pub struct CapabilitySnapshot {
     pub amd_peerdirect: CapabilityState,
     pub dma_buf_export: CapabilityState,
     pub cxl: CapabilityState,
+    pub topology: TopologySnapshot,
 }
 
 impl CapabilitySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\"}}",
+            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
             host_arch_to_str(self.host_arch),
             self.target_os,
             self.target_arch,
@@ -114,6 +149,7 @@ impl CapabilitySnapshot {
             self.amd_peerdirect.as_str(),
             self.dma_buf_export.as_str(),
             self.cxl.as_str(),
+            self.topology.to_json(),
         )
     }
 }
@@ -1641,6 +1677,11 @@ impl Runtime {
         SyntheticEngine::new(token_ring_capacity, self.config.device)
     }
 
+    pub fn discover_topology(&self) -> TopologySnapshot {
+        let _ = self.config;
+        discover_topology_snapshot()
+    }
+
     pub fn discover_capabilities(&self) -> CapabilitySnapshot {
         let _ = self.config;
         let cuda_smoke = cuda_smoke();
@@ -1674,6 +1715,7 @@ impl Runtime {
             amd_peerdirect: CapabilityState::Unsupported,
             dma_buf_export: CapabilityState::Unsupported,
             cxl: CapabilityState::Unsupported,
+            topology: discover_topology_snapshot(),
         }
     }
 
@@ -3376,6 +3418,130 @@ fn estimate_cpu_fallback_weight_ns(bytes: usize, tier: MemoryTier) -> u64 {
     copy_ns + estimate_cpu_dram_weight_ns(bytes)
 }
 
+fn discover_topology_snapshot() -> TopologySnapshot {
+    let cpu_online = read_trimmed_first_line("/sys/devices/system/cpu/online");
+    let cpu_count = cpu_online
+        .as_deref()
+        .and_then(count_linux_id_list)
+        .filter(|count| *count > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1)
+        });
+    let numa_node_count = read_trimmed_first_line("/sys/devices/system/node/online")
+        .as_deref()
+        .and_then(count_linux_id_list)
+        .filter(|count| *count > 0)
+        .unwrap_or_else(|| count_prefixed_entries("/sys/devices/system/node", "node").max(1));
+    let pci = pci_class_counts("/sys/bus/pci/devices");
+
+    TopologySnapshot {
+        cpu_online,
+        cpu_count,
+        numa_node_count,
+        pci_device_count: pci.total,
+        pci_gpu_count: pci.gpu,
+        pci_network_count: pci.network,
+        pci_nvme_count: pci.nvme,
+        block_device_count: count_entries("/sys/block"),
+        nvme_block_device_count: count_prefixed_entries("/sys/block", "nvme"),
+        rdma_device_count: count_entries("/sys/class/infiniband"),
+        iommu_group_count: count_dirs("/sys/kernel/iommu_groups"),
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+struct PciClassCounts {
+    total: usize,
+    gpu: usize,
+    network: usize,
+    nvme: usize,
+}
+
+fn pci_class_counts(path: &str) -> PciClassCounts {
+    let Ok(entries) = fs::read_dir(path) else {
+        return PciClassCounts::default();
+    };
+    let mut counts = PciClassCounts::default();
+    for entry in entries.flatten() {
+        counts.total = counts.total.saturating_add(1);
+        let class_path = entry.path().join("class");
+        let Some(class) = read_trimmed_first_line(&class_path.to_string_lossy()) else {
+            continue;
+        };
+        let Some(class_value) = parse_pci_class(&class) else {
+            continue;
+        };
+        let base_class = ((class_value >> 16) & 0xff) as u8;
+        let subclass = ((class_value >> 8) & 0xff) as u8;
+        let programming_interface = (class_value & 0xff) as u8;
+        if base_class == 0x03 {
+            counts.gpu = counts.gpu.saturating_add(1);
+        }
+        if base_class == 0x02 {
+            counts.network = counts.network.saturating_add(1);
+        }
+        if base_class == 0x01 && subclass == 0x08 && programming_interface == 0x02 {
+            counts.nvme = counts.nvme.saturating_add(1);
+        }
+    }
+    counts
+}
+
+fn parse_pci_class(value: &str) -> Option<u32> {
+    u32::from_str_radix(value.trim().trim_start_matches("0x"), 16).ok()
+}
+
+fn count_linux_id_list(value: &str) -> Option<usize> {
+    let mut total = 0usize;
+    for part in value.trim().split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((start, end)) = part.split_once('-') {
+            let start = start.trim().parse::<usize>().ok()?;
+            let end = end.trim().parse::<usize>().ok()?;
+            if end < start {
+                return None;
+            }
+            total = total.checked_add(end - start + 1)?;
+        } else {
+            part.parse::<usize>().ok()?;
+            total = total.checked_add(1)?;
+        }
+    }
+    Some(total)
+}
+
+fn count_entries(path: &str) -> usize {
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries.flatten().count()
+}
+
+fn count_dirs(path: &str) -> usize {
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .count()
+}
+
+fn count_prefixed_entries(path: &str, prefix: &str) -> usize {
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(prefix))
+        .count()
+}
+
 fn read_trimmed_first_line(path: &str) -> Option<String> {
     let contents = fs::read_to_string(path).ok()?;
     contents
@@ -3569,12 +3735,15 @@ mod tests {
         assert_eq!(snapshot.amd_peerdirect, CapabilityState::Unsupported);
         assert_eq!(snapshot.dma_buf_export, CapabilityState::Unsupported);
         assert_eq!(snapshot.cxl, CapabilityState::Unsupported);
+        assert!(snapshot.topology.cpu_count > 0);
 
         let json = snapshot.to_json();
         assert!(json.contains("\"target_os\":\"linux\""));
         assert!(json.contains("\"kernel_release\""));
         assert!(json.contains("\"fabric\":\"DiscreteExplicit\""));
         assert!(json.contains("\"gpu_direct_rdma\":\"DEGRADED_TO_PINNED_HOST\""));
+        assert!(json.contains("\"topology\""));
+        assert!(json.contains("\"cpu_count\""));
     }
 
     #[test]
@@ -3597,12 +3766,52 @@ mod tests {
             amd_peerdirect: CapabilityState::Unsupported,
             dma_buf_export: CapabilityState::Unsupported,
             cxl: CapabilityState::Unsupported,
+            topology: TopologySnapshot {
+                cpu_online: Some("0-1".to_string()),
+                cpu_count: 2,
+                numa_node_count: 1,
+                pci_device_count: 3,
+                pci_gpu_count: 1,
+                pci_network_count: 1,
+                pci_nvme_count: 1,
+                block_device_count: 2,
+                nvme_block_device_count: 1,
+                rdma_device_count: 0,
+                iommu_group_count: 3,
+            },
         };
 
         let json = snapshot.to_json();
         assert!(json.contains("quote\\\" slash\\\\ newline\\n"));
         assert!(json.contains("kernel\\\" release"));
         assert!(json.contains("driver\\\\version"));
+        assert!(json.contains("\"cpu_online\":\"0-1\""));
+    }
+
+    #[test]
+    fn topology_snapshot_reports_basic_sysfs_counts() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let snapshot = runtime.discover_topology();
+
+        assert!(snapshot.cpu_count > 0);
+        assert!(snapshot.numa_node_count > 0);
+        assert!(snapshot.pci_device_count >= snapshot.pci_gpu_count);
+        assert!(snapshot.pci_device_count >= snapshot.pci_network_count);
+        assert!(snapshot.pci_device_count >= snapshot.pci_nvme_count);
+        assert!(snapshot.block_device_count >= snapshot.nvme_block_device_count);
+        let json = snapshot.to_json();
+        assert!(json.contains("\"cpu_count\""));
+        assert!(json.contains("\"pci_device_count\""));
+    }
+
+    #[test]
+    fn topology_helpers_parse_linux_id_and_pci_class_values() {
+        assert_eq!(count_linux_id_list("0-3"), Some(4));
+        assert_eq!(count_linux_id_list("0-1,4,8-9"), Some(5));
+        assert_eq!(count_linux_id_list("2-1"), None);
+        assert_eq!(parse_pci_class("0x030000"), Some(0x030000));
+        assert_eq!(parse_pci_class("010802"), Some(0x010802));
+        assert_eq!(parse_pci_class("not-hex"), None);
     }
 
     #[test]

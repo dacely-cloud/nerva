@@ -33,6 +33,16 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("topology") => match run_topology_probe() {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("{reason}");
+                ExitCode::from(1)
+            }
+        },
         Some("synthetic") => {
             let steps = match parse_optional_u64(args.next(), 1024, "steps") {
                 Ok(steps) => steps,
@@ -340,7 +350,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- transport-matrix\n       cargo run -p nerva-bench -- acceptance\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- topology\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- transport-matrix\n       cargo run -p nerva-bench -- acceptance\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
             );
             ExitCode::from(2)
         }
@@ -351,6 +361,12 @@ fn run_capabilities() -> Result<String, String> {
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
     Ok(runtime.discover_capabilities().to_json())
+}
+
+fn run_topology_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    Ok(runtime.discover_topology().to_json())
 }
 
 fn run_synthetic(steps: u64, ring_capacity: usize) -> Result<String, String> {
@@ -471,12 +487,37 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         "capability_provenance",
         capability_passed,
         format!(
-            "target={}-{} kernel_present={} fabric={:?} pinned_host_staging={:?}",
+            "target={}-{} kernel_present={} fabric={:?} pinned_host_staging={:?} topology_cpu_count={}",
             capabilities.target_os,
             capabilities.target_arch,
             capabilities.kernel_release.is_some(),
             capabilities.fabric,
             capabilities.pinned_host_staging,
+            capabilities.topology.cpu_count,
+        ),
+    );
+
+    let topology = runtime.discover_topology();
+    report.push(
+        "topology_snapshot",
+        topology.cpu_count > 0
+            && topology.numa_node_count > 0
+            && topology.pci_device_count >= topology.pci_gpu_count
+            && topology.pci_device_count >= topology.pci_network_count
+            && topology.pci_device_count >= topology.pci_nvme_count
+            && topology.block_device_count >= topology.nvme_block_device_count,
+        format!(
+            "cpu_count={} numa_nodes={} pci_devices={} pci_gpu={} pci_network={} pci_nvme={} block_devices={} nvme_block_devices={} rdma_devices={} iommu_groups={}",
+            topology.cpu_count,
+            topology.numa_node_count,
+            topology.pci_device_count,
+            topology.pci_gpu_count,
+            topology.pci_network_count,
+            topology.pci_nvme_count,
+            topology.block_device_count,
+            topology.nvme_block_device_count,
+            topology.rdma_device_count,
+            topology.iommu_group_count,
         ),
     );
 
@@ -762,6 +803,7 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
     match command {
         "smoke" => Ok(nerva_runtime::cuda_smoke().to_json()),
         "capabilities" => run_capabilities(),
+        "topology" => run_topology_probe(),
         "synthetic" => {
             let steps = parse_optional_u64(args.first().cloned(), 1024, "steps")?;
             let ring_capacity = parse_optional_usize(args.get(1).cloned(), 64, "ring_capacity")?;
@@ -1400,6 +1442,7 @@ mod tests {
         assert!(json.contains("\"cargo_encoded_rustflags\""));
         assert!(json.contains("\"capabilities\""));
         assert!(json.contains("\"target_os\":\"linux\""));
+        assert!(json.contains("\"topology\""));
         assert!(json.contains("\"summary\""));
         assert!(json.contains("\"device_timeline_idle_ns\":0"));
     }
@@ -1411,6 +1454,7 @@ mod tests {
         assert!(json.contains("\"acceptance_schema\":\"nerva-acceptance-v1\""));
         assert!(json.contains("\"status\":\"ok\""));
         assert!(json.contains("\"failed\":0"));
+        assert!(json.contains("\"topology_snapshot\""));
         assert!(json.contains("\"synthetic_device_token\""));
         assert!(json.contains("\"kv_residency_tiering\""));
         assert!(json.contains("\"transport_pinned_fallback\""));
