@@ -24,23 +24,35 @@ Memory residency, device-first token state, heterogeneous CPU/GPU execution, and
 
 ---
 
-<details>
-<summary><b>Contents</b></summary>
-<br/>
+## Table of contents
 
-**Overview** — [What NERVA is](#what-nerva-is) · [The thesis](#the-thesis)
-
-**The architecture** — [Why inference needs a new machine](#why-inference-needs-a-new-machine) · [What changes](#what-changes) · [ResidentBlocks](#residentblocks) · [Memory residency](#memory-residency) · [CPU and GPU roles](#cpu-and-gpu-roles) · [Device-first decoding](#device-first-decoding) · [KV cache as virtual memory](#kv-cache-as-virtual-memory) · [Static arenas and synchronization](#static-arenas-and-synchronization) · [Token ledgers](#token-ledgers)
-
-**Hardware and the road ahead** — [Hardware model](#hardware-model) · [Coherent shared memory](#coherent-shared-memory) · [Future transport and distributed inference](#future-transport-and-distributed-inference)
-
-**Positioning** — [Relationship to vLLM and rvLLM](#relationship-to-vllm-and-rvllm) · [What NERVA is not](#what-nerva-is-not)
-
-**Status and direction** — [Current stage](#current-stage) · [Long-term goal](#long-term-goal)
-
-**Implementation and running it** — [Current implementation](#current-implementation) · [Requirements](#requirements) · [Running the checks](#running-the-checks)
-
-</details>
+- [Overview](#overview)
+  - [What NERVA is](#what-nerva-is)
+  - [The thesis](#the-thesis)
+- [The architecture](#the-architecture)
+  - [Why inference needs a new machine](#why-inference-needs-a-new-machine)
+  - [What changes](#what-changes)
+  - [ResidentBlocks](#residentblocks)
+  - [Memory residency](#memory-residency)
+  - [CPU and GPU roles](#cpu-and-gpu-roles)
+  - [Device-first decoding](#device-first-decoding)
+  - [KV cache as virtual memory](#kv-cache-as-virtual-memory)
+  - [Static arenas and synchronization](#static-arenas-and-synchronization)
+  - [Token ledgers](#token-ledgers)
+- [Hardware and the road ahead](#hardware-and-the-road-ahead)
+  - [Hardware model](#hardware-model)
+  - [Coherent shared memory](#coherent-shared-memory)
+  - [Future transport and distributed inference](#future-transport-and-distributed-inference)
+- [Positioning](#positioning)
+  - [Relationship to vLLM and rvLLM](#relationship-to-vllm-and-rvllm)
+  - [What NERVA is not](#what-nerva-is-not)
+- [Status and direction](#status-and-direction)
+  - [Current stage](#current-stage)
+  - [Long-term goal](#long-term-goal)
+- [Implementation and running it](#implementation-and-running-it)
+  - [Current implementation](#current-implementation)
+  - [Requirements](#requirements)
+  - [Running the checks](#running-the-checks)
 
 ---
 
@@ -69,7 +81,7 @@ At the top level, NERVA replaces the GPU-centric command loop with an inference 
 ```mermaid
 flowchart TB
     REQ["Request and prompt"] --> CPU
-    subgraph CONTROL["CPU — latency and control plane"]
+    subgraph CONTROL["CPU, latency and control plane"]
         CPU["Request and token state machine"]
         SCHED["Execution planner and scheduler"]
         HILO["HILO residency planner"]
@@ -81,11 +93,11 @@ flowchart TB
         ARENA["Static arena manager"]
         PFE["Prefetch and eviction engine"]
     end
-    subgraph HOT["GPU — hot tensor plane"]
+    subgraph HOT["GPU, hot tensor plane"]
         EXEC["Prebuilt decode graph or transaction"]
         RING["Device token ring"]
     end
-    TM["Transport manager — RDMA, DPDK, pinned-host"]
+    TM["Transport manager, RDMA, DPDK, pinned-host"]
     CPU --> SCHED --> HILO --> BT
     BT --> KVM
     BT --> ARENA
@@ -149,19 +161,19 @@ NERVA treats memory as a hierarchy of roles rather than a binary capacity wall.
 
 ```mermaid
 flowchart TB
-    DISK["Disk / NVMe — cold tier<br/>model files, cold KV snapshots, persistent prefix cache"]
-    CXL["CXL / coherent fabric — expandable warm or cold tier"]
-    DRAM["DRAM — warm tier and CPU-compute tier<br/>warm weights, warm KV, prefix cache, computable shards"]
-    PIN["Pinned DRAM — staging tier<br/>registered transfer and transport rings"]
-    VRAM["VRAM / local HBM — hot tier<br/>active weights, hot KV, activations, device token ring"]
+    DISK["Disk / NVMe, cold tier<br/>model files, cold KV snapshots, persistent prefix cache"]
+    CXL["CXL / coherent fabric, expandable warm or cold tier"]
+    DRAM["DRAM, warm tier and CPU-compute tier<br/>warm weights, warm KV, prefix cache, computable shards"]
+    PIN["Pinned DRAM, staging tier<br/>registered transfer and transport rings"]
+    VRAM["VRAM / local HBM, hot tier<br/>active weights, hot KV, activations, device token ring"]
     DISK -->|planned prefetch| DRAM
     CXL --- DRAM
     DRAM -->|stage| PIN
     PIN -->|async H2D| VRAM
     VRAM -->|demote or evict| DRAM
-    GPU["GPU — hot tensor plane"] --- VRAM
-    CPUc["CPU — control and warm compute"] --- DRAM
-    NIC["NIC / fabric — explicit transport device"] --- PIN
+    GPU["GPU, hot tensor plane"] --- VRAM
+    CPUc["CPU, control and warm compute"] --- DRAM
+    NIC["NIC / fabric, explicit transport device"] --- PIN
 ```
 
 **VRAM** is the hot tier, and it should hold active weights, hot KV pages, current activations, graph workspaces, sampler state, prefetch slots, and the device token ring. It should not fill up with cold KV, duplicated prefixes, dead temporaries, or layout-conversion garbage.
@@ -211,7 +223,7 @@ sequenceDiagram
     G->>R: write sampled token t into versioned slot
     R-->>G: step t+1 consumes the same slot directly
     R--)C: async copy of token t to host
-    Note over C: stream, stop policy, metadata — off the decode path
+    Note over C: host-side stream, stop policy and metadata, kept off the decode path
     C-->>G: explicit policy barrier only when a policy demands it
 ```
 
@@ -223,7 +235,7 @@ The long-term design supports exact blockwise attention, where hot KV blocks run
 
 ```mermaid
 flowchart TB
-    subgraph PAGES["KV pages — each tracks layer, head, token range, hotness, owner"]
+    subgraph PAGES["KV pages, each tracks layer, head, token range, hotness, owner"]
         HOTKV["Hot KV pages in VRAM"]
         WARMKV["Warm KV pages in DRAM"]
         COLDKV["Cold KV pages retained off the hot set"]
@@ -232,7 +244,7 @@ flowchart TB
     WARMKV --> AC["CPU blockwise attention when cheaper than staging"]
     AG --> MERGE["Online-softmax merge"]
     AC --> MERGE
-    MERGE --> OUT["Exact attention output — context never dropped"]
+    MERGE --> OUT["Exact attention output, context never dropped"]
 ```
 
 ### Static arenas and synchronization
@@ -270,16 +282,16 @@ Networking is not part of the initial runtime, but the architecture is built so 
 ```mermaid
 flowchart LR
     IN["Prompt / hidden state"] --> S1
-    subgraph S1["System 1 — stage A"]
+    subgraph S1["System 1, stage A"]
         W1["Weights A + KV A, local"]
     end
-    subgraph S2["System 2 — stage B"]
+    subgraph S2["System 2, stage B"]
         W2["Weights B + KV B, local"]
     end
-    subgraph S3["System 3 — stage C"]
+    subgraph S3["System 3, stage C"]
         W3["Weights C + KV C, local"]
     end
-    subgraph S4["System 4 — stage D"]
+    subgraph S4["System 4, stage D"]
         W4["Weights D + KV D, local"]
     end
     S1 -->|boundary activation| S2
@@ -299,12 +311,12 @@ The runtime detects the best available path at startup and records the decision 
 ```mermaid
 flowchart TB
     START["Move a boundary activation"] --> CAP{"GPU-direct peer DMA verified at startup?"}
-    CAP -->|yes| A["Path A — true GPU-direct RDMA<br/>GPU VRAM to NIC to remote GPU VRAM"]
+    CAP -->|yes| A["Path A, true GPU-direct RDMA<br/>GPU VRAM to NIC to remote GPU VRAM"]
     CAP -->|no| MAP{"Mapped pinned host output measured faster?"}
-    MAP -->|yes, small decode activation| Dp["Path D — GPU kernel writes mapped pinned host memory, NIC sends it"]
+    MAP -->|yes, small decode activation| Dp["Path D, GPU kernel writes mapped pinned host memory, NIC sends it"]
     MAP -->|no| LAST{"Last stage produced on the CPU?"}
-    LAST -->|yes| Cp["Path C — CPU writes boundary into pinned send buffer, NIC sends it"]
-    LAST -->|no| B["Path B — async D2H into pinned ring, RDMA or DPDK, remote pinned ring, H2D<br/>universal discrete-GPU fallback"]
+    LAST -->|yes| Cp["Path C, CPU writes boundary into pinned send buffer, NIC sends it"]
+    LAST -->|no| B["Path B, async D2H into pinned ring, RDMA or DPDK, remote pinned ring, H2D<br/>universal discrete-GPU fallback"]
     A --> LEDGER["Path choice recorded in the ledger"]
     Dp --> LEDGER
     Cp --> LEDGER
