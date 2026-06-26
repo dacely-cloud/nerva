@@ -1,6 +1,7 @@
 mod attention;
 mod hf;
 mod precision;
+mod prompt;
 mod reference;
 mod safetensors;
 mod support;

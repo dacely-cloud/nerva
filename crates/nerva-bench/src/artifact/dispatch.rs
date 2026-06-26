@@ -100,6 +100,13 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
                 .map(|summary| summary.to_json())
                 .map_err(|err| format!("tiny greedy model failed: {err:?}"))
         }
+        "prompt-model" => {
+            let prompt = args.first().map_or("zero", String::as_str);
+            let steps = parse_optional_usize(args.get(1).cloned(), 8, "steps")?;
+            nerva_model::prompt::decode::tiny_prompt_decode_smoke(prompt, steps)
+                .map(|summary| summary.to_json())
+                .map_err(|err| format!("tiny prompt model failed: {err:?}"))
+        }
         "precision-model" => {
             let steps = parse_optional_usize(args.first().cloned(), 8, "steps")?;
             precision_model_pair_json(steps)
