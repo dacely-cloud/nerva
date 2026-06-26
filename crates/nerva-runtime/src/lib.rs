@@ -14,8 +14,8 @@ use nerva_kernel_contracts::{
     KernelBackend, KernelOperation, KernelPlan, KernelQuery, bootstrap_registry,
 };
 use nerva_ledger::{
-    CandidateCost, ExecutionDecision, LedgerEvent, LedgerEventKind, MetricSource,
-    ResidencyDecision, SyncClass, TokenLedger,
+    CandidateCost, DeviceTimelineSpan, ExecutionDecision, LedgerEvent, LedgerEventKind,
+    MetricSource, ResidencyDecision, SyncClass, TokenLedger,
 };
 use nerva_memory::{
     ArenaKind, BlockAllocationRequest, BlockRegistry, KvPageSpec, KvPrefixKey, KvResidencyAction,
@@ -844,10 +844,11 @@ pub struct SyntheticEngine {
     token_ring: DeviceTokenRing,
     next_transaction_id: u64,
     layout: GraphLayout,
+    device: DeviceOrdinal,
 }
 
 impl SyntheticEngine {
-    pub fn new(token_ring_capacity: usize) -> Result<Self> {
+    pub fn new(token_ring_capacity: usize, device: DeviceOrdinal) -> Result<Self> {
         let layout = GraphLayout::new(1, 1, token_ring_capacity as u32, 1);
         let mut graph_pool = GraphPool::new();
         graph_pool.capture_synthetic(layout);
@@ -856,6 +857,7 @@ impl SyntheticEngine {
             token_ring: DeviceTokenRing::new(token_ring_capacity)?,
             next_transaction_id: 1,
             layout,
+            device,
         })
     }
 
@@ -1010,6 +1012,13 @@ impl<'engine> PendingSyntheticStep<'engine> {
             latency_ns: 3,
             label: "synthetic_decode_kernel",
         });
+        ledger.record_device_span(DeviceTimelineSpan::new(
+            self.engine.device,
+            0,
+            3,
+            MetricSource::EstimatedModel,
+            "synthetic_decode_device_active",
+        ))?;
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::Copy,
             sync_class: None,
@@ -1090,6 +1099,8 @@ pub struct SyntheticDecodeSummary {
     pub copy_events: u64,
     pub host_wait_events: u64,
     pub soft_visibility_syncs: u64,
+    pub device_timeline_active_ns: u64,
+    pub device_timeline_idle_ns: u64,
     pub graph_replay_latency_ns: u64,
     pub device_latency_ns: u64,
     pub copy_latency_ns: u64,
@@ -1382,7 +1393,7 @@ impl SyntheticDecodeSummary {
             SyntheticDecodeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"soft_visibility_syncs\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"soft_visibility_sync_latency_ns\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"soft_visibility_syncs\":{},\"device_timeline_active_ns\":{},\"device_timeline_idle_ns\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"soft_visibility_sync_latency_ns\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
             status,
             self.steps,
             self.token_ring_capacity,
@@ -1395,6 +1406,8 @@ impl SyntheticDecodeSummary {
             self.copy_events,
             self.host_wait_events,
             self.soft_visibility_syncs,
+            self.device_timeline_active_ns,
+            self.device_timeline_idle_ns,
             self.graph_replay_latency_ns,
             self.device_latency_ns,
             self.copy_latency_ns,
@@ -1449,8 +1462,7 @@ impl Runtime {
     }
 
     pub fn synthetic_engine(&self, token_ring_capacity: usize) -> Result<SyntheticEngine> {
-        let _ = self.config;
-        SyntheticEngine::new(token_ring_capacity)
+        SyntheticEngine::new(token_ring_capacity, self.config.device)
     }
 
     pub fn discover_capabilities(&self) -> CapabilitySnapshot {
@@ -2533,6 +2545,8 @@ impl Runtime {
         let mut copy_events: u64 = 0;
         let mut host_wait_events: u64 = 0;
         let mut soft_visibility_syncs: u64 = 0;
+        let mut device_timeline_active_ns: u64 = 0;
+        let mut device_timeline_idle_ns: u64 = 0;
         let mut graph_replay_latency_ns: u64 = 0;
         let mut device_latency_ns: u64 = 0;
         let mut copy_latency_ns: u64 = 0;
@@ -2570,6 +2584,10 @@ impl Runtime {
             copy_events += token_copy_events;
             host_wait_events += token_host_wait_events;
             soft_visibility_syncs += token_soft_visibility_syncs;
+            device_timeline_active_ns = device_timeline_active_ns
+                .saturating_add(output.ledger.device_active_ns(self.config.device)?);
+            device_timeline_idle_ns = device_timeline_idle_ns
+                .saturating_add(output.ledger.device_idle_ns(self.config.device)?);
             graph_replay_latency_ns = graph_replay_latency_ns
                 .saturating_add(output.ledger.latency_ns_for(LedgerEventKind::GraphReplay));
             device_latency_ns = device_latency_ns.saturating_add(
@@ -2651,6 +2669,8 @@ impl Runtime {
             copy_events,
             host_wait_events,
             soft_visibility_syncs,
+            device_timeline_active_ns,
+            device_timeline_idle_ns,
             graph_replay_latency_ns,
             device_latency_ns,
             copy_latency_ns,
@@ -3695,6 +3715,8 @@ mod tests {
             output.ledger.sync_count_for(SyncClass::SoftVisibilitySync),
             1
         );
+        assert_eq!(output.ledger.device_active_ns(DeviceOrdinal(0)).unwrap(), 3);
+        assert_eq!(output.ledger.device_idle_ns(DeviceOrdinal(0)).unwrap(), 0);
         assert!(output.ledger.require_classified_syncs().is_ok());
         assert_eq!(
             engine
@@ -3777,6 +3799,8 @@ mod tests {
         assert_eq!(summary.copy_events, 1024);
         assert_eq!(summary.host_wait_events, 1024);
         assert_eq!(summary.soft_visibility_syncs, 1024);
+        assert_eq!(summary.device_timeline_active_ns, 3072);
+        assert_eq!(summary.device_timeline_idle_ns, 0);
         assert_eq!(summary.graph_replay_latency_ns, 1024);
         assert_eq!(summary.device_latency_ns, 3072);
         assert_eq!(summary.copy_latency_ns, 1024);

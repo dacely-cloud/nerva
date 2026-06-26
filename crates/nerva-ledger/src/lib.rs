@@ -3,7 +3,9 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("NERVA currently supports Linux only.");
 
-use nerva_core::{CostSource, ExecutionOwner, MemoryTier, NervaError, ResidentBlockId, Result};
+use nerva_core::{
+    CostSource, DeviceOrdinal, ExecutionOwner, MemoryTier, NervaError, ResidentBlockId, Result,
+};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum LedgerEventKind {
@@ -50,6 +52,33 @@ pub struct LedgerEvent {
     pub bytes: usize,
     pub latency_ns: u64,
     pub label: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceTimelineSpan {
+    pub device: DeviceOrdinal,
+    pub start_ns: u64,
+    pub end_ns: u64,
+    pub metric_source: MetricSource,
+    pub label: &'static str,
+}
+
+impl DeviceTimelineSpan {
+    pub const fn new(
+        device: DeviceOrdinal,
+        start_ns: u64,
+        end_ns: u64,
+        metric_source: MetricSource,
+        label: &'static str,
+    ) -> Self {
+        Self {
+            device,
+            start_ns,
+            end_ns,
+            metric_source,
+            label,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,6 +134,7 @@ pub struct ExecutionDecision {
 pub struct TokenLedger {
     pub token_index: u64,
     pub events: Vec<LedgerEvent>,
+    pub device_timeline: Vec<DeviceTimelineSpan>,
     pub residency_decisions: Vec<ResidencyDecision>,
     pub execution_decisions: Vec<ExecutionDecision>,
     pub hot_path_allocations: u64,
@@ -115,6 +145,7 @@ impl TokenLedger {
         Self {
             token_index,
             events: Vec::new(),
+            device_timeline: Vec::new(),
             residency_decisions: Vec::new(),
             execution_decisions: Vec::new(),
             hot_path_allocations: 0,
@@ -158,6 +189,12 @@ impl TokenLedger {
 
     pub fn record_execution_decision(&mut self, decision: ExecutionDecision) {
         self.execution_decisions.push(decision);
+    }
+
+    pub fn record_device_span(&mut self, span: DeviceTimelineSpan) -> Result<()> {
+        validate_device_span(&span)?;
+        self.device_timeline.push(span);
+        Ok(())
     }
 
     pub fn record_hot_path_allocation_attempt(
@@ -232,6 +269,51 @@ impl TokenLedger {
             .sum()
     }
 
+    pub fn device_active_ns(&self, device: DeviceOrdinal) -> Result<u64> {
+        let (active_ns, _) = self.device_timeline_totals(device)?;
+        Ok(active_ns)
+    }
+
+    pub fn device_idle_ns(&self, device: DeviceOrdinal) -> Result<u64> {
+        let (_, idle_ns) = self.device_timeline_totals(device)?;
+        Ok(idle_ns)
+    }
+
+    fn device_timeline_totals(&self, device: DeviceOrdinal) -> Result<(u64, u64)> {
+        let mut spans = self
+            .device_timeline
+            .iter()
+            .filter(|span| span.device == device)
+            .collect::<Vec<_>>();
+        spans.sort_by_key(|span| (span.start_ns, span.end_ns));
+
+        let mut active_ns = 0u64;
+        let mut idle_ns = 0u64;
+        let mut merged_end: Option<u64> = None;
+
+        for span in spans {
+            validate_device_span(span)?;
+            match merged_end {
+                None => {
+                    active_ns = active_ns.saturating_add(span.end_ns - span.start_ns);
+                    merged_end = Some(span.end_ns);
+                }
+                Some(end) if span.end_ns <= end => {}
+                Some(end) if span.start_ns <= end => {
+                    active_ns = active_ns.saturating_add(span.end_ns - end);
+                    merged_end = Some(span.end_ns);
+                }
+                Some(end) => {
+                    idle_ns = idle_ns.saturating_add(span.start_ns - end);
+                    active_ns = active_ns.saturating_add(span.end_ns - span.start_ns);
+                    merged_end = Some(span.end_ns);
+                }
+            }
+        }
+
+        Ok((active_ns, idle_ns))
+    }
+
     pub fn require_zero_hot_path_allocations(&self) -> Result<()> {
         if self.hot_path_allocations == 0 {
             Ok(())
@@ -265,6 +347,16 @@ impl TokenLedger {
                 (_, None) => {}
             }
         }
+        Ok(())
+    }
+}
+
+fn validate_device_span(span: &DeviceTimelineSpan) -> Result<()> {
+    if span.end_ns < span.start_ns {
+        Err(NervaError::InvalidArgument {
+            reason: format!("device span '{}' ends before it starts", span.label),
+        })
+    } else {
         Ok(())
     }
 }
@@ -331,8 +423,79 @@ mod tests {
             ledger.latency_ns_for_source(MetricSource::EstimatedModel),
             5
         );
+        ledger
+            .record_device_span(DeviceTimelineSpan::new(
+                DeviceOrdinal(0),
+                0,
+                7,
+                MetricSource::GpuEvent,
+                "device_active",
+            ))
+            .unwrap();
+        assert_eq!(ledger.device_active_ns(DeviceOrdinal(0)).unwrap(), 7);
+        assert_eq!(ledger.device_idle_ns(DeviceOrdinal(0)).unwrap(), 0);
         assert_eq!(ledger.total_latency_ns(), 12);
         assert!(ledger.require_classified_syncs().is_ok());
+    }
+
+    #[test]
+    fn device_idle_is_derived_from_device_timeline_gaps() {
+        let mut ledger = TokenLedger::new(0);
+        ledger
+            .record_device_span(DeviceTimelineSpan::new(
+                DeviceOrdinal(0),
+                0,
+                10,
+                MetricSource::GpuEvent,
+                "kernel_a",
+            ))
+            .unwrap();
+        ledger
+            .record_device_span(DeviceTimelineSpan::new(
+                DeviceOrdinal(0),
+                15,
+                25,
+                MetricSource::GpuEvent,
+                "kernel_b",
+            ))
+            .unwrap();
+        ledger
+            .record_device_span(DeviceTimelineSpan::new(
+                DeviceOrdinal(0),
+                20,
+                30,
+                MetricSource::GpuEvent,
+                "overlap_kernel",
+            ))
+            .unwrap();
+        ledger.record_sync(
+            SyncClass::SoftVisibilitySync,
+            None,
+            Some(MemoryTier::Vram),
+            Some(MemoryTier::PinnedDram),
+            0,
+            100,
+            MetricSource::RuntimeTimestamp,
+            "host_wait_not_gpu_idle",
+        );
+
+        assert_eq!(ledger.latency_ns_for(LedgerEventKind::Sync), 100);
+        assert_eq!(ledger.device_active_ns(DeviceOrdinal(0)).unwrap(), 25);
+        assert_eq!(ledger.device_idle_ns(DeviceOrdinal(0)).unwrap(), 5);
+    }
+
+    #[test]
+    fn device_timeline_rejects_invalid_spans() {
+        let mut ledger = TokenLedger::new(0);
+        let result = ledger.record_device_span(DeviceTimelineSpan::new(
+            DeviceOrdinal(0),
+            10,
+            9,
+            MetricSource::GpuEvent,
+            "bad_span",
+        ));
+
+        assert!(result.is_err());
     }
 
     #[test]
