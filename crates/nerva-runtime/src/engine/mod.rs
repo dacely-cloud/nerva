@@ -1,6 +1,7 @@
 pub mod cuda;
 pub mod kv_probe;
 pub mod memory_loop;
+pub mod phase_handoff;
 pub mod residency;
 pub mod resident_weights;
 pub mod runtime;

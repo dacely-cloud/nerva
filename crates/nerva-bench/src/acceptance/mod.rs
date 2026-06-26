@@ -6,6 +6,7 @@ mod files;
 mod manifest;
 mod memory_loop;
 mod model;
+mod phase;
 mod report;
 mod resident_weights;
 pub(crate) mod runner;
