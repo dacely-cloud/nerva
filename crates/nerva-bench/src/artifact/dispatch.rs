@@ -64,6 +64,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "capabilities" => runtime::run_capabilities(),
         "backend-contract" => backend::run_backend_contract_probe(),
         "hot-path-guard" => runtime::run_hot_path_guard_probe(),
+        "security-isolation" => runtime::run_security_isolation_probe(),
         "topology" => runtime::run_topology_probe(),
         "synthetic" => {
             let steps = parse_optional_u64(args.first().cloned(), 1024, "steps")?;

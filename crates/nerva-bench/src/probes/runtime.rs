@@ -21,3 +21,12 @@ pub(crate) fn run_hot_path_guard_probe() -> Result<String, String> {
         .map(|summary| summary.to_json())
         .map_err(|err| format!("hot-path guard probe failed: {err:?}"))
 }
+
+pub(crate) fn run_security_isolation_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    runtime
+        .run_security_isolation_probe()
+        .map(|summary| summary.to_json())
+        .map_err(|err| format!("security isolation probe failed: {err:?}"))
+}

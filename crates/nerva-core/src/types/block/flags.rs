@@ -7,6 +7,7 @@ impl BlockFlags {
     pub const PREFETCHABLE: u32 = 1 << 0;
     pub const EVICTABLE: u32 = 1 << 1;
     pub const TRANSPORT_REGISTERED: u32 = 1 << 2;
+    pub const SENSITIVE: u32 = 1 << 3;
 
     pub const fn empty() -> Self {
         Self { bits: 0 }

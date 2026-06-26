@@ -16,6 +16,7 @@ mod report;
 mod resident_weights;
 pub(crate) mod runner;
 mod runtime_checks;
+mod security;
 mod token;
 mod transport;
 mod vllm;

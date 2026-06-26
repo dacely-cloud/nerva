@@ -16,6 +16,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"cuda_device_sampler\""));
     assert!(json.contains("\"static_arenas\""));
     assert!(json.contains("\"hot_path_guard\""));
+    assert!(json.contains("\"security_isolation\""));
     assert!(json.contains("\"topology_snapshot\""));
     assert!(json.contains("\"synthetic_transaction\""));
     assert!(json.contains("\"synthetic_device_token\""));

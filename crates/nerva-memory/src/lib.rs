@@ -8,6 +8,7 @@ pub mod kv;
 pub mod phase;
 pub mod queue;
 pub mod registry;
+pub mod security;
 
 #[cfg(test)]
 mod tests;
