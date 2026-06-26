@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use crate::cli::exit;
 use crate::parity::load_vllm_token_identity_parity;
 use crate::parse::parse_optional_usize;
+use nerva_core::types::dtype::DType;
 
 pub(crate) fn dispatch(
     command: Option<&str>,
@@ -13,6 +14,7 @@ pub(crate) fn dispatch(
         Some("precision") => Some(run_precision_block()),
         Some("safetensors-block") => Some(run_safetensors_block()),
         Some("model") => Some(run_tiny_model(args)),
+        Some("precision-model") => Some(run_tiny_precision_model(args)),
         Some("vllm-parity") => Some(run_vllm_parity(args)),
         Some("attention") => Some(run_attention()),
         Some("warm") => Some(run_warm_compute()),
@@ -75,6 +77,39 @@ fn run_tiny_model(args: &mut impl Iterator<Item = String>) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn run_tiny_precision_model(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let steps = match parse_optional_usize(args.next(), 8, "steps") {
+        Ok(steps) => steps,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    match precision_model_pair_json(steps) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(reason) => {
+            eprintln!("{reason}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+pub(crate) fn precision_model_pair_json(steps: usize) -> Result<String, String> {
+    let f16 = nerva_model::tiny::precision::tiny_precision_greedy_decode_smoke(DType::F16, steps)
+        .map_err(|err| format!("tiny FP16 precision model failed: {err:?}"))?;
+    let bf16 = nerva_model::tiny::precision::tiny_precision_greedy_decode_smoke(DType::BF16, steps)
+        .map_err(|err| format!("tiny BF16 precision model failed: {err:?}"))?;
+    let passed = f16.passed() && bf16.passed() && f16.output_hash == bf16.output_hash;
+    Ok(format!(
+        "{{\"status\":\"{}\",\"steps\":{},\"passed\":{},\"f16\":{},\"bf16\":{}}}",
+        if passed { "ok" } else { "failed" },
+        steps,
+        passed,
+        f16.to_json(),
+        bf16.to_json(),
+    ))
 }
 
 fn run_vllm_parity(args: &mut impl Iterator<Item = String>) -> ExitCode {

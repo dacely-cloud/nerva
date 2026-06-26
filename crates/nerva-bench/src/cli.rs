@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 mod cuda;
 mod exit;
-mod model;
+pub(crate) mod model;
 mod probes;
 mod usage;
 mod weights_io;

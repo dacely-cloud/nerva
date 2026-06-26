@@ -1,5 +1,6 @@
 use crate::{
     acceptance::run_acceptance_probe,
+    cli::model::precision_model_pair_json,
     model_io::{
         config::{run_layout_probe, run_manifest_probe, run_metadata_probe},
         resident::{
@@ -73,6 +74,10 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
             nerva_model::tiny::smoke::tiny_greedy_decode_smoke(steps)
                 .map(|summary| summary.to_json())
                 .map_err(|err| format!("tiny greedy model failed: {err:?}"))
+        }
+        "precision-model" => {
+            let steps = parse_optional_usize(args.first().cloned(), 8, "steps")?;
+            precision_model_pair_json(steps)
         }
         "vllm-parity" => {
             let steps = parse_optional_usize(args.get(1).cloned(), 8, "steps")?;

@@ -3,6 +3,7 @@ use crate::acceptance::files;
 use crate::acceptance::manifest;
 use crate::acceptance::report::AcceptanceReport;
 use crate::acceptance::vllm;
+use nerva_core::types::dtype::DType;
 
 pub(crate) fn push_reference_block(report: &mut AcceptanceReport) {
     match nerva_model::reference::smoke::reference_block_smoke() {
@@ -61,6 +62,36 @@ pub(crate) fn push_precision_and_cuda_blocks(report: &mut AcceptanceReport) {
             report.push("safetensors_precision_block", false, details.clone());
             cuda::block::push_prerequisite_failure(report, &details);
         }
+    }
+
+    match (
+        nerva_model::tiny::precision::tiny_precision_greedy_decode_smoke(DType::F16, 8),
+        nerva_model::tiny::precision::tiny_precision_greedy_decode_smoke(DType::BF16, 8),
+    ) {
+        (Ok(f16), Ok(bf16)) => report.push(
+            "precision_tiny_model_greedy_parity",
+            f16.passed() && bf16.passed() && f16.output_hash == bf16.output_hash,
+            format!(
+                "f16_parity={} bf16_parity={} f16_hash={} bf16_hash={} f16_ledgers={} bf16_ledgers={} f16_cpu_events={} bf16_cpu_events={} f16_decisions={} bf16_decisions={} f16_hot_path_allocations={} bf16_hot_path_allocations={}",
+                f16.parity,
+                bf16.parity,
+                f16.output_hash,
+                bf16.output_hash,
+                f16.ledger_count,
+                bf16.ledger_count,
+                f16.cpu_events,
+                bf16.cpu_events,
+                f16.execution_decisions,
+                bf16.execution_decisions,
+                f16.hot_path_allocations,
+                bf16.hot_path_allocations,
+            ),
+        ),
+        (Err(err), _) | (_, Err(err)) => report.push(
+            "precision_tiny_model_greedy_parity",
+            false,
+            format!("{err:?}"),
+        ),
     }
 }
 

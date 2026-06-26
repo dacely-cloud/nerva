@@ -520,6 +520,7 @@ This repository is in the runtime foundation stage, so it is not a production mo
 | Safetensors header loader | Single-file and sharded safetensors probes read bounded headers, validate tensor metadata against the HF manifest, and avoid bulk payload reads during metadata inspection. |
 | Safetensors file prefetch | Resident shard prefetch reads planned file ranges from safetensors shards, validates complete block coverage, records disk-read/copy events, and hashes read bytes. |
 | Single model | One exact tiny f32 greedy decode path checks deterministic token parity and per-token ledgers. |
+| Precision single model | One exact tiny FP16 and BF16 Transformer greedy decode path uses encoded weights, encoded embeddings, encoded LM head, reusable scratch, per-token ledgers, and token parity. |
 | vLLM token parity | A vLLM-style token artifact is compared against NERVA token IDs with exact mismatch, missing, extra, and hash accounting. |
 | Tiered attention | Exact online-softmax blockwise attention merges warm DRAM and hot VRAM KV blocks without changing semantics. |
 | Warm compute | Exact dense matvec candidates compare CPU-resident, GPU-resident, GPU-staged, and hybrid execution with selected-owner ledgering. |
@@ -547,6 +548,7 @@ cargo run -p nerva-bench -- synthetic 1024 64
 cargo run -p nerva-bench -- block
 cargo run -p nerva-bench -- precision
 cargo run -p nerva-bench -- model 8
+cargo run -p nerva-bench -- precision-model 8
 cargo run -p nerva-bench -- vllm-parity path/to/vllm_tokens.json 8
 cargo run -p nerva-bench -- attention
 cargo run -p nerva-bench -- warm
@@ -554,4 +556,4 @@ cargo run -p nerva-bench -- contracts
 cargo run -p nerva-bench -- kv
 ```
 
-The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, exact token parity for the model probe, exact FP16/BF16 bit parity for the precision probe, bounded safetensors `header_bytes` and `payload_bytes`, safetensors file-prefetch `disk_read_events`, `ready_blocks`, and `data_hash`, exact vLLM-style token identity parity, exact dense-reference parity for the attention tests, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, warm-compute `execution_decisions`, contract `device_resident_buffers`, and the explicit KV residency transfer and stall ledger events.
+The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, exact token parity for the f32 model probe, exact FP16/BF16 token parity for the precision model probe, exact FP16/BF16 bit parity for the precision block probe, bounded safetensors `header_bytes` and `payload_bytes`, safetensors file-prefetch `disk_read_events`, `ready_blocks`, and `data_hash`, exact vLLM-style token identity parity, exact dense-reference parity for the attention tests, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, warm-compute `execution_decisions`, contract `device_resident_buffers`, and the explicit KV residency transfer and stall ledger events.
