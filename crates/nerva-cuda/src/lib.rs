@@ -5,6 +5,7 @@
 
 pub mod block;
 pub mod graph;
+pub mod sampler;
 pub mod smoke;
 
 #[cfg(test)]

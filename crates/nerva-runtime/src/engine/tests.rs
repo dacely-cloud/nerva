@@ -22,14 +22,16 @@ use crate::engine::kv_probe::{KvResidencyProbeConfig, KvResidencyProbeStatus};
 use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::engine::synthetic::{SyntheticDecodeConfig, SyntheticDecodeStatus};
-use crate::graph::{GraphKey, GraphLayout, GraphPool};
-use crate::token::{DeviceTokenRef, DeviceTokenRing, TokenInputSource};
+use crate::graph::layout::{GraphKey, GraphLayout};
+use crate::graph::pool::GraphPool;
+use crate::token::ring::{DeviceTokenRef, DeviceTokenRing, TokenInputSource};
 use crate::transport::matrix::TransportCapabilityMatrixStatus;
 use crate::transport::path::{
     TransferMode, TransportPathClass, TransportPathKind, TransportPathRequest,
 };
 use crate::transport::probe::TransportPathProbeStatus;
-use crate::weights::{ResidentWeightExecutionStrategy, ResidentWeightProbeStatus};
+use crate::weights::execution::ResidentWeightExecutionStrategy;
+use crate::weights::probe::ResidentWeightProbeStatus;
 
 const SHARD_ONE: &str = "model-00001-of-00001.safetensors";
 

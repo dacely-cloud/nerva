@@ -6,8 +6,8 @@ use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
 
 use crate::engine::runtime::Runtime;
-use crate::graph::GraphKey;
-use crate::token::TokenInputSource;
+use crate::graph::layout::GraphKey;
+use crate::token::ring::TokenInputSource;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SyntheticDecodeConfig {

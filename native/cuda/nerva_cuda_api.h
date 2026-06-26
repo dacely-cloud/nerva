@@ -92,6 +92,24 @@ typedef struct NervaCudaLoadedTinyBlockResult {
   uint64_t hot_path_allocations;
 } NervaCudaLoadedTinyBlockResult;
 
+typedef struct NervaCudaGreedySamplerResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t vocab_size;
+  uint64_t token_index;
+  uint32_t token;
+  uint64_t slot_version;
+  uint32_t completion;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaGreedySamplerResult;
+
 int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out);
 int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      uint32_t ring_capacity,
@@ -99,6 +117,7 @@ int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      NervaCudaSyntheticGraphResult *out);
 int nerva_cuda_tiny_block_smoke(NervaCudaTinyBlockResult *out);
 int nerva_cuda_loaded_tiny_block_smoke(NervaCudaLoadedTinyBlockResult *out);
+int nerva_cuda_greedy_sampler_smoke(NervaCudaGreedySamplerResult *out);
 
 #ifdef __cplusplus
 }

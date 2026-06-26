@@ -1,5 +1,8 @@
 use std::process::ExitCode;
 
+mod cuda;
+mod usage;
+
 use crate::{
     acceptance::build_acceptance_report,
     artifact::run_artifact,
@@ -9,7 +12,7 @@ use crate::{
         run_safetensors_shard_probe, run_weight_execution_probe,
     },
     parity::load_vllm_token_identity_parity,
-    parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
+    parse::{parse_optional_u64, parse_optional_usize},
     probes::{
         run_capabilities, run_kv_probe, run_synthetic, run_synthetic_ledger_probe,
         run_topology_probe, run_transport_matrix_probe, run_transport_probe,
@@ -18,64 +21,12 @@ use crate::{
 
 pub(crate) fn run() -> ExitCode {
     let mut args = std::env::args().skip(1);
-    match args.next().as_deref() {
-        Some("smoke") => {
-            let summary = nerva_runtime::capabilities::discovery::cuda_smoke();
-            println!("{}", summary.to_json());
-            ExitCode::SUCCESS
-        }
-        Some("cuda-graph") => {
-            let steps = match parse_optional_u32(args.next(), 1024, "steps") {
-                Ok(steps) => steps,
-                Err(reason) => {
-                    eprintln!("{reason}");
-                    return ExitCode::from(2);
-                }
-            };
-            let ring_capacity = match parse_optional_u32(args.next(), 64, "ring_capacity") {
-                Ok(ring_capacity) => ring_capacity,
-                Err(reason) => {
-                    eprintln!("{reason}");
-                    return ExitCode::from(2);
-                }
-            };
-            let seed_token = match parse_optional_u32(args.next(), 1, "seed_token") {
-                Ok(seed_token) => seed_token,
-                Err(reason) => {
-                    eprintln!("{reason}");
-                    return ExitCode::from(2);
-                }
-            };
-            let summary = nerva_runtime::engine::cuda::cuda_synthetic_graph_smoke(
-                steps,
-                ring_capacity,
-                seed_token,
-            );
-            println!("{}", summary.to_json());
-            if format!("{:?}", summary.status) == "Ok" {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            }
-        }
-        Some("cuda-block") => {
-            let summary = nerva_runtime::engine::cuda::cuda_tiny_block_smoke();
-            println!("{}", summary.to_json());
-            if format!("{:?}", summary.status) == "Ok" {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            }
-        }
-        Some("cuda-loaded-block") => {
-            let summary = nerva_runtime::engine::cuda::cuda_loaded_tiny_block_smoke();
-            println!("{}", summary.to_json());
-            if format!("{:?}", summary.status) == "Ok" {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            }
-        }
+    let command = args.next();
+    if let Some(exit_code) = cuda::dispatch(command.as_deref(), &mut args) {
+        return exit_code;
+    }
+
+    match command.as_deref() {
         Some("capabilities") => match run_capabilities() {
             Ok(json) => {
                 println!("{json}");
@@ -172,7 +123,7 @@ pub(crate) fn run() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            match nerva_model::tiny::tiny_greedy_decode_smoke(steps) {
+            match nerva_model::tiny::smoke::tiny_greedy_decode_smoke(steps) {
                 Ok(summary) => {
                     println!("{}", summary.to_json());
                     ExitCode::SUCCESS
@@ -373,7 +324,7 @@ pub(crate) fn run() -> ExitCode {
                 }
             }
         }
-        Some("attention") => match nerva_model::attention::blockwise_attention_smoke() {
+        Some("attention") => match nerva_model::attention::smoke::blockwise_attention_smoke() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
                 ExitCode::SUCCESS
@@ -383,7 +334,7 @@ pub(crate) fn run() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        Some("warm") => match nerva_model::warm_compute::warm_compute_probe() {
+        Some("warm") => match nerva_model::warm_compute::probe::warm_compute_probe() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
                 ExitCode::SUCCESS
@@ -459,9 +410,7 @@ pub(crate) fn run() -> ExitCode {
             }
         },
         _ => {
-            eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- cuda-graph [steps] [ring_capacity] [seed_token]\n       cargo run -p nerva-bench -- cuda-block\n       cargo run -p nerva-bench -- cuda-loaded-block\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- topology\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- ledger\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- precision\n       cargo run -p nerva-bench -- safetensors-block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- vllm-parity vllm_tokens.json [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- transport-matrix\n       cargo run -p nerva-bench -- acceptance\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
-            );
+            usage::print_usage();
             ExitCode::from(2)
         }
     }

@@ -6,7 +6,8 @@ use nerva_ledger::types::decision::{CandidateCost, ResidencyDecision};
 use nerva_ledger::types::metric::MetricSource;
 
 use crate::engine::runtime::Runtime;
-use crate::weights::{ResidentWeightHotsetSummary, ResidentWeightTable};
+use crate::weights::block::ResidentWeightTable;
+use crate::weights::hotset::ResidentWeightHotsetSummary;
 
 impl Runtime {
     pub fn promote_resident_weight_hotset(

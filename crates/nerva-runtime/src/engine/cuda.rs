@@ -2,6 +2,7 @@ use nerva_cuda::block::{
     CudaLoadedTinyBlockSummary, CudaTinyBlockSummary, loaded_tiny_block_smoke, tiny_block_smoke,
 };
 use nerva_cuda::graph::{CudaSyntheticGraphSummary, synthetic_graph_smoke};
+use nerva_cuda::sampler::{CudaGreedySamplerSummary, greedy_sampler_smoke};
 
 pub fn cuda_tiny_block_smoke() -> CudaTinyBlockSummary {
     tiny_block_smoke()
@@ -9,6 +10,10 @@ pub fn cuda_tiny_block_smoke() -> CudaTinyBlockSummary {
 
 pub fn cuda_loaded_tiny_block_smoke() -> CudaLoadedTinyBlockSummary {
     loaded_tiny_block_smoke()
+}
+
+pub fn cuda_greedy_sampler_smoke() -> CudaGreedySamplerSummary {
+    greedy_sampler_smoke()
 }
 
 pub fn cuda_synthetic_graph_smoke(

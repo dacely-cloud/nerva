@@ -6,7 +6,7 @@ use nerva_ledger::types::token::TokenLedger;
 use crate::capabilities::discovery::discover_capabilities;
 use crate::capabilities::snapshot::{CapabilitySnapshot, TopologySnapshot};
 use crate::capabilities::topology::discover_topology_snapshot;
-use crate::token::SyntheticEngine;
+use crate::token::engine::SyntheticEngine;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeConfig {

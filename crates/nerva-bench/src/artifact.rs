@@ -44,6 +44,7 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
         "cuda-loaded-block" => {
             Ok(nerva_runtime::engine::cuda::cuda_loaded_tiny_block_smoke().to_json())
         }
+        "cuda-sampler" => Ok(nerva_runtime::engine::cuda::cuda_greedy_sampler_smoke().to_json()),
         "capabilities" => run_capabilities(),
         "topology" => run_topology_probe(),
         "synthetic" => {
@@ -65,7 +66,7 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
         }
         "model" => {
             let steps = parse_optional_usize(args.first().cloned(), 8, "steps")?;
-            nerva_model::tiny::tiny_greedy_decode_smoke(steps)
+            nerva_model::tiny::smoke::tiny_greedy_decode_smoke(steps)
                 .map(|summary| summary.to_json())
                 .map_err(|err| format!("tiny greedy model failed: {err:?}"))
         }
@@ -116,10 +117,10 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
                 Some(compute_capability as u32),
             )
         }
-        "attention" => nerva_model::attention::blockwise_attention_smoke()
+        "attention" => nerva_model::attention::smoke::blockwise_attention_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("blockwise attention failed: {err:?}")),
-        "warm" => nerva_model::warm_compute::warm_compute_probe()
+        "warm" => nerva_model::warm_compute::probe::warm_compute_probe()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("warm compute probe failed: {err:?}")),
         "contracts" => nerva_kernel_contracts::registry::kernel_registry_probe()

@@ -14,9 +14,10 @@ use nerva_ledger::types::token::TokenLedger;
 
 use crate::engine::resident_weights::helpers::update_prefetch_data_hash;
 use crate::engine::runtime::Runtime;
-use crate::weights::{
+use crate::weights::block::ResidentWeightTable;
+use crate::weights::prefetch::{
     ResidentWeightPrefetchExecutionSummary, ResidentWeightPrefetchIoSummary,
-    ResidentWeightPrefetchPlan, ResidentWeightPrefetchTask, ResidentWeightTable,
+    ResidentWeightPrefetchPlan, ResidentWeightPrefetchTask,
 };
 
 impl Runtime {

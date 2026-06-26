@@ -10,6 +10,7 @@ fn main() {
         native_dir.join("nerva_cuda_device_smoke.cu"),
         native_dir.join("nerva_cuda_synthetic_graph.cu"),
         native_dir.join("nerva_cuda_tiny_block.cu"),
+        native_dir.join("nerva_cuda_greedy_sampler.cu"),
     ];
     let header = native_dir.join("nerva_cuda_api.h");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());

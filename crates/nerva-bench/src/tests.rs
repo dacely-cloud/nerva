@@ -243,6 +243,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"vllm_rvllm_audit\""));
     assert!(json.contains("\"cuda_runtime_smoke\""));
     assert!(json.contains("\"cuda_graph_transaction\""));
+    assert!(json.contains("\"cuda_device_sampler\""));
     assert!(json.contains("\"static_arenas\""));
     assert!(json.contains("\"topology_snapshot\""));
     assert!(json.contains("\"synthetic_transaction\""));

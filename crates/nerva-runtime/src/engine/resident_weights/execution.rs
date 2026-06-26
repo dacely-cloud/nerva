@@ -16,9 +16,10 @@ use crate::engine::resident_weights::helpers::{
     estimate_gpu_resident_weight_ns, estimate_gpu_staged_weight_ns,
 };
 use crate::engine::runtime::Runtime;
-use crate::weights::{
+use crate::weights::block::ResidentWeightTable;
+use crate::weights::execution::{
     ResidentWeightExecutionPlan, ResidentWeightExecutionRunSummary, ResidentWeightExecutionStep,
-    ResidentWeightExecutionStrategy, ResidentWeightTable,
+    ResidentWeightExecutionStrategy,
 };
 
 impl Runtime {

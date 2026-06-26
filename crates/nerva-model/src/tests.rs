@@ -1,7 +1,7 @@
-use crate::attention::{
-    BlockwiseAttentionScratch, BlockwiseAttentionSmokeStatus, KvAttentionBlock,
-    blockwise_attention_smoke, exact_blockwise_attention_into,
-};
+use crate::attention::block::KvAttentionBlock;
+use crate::attention::exact::exact_blockwise_attention_into;
+use crate::attention::scratch::BlockwiseAttentionScratch;
+use crate::attention::smoke::{BlockwiseAttentionSmokeStatus, blockwise_attention_smoke};
 use crate::common::json::json_escape;
 use crate::common::math::{dot, silu};
 use crate::common::shape::TransformerBlockShape;
@@ -20,10 +20,12 @@ use crate::precision::smoke::{PrecisionBlockSmokeStatus, precision_block_smoke};
 use crate::reference::block::ReferenceTransformerBlock;
 use crate::reference::scratch::TransformerBlockScratch;
 use crate::reference::smoke::{ReferenceBlockSmokeStatus, reference_block_smoke};
-use crate::tiny::{
-    TinyGreedyDecodeScratch, TinyGreedyDecodeStatus, tiny_cycle_model, tiny_greedy_decode_smoke,
-};
-use crate::warm_compute::{WarmComputeProbeStatus, WarmComputeStrategy, warm_compute_probe};
+use crate::tiny::output::TinyGreedyDecodeStatus;
+use crate::tiny::scratch::TinyGreedyDecodeScratch;
+use crate::tiny::smoke::{tiny_cycle_model, tiny_greedy_decode_smoke};
+use crate::warm_compute::probe::warm_compute_probe;
+use crate::warm_compute::strategy::WarmComputeStrategy;
+use crate::warm_compute::summary::WarmComputeProbeStatus;
 use crate::weights::file::{read_safetensors_header_file, read_safetensors_header_file_with_limit};
 use crate::weights::layout::{
     HfWeightLayoutProbeStatus, WeightBlockRole, hf_weight_layout_probe, plan_hf_weight_layout,
