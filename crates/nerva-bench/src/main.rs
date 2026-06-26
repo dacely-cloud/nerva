@@ -616,13 +616,17 @@ fn run_weight_execution_probe(
     let execution = runtime
         .plan_resident_weight_execution(&table, max_steps, compute_capability)
         .map_err(|err| format!("resident weight execution planning failed: {err:?}"))?;
+    let execution_run = runtime
+        .execute_resident_weight_execution_plan(&table, &execution)
+        .map_err(|err| format!("resident weight execution run failed: {err:?}"))?;
     Ok(format!(
-        "{{\"status\":\"ok\",\"blocks\":{},\"total_weight_bytes\":{},\"manifest_hash\":{},\"hotset\":{},\"execution\":{}}}",
+        "{{\"status\":\"ok\",\"blocks\":{},\"total_weight_bytes\":{},\"manifest_hash\":{},\"hotset\":{},\"execution\":{},\"run\":{}}}",
         table.entries.len(),
         table.total_weight_bytes,
         table.manifest_hash,
         hotset.to_json(),
         execution.to_json(),
+        execution_run.to_json(),
     ))
 }
 
@@ -771,6 +775,7 @@ mod tests {
         .unwrap();
         assert!(execution_json.contains("\"status\":\"ok\""));
         assert!(execution_json.contains("\"execution\""));
+        assert!(execution_json.contains("\"run\""));
         assert!(execution_json.contains("\"gpu_resident_steps\":2"));
         assert!(execution_json.contains("\"gpu_staged_steps\":1"));
 
