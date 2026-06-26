@@ -89,7 +89,7 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        Some("contracts") => match nerva_kernel_contracts::kernel_contract_probe() {
+        Some("contracts") => match nerva_kernel_contracts::kernel_registry_probe() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
                 ExitCode::SUCCESS
