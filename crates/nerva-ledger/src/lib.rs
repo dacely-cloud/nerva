@@ -41,6 +41,14 @@ pub enum SyncClass {
     DebugSync,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum FallbackClass {
+    ExactNamed,
+    CapabilityDegraded,
+    PolicySelected,
+    DebugOnly,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LedgerEvent {
     pub kind: LedgerEventKind,
@@ -79,6 +87,17 @@ impl DeviceTimelineSpan {
             label,
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FallbackDecision {
+    pub label: &'static str,
+    pub class: FallbackClass,
+    pub requested: &'static str,
+    pub selected: &'static str,
+    pub reason: &'static str,
+    pub visible_ns: Option<u64>,
+    pub metric_source: MetricSource,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -135,6 +154,7 @@ pub struct TokenLedger {
     pub token_index: u64,
     pub events: Vec<LedgerEvent>,
     pub device_timeline: Vec<DeviceTimelineSpan>,
+    pub fallback_decisions: Vec<FallbackDecision>,
     pub residency_decisions: Vec<ResidencyDecision>,
     pub execution_decisions: Vec<ExecutionDecision>,
     pub hot_path_allocations: u64,
@@ -146,6 +166,7 @@ impl TokenLedger {
             token_index,
             events: Vec::new(),
             device_timeline: Vec::new(),
+            fallback_decisions: Vec::new(),
             residency_decisions: Vec::new(),
             execution_decisions: Vec::new(),
             hot_path_allocations: 0,
@@ -189,6 +210,10 @@ impl TokenLedger {
 
     pub fn record_execution_decision(&mut self, decision: ExecutionDecision) {
         self.execution_decisions.push(decision);
+    }
+
+    pub fn record_fallback_decision(&mut self, decision: FallbackDecision) {
+        self.fallback_decisions.push(decision);
     }
 
     pub fn record_device_span(&mut self, span: DeviceTimelineSpan) -> Result<()> {
@@ -267,6 +292,17 @@ impl TokenLedger {
             })
             .map(|event| event.latency_ns)
             .sum()
+    }
+
+    pub fn fallback_count(&self) -> u64 {
+        self.fallback_decisions.len() as u64
+    }
+
+    pub fn fallback_count_for(&self, class: FallbackClass) -> u64 {
+        self.fallback_decisions
+            .iter()
+            .filter(|decision| decision.class == class)
+            .count() as u64
     }
 
     pub fn device_active_ns(&self, device: DeviceOrdinal) -> Result<u64> {
@@ -496,6 +532,37 @@ mod tests {
         ));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn fallback_decisions_are_recorded_separately_from_events() {
+        let mut ledger = TokenLedger::new(0);
+        ledger.record_fallback_decision(FallbackDecision {
+            label: "cpu_reference_fallback",
+            class: FallbackClass::ExactNamed,
+            requested: "cuda_dense_matvec_f16",
+            selected: "cpu_reference_dense_matvec_f32",
+            reason: "declared exact fallback",
+            visible_ns: Some(12),
+            metric_source: MetricSource::EstimatedModel,
+        });
+        ledger.record_fallback_decision(FallbackDecision {
+            label: "host_staged_transport",
+            class: FallbackClass::CapabilityDegraded,
+            requested: "gpu_direct_rdma",
+            selected: "pinned_host_bounce",
+            reason: "direct path unverified",
+            visible_ns: Some(7),
+            metric_source: MetricSource::EstimatedModel,
+        });
+
+        assert_eq!(ledger.events.len(), 0);
+        assert_eq!(ledger.fallback_count(), 2);
+        assert_eq!(ledger.fallback_count_for(FallbackClass::ExactNamed), 1);
+        assert_eq!(
+            ledger.fallback_count_for(FallbackClass::CapabilityDegraded),
+            1
+        );
     }
 
     #[test]

@@ -14,8 +14,8 @@ use nerva_kernel_contracts::{
     KernelBackend, KernelOperation, KernelPlan, KernelQuery, bootstrap_registry,
 };
 use nerva_ledger::{
-    CandidateCost, DeviceTimelineSpan, ExecutionDecision, LedgerEvent, LedgerEventKind,
-    MetricSource, ResidencyDecision, SyncClass, TokenLedger,
+    CandidateCost, DeviceTimelineSpan, ExecutionDecision, FallbackClass, FallbackDecision,
+    LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, SyncClass, TokenLedger,
 };
 use nerva_memory::{
     ArenaKind, BlockAllocationRequest, BlockRegistry, KvPageSpec, KvPrefixKey, KvResidencyAction,
@@ -230,6 +230,17 @@ pub struct TransportPathDecision {
 
 impl TransportPathDecision {
     pub fn record_to_ledger(self, ledger: &mut TokenLedger) {
+        if self.class == TransportPathClass::HostStaged {
+            ledger.record_fallback_decision(FallbackDecision {
+                label: "transport_host_staged_fallback",
+                class: FallbackClass::CapabilityDegraded,
+                requested: "gpu_direct_rdma",
+                selected: self.path.as_str(),
+                reason: self.reason,
+                visible_ns: Some(self.estimated_visible_ns),
+                metric_source: MetricSource::EstimatedModel,
+            });
+        }
         if self.explicit_copy_bytes > 0 {
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
@@ -426,6 +437,7 @@ pub struct ResidentWeightExecutionPlan {
     pub gpu_resident_steps: u64,
     pub gpu_staged_steps: u64,
     pub fallback_steps: u64,
+    pub fallback_decisions: u64,
     pub first_tensor: Option<String>,
     pub last_tensor: Option<String>,
     pub ledger: TokenLedger,
@@ -434,7 +446,7 @@ pub struct ResidentWeightExecutionPlan {
 impl ResidentWeightExecutionPlan {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_predicted_visible_ns\":{},\"cpu_steps\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"first_tensor\":{},\"last_tensor\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
+            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_predicted_visible_ns\":{},\"cpu_steps\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"fallback_decisions\":{},\"first_tensor\":{},\"last_tensor\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
             self.steps.len(),
             self.total_weight_bytes,
             self.total_predicted_visible_ns,
@@ -442,6 +454,7 @@ impl ResidentWeightExecutionPlan {
             self.gpu_resident_steps,
             self.gpu_staged_steps,
             self.fallback_steps,
+            self.fallback_decisions,
             json_opt_string(self.first_tensor.as_deref()),
             json_opt_string(self.last_tensor.as_deref()),
             self.ledger.execution_decisions.len(),
@@ -461,6 +474,7 @@ pub struct ResidentWeightExecutionRunSummary {
     pub gpu_resident_steps: u64,
     pub gpu_staged_steps: u64,
     pub fallback_steps: u64,
+    pub fallback_decisions: u64,
     pub hot_path_allocations: u64,
     pub ledger: TokenLedger,
 }
@@ -468,7 +482,7 @@ pub struct ResidentWeightExecutionRunSummary {
 impl ResidentWeightExecutionRunSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_latency_ns\":{},\"cpu_events\":{},\"device_events\":{},\"copy_events\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"hot_path_allocations\":{}}}",
+            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_latency_ns\":{},\"cpu_events\":{},\"device_events\":{},\"copy_events\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"fallback_decisions\":{},\"hot_path_allocations\":{}}}",
             self.steps,
             self.total_weight_bytes,
             self.total_latency_ns,
@@ -478,6 +492,7 @@ impl ResidentWeightExecutionRunSummary {
             self.gpu_resident_steps,
             self.gpu_staged_steps,
             self.fallback_steps,
+            self.fallback_decisions,
             self.hot_path_allocations,
         )
     }
@@ -1201,6 +1216,7 @@ pub struct TransportPathProbeSummary {
     pub copy_events: u64,
     pub sync_events: u64,
     pub phase_handoff_syncs: u64,
+    pub fallback_decisions: u64,
     pub nic_tx_bytes: usize,
     pub nic_rx_bytes: usize,
     pub explicit_copy_bytes: usize,
@@ -1299,6 +1315,7 @@ impl TransportProbeAccumulator {
             copy_events: self.ledger.event_count(LedgerEventKind::Copy),
             sync_events: self.ledger.event_count(LedgerEventKind::Sync),
             phase_handoff_syncs: self.ledger.sync_count_for(SyncClass::PhaseHandoff),
+            fallback_decisions: self.ledger.fallback_count(),
             nic_tx_bytes: self.nic_tx_bytes,
             nic_rx_bytes: self.nic_rx_bytes,
             explicit_copy_bytes: self.explicit_copy_bytes,
@@ -1359,7 +1376,7 @@ impl TransportPathProbeSummary {
             TransportPathProbeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"requests\":{},\"decode_requests\":{},\"prefill_requests\":{},\"gpu_direct_paths\":{},\"pinned_host_paths\":{},\"cpu_produced_paths\":{},\"mapped_pinned_paths\":{},\"transport_events\":{},\"copy_events\":{},\"sync_events\":{},\"phase_handoff_syncs\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"explicit_copy_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"requests\":{},\"decode_requests\":{},\"prefill_requests\":{},\"gpu_direct_paths\":{},\"pinned_host_paths\":{},\"cpu_produced_paths\":{},\"mapped_pinned_paths\":{},\"transport_events\":{},\"copy_events\":{},\"sync_events\":{},\"phase_handoff_syncs\":{},\"fallback_decisions\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"explicit_copy_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             self.requests,
             self.decode_requests,
@@ -1372,6 +1389,7 @@ impl TransportPathProbeSummary {
             self.copy_events,
             self.sync_events,
             self.phase_handoff_syncs,
+            self.fallback_decisions,
             self.nic_tx_bytes,
             self.nic_rx_bytes,
             self.explicit_copy_bytes,
@@ -2300,6 +2318,17 @@ impl Runtime {
                 actual_visible_ns: Some(0),
                 metric_source: MetricSource::EstimatedModel,
             });
+            if fallback {
+                ledger.record_fallback_decision(FallbackDecision {
+                    label: "resident_weight_exact_cpu_fallback",
+                    class: FallbackClass::ExactNamed,
+                    requested: "cuda_dense_matvec",
+                    selected: kernel_name,
+                    reason,
+                    visible_ns: Some(predicted_visible_ns),
+                    metric_source: MetricSource::EstimatedModel,
+                });
+            }
             steps.push(ResidentWeightExecutionStep {
                 step_index: index as u64,
                 block_id: entry.block_id,
@@ -2330,6 +2359,7 @@ impl Runtime {
             gpu_resident_steps,
             gpu_staged_steps,
             fallback_steps,
+            fallback_decisions: ledger.fallback_count(),
             first_tensor,
             last_tensor,
             ledger,
@@ -2475,6 +2505,15 @@ impl Runtime {
                 }
                 ResidentWeightExecutionStrategy::CpuExactFallback => {
                     fallback_steps += 1;
+                    ledger.record_fallback_decision(FallbackDecision {
+                        label: "resident_weight_exact_cpu_fallback_run",
+                        class: FallbackClass::ExactNamed,
+                        requested: "cuda_dense_matvec",
+                        selected: step.kernel_name,
+                        reason: "executing declared exact CPU fallback step",
+                        visible_ns: Some(step.predicted_visible_ns),
+                        metric_source: MetricSource::EstimatedModel,
+                    });
                     if block.tier == MemoryTier::Vram || block.tier == MemoryTier::SharedHbmOrLpddr
                     {
                         let copy_ns = div_ceil_u64(step.bytes as u64, 24);
@@ -2522,6 +2561,7 @@ impl Runtime {
             gpu_resident_steps,
             gpu_staged_steps,
             fallback_steps,
+            fallback_decisions: ledger.fallback_count(),
             hot_path_allocations: ledger.hot_path_allocations,
             ledger,
         })
@@ -3175,6 +3215,7 @@ mod tests {
         assert_eq!(summary.copy_events, 6);
         assert_eq!(summary.sync_events, 7);
         assert_eq!(summary.phase_handoff_syncs, 7);
+        assert_eq!(summary.fallback_decisions, 6);
         assert_eq!(summary.estimated_events, 20);
         assert_eq!(summary.estimated_latency_ns, summary.total_latency_ns);
         assert_eq!(summary.pageable_copies, 0);
@@ -3456,6 +3497,7 @@ mod tests {
         assert_eq!(plan.gpu_resident_steps, 0);
         assert_eq!(plan.gpu_staged_steps, 3);
         assert_eq!(plan.fallback_steps, 0);
+        assert_eq!(plan.fallback_decisions, 0);
         assert_eq!(plan.ledger.execution_decisions.len(), 3);
         assert_eq!(
             plan.steps[0].strategy,
@@ -3522,6 +3564,8 @@ mod tests {
 
         assert_eq!(plan.cpu_steps, 2);
         assert_eq!(plan.fallback_steps, 2);
+        assert_eq!(plan.fallback_decisions, 2);
+        assert_eq!(plan.ledger.fallback_count_for(FallbackClass::ExactNamed), 2);
         assert!(plan.steps.iter().all(|step| step.fallback));
         assert!(
             plan.steps
@@ -3572,6 +3616,7 @@ mod tests {
         assert_eq!(summary.gpu_resident_steps, 2);
         assert_eq!(summary.gpu_staged_steps, 1);
         assert_eq!(summary.fallback_steps, 0);
+        assert_eq!(summary.fallback_decisions, 0);
         assert_eq!(summary.cpu_events, 0);
         assert_eq!(summary.device_events, 3);
         assert_eq!(summary.copy_events, 1);
@@ -3611,6 +3656,11 @@ mod tests {
         assert_eq!(summary.device_events, 0);
         assert_eq!(summary.copy_events, 0);
         assert_eq!(summary.fallback_steps, 2);
+        assert_eq!(summary.fallback_decisions, 2);
+        assert_eq!(
+            summary.ledger.fallback_count_for(FallbackClass::ExactNamed),
+            2
+        );
         assert_eq!(summary.hot_path_allocations, 0);
     }
 
