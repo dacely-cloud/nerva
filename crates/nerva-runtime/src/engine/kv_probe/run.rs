@@ -13,8 +13,8 @@ use nerva_memory::kv::residency::types::{
 
 use crate::engine::kv_probe::config::KvResidencyProbeConfig;
 use crate::engine::kv_probe::summary::{KvResidencyProbeStatus, KvResidencyProbeSummary};
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;
+use crate::residency::budget::ResidencyBudget;
 
 impl Runtime {
     pub fn run_kv_residency_probe(

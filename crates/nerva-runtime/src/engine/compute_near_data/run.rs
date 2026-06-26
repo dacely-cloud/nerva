@@ -13,8 +13,8 @@ use crate::engine::compute_near_data::summary::{
     ComputeNearDataProbeStatus, ComputeNearDataProbeSummary,
 };
 use crate::engine::compute_near_data::validation::validate_config;
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;
+use crate::residency::budget::ResidencyBudget;
 
 impl Runtime {
     pub fn run_compute_near_data_probe(

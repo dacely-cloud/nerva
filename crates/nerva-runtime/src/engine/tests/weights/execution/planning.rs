@@ -1,9 +1,9 @@
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_ledger::types::fallback::FallbackClass;
 
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::engine::tests::support::tiny_llama_manifest;
+use crate::residency::budget::ResidencyBudget;
 use crate::weights::execution::strategy::ResidentWeightExecutionStrategy;
 
 #[test]

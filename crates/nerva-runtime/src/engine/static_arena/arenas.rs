@@ -2,8 +2,8 @@ use nerva_core::types::memory::tier::MemoryTier;
 use nerva_memory::arena::set::static_set::StaticArenaSet;
 use nerva_memory::registry::table::registry::BlockRegistry;
 
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;
+use crate::residency::budget::ResidencyBudget;
 
 impl Runtime {
     pub fn block_registry(&self, budget: ResidencyBudget) -> BlockRegistry {

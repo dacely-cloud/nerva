@@ -3,9 +3,9 @@ use nerva_core::types::error::Result;
 use nerva_memory::arena::kind::ArenaKind;
 use nerva_memory::arena::set::bootstrap::StaticArenaBootstrapSpec;
 
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;
 use crate::engine::static_arena::summary::StaticArenaProbeSummary;
+use crate::residency::budget::ResidencyBudget;
 
 impl Runtime {
     pub fn static_arena_probe(&self, budget: ResidencyBudget) -> Result<StaticArenaProbeSummary> {

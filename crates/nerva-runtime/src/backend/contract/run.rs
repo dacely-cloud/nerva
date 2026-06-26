@@ -4,6 +4,9 @@ use nerva_core::types::backend::validation::{
     BackendContractValidation, validate_backend_contract,
 };
 use nerva_core::types::id::transaction::TransactionId;
+use nerva_cuda::backend::probe::backend_contract_smoke;
+use nerva_cuda::graph::probe::synthetic_graph_smoke;
+use nerva_cuda::sampler::probe::greedy_sampler_smoke;
 use nerva_cuda::smoke::status::SmokeStatus;
 
 use crate::backend::contract::adapter::CudaBackendContractAdapter;
@@ -20,16 +23,13 @@ const PROBE_GRAPH_SEED_TOKEN: u32 = 1;
 
 impl Runtime {
     pub fn run_backend_contract_probe(&self) -> RuntimeBackendContractSummary {
-        let backend = crate::engine::cuda::cuda_backend_contract_smoke(
-            PROBE_DEVICE_BYTES,
-            PROBE_PINNED_BYTES,
-        );
-        let graph = crate::engine::cuda::cuda_synthetic_graph_smoke(
+        let backend = backend_contract_smoke(PROBE_DEVICE_BYTES, PROBE_PINNED_BYTES);
+        let graph = synthetic_graph_smoke(
             PROBE_GRAPH_STEPS,
             PROBE_GRAPH_RING_CAPACITY,
             PROBE_GRAPH_SEED_TOKEN,
         );
-        let sampler = crate::engine::cuda::cuda_greedy_sampler_smoke();
+        let sampler = greedy_sampler_smoke();
         let capabilities = cuda_capabilities_from_probe(
             &backend,
             graph.status == SmokeStatus::Ok && graph.hot_path_allocations == 0,

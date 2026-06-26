@@ -1,7 +1,7 @@
 use crate::acceptance::report::AcceptanceReport;
 
 pub(crate) fn push_transaction(report: &mut AcceptanceReport) {
-    let cuda_graph = nerva_runtime::engine::cuda::cuda_synthetic_graph_smoke(1024, 64, 1);
+    let cuda_graph = nerva_cuda::graph::probe::synthetic_graph_smoke(1024, 64, 1);
     let cuda_graph_passed = format!("{:?}", cuda_graph.status) == "Ok"
         && cuda_graph.steps == 1024
         && cuda_graph.ring_capacity == 64

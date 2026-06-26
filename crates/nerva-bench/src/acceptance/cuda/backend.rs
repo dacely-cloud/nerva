@@ -1,7 +1,7 @@
 use crate::acceptance::report::AcceptanceReport;
 
 pub(crate) fn push_backend_contract(report: &mut AcceptanceReport) {
-    let summary = nerva_runtime::engine::cuda::cuda_backend_contract_smoke(4096, 4096);
+    let summary = nerva_cuda::backend::probe::backend_contract_smoke(4096, 4096);
     report.push(
         "cuda_backend_contract",
         summary.passed(),

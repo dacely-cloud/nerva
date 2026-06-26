@@ -7,6 +7,7 @@ name = "nerva-bench"
 version = "0.1.0"
 dependencies = [
  "nerva-core",
+ "nerva-cuda",
  "nerva-kernel-contracts",
  "nerva-model",
  "nerva-runtime",

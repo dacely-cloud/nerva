@@ -34,8 +34,7 @@ fn run_backend(args: &mut impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let summary =
-        nerva_runtime::engine::cuda::cuda_backend_contract_smoke(device_bytes, pinned_bytes);
+    let summary = nerva_cuda::backend::probe::backend_contract_smoke(device_bytes, pinned_bytes);
     print_status_json(summary.to_json(), summary.passed())
 }
 
@@ -67,28 +66,27 @@ fn run_graph(args: &mut impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let summary =
-        nerva_runtime::engine::cuda::cuda_synthetic_graph_smoke(steps, ring_capacity, seed_token);
+    let summary = nerva_cuda::graph::probe::synthetic_graph_smoke(steps, ring_capacity, seed_token);
     print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
 }
 
 fn run_block() -> ExitCode {
-    let summary = nerva_runtime::engine::cuda::cuda_tiny_block_smoke();
+    let summary = nerva_cuda::block::probe::tiny_block_smoke();
     print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
 }
 
 fn run_loaded_block() -> ExitCode {
-    let summary = nerva_runtime::engine::cuda::cuda_loaded_tiny_block_smoke();
+    let summary = nerva_cuda::block::probe::loaded_tiny_block_smoke();
     print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
 }
 
 fn run_attention() -> ExitCode {
-    let summary = nerva_runtime::engine::cuda::cuda_tiered_attention_smoke();
+    let summary = nerva_cuda::attention::probe::tiered_attention_smoke();
     print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
 }
 
 fn run_sampler() -> ExitCode {
-    let summary = nerva_runtime::engine::cuda::cuda_greedy_sampler_smoke();
+    let summary = nerva_cuda::sampler::probe::greedy_sampler_smoke();
     print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
 }
 
@@ -114,8 +112,7 @@ fn run_tiny_decode(args: &mut impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let summary =
-        nerva_runtime::engine::cuda::cuda_tiny_decode_smoke(steps, ring_capacity, seed_token);
+    let summary = nerva_cuda::decode::probe::tiny_decode_smoke(steps, ring_capacity, seed_token);
     print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
 }
 

@@ -6,7 +6,7 @@ pub(crate) fn push_tiered_check(
     report: &mut AcceptanceReport,
     summary: &BlockwiseAttentionSmokeSummary,
 ) {
-    let cuda_attention = nerva_runtime::engine::cuda::cuda_tiered_attention_smoke();
+    let cuda_attention = nerva_cuda::attention::probe::tiered_attention_smoke();
     let max_abs_error = cuda_attention
         .output
         .iter()

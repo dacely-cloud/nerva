@@ -20,8 +20,8 @@ use crate::engine::kv_attention::summary::{
     TieredKvAttentionProbeStatus, TieredKvAttentionProbeSummary,
 };
 use crate::engine::kv_attention::validate::validate_config;
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;
+use crate::residency::budget::ResidencyBudget;
 
 impl Runtime {
     pub fn run_tiered_kv_attention_probe(

@@ -1,9 +1,9 @@
 use nerva_core::types::id::token::TokenId;
 use nerva_runtime::engine::hot_path::status::HotPathGuardStatus;
-use nerva_runtime::engine::residency::ResidencyBudget;
 use nerva_runtime::engine::runtime::Runtime;
 use nerva_runtime::engine::synthetic::config::SyntheticDecodeConfig;
 use nerva_runtime::engine::synthetic::summary::SyntheticDecodeStatus;
+use nerva_runtime::residency::budget::ResidencyBudget;
 
 use crate::acceptance::report::AcceptanceReport;
 

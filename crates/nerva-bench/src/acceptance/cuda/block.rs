@@ -6,7 +6,7 @@ pub(crate) fn push_precision_checks(
     report: &mut AcceptanceReport,
     summary: &PrecisionSafetensorsBlockSmokeSummary,
 ) {
-    let cuda_block = nerva_runtime::engine::cuda::cuda_tiny_block_smoke();
+    let cuda_block = nerva_cuda::block::probe::tiny_block_smoke();
     let cuda_block_passed = format!("{:?}", cuda_block.status) == "Ok"
         && cuda_block.hidden == summary.hidden as u32
         && cuda_block.intermediate == summary.intermediate as u32
@@ -39,7 +39,7 @@ pub(crate) fn push_precision_checks(
         ),
     );
 
-    let cuda_resident_block = nerva_runtime::engine::cuda::cuda_loaded_tiny_block_smoke();
+    let cuda_resident_block = nerva_cuda::block::probe::loaded_tiny_block_smoke();
     let cuda_resident_block_passed = format!("{:?}", cuda_resident_block.status) == "Ok"
         && cuda_resident_block.hidden == summary.hidden as u32
         && cuda_resident_block.intermediate == summary.intermediate as u32

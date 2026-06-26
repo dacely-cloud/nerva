@@ -1,7 +1,7 @@
 use crate::acceptance::report::AcceptanceReport;
 
 pub(crate) fn push_device_sampler(report: &mut AcceptanceReport) {
-    let cuda_sampler = nerva_runtime::engine::cuda::cuda_greedy_sampler_smoke();
+    let cuda_sampler = nerva_cuda::sampler::probe::greedy_sampler_smoke();
     let cuda_sampler_passed = format!("{:?}", cuda_sampler.status) == "Ok"
         && cuda_sampler.vocab_size == 4
         && cuda_sampler.token_index == 0

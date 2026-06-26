@@ -7,8 +7,8 @@ use nerva_memory::arena::set::bootstrap::StaticArenaBootstrapSpec;
 use crate::engine::hot_path::guard::{HotPathGuard, allocation_event_count};
 use crate::engine::hot_path::status::HotPathGuardStatus;
 use crate::engine::hot_path::summary::HotPathGuardSummary;
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;
+use crate::residency::budget::ResidencyBudget;
 
 impl Runtime {
     pub fn run_hot_path_guard_probe(&self, budget: ResidencyBudget) -> Result<HotPathGuardSummary> {

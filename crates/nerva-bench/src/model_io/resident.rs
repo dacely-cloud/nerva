@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use nerva_runtime::engine::residency::ResidencyBudget;
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
+use nerva_runtime::residency::budget::ResidencyBudget;
 
 use crate::model_io::config::load_manifest_from_optional_config;
 use crate::model_io::safetensors::load_safetensors_shard_plan;

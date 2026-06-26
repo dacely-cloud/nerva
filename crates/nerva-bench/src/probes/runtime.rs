@@ -1,5 +1,5 @@
-use nerva_runtime::engine::residency::ResidencyBudget;
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
+use nerva_runtime::residency::budget::ResidencyBudget;
 
 pub(crate) fn run_capabilities() -> Result<String, String> {
     let runtime = Runtime::new(RuntimeConfig::default())

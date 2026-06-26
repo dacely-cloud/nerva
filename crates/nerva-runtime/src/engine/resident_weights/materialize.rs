@@ -10,9 +10,9 @@ use nerva_memory::registry::request::BlockAllocationRequest;
 use nerva_model::weights::manifest::{HfTensorManifest, hf_tensor_manifest_probe};
 use nerva_model::weights::safetensors::shard::SafetensorsShardPlan;
 
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::resident_weights::helpers::weight_role_layout_id;
 use crate::engine::runtime::Runtime;
+use crate::residency::budget::ResidencyBudget;
 use crate::weights::block::{ResidentWeightBlockRef, ResidentWeightTable};
 use crate::weights::probe::{ResidentWeightProbeStatus, ResidentWeightProbeSummary};
 

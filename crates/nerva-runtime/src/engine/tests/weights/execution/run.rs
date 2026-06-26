@@ -1,8 +1,8 @@
 use nerva_ledger::types::fallback::FallbackClass;
 
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::engine::tests::support::tiny_llama_manifest;
+use crate::residency::budget::ResidencyBudget;
 
 #[test]
 fn resident_weight_execution_run_ledgers_gpu_resident_and_staged_work() {

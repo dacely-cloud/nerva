@@ -5,9 +5,9 @@ use nerva_core::types::id::layout::LayoutId;
 
 use nerva_core::types::memory::tier::MemoryTier;
 
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::engine::tests::support::{SHARD_ONE, tiny_shard_plan};
+use crate::residency::budget::ResidencyBudget;
 
 #[test]
 fn materializes_hf_weight_manifest_as_dram_resident_blocks() {

@@ -6,8 +6,7 @@ pub(crate) fn push_tiny_decode_check(
     report: &mut AcceptanceReport,
     summary: &TinyGreedyDecodeSummary,
 ) {
-    let cuda_decode =
-        nerva_runtime::engine::cuda::cuda_tiny_decode_smoke(summary.steps as u32, 4, 0);
+    let cuda_decode = nerva_cuda::decode::probe::tiny_decode_smoke(summary.steps as u32, 4, 0);
     let cuda_decode_passed = format!("{:?}", cuda_decode.status) == "Ok"
         && cuda_decode.steps == summary.steps as u32
         && cuda_decode.ring_capacity == 4

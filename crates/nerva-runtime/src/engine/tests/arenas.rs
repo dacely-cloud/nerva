@@ -1,7 +1,7 @@
 use nerva_core::types::memory::tier::MemoryTier;
 
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
+use crate::residency::budget::ResidencyBudget;
 
 #[test]
 fn runtime_creates_residency_registry_from_budget() {

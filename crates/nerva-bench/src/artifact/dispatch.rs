@@ -24,42 +24,31 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
             let device_bytes = parse_optional_usize(args.first().cloned(), 4096, "device_bytes")?;
             let pinned_bytes = parse_optional_usize(args.get(1).cloned(), 4096, "pinned_bytes")?;
             Ok(
-                nerva_runtime::engine::cuda::cuda_backend_contract_smoke(
-                    device_bytes,
-                    pinned_bytes,
-                )
-                .to_json(),
+                nerva_cuda::backend::probe::backend_contract_smoke(device_bytes, pinned_bytes)
+                    .to_json(),
             )
         }
         "cuda-graph" => {
             let steps = parse_optional_u32(args.first().cloned(), 1024, "steps")?;
             let ring_capacity = parse_optional_u32(args.get(1).cloned(), 64, "ring_capacity")?;
             let seed_token = parse_optional_u32(args.get(2).cloned(), 1, "seed_token")?;
-            Ok(nerva_runtime::engine::cuda::cuda_synthetic_graph_smoke(
-                steps,
-                ring_capacity,
-                seed_token,
+            Ok(
+                nerva_cuda::graph::probe::synthetic_graph_smoke(steps, ring_capacity, seed_token)
+                    .to_json(),
             )
-            .to_json())
         }
-        "cuda-block" => Ok(nerva_runtime::engine::cuda::cuda_tiny_block_smoke().to_json()),
-        "cuda-loaded-block" => {
-            Ok(nerva_runtime::engine::cuda::cuda_loaded_tiny_block_smoke().to_json())
-        }
-        "cuda-attention" => {
-            Ok(nerva_runtime::engine::cuda::cuda_tiered_attention_smoke().to_json())
-        }
-        "cuda-sampler" => Ok(nerva_runtime::engine::cuda::cuda_greedy_sampler_smoke().to_json()),
+        "cuda-block" => Ok(nerva_cuda::block::probe::tiny_block_smoke().to_json()),
+        "cuda-loaded-block" => Ok(nerva_cuda::block::probe::loaded_tiny_block_smoke().to_json()),
+        "cuda-attention" => Ok(nerva_cuda::attention::probe::tiered_attention_smoke().to_json()),
+        "cuda-sampler" => Ok(nerva_cuda::sampler::probe::greedy_sampler_smoke().to_json()),
         "cuda-tiny-decode" => {
             let steps = parse_optional_u32(args.first().cloned(), 8, "steps")?;
             let ring_capacity = parse_optional_u32(args.get(1).cloned(), 4, "ring_capacity")?;
             let seed_token = parse_optional_u32(args.get(2).cloned(), 0, "seed_token")?;
-            Ok(nerva_runtime::engine::cuda::cuda_tiny_decode_smoke(
-                steps,
-                ring_capacity,
-                seed_token,
+            Ok(
+                nerva_cuda::decode::probe::tiny_decode_smoke(steps, ring_capacity, seed_token)
+                    .to_json(),
             )
-            .to_json())
         }
         "capabilities" => runtime::run_capabilities(),
         "backend-contract" => backend::run_backend_contract_probe(),

@@ -1,9 +1,9 @@
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::memory::tier::MemoryTier;
 
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::engine::tests::support::tiny_llama_manifest;
+use crate::residency::budget::ResidencyBudget;
 
 #[test]
 fn resident_weight_hotset_promotion_moves_bounded_prefix_to_vram() {

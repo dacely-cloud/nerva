@@ -2,8 +2,8 @@ use nerva_memory::arena::kind::ArenaKind;
 
 use crate::engine::hot_path::guard::{HotPathGuard, allocation_event_count};
 use crate::engine::hot_path::status::HotPathGuardStatus;
-use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
+use crate::residency::budget::ResidencyBudget;
 
 #[test]
 fn hot_path_guard_clean_scope_records_zero_allocation_attempts() {

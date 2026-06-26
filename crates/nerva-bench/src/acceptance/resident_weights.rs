@@ -1,5 +1,5 @@
-use nerva_runtime::engine::residency::ResidencyBudget;
 use nerva_runtime::engine::runtime::Runtime;
+use nerva_runtime::residency::budget::ResidencyBudget;
 
 pub(crate) fn resident_weight_execution_acceptance(
     runtime: &Runtime,
