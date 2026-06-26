@@ -105,6 +105,13 @@ pub fn run_fabric_backend_probe(
         uio_pci_generic_loaded: module_loaded("uio_pci_generic"),
         igb_uio_loaded: module_loaded("igb_uio"),
         hugepages_total: hugepages_total(),
+        dma_buf_export: capabilities.dma_buf_export,
+        gpu_memory_export_verified: topology.gpu_memory_export_verified,
+        cuda_vmm_posix_fd_export_verified: topology.cuda_vmm_posix_fd_export_verified,
+        cuda_gpu_direct_rdma_supported: capabilities.cuda_gpu_direct_rdma_supported,
+        cuda_gpu_direct_rdma_with_vmm_supported: capabilities
+            .cuda_gpu_direct_rdma_with_vmm_supported,
+        gpu_export_without_nic_direct: topology.gpu_export_without_nic_direct,
         rdma_gpu_direct,
         rdma_pinned_host,
         dpdk_udp_gpu,

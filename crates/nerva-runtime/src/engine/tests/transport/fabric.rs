@@ -14,10 +14,21 @@ fn fabric_topology_probe_reports_sysfs_affinity_without_false_direct_claims() {
     assert!(summary.rdma_with_pci_path <= summary.rdma_devices);
     assert_eq!(summary.false_direct_claims, 0);
     assert!(summary.gpu_direct_verified || summary.degraded_to_pinned_host);
+    assert_eq!(
+        summary.gpu_memory_export_verified,
+        summary.dma_buf_export == CapabilityState::SupportedAndVerified
+    );
+    assert_eq!(
+        summary.gpu_export_without_nic_direct,
+        summary.gpu_memory_export_verified && !summary.gpu_direct_verified
+    );
     assert!(summary.passed());
     let json = summary.to_json();
     assert!(json.contains("\"evidence_source\":\"linux_sysfs\""));
     assert!(json.contains("\"rdma_affinity\""));
+    assert!(json.contains("\"dma_buf_export\""));
+    assert!(json.contains("\"gpu_memory_export_verified\""));
+    assert!(json.contains("\"gpu_export_without_nic_direct\""));
     assert!(json.contains("\"false_direct_claims\":0"));
 }
 
@@ -30,6 +41,14 @@ fn fabric_backend_probe_reports_explicit_rdma_dpdk_readiness() {
     assert_eq!(summary.evidence_source, "linux_sysfs_pkg_config");
     assert!(summary.dpdk_shim_sources_present);
     assert_eq!(summary.false_direct_claims, 0);
+    assert_eq!(
+        summary.gpu_memory_export_verified,
+        summary.dma_buf_export == CapabilityState::SupportedAndVerified
+    );
+    assert_eq!(
+        summary.gpu_export_without_nic_direct,
+        summary.gpu_memory_export_verified && summary.verified_direct_backends == 0
+    );
     assert!(summary.rdma_ports >= summary.rdma_active_ports);
     assert_eq!(
         summary.rdma_ports,
@@ -73,6 +92,9 @@ fn fabric_backend_probe_reports_explicit_rdma_dpdk_readiness() {
     assert!(json.contains("\"evidence_source\":\"linux_sysfs_pkg_config\""));
     assert!(json.contains("\"rdma_active_ports\""));
     assert!(json.contains("\"rdma_uverbs_devices\""));
+    assert!(json.contains("\"dma_buf_export\""));
+    assert!(json.contains("\"gpu_memory_export_verified\""));
+    assert!(json.contains("\"gpu_export_without_nic_direct\""));
     assert!(json.contains("\"backend\":\"rdma_pinned_host\""));
     assert!(json.contains("\"backend\":\"dpdk_udp_pinned_host\""));
     assert!(json.contains("\"false_direct_claims\":0"));

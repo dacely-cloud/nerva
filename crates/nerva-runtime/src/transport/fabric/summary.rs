@@ -1,4 +1,4 @@
-use crate::capabilities::json::{json_escape, json_opt_string};
+use crate::capabilities::json::{json_escape, json_opt_bool, json_opt_string};
 use crate::capabilities::snapshot::CapabilityState;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -51,9 +51,15 @@ pub struct FabricTopologySummary {
     pub rdma_core_loaded: bool,
     pub mlx5_core_loaded: bool,
     pub peer_memory_module: Option<String>,
+    pub dma_buf_export: CapabilityState,
+    pub gpu_memory_export_verified: bool,
+    pub cuda_vmm_posix_fd_export_verified: bool,
+    pub cuda_gpu_direct_rdma_supported: Option<bool>,
+    pub cuda_gpu_direct_rdma_with_vmm_supported: Option<bool>,
     pub gpu_direct_rdma: CapabilityState,
     pub pinned_host_staging: CapabilityState,
     pub gpu_direct_verified: bool,
+    pub gpu_export_without_nic_direct: bool,
     pub degraded_to_pinned_host: bool,
     pub topology_affinity_known: bool,
     pub false_direct_claims: u64,
@@ -67,7 +73,11 @@ impl FabricTopologySummary {
             && self.rdma_devices == self.rdma_affinity.len() as u64
             && self.rdma_with_pci_path <= self.rdma_devices
             && (!self.gpu_direct_verified
-                || (self.rdma_same_root_as_gpu > 0 && self.peer_memory_module.is_some()))
+                || (self.rdma_same_root_as_gpu > 0
+                    && (self.peer_memory_module.is_some()
+                        || self.cuda_gpu_direct_rdma_with_vmm_supported == Some(true))))
+            && (self.gpu_export_without_nic_direct
+                == (self.gpu_memory_export_verified && !self.gpu_direct_verified))
             && (self.gpu_direct_verified
                 || (self.degraded_to_pinned_host
                     && self.pinned_host_staging != CapabilityState::Unsupported))
@@ -79,7 +89,7 @@ impl FabricTopologySummary {
             FabricTopologyStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"evidence_source\":\"{}\",\"gpu_pci_bus_id\":{},\"gpu_root_complex\":{},\"gpu_numa_node\":{},\"rdma_devices\":{},\"rdma_with_pci_path\":{},\"rdma_same_root_as_gpu\":{},\"rdma_same_numa_as_gpu\":{},\"rdma_affinity\":{},\"iommu_group_count\":{},\"iommu_mode\":\"{}\",\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"peer_memory_module\":{},\"gpu_direct_rdma\":\"{}\",\"pinned_host_staging\":\"{}\",\"gpu_direct_verified\":{},\"degraded_to_pinned_host\":{},\"topology_affinity_known\":{},\"false_direct_claims\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"evidence_source\":\"{}\",\"gpu_pci_bus_id\":{},\"gpu_root_complex\":{},\"gpu_numa_node\":{},\"rdma_devices\":{},\"rdma_with_pci_path\":{},\"rdma_same_root_as_gpu\":{},\"rdma_same_numa_as_gpu\":{},\"rdma_affinity\":{},\"iommu_group_count\":{},\"iommu_mode\":\"{}\",\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"peer_memory_module\":{},\"dma_buf_export\":\"{}\",\"gpu_memory_export_verified\":{},\"cuda_vmm_posix_fd_export_verified\":{},\"cuda_gpu_direct_rdma_supported\":{},\"cuda_gpu_direct_rdma_with_vmm_supported\":{},\"gpu_direct_rdma\":\"{}\",\"pinned_host_staging\":\"{}\",\"gpu_direct_verified\":{},\"gpu_export_without_nic_direct\":{},\"degraded_to_pinned_host\":{},\"topology_affinity_known\":{},\"false_direct_claims\":{},\"error\":{}}}",
             status,
             self.evidence_source,
             json_opt_string(self.gpu_pci_bus_id.as_deref()),
@@ -96,9 +106,15 @@ impl FabricTopologySummary {
             self.rdma_core_loaded,
             self.mlx5_core_loaded,
             json_opt_string(self.peer_memory_module.as_deref()),
+            self.dma_buf_export.as_str(),
+            self.gpu_memory_export_verified,
+            self.cuda_vmm_posix_fd_export_verified,
+            json_opt_bool(self.cuda_gpu_direct_rdma_supported),
+            json_opt_bool(self.cuda_gpu_direct_rdma_with_vmm_supported),
             self.gpu_direct_rdma.as_str(),
             self.pinned_host_staging.as_str(),
             self.gpu_direct_verified,
+            self.gpu_export_without_nic_direct,
             self.degraded_to_pinned_host,
             self.topology_affinity_known,
             self.false_direct_claims,

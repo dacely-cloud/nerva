@@ -52,12 +52,21 @@ pub fn run_fabric_topology_probe(capabilities: &CapabilitySnapshot) -> FabricTop
         .iter()
         .filter(|entry| entry.same_numa_as_gpu)
         .count() as u64;
+    let gpu_memory_export_verified =
+        capabilities.dma_buf_export == CapabilityState::SupportedAndVerified;
+    let cuda_vmm_posix_fd_export_verified =
+        capabilities.cuda_vmm_posix_fd_export_verified == Some(true);
     let gpu_direct_verified = capabilities.gpu_direct_rdma == CapabilityState::SupportedAndVerified;
+    let gpu_export_without_nic_direct = gpu_memory_export_verified && !gpu_direct_verified;
     let degraded_to_pinned_host = capabilities.gpu_direct_rdma
         == CapabilityState::DegradedToPinnedHost
         || !gpu_direct_verified;
+    let peer_memory_direct_path = capabilities.nvidia_peer_memory_module.is_some()
+        && capabilities.cuda_gpu_direct_rdma_supported != Some(false);
+    let dma_buf_direct_path = capabilities.dma_buf_export != CapabilityState::Unsupported
+        && capabilities.cuda_gpu_direct_rdma_with_vmm_supported == Some(true);
     let false_direct_claims = u64::from(gpu_direct_verified && rdma_same_root_as_gpu == 0)
-        + u64::from(gpu_direct_verified && capabilities.nvidia_peer_memory_module.is_none());
+        + u64::from(gpu_direct_verified && !(peer_memory_direct_path || dma_buf_direct_path));
 
     let topology_affinity_known = gpu_root_complex.is_some() && rdma_with_pci_path > 0;
 
@@ -77,9 +86,16 @@ pub fn run_fabric_topology_probe(capabilities: &CapabilitySnapshot) -> FabricTop
         rdma_core_loaded: capabilities.rdma_core_loaded,
         mlx5_core_loaded: capabilities.mlx5_core_loaded,
         peer_memory_module: capabilities.nvidia_peer_memory_module.clone(),
+        dma_buf_export: capabilities.dma_buf_export,
+        gpu_memory_export_verified,
+        cuda_vmm_posix_fd_export_verified,
+        cuda_gpu_direct_rdma_supported: capabilities.cuda_gpu_direct_rdma_supported,
+        cuda_gpu_direct_rdma_with_vmm_supported: capabilities
+            .cuda_gpu_direct_rdma_with_vmm_supported,
         gpu_direct_rdma: capabilities.gpu_direct_rdma,
         pinned_host_staging: capabilities.pinned_host_staging,
         gpu_direct_verified,
+        gpu_export_without_nic_direct,
         degraded_to_pinned_host,
         topology_affinity_known,
         false_direct_claims,

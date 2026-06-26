@@ -1,4 +1,4 @@
-use crate::capabilities::json::{json_escape, json_opt_string};
+use crate::capabilities::json::{json_escape, json_opt_bool, json_opt_string};
 use crate::capabilities::snapshot::CapabilityState;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -52,6 +52,12 @@ pub struct FabricBackendSummary {
     pub uio_pci_generic_loaded: bool,
     pub igb_uio_loaded: bool,
     pub hugepages_total: Option<u64>,
+    pub dma_buf_export: CapabilityState,
+    pub gpu_memory_export_verified: bool,
+    pub cuda_vmm_posix_fd_export_verified: bool,
+    pub cuda_gpu_direct_rdma_supported: Option<bool>,
+    pub cuda_gpu_direct_rdma_with_vmm_supported: Option<bool>,
+    pub gpu_export_without_nic_direct: bool,
     pub rdma_gpu_direct: CapabilityState,
     pub rdma_pinned_host: CapabilityState,
     pub dpdk_udp_gpu: CapabilityState,
@@ -85,6 +91,7 @@ impl FabricBackendSummary {
                 || self.rdma_uverbs_devices == 0
                 || self.rdma_pinned_host != CapabilityState::Unsupported)
             && self.dpdk_udp_gpu != CapabilityState::SupportedAndVerified
+            && (!self.gpu_export_without_nic_direct || self.verified_direct_backends == 0)
             && self.verified_direct_backends
                 == self
                     .backend_readiness
@@ -111,7 +118,7 @@ impl FabricBackendSummary {
             FabricBackendStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"evidence_source\":\"{}\",\"rdma_devices\":{},\"rdma_ports\":{},\"rdma_active_ports\":{},\"rdma_roce_ports\":{},\"rdma_infiniband_ports\":{},\"rdma_unknown_link_layer_ports\":{},\"rdma_uverbs_devices\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"peer_memory_module\":{},\"dpdk_shim_sources_present\":{},\"dpdk_pkg_config\":\"{}\",\"dpdk_pkg_config_version\":{},\"dpdk_mlx5_pmd_linked\":{},\"dpdk_gpudev_linked\":{},\"vfio_pci_loaded\":{},\"uio_pci_generic_loaded\":{},\"igb_uio_loaded\":{},\"hugepages_total\":{},\"rdma_gpu_direct\":\"{}\",\"rdma_pinned_host\":\"{}\",\"dpdk_udp_gpu\":\"{}\",\"dpdk_udp_pinned_host\":\"{}\",\"kernel_udp_test\":\"{}\",\"tcp_control_only\":\"{}\",\"verified_direct_backends\":{},\"host_staged_backends\":{},\"unsupported_backends\":{},\"explicit_degradations\":{},\"false_direct_claims\":{},\"backend_readiness\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"evidence_source\":\"{}\",\"rdma_devices\":{},\"rdma_ports\":{},\"rdma_active_ports\":{},\"rdma_roce_ports\":{},\"rdma_infiniband_ports\":{},\"rdma_unknown_link_layer_ports\":{},\"rdma_uverbs_devices\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"peer_memory_module\":{},\"dpdk_shim_sources_present\":{},\"dpdk_pkg_config\":\"{}\",\"dpdk_pkg_config_version\":{},\"dpdk_mlx5_pmd_linked\":{},\"dpdk_gpudev_linked\":{},\"vfio_pci_loaded\":{},\"uio_pci_generic_loaded\":{},\"igb_uio_loaded\":{},\"hugepages_total\":{},\"dma_buf_export\":\"{}\",\"gpu_memory_export_verified\":{},\"cuda_vmm_posix_fd_export_verified\":{},\"cuda_gpu_direct_rdma_supported\":{},\"cuda_gpu_direct_rdma_with_vmm_supported\":{},\"gpu_export_without_nic_direct\":{},\"rdma_gpu_direct\":\"{}\",\"rdma_pinned_host\":\"{}\",\"dpdk_udp_gpu\":\"{}\",\"dpdk_udp_pinned_host\":\"{}\",\"kernel_udp_test\":\"{}\",\"tcp_control_only\":\"{}\",\"verified_direct_backends\":{},\"host_staged_backends\":{},\"unsupported_backends\":{},\"explicit_degradations\":{},\"false_direct_claims\":{},\"backend_readiness\":{},\"error\":{}}}",
             status,
             self.evidence_source,
             self.rdma_devices,
@@ -134,6 +141,12 @@ impl FabricBackendSummary {
             self.igb_uio_loaded,
             self.hugepages_total
                 .map_or_else(|| "null".to_string(), |value| value.to_string()),
+            self.dma_buf_export.as_str(),
+            self.gpu_memory_export_verified,
+            self.cuda_vmm_posix_fd_export_verified,
+            json_opt_bool(self.cuda_gpu_direct_rdma_supported),
+            json_opt_bool(self.cuda_gpu_direct_rdma_with_vmm_supported),
+            self.gpu_export_without_nic_direct,
             self.rdma_gpu_direct.as_str(),
             self.rdma_pinned_host.as_str(),
             self.dpdk_udp_gpu.as_str(),
