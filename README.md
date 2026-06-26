@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="./images/logo.svg" alt="Nerva" width="300" />
-
----
+<img src="./images/logo.svg" alt="Nerva" width="500" />
 
 ### AI inference beyond the VRAM wall.
 
@@ -11,14 +9,6 @@
 <sub>
 An inference operating system for AI models: memory residency, device-first token state, heterogeneous CPU/GPU execution, and token-level observability built into the runtime itself.
 </sub>
-
-<br/>
-
-**Stop treating VRAM like the model.**<br/>
-**Stop treating the GPU like the whole machine.**<br/>
-**Stop letting inference fall off a cliff when the model no longer fits.**
-
-<br/>
 
 ![status](https://img.shields.io/badge/status-architecture_first-0e1520?labelColor=0e1520&color=2563ff)
 ![runtime](https://img.shields.io/badge/runtime-Rust-b7410e?labelColor=0e1520)
