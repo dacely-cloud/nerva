@@ -11,4 +11,7 @@ pub mod token;
 pub mod transport;
 pub mod weights;
 
+pub use engine::cuda_synthetic_graph_smoke;
 pub use engine::*;
+pub use graph::*;
+pub use token::*;
