@@ -1,4 +1,4 @@
-use crate::engine::{CapabilitySnapshot, CapabilityState};
+use crate::capabilities::{CapabilitySnapshot, CapabilityState};
 use nerva_core::{DeviceOrdinal, ExecutionOwner, MemoryTier, NervaError, Result};
 use nerva_ledger::{
     FallbackClass, FallbackDecision, LedgerEvent, LedgerEventKind, MetricSource, SyncClass,
