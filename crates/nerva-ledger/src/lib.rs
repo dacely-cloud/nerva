@@ -17,6 +17,7 @@ pub enum LedgerEventKind {
     Eviction,
     Prefetch,
     Stall,
+    Transport,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

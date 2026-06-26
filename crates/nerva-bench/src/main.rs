@@ -119,9 +119,19 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("transport") => match run_transport_probe() {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("{reason}");
+                ExitCode::from(1)
+            }
+        },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
             );
             ExitCode::from(2)
         }
@@ -149,6 +159,15 @@ fn run_kv_probe() -> Result<String, String> {
     let summary = runtime
         .run_kv_residency_probe(KvResidencyProbeConfig::default())
         .map_err(|err| format!("KV residency probe failed: {err:?}"))?;
+    Ok(summary.to_json())
+}
+
+fn run_transport_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let summary = runtime
+        .run_transport_path_probe()
+        .map_err(|err| format!("transport path probe failed: {err:?}"))?;
     Ok(summary.to_json())
 }
 
