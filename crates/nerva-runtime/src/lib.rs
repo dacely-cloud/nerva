@@ -234,6 +234,7 @@ impl TransportPathDecision {
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(self.request.source_tier),
                 to_tier: Some(MemoryTier::PinnedDram),
@@ -245,6 +246,7 @@ impl TransportPathDecision {
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::Transport,
             sync_class: None,
+            metric_source: MetricSource::EstimatedModel,
             block_id: None,
             from_tier: Some(self.request.source_tier),
             to_tier: Some(self.request.destination_tier),
@@ -259,6 +261,7 @@ impl TransportPathDecision {
             Some(self.request.destination_tier),
             0,
             1,
+            MetricSource::EstimatedModel,
             "transport_ordering_barrier",
         );
     }
@@ -988,6 +991,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::GraphReplay,
             sync_class: None,
+            metric_source: MetricSource::EstimatedModel,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -998,6 +1002,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::DeviceActivity,
             sync_class: None,
+            metric_source: MetricSource::EstimatedModel,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -1008,6 +1013,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::Copy,
             sync_class: None,
+            metric_source: MetricSource::EstimatedModel,
             block_id: None,
             from_tier: Some(MemoryTier::Vram),
             to_tier: Some(MemoryTier::PinnedDram),
@@ -1022,6 +1028,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
             Some(MemoryTier::PinnedDram),
             0,
             1,
+            MetricSource::EstimatedModel,
             "soft_visibility_host_wait",
         );
 
@@ -1088,6 +1095,8 @@ pub struct SyntheticDecodeSummary {
     pub copy_latency_ns: u64,
     pub host_wait_latency_ns: u64,
     pub soft_visibility_sync_latency_ns: u64,
+    pub estimated_events: u64,
+    pub estimated_latency_ns: u64,
     pub total_latency_ns: u64,
     pub hot_path_allocations: u64,
     pub observed_tokens: u64,
@@ -1186,6 +1195,8 @@ pub struct TransportPathProbeSummary {
     pub explicit_copy_bytes: usize,
     pub pageable_copies: u64,
     pub per_token_registrations: u64,
+    pub estimated_events: u64,
+    pub estimated_latency_ns: u64,
     pub total_latency_ns: u64,
     pub hot_path_allocations: u64,
     pub error: Option<&'static str>,
@@ -1282,6 +1293,12 @@ impl TransportProbeAccumulator {
             explicit_copy_bytes: self.explicit_copy_bytes,
             pageable_copies: self.pageable_copies,
             per_token_registrations: self.per_token_registrations,
+            estimated_events: self
+                .ledger
+                .event_count_for_source(MetricSource::EstimatedModel),
+            estimated_latency_ns: self
+                .ledger
+                .latency_ns_for_source(MetricSource::EstimatedModel),
             total_latency_ns: self.ledger.total_latency_ns(),
             hot_path_allocations: self.ledger.hot_path_allocations,
             error: None,
@@ -1331,7 +1348,7 @@ impl TransportPathProbeSummary {
             TransportPathProbeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"requests\":{},\"decode_requests\":{},\"prefill_requests\":{},\"gpu_direct_paths\":{},\"pinned_host_paths\":{},\"cpu_produced_paths\":{},\"mapped_pinned_paths\":{},\"transport_events\":{},\"copy_events\":{},\"sync_events\":{},\"phase_handoff_syncs\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"explicit_copy_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"requests\":{},\"decode_requests\":{},\"prefill_requests\":{},\"gpu_direct_paths\":{},\"pinned_host_paths\":{},\"cpu_produced_paths\":{},\"mapped_pinned_paths\":{},\"transport_events\":{},\"copy_events\":{},\"sync_events\":{},\"phase_handoff_syncs\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"explicit_copy_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             self.requests,
             self.decode_requests,
@@ -1349,6 +1366,8 @@ impl TransportPathProbeSummary {
             self.explicit_copy_bytes,
             self.pageable_copies,
             self.per_token_registrations,
+            self.estimated_events,
+            self.estimated_latency_ns,
             self.total_latency_ns,
             self.hot_path_allocations,
             json_opt_static_str(self.error),
@@ -1363,7 +1382,7 @@ impl SyntheticDecodeSummary {
             SyntheticDecodeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"soft_visibility_syncs\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"soft_visibility_sync_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"soft_visibility_syncs\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"soft_visibility_sync_latency_ns\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
             status,
             self.steps,
             self.token_ring_capacity,
@@ -1381,6 +1400,8 @@ impl SyntheticDecodeSummary {
             self.copy_latency_ns,
             self.host_wait_latency_ns,
             self.soft_visibility_sync_latency_ns,
+            self.estimated_events,
+            self.estimated_latency_ns,
             self.total_latency_ns,
             self.hot_path_allocations,
             self.observed_tokens,
@@ -1829,6 +1850,7 @@ impl Runtime {
                 ledger.record(LedgerEvent {
                     kind: LedgerEventKind::Prefetch,
                     sync_class: None,
+                    metric_source: MetricSource::EstimatedModel,
                     block_id: Some(entry.block_id),
                     from_tier: Some(MemoryTier::Disk),
                     to_tier: Some(MemoryTier::PinnedDram),
@@ -1839,6 +1861,7 @@ impl Runtime {
                 ledger.record(LedgerEvent {
                     kind: LedgerEventKind::Copy,
                     sync_class: None,
+                    metric_source: MetricSource::EstimatedModel,
                     block_id: Some(entry.block_id),
                     from_tier: Some(MemoryTier::PinnedDram),
                     to_tier: Some(entry.tier),
@@ -1946,6 +1969,7 @@ impl Runtime {
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Prefetch,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: Some(task.block_id),
                 from_tier: Some(MemoryTier::Disk),
                 to_tier: Some(MemoryTier::PinnedDram),
@@ -1956,6 +1980,7 @@ impl Runtime {
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: Some(task.block_id),
                 from_tier: Some(MemoryTier::PinnedDram),
                 to_tier: Some(task.target_tier),
@@ -2370,6 +2395,7 @@ impl Runtime {
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::CpuActivity,
                         sync_class: None,
+                        metric_source: MetricSource::EstimatedModel,
                         block_id: Some(step.block_id),
                         from_tier: Some(MemoryTier::Dram),
                         to_tier: Some(MemoryTier::Dram),
@@ -2391,6 +2417,7 @@ impl Runtime {
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::DeviceActivity,
                         sync_class: None,
+                        metric_source: MetricSource::EstimatedModel,
                         block_id: Some(step.block_id),
                         from_tier: Some(MemoryTier::Vram),
                         to_tier: Some(MemoryTier::Vram),
@@ -2414,6 +2441,7 @@ impl Runtime {
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::Copy,
                         sync_class: None,
+                        metric_source: MetricSource::EstimatedModel,
                         block_id: Some(step.block_id),
                         from_tier: Some(block.tier),
                         to_tier: Some(MemoryTier::Vram),
@@ -2424,6 +2452,7 @@ impl Runtime {
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::DeviceActivity,
                         sync_class: None,
+                        metric_source: MetricSource::EstimatedModel,
                         block_id: Some(step.block_id),
                         from_tier: Some(MemoryTier::Vram),
                         to_tier: Some(MemoryTier::Vram),
@@ -2440,6 +2469,7 @@ impl Runtime {
                         ledger.record(LedgerEvent {
                             kind: LedgerEventKind::Copy,
                             sync_class: None,
+                            metric_source: MetricSource::EstimatedModel,
                             block_id: Some(step.block_id),
                             from_tier: Some(block.tier),
                             to_tier: Some(MemoryTier::Dram),
@@ -2451,6 +2481,7 @@ impl Runtime {
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::CpuActivity,
                         sync_class: None,
+                        metric_source: MetricSource::EstimatedModel,
                         block_id: Some(step.block_id),
                         from_tier: Some(MemoryTier::Dram),
                         to_tier: Some(MemoryTier::Dram),
@@ -2507,6 +2538,8 @@ impl Runtime {
         let mut copy_latency_ns: u64 = 0;
         let mut host_wait_latency_ns: u64 = 0;
         let mut soft_visibility_sync_latency_ns: u64 = 0;
+        let mut estimated_events: u64 = 0;
+        let mut estimated_latency_ns: u64 = 0;
         let mut total_latency_ns: u64 = 0;
         let mut hot_path_allocations: u64 = 0;
         let mut observed_tokens: u64 = 0;
@@ -2552,6 +2585,16 @@ impl Runtime {
                 output
                     .ledger
                     .sync_latency_ns_for(SyncClass::SoftVisibilitySync),
+            );
+            estimated_events = estimated_events.saturating_add(
+                output
+                    .ledger
+                    .event_count_for_source(MetricSource::EstimatedModel),
+            );
+            estimated_latency_ns = estimated_latency_ns.saturating_add(
+                output
+                    .ledger
+                    .latency_ns_for_source(MetricSource::EstimatedModel),
             );
             total_latency_ns = total_latency_ns.saturating_add(output.ledger.total_latency_ns());
             hot_path_allocations =
@@ -2613,6 +2656,8 @@ impl Runtime {
             copy_latency_ns,
             host_wait_latency_ns,
             soft_visibility_sync_latency_ns,
+            estimated_events,
+            estimated_latency_ns,
             total_latency_ns,
             hot_path_allocations,
             observed_tokens,
@@ -3110,6 +3155,8 @@ mod tests {
         assert_eq!(summary.copy_events, 6);
         assert_eq!(summary.sync_events, 7);
         assert_eq!(summary.phase_handoff_syncs, 7);
+        assert_eq!(summary.estimated_events, 20);
+        assert_eq!(summary.estimated_latency_ns, summary.total_latency_ns);
         assert_eq!(summary.pageable_copies, 0);
         assert_eq!(summary.per_token_registrations, 0);
         assert_eq!(summary.hot_path_allocations, 0);
@@ -3735,6 +3782,8 @@ mod tests {
         assert_eq!(summary.copy_latency_ns, 1024);
         assert_eq!(summary.host_wait_latency_ns, 1024);
         assert_eq!(summary.soft_visibility_sync_latency_ns, 1024);
+        assert_eq!(summary.estimated_events, 4096);
+        assert_eq!(summary.estimated_latency_ns, summary.total_latency_ns);
         assert_eq!(summary.total_latency_ns, 6144);
         assert_eq!(summary.hot_path_allocations, 0);
         assert_eq!(summary.observed_tokens, 1024);

@@ -43,6 +43,7 @@ pub enum SyncClass {
 pub struct LedgerEvent {
     pub kind: LedgerEventKind,
     pub sync_class: Option<SyncClass>,
+    pub metric_source: MetricSource,
     pub block_id: Option<ResidentBlockId>,
     pub from_tier: Option<MemoryTier>,
     pub to_tier: Option<MemoryTier>,
@@ -135,11 +136,13 @@ impl TokenLedger {
         to_tier: Option<MemoryTier>,
         bytes: usize,
         latency_ns: u64,
+        metric_source: MetricSource,
         label: &'static str,
     ) {
         self.record(LedgerEvent {
             kind: LedgerEventKind::Sync,
             sync_class: Some(sync_class),
+            metric_source,
             block_id,
             from_tier,
             to_tier,
@@ -166,6 +169,7 @@ impl TokenLedger {
         self.record(LedgerEvent {
             kind: LedgerEventKind::Allocation,
             sync_class: None,
+            metric_source: MetricSource::RuntimeTimestamp,
             block_id: None,
             from_tier: None,
             to_tier: Some(to_tier),
@@ -190,6 +194,21 @@ impl TokenLedger {
         self.events
             .iter()
             .filter(|event| event.kind == kind)
+            .map(|event| event.latency_ns)
+            .sum()
+    }
+
+    pub fn event_count_for_source(&self, source: MetricSource) -> u64 {
+        self.events
+            .iter()
+            .filter(|event| event.metric_source == source)
+            .count() as u64
+    }
+
+    pub fn latency_ns_for_source(&self, source: MetricSource) -> u64 {
+        self.events
+            .iter()
+            .filter(|event| event.metric_source == source)
             .map(|event| event.latency_ns)
             .sum()
     }
@@ -270,6 +289,7 @@ mod tests {
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::GraphReplay,
             sync_class: None,
+            metric_source: MetricSource::EstimatedModel,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -280,6 +300,7 @@ mod tests {
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::DeviceActivity,
             sync_class: None,
+            metric_source: MetricSource::GpuEvent,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -294,6 +315,7 @@ mod tests {
             Some(MemoryTier::PinnedDram),
             0,
             3,
+            MetricSource::EstimatedModel,
             "soft_visibility_host_wait",
         );
 
@@ -304,6 +326,11 @@ mod tests {
         assert_eq!(ledger.latency_ns_for(LedgerEventKind::DeviceActivity), 7);
         assert_eq!(ledger.latency_ns_for(LedgerEventKind::Sync), 3);
         assert_eq!(ledger.sync_latency_ns_for(SyncClass::SoftVisibilitySync), 3);
+        assert_eq!(ledger.event_count_for_source(MetricSource::GpuEvent), 1);
+        assert_eq!(
+            ledger.latency_ns_for_source(MetricSource::EstimatedModel),
+            5
+        );
         assert_eq!(ledger.total_latency_ns(), 12);
         assert!(ledger.require_classified_syncs().is_ok());
     }
@@ -314,6 +341,7 @@ mod tests {
         missing.record(LedgerEvent {
             kind: LedgerEventKind::Sync,
             sync_class: None,
+            metric_source: MetricSource::RuntimeTimestamp,
             block_id: None,
             from_tier: None,
             to_tier: None,
@@ -327,6 +355,7 @@ mod tests {
         misplaced.record(LedgerEvent {
             kind: LedgerEventKind::Copy,
             sync_class: Some(SyncClass::HardSync),
+            metric_source: MetricSource::RuntimeTimestamp,
             block_id: None,
             from_tier: Some(MemoryTier::Dram),
             to_tier: Some(MemoryTier::Vram),

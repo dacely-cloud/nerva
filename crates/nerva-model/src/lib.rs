@@ -1752,6 +1752,7 @@ impl TinyGreedyModel {
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::DeviceActivity,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(MemoryTier::Dram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2679,6 +2680,7 @@ fn run_warm_compute_candidate(
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::CpuActivity,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(MemoryTier::Dram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2694,6 +2696,7 @@ fn run_warm_compute_candidate(
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::DeviceActivity,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Vram),
@@ -2710,6 +2713,7 @@ fn run_warm_compute_candidate(
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(MemoryTier::Dram),
                 to_tier: Some(MemoryTier::Vram),
@@ -2721,6 +2725,7 @@ fn run_warm_compute_candidate(
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::DeviceActivity,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Vram),
@@ -2731,6 +2736,7 @@ fn run_warm_compute_candidate(
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2751,6 +2757,7 @@ fn run_warm_compute_candidate(
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::CpuActivity,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(MemoryTier::Dram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2761,6 +2768,7 @@ fn run_warm_compute_candidate(
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::DeviceActivity,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Vram),
@@ -2771,6 +2779,7 @@ fn run_warm_compute_candidate(
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
                 sync_class: None,
+                metric_source: MetricSource::EstimatedModel,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2910,6 +2919,7 @@ fn record_attention_block_event(
     ledger.record(LedgerEvent {
         kind,
         sync_class: None,
+        metric_source: MetricSource::EstimatedModel,
         block_id: None,
         from_tier: Some(block.tier),
         to_tier: Some(block.tier),
