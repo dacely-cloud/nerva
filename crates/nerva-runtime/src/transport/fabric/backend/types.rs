@@ -34,6 +34,12 @@ pub struct FabricBackendSummary {
     pub status: FabricBackendStatus,
     pub evidence_source: &'static str,
     pub rdma_devices: u64,
+    pub rdma_ports: u64,
+    pub rdma_active_ports: u64,
+    pub rdma_roce_ports: u64,
+    pub rdma_infiniband_ports: u64,
+    pub rdma_unknown_link_layer_ports: u64,
+    pub rdma_uverbs_devices: u64,
     pub rdma_core_loaded: bool,
     pub mlx5_core_loaded: bool,
     pub peer_memory_module: Option<String>,
@@ -68,7 +74,16 @@ impl FabricBackendSummary {
             && self.backend_readiness.len() >= 6
             && self.kernel_udp_test != CapabilityState::Unsupported
             && self.tcp_control_only != CapabilityState::Unsupported
-            && (self.rdma_devices == 0 || self.rdma_pinned_host != CapabilityState::Unsupported)
+            && self.rdma_ports >= self.rdma_active_ports
+            && self.rdma_ports
+                == self.rdma_roce_ports
+                    + self.rdma_infiniband_ports
+                    + self.rdma_unknown_link_layer_ports
+            && (self.rdma_pinned_host == CapabilityState::Unsupported
+                || (self.rdma_active_ports > 0 && self.rdma_uverbs_devices > 0))
+            && (self.rdma_active_ports == 0
+                || self.rdma_uverbs_devices == 0
+                || self.rdma_pinned_host != CapabilityState::Unsupported)
             && self.dpdk_udp_gpu != CapabilityState::SupportedAndVerified
             && self.verified_direct_backends
                 == self
@@ -96,10 +111,16 @@ impl FabricBackendSummary {
             FabricBackendStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"evidence_source\":\"{}\",\"rdma_devices\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"peer_memory_module\":{},\"dpdk_shim_sources_present\":{},\"dpdk_pkg_config\":\"{}\",\"dpdk_pkg_config_version\":{},\"dpdk_mlx5_pmd_linked\":{},\"dpdk_gpudev_linked\":{},\"vfio_pci_loaded\":{},\"uio_pci_generic_loaded\":{},\"igb_uio_loaded\":{},\"hugepages_total\":{},\"rdma_gpu_direct\":\"{}\",\"rdma_pinned_host\":\"{}\",\"dpdk_udp_gpu\":\"{}\",\"dpdk_udp_pinned_host\":\"{}\",\"kernel_udp_test\":\"{}\",\"tcp_control_only\":\"{}\",\"verified_direct_backends\":{},\"host_staged_backends\":{},\"unsupported_backends\":{},\"explicit_degradations\":{},\"false_direct_claims\":{},\"backend_readiness\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"evidence_source\":\"{}\",\"rdma_devices\":{},\"rdma_ports\":{},\"rdma_active_ports\":{},\"rdma_roce_ports\":{},\"rdma_infiniband_ports\":{},\"rdma_unknown_link_layer_ports\":{},\"rdma_uverbs_devices\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"peer_memory_module\":{},\"dpdk_shim_sources_present\":{},\"dpdk_pkg_config\":\"{}\",\"dpdk_pkg_config_version\":{},\"dpdk_mlx5_pmd_linked\":{},\"dpdk_gpudev_linked\":{},\"vfio_pci_loaded\":{},\"uio_pci_generic_loaded\":{},\"igb_uio_loaded\":{},\"hugepages_total\":{},\"rdma_gpu_direct\":\"{}\",\"rdma_pinned_host\":\"{}\",\"dpdk_udp_gpu\":\"{}\",\"dpdk_udp_pinned_host\":\"{}\",\"kernel_udp_test\":\"{}\",\"tcp_control_only\":\"{}\",\"verified_direct_backends\":{},\"host_staged_backends\":{},\"unsupported_backends\":{},\"explicit_degradations\":{},\"false_direct_claims\":{},\"backend_readiness\":{},\"error\":{}}}",
             status,
             self.evidence_source,
             self.rdma_devices,
+            self.rdma_ports,
+            self.rdma_active_ports,
+            self.rdma_roce_ports,
+            self.rdma_infiniband_ports,
+            self.rdma_unknown_link_layer_ports,
+            self.rdma_uverbs_devices,
             self.rdma_core_loaded,
             self.mlx5_core_loaded,
             json_opt_string(self.peer_memory_module.as_deref()),

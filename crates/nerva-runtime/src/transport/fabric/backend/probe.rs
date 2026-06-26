@@ -3,6 +3,7 @@ use crate::transport::fabric::backend::linux::{
     dpdk_shim_sources_present, hugepages_total, module_loaded,
 };
 use crate::transport::fabric::backend::pkg_config::read_dpdk_pkg_config;
+use crate::transport::fabric::backend::rdma::collect_rdma_port_evidence;
 use crate::transport::fabric::backend::types::{
     FabricBackendReadiness, FabricBackendStatus, FabricBackendSummary,
 };
@@ -13,12 +14,15 @@ pub fn run_fabric_backend_probe(
     topology: &FabricTopologySummary,
 ) -> FabricBackendSummary {
     let pkg_config = read_dpdk_pkg_config();
+    let rdma = collect_rdma_port_evidence(&capabilities.topology.rdma_device_names);
     let dpdk_pkg_config = if pkg_config.present {
         CapabilityState::SupportedUnverified
     } else {
         CapabilityState::Unsupported
     };
     let rdma_pinned_host = if capabilities.topology.rdma_device_count > 0
+        && rdma.active_ports > 0
+        && rdma.uverbs_devices > 0
         && capabilities.rdma_core_loaded
         && capabilities.pinned_host_staging != CapabilityState::Unsupported
     {
@@ -83,6 +87,12 @@ pub fn run_fabric_backend_probe(
         status: FabricBackendStatus::Ok,
         evidence_source: "linux_sysfs_pkg_config",
         rdma_devices: capabilities.topology.rdma_device_count as u64,
+        rdma_ports: rdma.total_ports,
+        rdma_active_ports: rdma.active_ports,
+        rdma_roce_ports: rdma.roce_ports,
+        rdma_infiniband_ports: rdma.infiniband_ports,
+        rdma_unknown_link_layer_ports: rdma.unknown_link_layer_ports,
+        rdma_uverbs_devices: rdma.uverbs_devices,
         rdma_core_loaded: capabilities.rdma_core_loaded,
         mlx5_core_loaded: capabilities.mlx5_core_loaded,
         peer_memory_module: capabilities.nvidia_peer_memory_module.clone(),
@@ -131,7 +141,7 @@ fn backend_readiness(
         FabricBackendReadiness {
             backend: "rdma_pinned_host",
             capability: rdma_pinned_host,
-            evidence: "linux_sysfs_rdma_pinned_host",
+            evidence: "linux_sysfs_active_rdma_ports_uverbs",
             direct_gpu_memory: false,
             pinned_host_required: rdma_pinned_host != CapabilityState::Unsupported,
         },

@@ -51,13 +51,20 @@ pub(crate) fn push_fabric_backends(report: &mut AcceptanceReport, runtime: &Runt
             && summary.passed()
             && summary.evidence_source == "linux_sysfs_pkg_config"
             && summary.false_direct_claims == 0
+            && summary.rdma_ports >= summary.rdma_active_ports
             && summary.backend_readiness.len() >= 6
             && summary.kernel_udp_test != CapabilityState::Unsupported
             && summary.tcp_control_only != CapabilityState::Unsupported,
         format!(
-            "evidence={} rdma_devices={} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} dpdk_shim_sources_present={} dpdk_pkg_config={:?} dpdk_version={} dpdk_mlx5_pmd_linked={} dpdk_gpudev_linked={} vfio_pci_loaded={} uio_pci_generic_loaded={} igb_uio_loaded={} hugepages_total={} rdma_gpu_direct={:?} rdma_pinned_host={:?} dpdk_udp_gpu={:?} dpdk_udp_pinned_host={:?} verified_direct_backends={} host_staged_backends={} unsupported_backends={} explicit_degradations={} false_direct_claims={}",
+            "evidence={} rdma_devices={} rdma_ports={} rdma_active_ports={} rdma_roce_ports={} rdma_infiniband_ports={} rdma_unknown_link_layer_ports={} rdma_uverbs_devices={} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} dpdk_shim_sources_present={} dpdk_pkg_config={:?} dpdk_version={} dpdk_mlx5_pmd_linked={} dpdk_gpudev_linked={} vfio_pci_loaded={} uio_pci_generic_loaded={} igb_uio_loaded={} hugepages_total={} rdma_gpu_direct={:?} rdma_pinned_host={:?} dpdk_udp_gpu={:?} dpdk_udp_pinned_host={:?} verified_direct_backends={} host_staged_backends={} unsupported_backends={} explicit_degradations={} false_direct_claims={}",
             summary.evidence_source,
             summary.rdma_devices,
+            summary.rdma_ports,
+            summary.rdma_active_ports,
+            summary.rdma_roce_ports,
+            summary.rdma_infiniband_ports,
+            summary.rdma_unknown_link_layer_ports,
+            summary.rdma_uverbs_devices,
             summary.rdma_core_loaded,
             summary.mlx5_core_loaded,
             summary.peer_memory_module.as_deref().unwrap_or("none"),
