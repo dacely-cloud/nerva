@@ -28,6 +28,9 @@ pub(crate) fn dispatch(
         Some("transport-matrix") => Some(exit::print_json_result(
             transport::run_transport_matrix_probe(),
         )),
+        Some("transport-registration") => Some(exit::print_json_result(
+            transport::run_transport_registration_probe(),
+        )),
         Some("stage-pipeline") => Some(exit::print_json_result(
             transport::run_stage_pipeline_probe(),
         )),

@@ -139,6 +139,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "fabric-backends" => transport::run_fabric_backend_probe(),
         "transport" => transport::run_transport_probe(),
         "transport-matrix" => transport::run_transport_matrix_probe(),
+        "transport-registration" => transport::run_transport_registration_probe(),
         "stage-pipeline" => transport::run_stage_pipeline_probe(),
         "acceptance" => run_acceptance_probe(),
         _ => Err(format!("unknown artifact probe '{command}'")),

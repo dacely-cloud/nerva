@@ -31,6 +31,15 @@ pub(crate) fn run_transport_matrix_probe() -> Result<String, String> {
     Ok(summary.to_json())
 }
 
+pub(crate) fn run_transport_registration_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let summary = runtime
+        .run_transport_registration_probe()
+        .map_err(|err| format!("transport registration probe failed: {err:?}"))?;
+    Ok(summary.to_json())
+}
+
 pub(crate) fn run_stage_pipeline_probe() -> Result<String, String> {
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
