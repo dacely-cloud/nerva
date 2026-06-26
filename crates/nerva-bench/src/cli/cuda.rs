@@ -12,6 +12,7 @@ pub(crate) fn dispatch(
         Some("cuda-block") => Some(run_block()),
         Some("cuda-loaded-block") => Some(run_loaded_block()),
         Some("cuda-sampler") => Some(run_sampler()),
+        Some("cuda-tiny-decode") => Some(run_tiny_decode(args)),
         _ => None,
     }
 }
@@ -61,6 +62,33 @@ fn run_loaded_block() -> ExitCode {
 
 fn run_sampler() -> ExitCode {
     let summary = nerva_runtime::engine::cuda::cuda_greedy_sampler_smoke();
+    print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
+}
+
+fn run_tiny_decode(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let steps = match parse_optional_u32(args.next(), 8, "steps") {
+        Ok(steps) => steps,
+        Err(reason) => {
+            eprintln!("{reason}");
+            return ExitCode::from(2);
+        }
+    };
+    let ring_capacity = match parse_optional_u32(args.next(), 4, "ring_capacity") {
+        Ok(ring_capacity) => ring_capacity,
+        Err(reason) => {
+            eprintln!("{reason}");
+            return ExitCode::from(2);
+        }
+    };
+    let seed_token = match parse_optional_u32(args.next(), 0, "seed_token") {
+        Ok(seed_token) => seed_token,
+        Err(reason) => {
+            eprintln!("{reason}");
+            return ExitCode::from(2);
+        }
+    };
+    let summary =
+        nerva_runtime::engine::cuda::cuda_tiny_decode_smoke(steps, ring_capacity, seed_token);
     print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
 }
 

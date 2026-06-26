@@ -4,6 +4,7 @@
 //! Runtime API calls and kernel launch mechanics.
 
 pub mod block;
+pub mod decode;
 pub mod graph;
 pub mod sampler;
 pub mod smoke;

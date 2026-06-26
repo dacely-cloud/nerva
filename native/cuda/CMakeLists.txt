@@ -204,6 +204,7 @@ add_library(nerva_cuda STATIC
     nerva_cuda_synthetic_graph.cu
     nerva_cuda_tiny_block.cu
     nerva_cuda_greedy_sampler.cu
+    nerva_cuda_tiny_decode.cu
     smoke_kernel.cu
     token_ring_kernels.cu
     synthetic_decode.cu

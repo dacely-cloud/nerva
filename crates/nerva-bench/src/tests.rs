@@ -252,6 +252,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"safetensors_precision_block\""));
     assert!(json.contains("\"cuda_real_block\""));
     assert!(json.contains("\"cuda_resident_block\""));
+    assert!(json.contains("\"cuda_tiny_decode_model\""));
     assert!(json.contains("\"hf_model_manifest\""));
     assert!(json.contains("\"safetensors_file_header\""));
     assert!(json.contains("\"safetensors_file_prefetch\""));

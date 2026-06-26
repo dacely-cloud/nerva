@@ -45,6 +45,17 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
             Ok(nerva_runtime::engine::cuda::cuda_loaded_tiny_block_smoke().to_json())
         }
         "cuda-sampler" => Ok(nerva_runtime::engine::cuda::cuda_greedy_sampler_smoke().to_json()),
+        "cuda-tiny-decode" => {
+            let steps = parse_optional_u32(args.first().cloned(), 8, "steps")?;
+            let ring_capacity = parse_optional_u32(args.get(1).cloned(), 4, "ring_capacity")?;
+            let seed_token = parse_optional_u32(args.get(2).cloned(), 0, "seed_token")?;
+            Ok(nerva_runtime::engine::cuda::cuda_tiny_decode_smoke(
+                steps,
+                ring_capacity,
+                seed_token,
+            )
+            .to_json())
+        }
         "capabilities" => run_capabilities(),
         "topology" => run_topology_probe(),
         "synthetic" => {

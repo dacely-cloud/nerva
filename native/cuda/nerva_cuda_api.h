@@ -110,6 +110,39 @@ typedef struct NervaCudaGreedySamplerResult {
   uint64_t hot_path_allocations;
 } NervaCudaGreedySamplerResult;
 
+typedef struct NervaCudaTinyDecodeResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t steps;
+  uint32_t ring_capacity;
+  uint32_t seed_token;
+  uint32_t vocab_size;
+  uint32_t hidden;
+  uint32_t last_token;
+  uint64_t graph_replays;
+  uint64_t graph_nodes;
+  uint64_t observed_tokens;
+  uint64_t observed_token_hash;
+  uint64_t token_ring_slots_touched;
+  uint64_t token_ring_reuses;
+  uint64_t token_ring_max_slot_version;
+  uint64_t stale_tokens;
+  uint64_t missing_tokens;
+  uint64_t extra_tokens;
+  uint64_t mismatched_tokens;
+  uint64_t host_causality_edges;
+  uint64_t resident_weight_bytes;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t graph_launches;
+  uint64_t sync_calls;
+  uint64_t kernel_launches;
+  uint64_t hot_path_allocations;
+} NervaCudaTinyDecodeResult;
+
 int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out);
 int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      uint32_t ring_capacity,
@@ -118,6 +151,10 @@ int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
 int nerva_cuda_tiny_block_smoke(NervaCudaTinyBlockResult *out);
 int nerva_cuda_loaded_tiny_block_smoke(NervaCudaLoadedTinyBlockResult *out);
 int nerva_cuda_greedy_sampler_smoke(NervaCudaGreedySamplerResult *out);
+int nerva_cuda_tiny_decode_smoke(uint32_t steps,
+                                 uint32_t ring_capacity,
+                                 uint32_t seed_token,
+                                 NervaCudaTinyDecodeResult *out);
 
 #ifdef __cplusplus
 }
