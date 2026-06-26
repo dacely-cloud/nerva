@@ -37,6 +37,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"vllm_token_identity_parity\""));
     assert!(json.contains("\"cuda_tiered_attention\""));
     assert!(json.contains("\"kv_residency_tiering\""));
+    assert!(json.contains("\"tiered_kv_attention_execution\""));
     assert!(json.contains("\"fabric_topology_affinity\""));
     assert!(json.contains("\"fabric_backend_capabilities\""));
     assert!(json.contains("\"dpdk_udp_activation_protocol\""));

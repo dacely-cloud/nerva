@@ -155,6 +155,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
             .map(|summary| summary.to_json())
             .map_err(|err| format!("kernel contract probe failed: {err:?}")),
         "kv" => kv::run_kv_probe(),
+        "tiered-kv" => kv::run_tiered_kv_attention_probe(),
         "fabric-topology" => transport::run_fabric_topology_probe(),
         "fabric-backends" => transport::run_fabric_backend_probe(),
         "dpdk-udp" => transport::run_dpdk_udp_probe(),

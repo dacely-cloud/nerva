@@ -32,6 +32,7 @@ pub(crate) fn dispatch(
         Some("transaction") => Some(exit::print_json_result(transaction::run_transaction_probe())),
         Some("memory-loop") => Some(exit::print_json_result(memory_loop::run_memory_loop_probe())),
         Some("kv") => Some(exit::print_json_result(kv::run_kv_probe())),
+        Some("tiered-kv") => Some(exit::print_json_result(kv::run_tiered_kv_attention_probe())),
         Some("fabric-topology") => Some(exit::print_json_result(
             transport::run_fabric_topology_probe(),
         )),
