@@ -642,6 +642,7 @@ pub struct SafetensorsShardPlanEntry {
     pub role: WeightBlockRole,
     pub layer: Option<u32>,
     pub dtype: DType,
+    pub tier: MemoryTier,
     pub bytes: usize,
     pub data_offset_begin: usize,
     pub data_offset_end: usize,
@@ -927,6 +928,7 @@ pub fn plan_safetensors_shards_for_manifest(
             role: entry.role,
             layer: entry.layer,
             dtype: entry.dtype,
+            tier: entry.tier,
             bytes: entry.bytes,
             data_offset_begin,
             data_offset_end,
@@ -3107,6 +3109,7 @@ fn hash_safetensors_shard_plan(plan: &SafetensorsShardPlan) -> u64 {
         }
         for value in [
             entry.layer.map(u64::from).unwrap_or(u64::MAX),
+            entry.tier as u64,
             entry.bytes as u64,
             entry.data_offset_begin as u64,
             entry.data_offset_end as u64,

@@ -265,6 +265,9 @@ pub struct ResidentWeightBlockRef {
     pub bytes: usize,
     pub dtype: nerva_core::DType,
     pub tier: MemoryTier,
+    pub source_shard: Option<String>,
+    pub file_offset_begin: Option<usize>,
+    pub file_offset_end: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1421,6 +1424,9 @@ impl Runtime {
                 bytes: entry.bytes,
                 dtype: entry.dtype,
                 tier: entry.tier,
+                source_shard: None,
+                file_offset_begin: None,
+                file_offset_end: None,
             });
         }
 
@@ -1459,6 +1465,82 @@ impl Runtime {
             last_tensor: last.map(|entry| entry.name.clone()),
             manifest_hash: table.manifest_hash,
             hot_path_allocations: table.ledger.hot_path_allocations,
+        })
+    }
+
+    pub fn materialize_safetensors_shard_plan(
+        &self,
+        plan: &nerva_model::SafetensorsShardPlan,
+    ) -> Result<ResidentWeightTable> {
+        self.materialize_safetensors_shard_plan_with_budget(
+            plan,
+            ResidencyBudget::new(0, 0, plan.total_weight_bytes),
+        )
+    }
+
+    pub fn materialize_safetensors_shard_plan_with_budget(
+        &self,
+        plan: &nerva_model::SafetensorsShardPlan,
+        budget: ResidencyBudget,
+    ) -> Result<ResidentWeightTable> {
+        let _ = self.config;
+        let mut registry = self.block_registry(budget);
+        let mut ledger = TokenLedger::new(0);
+        let mut entries = Vec::with_capacity(plan.entries.len());
+        let mut materialized_bytes = 0usize;
+
+        for entry in &plan.entries {
+            let block_id = registry.allocate(
+                BlockAllocationRequest::new(BlockKind::Weight, entry.tier, entry.bytes)
+                    .with_dtype(entry.dtype)
+                    .with_layout(LayoutId(weight_role_layout_id(entry.role))),
+            )?;
+            registry.mark_ready(block_id)?;
+            materialized_bytes = materialized_bytes.checked_add(entry.bytes).ok_or_else(|| {
+                NervaError::AllocationFailed {
+                    bytes: entry.bytes,
+                    reason: "resident shard-plan weight byte count overflow".to_string(),
+                }
+            })?;
+            ledger.record_residency_decision(ResidencyDecision {
+                block_id,
+                old_tier: MemoryTier::Disk,
+                new_tier: entry.tier,
+                executor_selected: ExecutionOwner::Cpu,
+                candidate_costs: vec![
+                    CandidateCost::estimated("safetensors-shard-read", entry.bytes as u64),
+                    CandidateCost::estimated("file-offset-begin", entry.file_offset_begin as u64),
+                ],
+                reason: "initialize exact sharded safetensors weight block as resident immutable backing",
+                predicted_overlap_ns: 0,
+                actual_visible_ns: Some(0),
+                metric_source: MetricSource::EstimatedModel,
+            });
+            entries.push(ResidentWeightBlockRef {
+                name: entry.tensor_name.clone(),
+                block_id,
+                bytes: entry.bytes,
+                dtype: entry.dtype,
+                tier: entry.tier,
+                source_shard: Some(entry.shard_file.clone()),
+                file_offset_begin: Some(entry.file_offset_begin),
+                file_offset_end: Some(entry.file_offset_end),
+            });
+        }
+
+        if materialized_bytes != plan.total_weight_bytes {
+            return Err(NervaError::InvalidArgument {
+                reason: "resident shard-plan weight byte count does not match plan".to_string(),
+            });
+        }
+        ledger.require_zero_hot_path_allocations()?;
+
+        Ok(ResidentWeightTable {
+            registry,
+            entries,
+            total_weight_bytes: materialized_bytes,
+            manifest_hash: plan.manifest_hash,
+            ledger,
         })
     }
 
@@ -1852,6 +1934,59 @@ fn json_opt_static_str(value: Option<&'static str>) -> String {
 mod tests {
     use super::*;
 
+    const SHARD_ONE: &str = "model-00001-of-00001.safetensors";
+
+    fn tiny_llama_manifest() -> nerva_model::HfTensorManifest {
+        let metadata = nerva_model::parse_hf_config_metadata(
+            r#"{
+                "model_type": "llama",
+                "hidden_size": 4,
+                "intermediate_size": 8,
+                "num_hidden_layers": 1,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 10,
+                "torch_dtype": "float16"
+            }"#,
+        )
+        .unwrap();
+        let layout = nerva_model::plan_hf_weight_layout(&metadata).unwrap();
+        nerva_model::build_hf_tensor_manifest(&layout).unwrap()
+    }
+
+    fn single_shard_index_json(manifest: &nerva_model::HfTensorManifest) -> String {
+        let mut out = format!(
+            "{{\"metadata\":{{\"total_size\":{}}},\"weight_map\":{{",
+            manifest.total_weight_bytes
+        );
+        for (index, entry) in manifest.entries.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(&entry.name);
+            out.push_str("\":\"");
+            out.push_str(SHARD_ONE);
+            out.push('"');
+        }
+        out.push_str("}}");
+        out
+    }
+
+    fn tiny_shard_plan() -> (nerva_model::SafetensorsShardPlan, usize) {
+        let manifest = tiny_llama_manifest();
+        let index = single_shard_index_json(&manifest);
+        let header = nerva_model::synthetic_safetensors_header_for_manifest(&manifest).unwrap();
+        let header_len = header.len();
+        let plan = nerva_model::plan_safetensors_shards_for_manifest(
+            &index,
+            &[nerva_model::SafetensorsShardHeader::new(SHARD_ONE, &header)],
+            &manifest,
+        )
+        .unwrap();
+        (plan, header_len)
+    }
+
     #[test]
     fn runtime_uses_device_zero_by_default() {
         let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
@@ -2060,6 +2195,46 @@ mod tests {
             .materialize_hf_weight_manifest_with_budget(
                 &manifest,
                 ResidencyBudget::new(0, 0, manifest.total_weight_bytes - 1),
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, NervaError::AllocationFailed { .. }));
+    }
+
+    #[test]
+    fn materializes_safetensors_shard_plan_with_source_offsets() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let (plan, header_len) = tiny_shard_plan();
+        let table = runtime.materialize_safetensors_shard_plan(&plan).unwrap();
+
+        assert_eq!(table.entries.len(), plan.entries.len());
+        assert_eq!(table.total_weight_bytes, plan.total_weight_bytes);
+        assert_eq!(table.registry.used_bytes(MemoryTier::Dram), 464);
+        assert_eq!(table.registry.used_bytes(MemoryTier::Vram), 0);
+        assert_eq!(table.ledger.hot_path_allocations, 0);
+        assert_eq!(table.ledger.residency_decisions.len(), plan.entries.len());
+
+        let first = table.entries.first().unwrap();
+        assert_eq!(first.name, "model.embed_tokens.weight");
+        assert_eq!(first.source_shard.as_deref(), Some(SHARD_ONE));
+        assert_eq!(first.file_offset_begin, Some(8 + header_len));
+        assert_eq!(first.file_offset_end, Some(8 + header_len + first.bytes));
+        assert_eq!(first.tier, MemoryTier::Dram);
+
+        let block = table.registry.block(first.block_id).unwrap();
+        assert_eq!(block.kind, BlockKind::Weight);
+        assert_eq!(block.layout, LayoutId(1));
+        assert_eq!(block.dtype, first.dtype);
+    }
+
+    #[test]
+    fn materialized_safetensors_shard_plan_respects_dram_budget() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let (plan, _) = tiny_shard_plan();
+        let err = runtime
+            .materialize_safetensors_shard_plan_with_budget(
+                &plan,
+                ResidencyBudget::new(0, 0, plan.total_weight_bytes - 1),
             )
             .unwrap_err();
 
