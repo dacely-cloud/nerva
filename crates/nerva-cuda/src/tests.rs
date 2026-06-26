@@ -1,6 +1,6 @@
 use std::os::raw::c_char;
 
-use crate::block::CudaTinyBlockSummary;
+use crate::block::{CudaLoadedTinyBlockSummary, CudaTinyBlockSummary};
 use crate::graph::CudaSyntheticGraphSummary;
 use crate::smoke::{CudaSmokeSummary, SmokeStatus, c_char_array_to_string, escape_json};
 
@@ -94,5 +94,32 @@ fn tiny_block_summary_serializes_device_block_fields() {
     assert!(json.contains("\"output_bits\":[15360,16384]"));
     assert!(json.contains("\"kernel_launches\":1"));
     assert!(json.contains("\"D2H_bytes\":4"));
+    assert!(json.contains("\"hot_path_allocations\":0"));
+}
+
+#[test]
+fn loaded_tiny_block_summary_serializes_residency_fields() {
+    let summary = CudaLoadedTinyBlockSummary {
+        status: SmokeStatus::Ok,
+        hidden: 2,
+        intermediate: 2,
+        output: [16_126, 17_299],
+        output_hash: 17766510782028265595,
+        resident_weight_bytes: 64,
+        device_arena_bytes: 72,
+        pinned_host_bytes: 72,
+        h2d_bytes: 72,
+        d2h_bytes: 4,
+        kernel_launches: 1,
+        sync_calls: 2,
+        hot_path_allocations: 0,
+        error: None,
+    };
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"resident_weight_bytes\":64"));
+    assert!(json.contains("\"H2D_bytes\":72"));
+    assert!(json.contains("\"D2H_bytes\":4"));
+    assert!(json.contains("\"kernel_launches\":1"));
     assert!(json.contains("\"hot_path_allocations\":0"));
 }

@@ -41,6 +41,9 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
             .to_json())
         }
         "cuda-block" => Ok(nerva_runtime::engine::cuda::cuda_tiny_block_smoke().to_json()),
+        "cuda-loaded-block" => {
+            Ok(nerva_runtime::engine::cuda::cuda_loaded_tiny_block_smoke().to_json())
+        }
         "capabilities" => run_capabilities(),
         "topology" => run_topology_probe(),
         "synthetic" => {
