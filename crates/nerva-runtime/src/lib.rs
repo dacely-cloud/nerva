@@ -279,6 +279,48 @@ pub struct ResidentWeightTable {
     pub ledger: TokenLedger,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightPrefetchTask {
+    pub task_index: u64,
+    pub block_id: ResidentBlockId,
+    pub name: String,
+    pub source_shard: String,
+    pub file_offset_begin: usize,
+    pub file_offset_end: usize,
+    pub bytes: usize,
+    pub target_tier: MemoryTier,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightPrefetchPlan {
+    pub tasks: Vec<ResidentWeightPrefetchTask>,
+    pub total_bytes: usize,
+    pub shard_count: usize,
+    pub max_task_bytes: usize,
+    pub prefetch_events: u64,
+    pub copy_events: u64,
+    pub first_source_shard: Option<String>,
+    pub last_source_shard: Option<String>,
+    pub ledger: TokenLedger,
+}
+
+impl ResidentWeightPrefetchPlan {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"tasks\":{},\"total_bytes\":{},\"shard_count\":{},\"max_task_bytes\":{},\"prefetch_events\":{},\"copy_events\":{},\"first_source_shard\":{},\"last_source_shard\":{},\"hot_path_allocations\":{}}}",
+            self.tasks.len(),
+            self.total_bytes,
+            self.shard_count,
+            self.max_task_bytes,
+            self.prefetch_events,
+            self.copy_events,
+            json_opt_string(self.first_source_shard.as_deref()),
+            json_opt_string(self.last_source_shard.as_deref()),
+            self.ledger.hot_path_allocations,
+        )
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ResidentWeightProbeStatus {
     Ok,
@@ -1544,6 +1586,130 @@ impl Runtime {
         })
     }
 
+    pub fn plan_resident_weight_prefetch(
+        &self,
+        table: &ResidentWeightTable,
+        max_task_bytes: usize,
+    ) -> Result<ResidentWeightPrefetchPlan> {
+        if max_task_bytes == 0 {
+            return Err(NervaError::InvalidArgument {
+                reason: "resident weight prefetch max_task_bytes must be non-zero".to_string(),
+            });
+        }
+
+        let mut tasks = Vec::new();
+        let mut ledger = TokenLedger::new(0);
+        let mut total_bytes = 0usize;
+        let mut shards = BTreeMap::new();
+
+        for entry in &table.entries {
+            let source_shard =
+                entry
+                    .source_shard
+                    .as_ref()
+                    .ok_or_else(|| NervaError::InvalidArgument {
+                        reason: format!("resident weight {} has no source shard", entry.name),
+                    })?;
+            let file_offset_begin =
+                entry
+                    .file_offset_begin
+                    .ok_or_else(|| NervaError::InvalidArgument {
+                        reason: format!(
+                            "resident weight {} has no source file begin offset",
+                            entry.name
+                        ),
+                    })?;
+            let file_offset_end =
+                entry
+                    .file_offset_end
+                    .ok_or_else(|| NervaError::InvalidArgument {
+                        reason: format!(
+                            "resident weight {} has no source file end offset",
+                            entry.name
+                        ),
+                    })?;
+            if file_offset_end < file_offset_begin
+                || file_offset_end - file_offset_begin != entry.bytes
+            {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!("resident weight {} source span is invalid", entry.name),
+                });
+            }
+            shards.insert(source_shard.clone(), ());
+
+            let mut cursor = file_offset_begin;
+            while cursor < file_offset_end {
+                let remaining = file_offset_end - cursor;
+                let bytes = remaining.min(max_task_bytes);
+                let task_index = tasks.len() as u64;
+                let file_end =
+                    cursor
+                        .checked_add(bytes)
+                        .ok_or_else(|| NervaError::AllocationFailed {
+                            bytes,
+                            reason: "resident weight prefetch file offset overflow".to_string(),
+                        })?;
+                total_bytes =
+                    total_bytes
+                        .checked_add(bytes)
+                        .ok_or_else(|| NervaError::AllocationFailed {
+                            bytes,
+                            reason: "resident weight prefetch byte count overflow".to_string(),
+                        })?;
+                ledger.record(LedgerEvent {
+                    kind: LedgerEventKind::Prefetch,
+                    block_id: Some(entry.block_id),
+                    from_tier: Some(MemoryTier::Disk),
+                    to_tier: Some(MemoryTier::PinnedDram),
+                    bytes,
+                    latency_ns: 0,
+                    label: "weight_prefetch_scheduled",
+                });
+                ledger.record(LedgerEvent {
+                    kind: LedgerEventKind::Copy,
+                    block_id: Some(entry.block_id),
+                    from_tier: Some(MemoryTier::PinnedDram),
+                    to_tier: Some(entry.tier),
+                    bytes,
+                    latency_ns: 0,
+                    label: "weight_prefetch_copy",
+                });
+                tasks.push(ResidentWeightPrefetchTask {
+                    task_index,
+                    block_id: entry.block_id,
+                    name: entry.name.clone(),
+                    source_shard: source_shard.clone(),
+                    file_offset_begin: cursor,
+                    file_offset_end: file_end,
+                    bytes,
+                    target_tier: entry.tier,
+                });
+                cursor = file_end;
+            }
+        }
+
+        if total_bytes != table.total_weight_bytes {
+            return Err(NervaError::InvalidArgument {
+                reason: "resident weight prefetch byte count does not match table".to_string(),
+            });
+        }
+        ledger.require_zero_hot_path_allocations()?;
+
+        let first_source_shard = tasks.first().map(|task| task.source_shard.clone());
+        let last_source_shard = tasks.last().map(|task| task.source_shard.clone());
+        Ok(ResidentWeightPrefetchPlan {
+            prefetch_events: ledger.event_count(LedgerEventKind::Prefetch),
+            copy_events: ledger.event_count(LedgerEventKind::Copy),
+            tasks,
+            total_bytes,
+            shard_count: shards.len(),
+            max_task_bytes,
+            first_source_shard,
+            last_source_shard,
+            ledger,
+        })
+    }
+
     pub fn run_synthetic_decode(
         &self,
         config: SyntheticDecodeConfig,
@@ -2239,6 +2405,60 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, NervaError::AllocationFailed { .. }));
+    }
+
+    #[test]
+    fn resident_weight_prefetch_plan_records_bounded_tasks() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let (plan, header_len) = tiny_shard_plan();
+        let table = runtime.materialize_safetensors_shard_plan(&plan).unwrap();
+        let prefetch = runtime.plan_resident_weight_prefetch(&table, 128).unwrap();
+
+        assert_eq!(prefetch.tasks.len(), table.entries.len());
+        assert_eq!(prefetch.total_bytes, table.total_weight_bytes);
+        assert_eq!(prefetch.shard_count, 1);
+        assert_eq!(prefetch.prefetch_events, prefetch.tasks.len() as u64);
+        assert_eq!(prefetch.copy_events, prefetch.tasks.len() as u64);
+        assert_eq!(prefetch.ledger.hot_path_allocations, 0);
+        assert_eq!(prefetch.first_source_shard.as_deref(), Some(SHARD_ONE));
+        assert_eq!(prefetch.last_source_shard.as_deref(), Some(SHARD_ONE));
+
+        let first = prefetch.tasks.first().unwrap();
+        assert_eq!(first.task_index, 0);
+        assert_eq!(first.name, "model.embed_tokens.weight");
+        assert_eq!(first.file_offset_begin, 8 + header_len);
+        assert_eq!(first.file_offset_end, 8 + header_len + first.bytes);
+        assert_eq!(first.target_tier, MemoryTier::Dram);
+        assert!(prefetch.to_json().contains("\"tasks\":11"));
+    }
+
+    #[test]
+    fn resident_weight_prefetch_plan_splits_large_source_spans() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let (plan, header_len) = tiny_shard_plan();
+        let table = runtime.materialize_safetensors_shard_plan(&plan).unwrap();
+        let prefetch = runtime.plan_resident_weight_prefetch(&table, 16).unwrap();
+
+        assert!(prefetch.tasks.len() > table.entries.len());
+        assert_eq!(prefetch.total_bytes, table.total_weight_bytes);
+        assert_eq!(prefetch.tasks[0].bytes, 16);
+        assert_eq!(prefetch.tasks[0].file_offset_begin, 8 + header_len);
+        assert_eq!(prefetch.tasks[1].file_offset_begin, 8 + header_len + 16);
+        assert_eq!(prefetch.tasks[4].file_offset_end, 8 + header_len + 80);
+        assert_eq!(
+            prefetch.tasks[5].name,
+            "model.layers.0.input_layernorm.weight"
+        );
+    }
+
+    #[test]
+    fn resident_weight_prefetch_requires_source_offsets() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = tiny_llama_manifest();
+        let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
+
+        assert!(runtime.plan_resident_weight_prefetch(&table, 128).is_err());
+        assert!(runtime.plan_resident_weight_prefetch(&table, 0).is_err());
     }
 
     #[test]
