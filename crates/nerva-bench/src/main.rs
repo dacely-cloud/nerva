@@ -719,6 +719,39 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
 
     match runtime.run_synthetic_decode(SyntheticDecodeConfig::new(1024, 64, TokenId(1))) {
         Ok(summary) => {
+            let transaction_passed = matches!(summary.status, SyntheticDecodeStatus::Ok)
+                && summary.steps == 1024
+                && summary.graph_replays == summary.steps
+                && summary.graph_replay_events == summary.steps
+                && summary.kernel_events >= summary.steps
+                && summary.device_events == summary.steps
+                && summary.copy_events == summary.steps
+                && summary.host_wait_events == summary.steps
+                && summary.graph_replay_latency_ns > 0
+                && summary.device_latency_ns > 0
+                && summary.copy_latency_ns > 0
+                && summary.host_wait_latency_ns > 0
+                && summary.hot_path_allocations == 0;
+            report.push(
+                "synthetic_transaction",
+                transaction_passed,
+                format!(
+                    "steps={} graph_replays={} graph_events={} kernel_events={} device_events={} copy_events={} host_wait_events={} graph_ns={} device_ns={} copy_ns={} host_wait_ns={} hot_path_allocations={}",
+                    summary.steps,
+                    summary.graph_replays,
+                    summary.graph_replay_events,
+                    summary.kernel_events,
+                    summary.device_events,
+                    summary.copy_events,
+                    summary.host_wait_events,
+                    summary.graph_replay_latency_ns,
+                    summary.device_latency_ns,
+                    summary.copy_latency_ns,
+                    summary.host_wait_latency_ns,
+                    summary.hot_path_allocations,
+                ),
+            );
+
             let passed = matches!(summary.status, SyntheticDecodeStatus::Ok)
                 && summary.steps == 1024
                 && summary.graph_replays == 1024
@@ -758,7 +791,11 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
                 ),
             );
         }
-        Err(err) => report.push("synthetic_device_token", false, format!("{err:?}")),
+        Err(err) => {
+            let details = format!("{err:?}");
+            report.push("synthetic_transaction", false, details.clone());
+            report.push("synthetic_device_token", false, details);
+        }
     }
 
     match nerva_model::reference_block_smoke() {
@@ -1685,6 +1722,7 @@ mod tests {
         assert!(json.contains("\"cuda_native_abi\""));
         assert!(json.contains("\"static_arenas\""));
         assert!(json.contains("\"topology_snapshot\""));
+        assert!(json.contains("\"synthetic_transaction\""));
         assert!(json.contains("\"synthetic_device_token\""));
         assert!(json.contains("\"hf_model_manifest\""));
         assert!(json.contains("\"kv_residency_tiering\""));
