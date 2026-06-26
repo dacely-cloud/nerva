@@ -1,5 +1,6 @@
 #include "nerva_cuda_api.h"
 
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
 #include <string.h>
@@ -24,6 +25,9 @@ void clear_result(NervaCudaDeviceSmokeResult *out) {
   out->runtime_version = 0;
   out->compute_capability_major = 0;
   out->compute_capability_minor = 0;
+  out->posix_fd_handle_supported = -1;
+  out->gpu_direct_rdma_supported = -1;
+  out->gpu_direct_rdma_with_cuda_vmm_supported = -1;
   out->total_global_mem = 0;
   out->gpu_name[0] = '\0';
   out->pci_bus_id[0] = '\0';
@@ -33,6 +37,17 @@ int fail(NervaCudaDeviceSmokeResult *out, cudaError_t err) {
   out->cuda_error = static_cast<int32_t>(err);
   out->status = -1;
   return -1;
+}
+
+void record_driver_attribute(
+    int32_t *out,
+    CUdevice device,
+    CUdevice_attribute attribute) {
+  int value = 0;
+  CUresult result = cuDeviceGetAttribute(&value, attribute, device);
+  if (result == CUDA_SUCCESS) {
+    *out = value != 0 ? 1 : 0;
+  }
 }
 
 }  // namespace
@@ -82,6 +97,23 @@ extern "C" int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out) {
     return fail(out, err);
   }
   out->runtime_version = runtime_version;
+
+  CUdevice driver_device = 0;
+  if (cuInit(0) == CUDA_SUCCESS &&
+      cuDeviceGet(&driver_device, out->device_ordinal) == CUDA_SUCCESS) {
+    record_driver_attribute(
+        &out->posix_fd_handle_supported,
+        driver_device,
+        CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR_SUPPORTED);
+    record_driver_attribute(
+        &out->gpu_direct_rdma_supported,
+        driver_device,
+        CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED);
+    record_driver_attribute(
+        &out->gpu_direct_rdma_with_cuda_vmm_supported,
+        driver_device,
+        CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED);
+  }
 
   char pci_bus_id[32]{};
   err = cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), out->device_ordinal);

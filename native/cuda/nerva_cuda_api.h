@@ -16,6 +16,9 @@ typedef struct NervaCudaDeviceSmokeResult {
   int32_t runtime_version;
   int32_t compute_capability_major;
   int32_t compute_capability_minor;
+  int32_t posix_fd_handle_supported;
+  int32_t gpu_direct_rdma_supported;
+  int32_t gpu_direct_rdma_with_cuda_vmm_supported;
   uint64_t total_global_mem;
   char gpu_name[128];
   char pci_bus_id[32];

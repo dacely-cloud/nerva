@@ -13,6 +13,9 @@ fn unavailable_summary_is_valid_shape() {
     assert!(json.contains("\"runtime_version\":13010"));
     assert!(json.contains("\"compute_capability_major\":null"));
     assert!(json.contains("\"compute_capability_minor\":null"));
+    assert!(json.contains("\"posix_fd_handle_supported\":null"));
+    assert!(json.contains("\"gpu_direct_rdma_supported\":null"));
+    assert!(json.contains("\"gpu_direct_rdma_with_cuda_vmm_supported\":null"));
     assert!(json.contains("\"device_total_memory_bytes\":null"));
     assert!(json.contains("\"pci_bus_id\":null"));
     assert!(json.contains("\"hot_path_allocations\":0"));
@@ -41,4 +44,7 @@ fn cuda_smoke_is_repeatable_when_device_is_available() {
     assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
     assert_eq!(second.kernel_value, Some(0x4e45_5256));
     assert_eq!(second.hot_path_allocations, 0);
+    assert!(second.posix_fd_handle_supported.is_some());
+    assert!(second.gpu_direct_rdma_supported.is_some());
+    assert!(second.gpu_direct_rdma_with_cuda_vmm_supported.is_some());
 }

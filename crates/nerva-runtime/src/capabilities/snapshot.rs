@@ -1,5 +1,6 @@
 use crate::capabilities::json::{
-    host_arch_to_str, json_opt_string, json_opt_usize, json_string_array, memory_fabric_to_str,
+    host_arch_to_str, json_opt_bool, json_opt_string, json_opt_usize, json_string_array,
+    memory_fabric_to_str,
 };
 use nerva_core::types::arch::HostArch;
 use nerva_core::types::memory::fabric::MemoryFabricKind;
@@ -108,6 +109,9 @@ pub struct CapabilitySnapshot {
     pub dma_buf_nvidia_driver_present: bool,
     pub dma_buf_nvidia_capability_entries: usize,
     pub dma_buf_cuda_vmm_export_symbols_present: bool,
+    pub cuda_posix_fd_handle_supported: Option<bool>,
+    pub cuda_gpu_direct_rdma_supported: Option<bool>,
+    pub cuda_gpu_direct_rdma_with_vmm_supported: Option<bool>,
     pub cxl: CapabilityState,
     pub topology: TopologySnapshot,
 }
@@ -115,7 +119,7 @@ pub struct CapabilitySnapshot {
 impl CapabilitySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_pci_bus_id\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"hip_runtime_present\":{},\"hip_runtime_version\":{},\"hip_amd_gpu_count\":{},\"hip_kfd_present\":{},\"hip_amdgpu_loaded\":{},\"nvidia_driver_version\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"nvidia_peer_memory_module\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"dma_buf_kernel_present\":{},\"dma_buf_nvidia_driver_present\":{},\"dma_buf_nvidia_capability_entries\":{},\"dma_buf_cuda_vmm_export_symbols_present\":{},\"cxl\":\"{}\",\"topology\":{}}}",
+            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_pci_bus_id\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"hip_runtime_present\":{},\"hip_runtime_version\":{},\"hip_amd_gpu_count\":{},\"hip_kfd_present\":{},\"hip_amdgpu_loaded\":{},\"nvidia_driver_version\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"nvidia_peer_memory_module\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"dma_buf_kernel_present\":{},\"dma_buf_nvidia_driver_present\":{},\"dma_buf_nvidia_capability_entries\":{},\"dma_buf_cuda_vmm_export_symbols_present\":{},\"cuda_posix_fd_handle_supported\":{},\"cuda_gpu_direct_rdma_supported\":{},\"cuda_gpu_direct_rdma_with_vmm_supported\":{},\"cxl\":\"{}\",\"topology\":{}}}",
             host_arch_to_str(self.host_arch),
             self.target_os,
             self.target_arch,
@@ -147,6 +151,9 @@ impl CapabilitySnapshot {
             self.dma_buf_nvidia_driver_present,
             self.dma_buf_nvidia_capability_entries,
             self.dma_buf_cuda_vmm_export_symbols_present,
+            json_opt_bool(self.cuda_posix_fd_handle_supported),
+            json_opt_bool(self.cuda_gpu_direct_rdma_supported),
+            json_opt_bool(self.cuda_gpu_direct_rdma_with_vmm_supported),
             self.cxl.as_str(),
             self.topology.to_json(),
         )

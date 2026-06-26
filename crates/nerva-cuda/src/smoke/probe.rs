@@ -18,6 +18,11 @@ pub fn smoke() -> CudaSmokeSummary {
             runtime_version,
             compute_capability_major: Some(out.compute_capability_major),
             compute_capability_minor: Some(out.compute_capability_minor),
+            posix_fd_handle_supported: attr_bool(out.posix_fd_handle_supported),
+            gpu_direct_rdma_supported: attr_bool(out.gpu_direct_rdma_supported),
+            gpu_direct_rdma_with_cuda_vmm_supported: attr_bool(
+                out.gpu_direct_rdma_with_cuda_vmm_supported,
+            ),
             device_total_memory_bytes: usize::try_from(out.total_global_mem).ok(),
             pci_bus_id: c_char_array_to_string(&out.pci_bus_id),
             device_arena_bytes: 4,
@@ -36,5 +41,13 @@ pub fn smoke() -> CudaSmokeSummary {
         CudaSmokeSummary::unavailable(reason, runtime_version)
     } else {
         CudaSmokeSummary::failed(reason, runtime_version)
+    }
+}
+
+fn attr_bool(value: i32) -> Option<bool> {
+    match value {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
     }
 }

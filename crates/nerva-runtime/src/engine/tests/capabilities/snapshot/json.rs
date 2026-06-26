@@ -37,6 +37,9 @@ fn capability_snapshot_json_escapes_cuda_error() {
         dma_buf_nvidia_driver_present: true,
         dma_buf_nvidia_capability_entries: 4,
         dma_buf_cuda_vmm_export_symbols_present: true,
+        cuda_posix_fd_handle_supported: Some(true),
+        cuda_gpu_direct_rdma_supported: Some(true),
+        cuda_gpu_direct_rdma_with_vmm_supported: Some(false),
         cxl: CapabilityState::Unsupported,
         topology: topology_fixture(),
     };
@@ -53,6 +56,9 @@ fn capability_snapshot_json_escapes_cuda_error() {
     assert!(json.contains("\"dma_buf_export\":\"SUPPORTED_UNVERIFIED\""));
     assert!(json.contains("\"dma_buf_kernel_present\":true"));
     assert!(json.contains("\"dma_buf_nvidia_capability_entries\":4"));
+    assert!(json.contains("\"cuda_posix_fd_handle_supported\":true"));
+    assert!(json.contains("\"cuda_gpu_direct_rdma_supported\":true"));
+    assert!(json.contains("\"cuda_gpu_direct_rdma_with_vmm_supported\":false"));
     assert!(json.contains("\"rdma_netdev_links\":[\"mlx5_0:enp1s0f0\"]"));
     assert!(json.contains("\"iommu_kernel_args\":\"intel_iommu=on iommu=pt\""));
 }

@@ -81,6 +81,8 @@ fn topology_helpers_parse_linux_id_and_pci_class_values() {
             2,
             Some("nvidia_peermem"),
             CapabilityState::Unsupported,
+            Some(true),
+            None,
         ),
         CapabilityState::SupportedUnverified
     );
@@ -90,6 +92,8 @@ fn topology_helpers_parse_linux_id_and_pci_class_values() {
             2,
             Some("nvidia_peermem"),
             CapabilityState::SupportedUnverified,
+            Some(true),
+            Some(true),
         ),
         CapabilityState::DegradedToPinnedHost
     );
@@ -99,6 +103,8 @@ fn topology_helpers_parse_linux_id_and_pci_class_values() {
             0,
             Some("nv_peer_mem"),
             CapabilityState::Unsupported,
+            Some(true),
+            None,
         ),
         CapabilityState::DegradedToPinnedHost
     );
@@ -108,6 +114,8 @@ fn topology_helpers_parse_linux_id_and_pci_class_values() {
             2,
             None,
             CapabilityState::Unsupported,
+            None,
+            None,
         ),
         CapabilityState::DegradedToPinnedHost
     );
@@ -117,8 +125,21 @@ fn topology_helpers_parse_linux_id_and_pci_class_values() {
             2,
             None,
             CapabilityState::SupportedUnverified,
+            None,
+            Some(true),
         ),
         CapabilityState::SupportedUnverified
+    );
+    assert_eq!(
+        gpu_direct_rdma_capability(
+            CapabilityState::SupportedAndVerified,
+            2,
+            None,
+            CapabilityState::SupportedUnverified,
+            Some(true),
+            Some(false),
+        ),
+        CapabilityState::DegradedToPinnedHost
     );
 
     assert_eq!(cxl_capability(0, 0), CapabilityState::Unsupported);

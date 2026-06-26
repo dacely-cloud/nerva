@@ -5,6 +5,10 @@ pub(crate) fn json_opt_usize(value: Option<usize>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.to_string())
 }
 
+pub(crate) fn json_opt_bool(value: Option<bool>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
 pub(crate) fn host_arch_to_str(value: HostArch) -> &'static str {
     match value {
         HostArch::X86_64 => "x86_64",
