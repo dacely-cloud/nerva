@@ -657,6 +657,35 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         ),
     );
 
+    match runtime.static_arena_probe(ResidencyBudget::new(1024, 2048, 4096)) {
+        Ok(summary) => report.push(
+            "static_arenas",
+            summary.device_capacity_bytes == 1024
+                && summary.pinned_host_capacity_bytes == 2048
+                && summary.host_capacity_bytes == 4096
+                && summary.bootstrap_blocks == 3
+                && summary.ready_blocks == 3
+                && summary.hot_path_rejections == 3
+                && summary.hot_path_allocation_attempts == 3
+                && summary.usage_preserved_after_rejections,
+            format!(
+                "device_capacity={} pinned_host_capacity={} host_capacity={} device_used={} pinned_host_used={} host_used={} bootstrap_blocks={} ready_blocks={} hot_path_rejections={} hot_path_allocation_attempts={} usage_preserved={}",
+                summary.device_capacity_bytes,
+                summary.pinned_host_capacity_bytes,
+                summary.host_capacity_bytes,
+                summary.device_used_bytes,
+                summary.pinned_host_used_bytes,
+                summary.host_used_bytes,
+                summary.bootstrap_blocks,
+                summary.ready_blocks,
+                summary.hot_path_rejections,
+                summary.hot_path_allocation_attempts,
+                summary.usage_preserved_after_rejections,
+            ),
+        ),
+        Err(err) => report.push("static_arenas", false, format!("{err:?}")),
+    }
+
     let topology = runtime.discover_topology();
     report.push(
         "topology_snapshot",
@@ -1654,6 +1683,7 @@ mod tests {
         assert!(json.contains("\"failed\":0"));
         assert!(json.contains("\"vllm_rvllm_audit\""));
         assert!(json.contains("\"cuda_native_abi\""));
+        assert!(json.contains("\"static_arenas\""));
         assert!(json.contains("\"topology_snapshot\""));
         assert!(json.contains("\"synthetic_device_token\""));
         assert!(json.contains("\"hf_model_manifest\""));
