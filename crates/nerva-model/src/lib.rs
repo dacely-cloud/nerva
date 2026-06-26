@@ -556,6 +556,177 @@ pub fn hf_tensor_manifest_probe() -> Result<HfTensorManifestProbeSummary> {
     })
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SafetensorsValidationStatus {
+    Ok,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SafetensorsManifestValidationSummary {
+    pub status: SafetensorsValidationStatus,
+    pub manifest_entries: usize,
+    pub validated_tensors: usize,
+    pub total_data_bytes: usize,
+    pub header_bytes: usize,
+    pub manifest_hash: u64,
+    pub header_hash: u64,
+}
+
+impl SafetensorsManifestValidationSummary {
+    pub fn to_json(&self) -> String {
+        let status = match self.status {
+            SafetensorsValidationStatus::Ok => "ok",
+        };
+        format!(
+            "{{\"status\":\"{}\",\"manifest_entries\":{},\"validated_tensors\":{},\"total_data_bytes\":{},\"header_bytes\":{},\"manifest_hash\":{},\"header_hash\":{}}}",
+            status,
+            self.manifest_entries,
+            self.validated_tensors,
+            self.total_data_bytes,
+            self.header_bytes,
+            self.manifest_hash,
+            self.header_hash,
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SafetensorsHeaderProbeSummary {
+    pub status: SafetensorsValidationStatus,
+    pub validation: SafetensorsManifestValidationSummary,
+}
+
+impl SafetensorsHeaderProbeSummary {
+    pub fn to_json(&self) -> String {
+        let status = match self.status {
+            SafetensorsValidationStatus::Ok => "ok",
+        };
+        format!(
+            "{{\"status\":\"{}\",\"validation\":{}}}",
+            status,
+            self.validation.to_json(),
+        )
+    }
+}
+
+pub fn safetensors_header_from_bytes(bytes: &[u8]) -> Result<&str> {
+    if bytes.len() < 8 {
+        return Err(NervaError::InvalidArgument {
+            reason: "safetensors file is too small to contain a header length".to_string(),
+        });
+    }
+    let mut header_len_bytes = [0u8; 8];
+    header_len_bytes.copy_from_slice(&bytes[..8]);
+    let header_len = u64::from_le_bytes(header_len_bytes);
+    let header_len = usize::try_from(header_len).map_err(|_| NervaError::InvalidArgument {
+        reason: "safetensors header length does not fit usize".to_string(),
+    })?;
+    let header_end = 8usize
+        .checked_add(header_len)
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "safetensors header length overflows file offset".to_string(),
+        })?;
+    if header_end > bytes.len() {
+        return Err(NervaError::InvalidArgument {
+            reason: "safetensors header length exceeds available bytes".to_string(),
+        });
+    }
+    core::str::from_utf8(&bytes[8..header_end]).map_err(|_| NervaError::InvalidArgument {
+        reason: "safetensors header is not valid UTF-8".to_string(),
+    })
+}
+
+pub fn validate_safetensors_header_for_manifest(
+    header_json: &str,
+    manifest: &HfTensorManifest,
+) -> Result<SafetensorsManifestValidationSummary> {
+    let mut validated_tensors = 0usize;
+    let mut total_data_bytes = 0usize;
+    for entry in &manifest.entries {
+        let tensor_json =
+            find_top_level_json_value(header_json, &entry.name)?.ok_or_else(|| {
+                NervaError::InvalidArgument {
+                    reason: format!("safetensors header is missing tensor {}", entry.name),
+                }
+            })?;
+        validate_safetensors_tensor_header(tensor_json, entry)?;
+        validated_tensors =
+            validated_tensors
+                .checked_add(1)
+                .ok_or_else(|| NervaError::AllocationFailed {
+                    bytes: 1,
+                    reason: "validated tensor count overflow".to_string(),
+                })?;
+        total_data_bytes = total_data_bytes.checked_add(entry.bytes).ok_or_else(|| {
+            NervaError::AllocationFailed {
+                bytes: entry.bytes,
+                reason: "safetensors validated data byte count overflow".to_string(),
+            }
+        })?;
+    }
+    if total_data_bytes != manifest.total_weight_bytes {
+        return Err(NervaError::InvalidArgument {
+            reason: "safetensors validated byte count does not match manifest".to_string(),
+        });
+    }
+    Ok(SafetensorsManifestValidationSummary {
+        status: SafetensorsValidationStatus::Ok,
+        manifest_entries: manifest.entries.len(),
+        validated_tensors,
+        total_data_bytes,
+        header_bytes: header_json.len(),
+        manifest_hash: manifest.manifest_hash,
+        header_hash: hash_bytes(header_json.as_bytes()),
+    })
+}
+
+pub fn synthetic_safetensors_header_for_manifest(manifest: &HfTensorManifest) -> Result<String> {
+    let mut header = String::from("{");
+    for (index, entry) in manifest.entries.iter().enumerate() {
+        if index > 0 {
+            header.push(',');
+        }
+        let begin = manifest.entries[..index]
+            .iter()
+            .try_fold(0usize, |acc, item| {
+                acc.checked_add(item.bytes)
+                    .ok_or_else(|| NervaError::AllocationFailed {
+                        bytes: item.bytes,
+                        reason: "synthetic safetensors offset overflow".to_string(),
+                    })
+            })?;
+        let end = begin
+            .checked_add(entry.bytes)
+            .ok_or_else(|| NervaError::AllocationFailed {
+                bytes: entry.bytes,
+                reason: "synthetic safetensors tensor end overflow".to_string(),
+            })?;
+        header.push('"');
+        header.push_str(&json_escape(&entry.name));
+        header.push_str("\":{\"dtype\":\"");
+        header.push_str(safetensors_dtype(entry.dtype)?);
+        header.push_str("\",\"shape\":");
+        push_safetensors_shape_json(entry, &mut header);
+        header.push_str(",\"data_offsets\":[");
+        header.push_str(&begin.to_string());
+        header.push(',');
+        header.push_str(&end.to_string());
+        header.push_str("]}");
+    }
+    header.push('}');
+    Ok(header)
+}
+
+pub fn safetensors_header_probe() -> Result<SafetensorsHeaderProbeSummary> {
+    let manifest = hf_tensor_manifest_probe()?.manifest;
+    let header = synthetic_safetensors_header_for_manifest(&manifest)?;
+    let validation = validate_safetensors_header_for_manifest(&header, &manifest)?;
+    Ok(SafetensorsHeaderProbeSummary {
+        status: SafetensorsValidationStatus::Ok,
+        validation,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct ReferenceTransformerBlock {
     shape: TransformerBlockShape,
@@ -1788,6 +1959,135 @@ fn weight_block_rank(role: WeightBlockRole) -> u8 {
     }
 }
 
+fn validate_safetensors_tensor_header(
+    tensor_json: &str,
+    entry: &HfTensorManifestEntry,
+) -> Result<()> {
+    let dtype =
+        optional_string(tensor_json, "dtype")?.ok_or_else(|| NervaError::InvalidArgument {
+            reason: format!("safetensors tensor {} is missing dtype", entry.name),
+        })?;
+    if dtype != safetensors_dtype(entry.dtype)? {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors tensor {} dtype {} does not match expected {}",
+                entry.name,
+                dtype,
+                safetensors_dtype(entry.dtype)?
+            ),
+        });
+    }
+
+    let shape = required_usize_array(tensor_json, "shape")?;
+    if shape != expected_safetensors_shape(entry) {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors tensor {} shape {:?} does not match expected {:?}",
+                entry.name,
+                shape,
+                expected_safetensors_shape(entry)
+            ),
+        });
+    }
+
+    let offsets = required_usize_array(tensor_json, "data_offsets")?;
+    if offsets.len() != 2 || offsets[1] < offsets[0] {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("safetensors tensor {} has invalid offsets", entry.name),
+        });
+    }
+    let span = offsets[1] - offsets[0];
+    if span != entry.bytes {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors tensor {} offset span {} does not match expected bytes {}",
+                entry.name, span, entry.bytes
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn required_usize_array(source: &str, key: &'static str) -> Result<Vec<usize>> {
+    let value =
+        find_top_level_json_value(source, key)?.ok_or_else(|| NervaError::InvalidArgument {
+            reason: format!("JSON object is missing required array {key}"),
+        })?;
+    parse_usize_array_value(value, key)
+}
+
+fn parse_usize_array_value(value: &str, key: &'static str) -> Result<Vec<usize>> {
+    let value = value.trim();
+    if !value.starts_with('[') || !value.ends_with(']') {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("JSON field {key} must be an unsigned integer array"),
+        });
+    }
+    let inner = value[1..value.len() - 1].trim();
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+    inner
+        .split(',')
+        .map(|part| {
+            let part = part.trim();
+            if part.starts_with('-') || part.is_empty() {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!("JSON field {key} must contain unsigned integers"),
+                });
+            }
+            let parsed = part
+                .parse::<u64>()
+                .map_err(|_| NervaError::InvalidArgument {
+                    reason: format!("JSON field {key} must contain unsigned integers"),
+                })?;
+            usize::try_from(parsed).map_err(|_| NervaError::InvalidArgument {
+                reason: format!("JSON field {key} value does not fit usize"),
+            })
+        })
+        .collect()
+}
+
+fn safetensors_dtype(dtype: DType) -> Result<&'static str> {
+    match dtype {
+        DType::F16 => Ok("F16"),
+        DType::BF16 => Ok("BF16"),
+        DType::F32 => Ok("F32"),
+        _ => Err(NervaError::InvalidArgument {
+            reason: format!(
+                "dtype {} is not supported in exact safetensors manifest validation",
+                dtype_to_str(dtype)
+            ),
+        }),
+    }
+}
+
+fn expected_safetensors_shape(entry: &HfTensorManifestEntry) -> Vec<usize> {
+    match entry.rank {
+        1 => vec![entry.rows],
+        2 => vec![entry.rows, entry.cols],
+        _ => Vec::new(),
+    }
+}
+
+fn push_safetensors_shape_json(entry: &HfTensorManifestEntry, out: &mut String) {
+    match entry.rank {
+        1 => {
+            out.push('[');
+            out.push_str(&entry.rows.to_string());
+            out.push(']');
+        }
+        2 => {
+            out.push('[');
+            out.push_str(&entry.rows.to_string());
+            out.push(',');
+            out.push_str(&entry.cols.to_string());
+            out.push(']');
+        }
+        _ => out.push_str("[]"),
+    }
+}
+
 fn find_top_level_json_value<'a>(source: &'a str, key: &str) -> Result<Option<&'a str>> {
     let bytes = source.as_bytes();
     let mut index = skip_json_ws(bytes, 0);
@@ -2316,6 +2616,15 @@ fn hash_tokens(values: &[TokenId]) -> u64 {
     hash
 }
 
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for value in [
@@ -2702,6 +3011,80 @@ mod tests {
         );
         assert_ne!(summary.manifest.manifest_hash, 0);
         assert!(summary.to_json().contains("\"entries\":290"));
+    }
+
+    #[test]
+    fn validates_synthetic_safetensors_header_against_manifest() {
+        let manifest = hf_tensor_manifest_probe().unwrap().manifest;
+        let header = synthetic_safetensors_header_for_manifest(&manifest).unwrap();
+        let validation = validate_safetensors_header_for_manifest(&header, &manifest).unwrap();
+
+        assert_eq!(validation.status, SafetensorsValidationStatus::Ok);
+        assert_eq!(validation.manifest_entries, manifest.entries.len());
+        assert_eq!(validation.validated_tensors, manifest.entries.len());
+        assert_eq!(validation.total_data_bytes, manifest.total_weight_bytes);
+        assert_eq!(validation.manifest_hash, manifest.manifest_hash);
+        assert_ne!(validation.header_hash, 0);
+    }
+
+    #[test]
+    fn extracts_safetensors_header_from_file_bytes() {
+        let header = "{\"x\":{\"dtype\":\"F16\",\"shape\":[1],\"data_offsets\":[0,2]}}";
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(header.as_bytes());
+        bytes.extend_from_slice(&[0xaa, 0xbb]);
+
+        assert_eq!(safetensors_header_from_bytes(&bytes).unwrap(), header);
+        assert!(safetensors_header_from_bytes(&bytes[..4]).is_err());
+    }
+
+    #[test]
+    fn safetensors_validation_rejects_missing_and_mismatched_tensors() {
+        let metadata = parse_hf_config_metadata(
+            r#"{
+                "model_type": "llama",
+                "hidden_size": 4,
+                "intermediate_size": 8,
+                "num_hidden_layers": 1,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 10,
+                "torch_dtype": "float16"
+            }"#,
+        )
+        .unwrap();
+        let plan = plan_hf_weight_layout(&metadata).unwrap();
+        let manifest = build_hf_tensor_manifest(&plan).unwrap();
+        let valid = synthetic_safetensors_header_for_manifest(&manifest).unwrap();
+
+        assert!(validate_safetensors_header_for_manifest("{}", &manifest).is_err());
+
+        let first = &manifest.entries[0];
+        let bad_dtype = format!(
+            "{{\"{}\":{{\"dtype\":\"F32\",\"shape\":[{},{}],\"data_offsets\":[0,{}]}}}}",
+            first.name, first.rows, first.cols, first.bytes
+        );
+        assert!(validate_safetensors_header_for_manifest(&bad_dtype, &manifest).is_err());
+
+        let bad_shape = valid.replacen(
+            &format!("\"shape\":[{},{}]", first.rows, first.cols),
+            "\"shape\":[1,1]",
+            1,
+        );
+        assert!(validate_safetensors_header_for_manifest(&bad_shape, &manifest).is_err());
+    }
+
+    #[test]
+    fn safetensors_header_probe_reports_manifest_parity() {
+        let summary = safetensors_header_probe().unwrap();
+
+        assert_eq!(summary.status, SafetensorsValidationStatus::Ok);
+        assert_eq!(summary.validation.manifest_entries, 290);
+        assert_eq!(summary.validation.validated_tensors, 290);
+        assert_eq!(summary.validation.total_data_bytes, 11_866_210_304);
+        assert_ne!(summary.validation.header_hash, 0);
+        assert!(summary.to_json().contains("\"validated_tensors\":290"));
     }
 
     #[test]

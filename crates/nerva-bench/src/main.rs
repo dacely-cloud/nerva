@@ -109,6 +109,16 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("safetensors") => match run_safetensors_probe(args.next(), args.next()) {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("{reason}");
+                ExitCode::from(1)
+            }
+        },
         Some("attention") => match nerva_model::blockwise_attention_smoke() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
@@ -161,7 +171,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
             );
             ExitCode::from(2)
         }
@@ -249,6 +259,39 @@ fn run_manifest_probe(config_path: Option<String>) -> Result<String, String> {
         None => nerva_model::hf_tensor_manifest_probe()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("HF tensor manifest probe failed: {err:?}")),
+    }
+}
+
+fn run_safetensors_probe(
+    config_path: Option<String>,
+    safetensors_path: Option<String>,
+) -> Result<String, String> {
+    match (config_path, safetensors_path) {
+        (None, None) => nerva_model::safetensors_header_probe()
+            .map(|summary| summary.to_json())
+            .map_err(|err| format!("safetensors header probe failed: {err:?}")),
+        (Some(config_path), Some(safetensors_path)) => {
+            let config = std::fs::read_to_string(&config_path)
+                .map_err(|err| format!("failed to read {config_path}: {err}"))?;
+            let metadata = nerva_model::parse_hf_config_metadata(&config)
+                .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+            let plan = nerva_model::plan_hf_weight_layout(&metadata)
+                .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
+            let manifest = nerva_model::build_hf_tensor_manifest(&plan)
+                .map_err(|err| format!("HF tensor manifest failed: {err:?}"))?;
+            let bytes = std::fs::read(&safetensors_path)
+                .map_err(|err| format!("failed to read {safetensors_path}: {err}"))?;
+            let header = nerva_model::safetensors_header_from_bytes(&bytes)
+                .map_err(|err| format!("safetensors header read failed: {err:?}"))?;
+            let validation =
+                nerva_model::validate_safetensors_header_for_manifest(header, &manifest)
+                    .map_err(|err| format!("safetensors manifest validation failed: {err:?}"))?;
+            Ok(validation.to_json())
+        }
+        _ => Err(
+            "safetensors requires either no args or both config.json and model.safetensors"
+                .to_string(),
+        ),
     }
 }
 
