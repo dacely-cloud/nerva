@@ -1,3 +1,4 @@
+mod contract;
 mod dpdk_udp;
 mod fabric;
 mod matrix;

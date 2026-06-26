@@ -161,6 +161,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "fabric-backends" => transport::run_fabric_backend_probe(),
         "dpdk-udp" => transport::run_dpdk_udp_probe(),
         "transport" => transport::run_transport_probe(),
+        "transport-contract" => transport::run_transport_contract_probe(),
         "transport-matrix" => transport::run_transport_matrix_probe(),
         "transport-registration" => transport::run_transport_registration_probe(),
         "stage-pipeline" => transport::run_stage_pipeline_probe(),

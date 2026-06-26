@@ -43,6 +43,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"fabric_backend_capabilities\""));
     assert!(json.contains("\"dpdk_udp_activation_protocol\""));
     assert!(json.contains("\"transport_pinned_fallback\""));
+    assert!(json.contains("\"transport_backend_contract\""));
     assert!(json.contains("\"transport_capability_matrix\""));
     assert!(json.contains("\"transport_registration_cache\""));
     assert!(json.contains("\"stage_pipeline_activation_only\""));

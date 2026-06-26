@@ -1,3 +1,4 @@
+pub(crate) mod contract;
 pub(crate) mod dpdk_udp;
 pub(crate) mod fabric;
 pub(crate) mod kv;
