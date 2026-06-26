@@ -3,8 +3,12 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("NERVA currently supports Linux only.");
 
-use nerva_core::{BlockKind, DType, MemoryTier, NervaError, Result, TokenId};
-use nerva_ledger::{LedgerEvent, LedgerEventKind, TokenLedger};
+use nerva_core::{
+    BlockKind, DType, DeviceOrdinal, ExecutionOwner, MemoryTier, NervaError, Result, TokenId,
+};
+use nerva_ledger::{
+    CandidateCost, ExecutionDecision, LedgerEvent, LedgerEventKind, MetricSource, TokenLedger,
+};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct TransformerBlockShape {
@@ -561,6 +565,185 @@ pub fn blockwise_attention_smoke() -> Result<BlockwiseAttentionSmokeSummary> {
     })
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WarmComputeStrategy {
+    CpuDram,
+    GpuResident,
+    GpuStaged,
+    HybridSplit,
+}
+
+impl WarmComputeStrategy {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CpuDram => "cpu-dram",
+            Self::GpuResident => "gpu-resident",
+            Self::GpuStaged => "gpu-staged",
+            Self::HybridSplit => "hybrid-split",
+        }
+    }
+
+    pub const fn executor(self) -> ExecutionOwner {
+        match self {
+            Self::CpuDram => ExecutionOwner::Cpu,
+            Self::GpuResident | Self::GpuStaged | Self::HybridSplit => {
+                ExecutionOwner::Gpu(DeviceOrdinal(0))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WarmComputeCandidate {
+    pub strategy: WarmComputeStrategy,
+    pub visible_ns: u64,
+    pub output_hash: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WarmComputeProbeStatus {
+    Ok,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WarmComputeProbeSummary {
+    pub status: WarmComputeProbeStatus,
+    pub rows: usize,
+    pub cols: usize,
+    pub candidates: Vec<WarmComputeCandidate>,
+    pub selected_strategy: WarmComputeStrategy,
+    pub parity: bool,
+    pub cpu_beats_staged: bool,
+    pub execution_decisions: u64,
+    pub cpu_events: u64,
+    pub device_events: u64,
+    pub copy_events: u64,
+    pub copy_bytes: usize,
+    pub total_latency_ns: u64,
+    pub hot_path_allocations: u64,
+    pub output_hash: u64,
+}
+
+impl WarmComputeProbeSummary {
+    pub fn to_json(&self) -> String {
+        let status = match self.status {
+            WarmComputeProbeStatus::Ok => "ok",
+        };
+        format!(
+            "{{\"status\":\"{}\",\"rows\":{},\"cols\":{},\"selected_strategy\":\"{}\",\"parity\":{},\"cpu_beats_staged\":{},\"candidate_count\":{},\"execution_decisions\":{},\"cpu_events\":{},\"device_events\":{},\"copy_events\":{},\"copy_bytes\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"output_hash\":{}}}",
+            status,
+            self.rows,
+            self.cols,
+            self.selected_strategy.label(),
+            self.parity,
+            self.cpu_beats_staged,
+            self.candidates.len(),
+            self.execution_decisions,
+            self.cpu_events,
+            self.device_events,
+            self.copy_events,
+            self.copy_bytes,
+            self.total_latency_ns,
+            self.hot_path_allocations,
+            self.output_hash,
+        )
+    }
+}
+
+pub fn warm_compute_probe() -> Result<WarmComputeProbeSummary> {
+    const ROWS: usize = 4;
+    const COLS: usize = 4;
+    let matrix = [
+        1.0, 0.0, 0.0, 1.0, 0.5, -1.0, 2.0, 0.0, -1.0, 0.0, 1.0, 0.5, 0.0, 2.0, 0.25, -0.5,
+    ];
+    let input = [1.0, -2.0, 0.5, 3.0];
+    let mut ledger = TokenLedger::new(0);
+    let mut candidates = Vec::new();
+
+    for strategy in [
+        WarmComputeStrategy::CpuDram,
+        WarmComputeStrategy::GpuResident,
+        WarmComputeStrategy::GpuStaged,
+        WarmComputeStrategy::HybridSplit,
+    ] {
+        candidates.push(run_warm_compute_candidate(
+            strategy,
+            ROWS,
+            COLS,
+            &matrix,
+            &input,
+            &mut ledger,
+        )?);
+    }
+
+    let output_hash = candidates
+        .first()
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "warm compute probe produced no candidates".to_string(),
+        })?
+        .output_hash;
+    let parity = candidates
+        .iter()
+        .all(|candidate| candidate.output_hash == output_hash);
+    if !parity {
+        return Err(NervaError::InvalidArgument {
+            reason: "warm compute candidate parity failed".to_string(),
+        });
+    }
+
+    let selected = candidates
+        .iter()
+        .min_by_key(|candidate| candidate.visible_ns)
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "warm compute candidate selection failed".to_string(),
+        })?;
+    let selected_strategy = selected.strategy;
+    let selected_visible_ns = selected.visible_ns;
+    let cpu_visible = candidate_visible_ns(&candidates, WarmComputeStrategy::CpuDram)?;
+    let staged_visible = candidate_visible_ns(&candidates, WarmComputeStrategy::GpuStaged)?;
+
+    ledger.record_execution_decision(ExecutionDecision {
+        operation: "dense_matvec",
+        executor_selected: selected_strategy.executor(),
+        candidate_costs: candidates
+            .iter()
+            .map(|candidate| {
+                CandidateCost::estimated(candidate.strategy.label(), candidate.visible_ns)
+            })
+            .collect(),
+        reason: "select exact candidate with lowest visible critical-path cost",
+        predicted_visible_ns: selected_visible_ns,
+        actual_visible_ns: Some(selected_visible_ns),
+        metric_source: MetricSource::EstimatedModel,
+    });
+    ledger.require_zero_hot_path_allocations()?;
+
+    let copy_bytes = ledger
+        .events
+        .iter()
+        .filter(|event| event.kind == LedgerEventKind::Copy)
+        .map(|event| event.bytes)
+        .sum();
+
+    Ok(WarmComputeProbeSummary {
+        status: WarmComputeProbeStatus::Ok,
+        rows: ROWS,
+        cols: COLS,
+        candidates,
+        selected_strategy,
+        parity,
+        cpu_beats_staged: cpu_visible < staged_visible,
+        execution_decisions: ledger.execution_decisions.len() as u64,
+        cpu_events: ledger.event_count(LedgerEventKind::CpuActivity),
+        device_events: ledger.event_count(LedgerEventKind::DeviceActivity),
+        copy_events: ledger.event_count(LedgerEventKind::Copy),
+        copy_bytes,
+        total_latency_ns: ledger.total_latency_ns(),
+        hot_path_allocations: ledger.hot_path_allocations,
+        output_hash,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct TinyGreedyModel {
     vocab_size: usize,
@@ -635,6 +818,18 @@ impl TinyGreedyModel {
             )?;
             mat_vec_row_major(&self.lm_head, &scratch.block_output, &mut scratch.logits);
             let next_token = greedy_argmax(&scratch.logits)?;
+            ledger.record_execution_decision(ExecutionDecision {
+                operation: "tiny_greedy_decode",
+                executor_selected: ExecutionOwner::Cpu,
+                candidate_costs: vec![
+                    CandidateCost::estimated("cpu-resident-reference", 1),
+                    CandidateCost::estimated("gpu-staged-reference", 3),
+                ],
+                reason: "tiny reference model is already resident in DRAM",
+                predicted_visible_ns: 1,
+                actual_visible_ns: Some(1),
+                metric_source: MetricSource::EstimatedModel,
+            });
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::DeviceActivity,
                 block_id: None,
@@ -834,6 +1029,168 @@ fn copy_embedding_row(
     Ok(())
 }
 
+fn run_warm_compute_candidate(
+    strategy: WarmComputeStrategy,
+    rows: usize,
+    cols: usize,
+    matrix: &[f32],
+    input: &[f32],
+    ledger: &mut TokenLedger,
+) -> Result<WarmComputeCandidate> {
+    require_len("warm compute matrix", matrix.len(), rows * cols)?;
+    require_len("warm compute input", input.len(), cols)?;
+    let mut output = vec![0.0; rows];
+    let matrix_bytes = matrix.len() * core::mem::size_of::<f32>();
+    let input_bytes = input.len() * core::mem::size_of::<f32>();
+    let output_bytes = output.len() * core::mem::size_of::<f32>();
+
+    let visible_ns = match strategy {
+        WarmComputeStrategy::CpuDram => {
+            mat_vec_row_major(matrix, input, &mut output);
+            let compute_ns = (rows * cols) as u64;
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::CpuActivity,
+                block_id: None,
+                from_tier: Some(MemoryTier::Dram),
+                to_tier: Some(MemoryTier::Dram),
+                bytes: matrix_bytes + input_bytes + output_bytes,
+                latency_ns: compute_ns,
+                label: "warm_matvec_cpu_dram",
+            });
+            compute_ns
+        }
+        WarmComputeStrategy::GpuResident => {
+            mat_vec_row_major(matrix, input, &mut output);
+            let compute_ns = rows as u64;
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::DeviceActivity,
+                block_id: None,
+                from_tier: Some(MemoryTier::Vram),
+                to_tier: Some(MemoryTier::Vram),
+                bytes: matrix_bytes + input_bytes + output_bytes,
+                latency_ns: compute_ns,
+                label: "warm_matvec_gpu_resident",
+            });
+            compute_ns
+        }
+        WarmComputeStrategy::GpuStaged => {
+            let copy_in_ns = (matrix_bytes + input_bytes) as u64;
+            let compute_ns = rows as u64;
+            let copy_out_ns = output_bytes as u64;
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::Copy,
+                block_id: None,
+                from_tier: Some(MemoryTier::Dram),
+                to_tier: Some(MemoryTier::Vram),
+                bytes: matrix_bytes + input_bytes,
+                latency_ns: copy_in_ns,
+                label: "warm_matvec_stage_to_gpu",
+            });
+            mat_vec_row_major(matrix, input, &mut output);
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::DeviceActivity,
+                block_id: None,
+                from_tier: Some(MemoryTier::Vram),
+                to_tier: Some(MemoryTier::Vram),
+                bytes: matrix_bytes + input_bytes + output_bytes,
+                latency_ns: compute_ns,
+                label: "warm_matvec_gpu_staged_compute",
+            });
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::Copy,
+                block_id: None,
+                from_tier: Some(MemoryTier::Vram),
+                to_tier: Some(MemoryTier::Dram),
+                bytes: output_bytes,
+                latency_ns: copy_out_ns,
+                label: "warm_matvec_stage_from_gpu",
+            });
+            copy_in_ns + compute_ns + copy_out_ns
+        }
+        WarmComputeStrategy::HybridSplit => {
+            let split = rows / 2;
+            mat_vec_row_range(matrix, input, cols, 0, split, &mut output)?;
+            mat_vec_row_range(matrix, input, cols, split, rows, &mut output)?;
+            let cpu_ns = (split * cols) as u64;
+            let gpu_ns = rows.saturating_sub(split) as u64;
+            let merge_bytes = rows.saturating_sub(split) * core::mem::size_of::<f32>();
+            let merge_ns = merge_bytes as u64;
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::CpuActivity,
+                block_id: None,
+                from_tier: Some(MemoryTier::Dram),
+                to_tier: Some(MemoryTier::Dram),
+                bytes: split * cols * core::mem::size_of::<f32>(),
+                latency_ns: cpu_ns,
+                label: "warm_matvec_hybrid_cpu_rows",
+            });
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::DeviceActivity,
+                block_id: None,
+                from_tier: Some(MemoryTier::Vram),
+                to_tier: Some(MemoryTier::Vram),
+                bytes: rows.saturating_sub(split) * cols * core::mem::size_of::<f32>(),
+                latency_ns: gpu_ns,
+                label: "warm_matvec_hybrid_gpu_rows",
+            });
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::Copy,
+                block_id: None,
+                from_tier: Some(MemoryTier::Vram),
+                to_tier: Some(MemoryTier::Dram),
+                bytes: merge_bytes,
+                latency_ns: merge_ns,
+                label: "warm_matvec_hybrid_merge",
+            });
+            cpu_ns.max(gpu_ns) + merge_ns
+        }
+    };
+
+    Ok(WarmComputeCandidate {
+        strategy,
+        visible_ns,
+        output_hash: hash_f32s(&output),
+    })
+}
+
+fn mat_vec_row_range(
+    matrix: &[f32],
+    input: &[f32],
+    cols: usize,
+    row_start: usize,
+    row_end: usize,
+    output: &mut [f32],
+) -> Result<()> {
+    if row_start > row_end || row_end > output.len() {
+        return Err(NervaError::InvalidArgument {
+            reason: "matvec row range is invalid".to_string(),
+        });
+    }
+    for row_index in row_start..row_end {
+        let start = row_index * cols;
+        let end = start + cols;
+        output[row_index] = matrix[start..end]
+            .iter()
+            .zip(input.iter())
+            .map(|(weight, value)| weight * value)
+            .sum();
+    }
+    Ok(())
+}
+
+fn candidate_visible_ns(
+    candidates: &[WarmComputeCandidate],
+    strategy: WarmComputeStrategy,
+) -> Result<u64> {
+    candidates
+        .iter()
+        .find(|candidate| candidate.strategy == strategy)
+        .map(|candidate| candidate.visible_ns)
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: format!("missing warm compute candidate {}", strategy.label()),
+        })
+}
+
 fn rms_norm_into(input: &[f32], weight: &[f32], eps: f32, output: &mut [f32]) {
     let mean_square = input.iter().map(|value| value * value).sum::<f32>() / input.len() as f32;
     let scale = (mean_square + eps).sqrt().recip();
@@ -884,24 +1241,43 @@ fn record_attention_block_event(
     block: &KvAttentionBlock<'_>,
     ledger: &mut TokenLedger,
 ) {
-    let kind = match block.tier {
-        MemoryTier::Vram | MemoryTier::SharedHbmOrLpddr => LedgerEventKind::DeviceActivity,
-        MemoryTier::PinnedDram | MemoryTier::Dram | MemoryTier::Cxl | MemoryTier::Disk => {
-            LedgerEventKind::CpuActivity
-        }
+    let (kind, executor_selected, reason) = match block.tier {
+        MemoryTier::Vram | MemoryTier::SharedHbmOrLpddr => (
+            LedgerEventKind::DeviceActivity,
+            ExecutionOwner::Gpu(DeviceOrdinal(0)),
+            "hot KV block is already device resident",
+        ),
+        MemoryTier::PinnedDram | MemoryTier::Dram | MemoryTier::Cxl | MemoryTier::Disk => (
+            LedgerEventKind::CpuActivity,
+            ExecutionOwner::Cpu,
+            "warm KV block is cheaper to compute near than stage",
+        ),
     };
     let label = match kind {
         LedgerEventKind::DeviceActivity => "attention_hot_kv_block",
         LedgerEventKind::CpuActivity => "attention_warm_kv_block",
         _ => "attention_kv_block",
     };
+    let latency_ns = block.token_count as u64;
+    ledger.record_execution_decision(ExecutionDecision {
+        operation: "blockwise_attention",
+        executor_selected,
+        candidate_costs: vec![
+            CandidateCost::estimated("compute-near-current-tier", latency_ns),
+            CandidateCost::estimated("stage-to-gpu", latency_ns + 2),
+        ],
+        reason,
+        predicted_visible_ns: latency_ns,
+        actual_visible_ns: Some(latency_ns),
+        metric_source: MetricSource::EstimatedModel,
+    });
     ledger.record(LedgerEvent {
         kind,
         block_id: None,
         from_tier: Some(block.tier),
         to_tier: Some(block.tier),
         bytes: block.token_count * shape.hidden * core::mem::size_of::<f32>() * 2,
-        latency_ns: block.token_count as u64,
+        latency_ns,
         label,
     });
 }
@@ -1158,6 +1534,37 @@ mod tests {
         assert_eq!(summary.device_block_events, 1);
         assert_eq!(summary.hot_path_allocations, 0);
         assert!(summary.to_json().contains("\"device_block_events\":1"));
+    }
+
+    #[test]
+    fn warm_compute_probe_compares_all_exact_strategies() {
+        let summary = warm_compute_probe().unwrap();
+
+        assert_eq!(summary.status, WarmComputeProbeStatus::Ok);
+        assert_eq!(summary.rows, 4);
+        assert_eq!(summary.cols, 4);
+        assert_eq!(summary.candidates.len(), 4);
+        assert_eq!(summary.selected_strategy, WarmComputeStrategy::GpuResident);
+        assert!(summary.parity);
+        assert!(summary.cpu_beats_staged);
+        assert_eq!(summary.execution_decisions, 1);
+        assert_eq!(summary.cpu_events, 2);
+        assert_eq!(summary.device_events, 3);
+        assert_eq!(summary.copy_events, 3);
+        assert_eq!(summary.copy_bytes, 104);
+        assert_eq!(summary.total_latency_ns, 138);
+        assert_eq!(summary.hot_path_allocations, 0);
+        assert!(
+            summary
+                .candidates
+                .iter()
+                .all(|candidate| candidate.output_hash == summary.output_hash)
+        );
+        assert!(
+            summary
+                .to_json()
+                .contains("\"selected_strategy\":\"gpu-resident\"")
+        );
     }
 
     #[test]

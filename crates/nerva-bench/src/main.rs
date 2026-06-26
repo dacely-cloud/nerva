@@ -79,6 +79,16 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("warm") => match nerva_model::warm_compute_probe() {
+            Ok(summary) => {
+                println!("{}", summary.to_json());
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("warm compute probe failed: {err:?}");
+                ExitCode::from(1)
+            }
+        },
         Some("kv") => match run_kv_probe() {
             Ok(json) => {
                 println!("{json}");
@@ -91,7 +101,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- kv"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- kv"
             );
             ExitCode::from(2)
         }

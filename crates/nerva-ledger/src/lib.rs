@@ -87,11 +87,23 @@ pub struct ResidencyDecision {
     pub metric_source: MetricSource,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutionDecision {
+    pub operation: &'static str,
+    pub executor_selected: ExecutionOwner,
+    pub candidate_costs: Vec<CandidateCost>,
+    pub reason: &'static str,
+    pub predicted_visible_ns: u64,
+    pub actual_visible_ns: Option<u64>,
+    pub metric_source: MetricSource,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TokenLedger {
     pub token_index: u64,
     pub events: Vec<LedgerEvent>,
     pub residency_decisions: Vec<ResidencyDecision>,
+    pub execution_decisions: Vec<ExecutionDecision>,
     pub hot_path_allocations: u64,
 }
 
@@ -101,6 +113,7 @@ impl TokenLedger {
             token_index,
             events: Vec::new(),
             residency_decisions: Vec::new(),
+            execution_decisions: Vec::new(),
             hot_path_allocations: 0,
         }
     }
@@ -114,6 +127,10 @@ impl TokenLedger {
 
     pub fn record_residency_decision(&mut self, decision: ResidencyDecision) {
         self.residency_decisions.push(decision);
+    }
+
+    pub fn record_execution_decision(&mut self, decision: ExecutionDecision) {
+        self.execution_decisions.push(decision);
     }
 
     pub fn record_hot_path_allocation_attempt(
@@ -242,6 +259,32 @@ mod tests {
         assert_eq!(
             ledger.residency_decisions[0].candidate_costs[1].label,
             "gpu-prefetch"
+        );
+        assert!(ledger.require_zero_hot_path_allocations().is_ok());
+    }
+
+    #[test]
+    fn execution_decisions_record_operation_placement() {
+        let mut ledger = TokenLedger::new(8);
+        ledger.record_execution_decision(ExecutionDecision {
+            operation: "matvec",
+            executor_selected: ExecutionOwner::Cpu,
+            candidate_costs: vec![
+                CandidateCost::estimated("cpu-dram", 16),
+                CandidateCost::estimated("gpu-staged", 68),
+            ],
+            reason: "compute near warm DRAM weights",
+            predicted_visible_ns: 16,
+            actual_visible_ns: Some(16),
+            metric_source: MetricSource::EstimatedModel,
+        });
+
+        assert_eq!(ledger.events.len(), 0);
+        assert_eq!(ledger.execution_decisions.len(), 1);
+        assert_eq!(ledger.execution_decisions[0].operation, "matvec");
+        assert_eq!(
+            ledger.execution_decisions[0].candidate_costs[0].label,
+            "cpu-dram"
         );
         assert!(ledger.require_zero_hot_path_allocations().is_ok());
     }
