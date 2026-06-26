@@ -89,6 +89,16 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("layout") => match run_layout_probe(args.next()) {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("{reason}");
+                ExitCode::from(1)
+            }
+        },
         Some("attention") => match nerva_model::blockwise_attention_smoke() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
@@ -141,7 +151,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
             );
             ExitCode::from(2)
         }
@@ -193,6 +203,23 @@ fn run_metadata_probe(config_path: Option<String>) -> Result<String, String> {
         None => nerva_model::hf_metadata_probe()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("HF metadata probe failed: {err:?}")),
+    }
+}
+
+fn run_layout_probe(config_path: Option<String>) -> Result<String, String> {
+    match config_path {
+        Some(path) => {
+            let config = std::fs::read_to_string(&path)
+                .map_err(|err| format!("failed to read {path}: {err}"))?;
+            let metadata = nerva_model::parse_hf_config_metadata(&config)
+                .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+            let plan = nerva_model::plan_hf_weight_layout(&metadata)
+                .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
+            Ok(plan.to_json())
+        }
+        None => nerva_model::hf_weight_layout_probe()
+            .map(|summary| summary.to_json())
+            .map_err(|err| format!("HF weight layout probe failed: {err:?}")),
     }
 }
 

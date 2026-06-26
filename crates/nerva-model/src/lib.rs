@@ -211,6 +211,233 @@ pub fn hf_metadata_probe() -> Result<HfMetadataProbeSummary> {
     })
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WeightBlockRole {
+    TokenEmbedding,
+    AttentionNorm,
+    QueryProjection,
+    KeyProjection,
+    ValueProjection,
+    OutputProjection,
+    MlpNorm,
+    GateProjection,
+    UpProjection,
+    DownProjection,
+    LmHead,
+}
+
+impl WeightBlockRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TokenEmbedding => "token_embedding",
+            Self::AttentionNorm => "attention_norm",
+            Self::QueryProjection => "q_proj",
+            Self::KeyProjection => "k_proj",
+            Self::ValueProjection => "v_proj",
+            Self::OutputProjection => "o_proj",
+            Self::MlpNorm => "mlp_norm",
+            Self::GateProjection => "gate_proj",
+            Self::UpProjection => "up_proj",
+            Self::DownProjection => "down_proj",
+            Self::LmHead => "lm_head",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct WeightBlockSpec {
+    pub role: WeightBlockRole,
+    pub layer: Option<u32>,
+    pub rows: usize,
+    pub cols: usize,
+    pub elements: usize,
+    pub bytes: usize,
+    pub dtype: DType,
+    pub tier: MemoryTier,
+}
+
+impl WeightBlockSpec {
+    fn new(
+        role: WeightBlockRole,
+        layer: Option<u32>,
+        rows: usize,
+        cols: usize,
+        dtype: DType,
+        tier: MemoryTier,
+    ) -> Result<Self> {
+        if rows == 0 || cols == 0 {
+            return Err(NervaError::InvalidArgument {
+                reason: format!("weight block {} shape must be non-zero", role.as_str()),
+            });
+        }
+        let elements = rows
+            .checked_mul(cols)
+            .ok_or_else(|| NervaError::AllocationFailed {
+                bytes: 0,
+                reason: format!("weight block {} element count overflow", role.as_str()),
+            })?;
+        let bytes = elements
+            .checked_mul(dtype_size_bytes(dtype)?)
+            .ok_or_else(|| NervaError::AllocationFailed {
+                bytes: elements,
+                reason: format!("weight block {} byte count overflow", role.as_str()),
+            })?;
+        Ok(Self {
+            role,
+            layer,
+            rows,
+            cols,
+            elements,
+            bytes,
+            dtype,
+            tier,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HfWeightLayoutPlan {
+    pub metadata: HfModelMetadata,
+    pub dtype: DType,
+    pub blocks: Vec<WeightBlockSpec>,
+    pub total_weight_bytes: usize,
+    pub per_layer_weight_bytes: usize,
+    pub static_weight_bytes: usize,
+}
+
+impl HfWeightLayoutPlan {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"architecture\":\"{}\",\"dtype\":\"{}\",\"blocks\":{},\"layers\":{},\"total_weight_bytes\":{},\"per_layer_weight_bytes\":{},\"static_weight_bytes\":{},\"hidden_size\":{},\"head_dim\":{},\"kv_hidden_size\":{}}}",
+            self.metadata.architecture.as_str(),
+            dtype_to_str(self.dtype),
+            self.blocks.len(),
+            self.metadata.num_hidden_layers,
+            self.total_weight_bytes,
+            self.per_layer_weight_bytes,
+            self.static_weight_bytes,
+            self.metadata.hidden_size,
+            self.metadata.head_dim(),
+            self.metadata.num_key_value_heads * self.metadata.head_dim(),
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum HfWeightLayoutProbeStatus {
+    Ok,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HfWeightLayoutProbeSummary {
+    pub status: HfWeightLayoutProbeStatus,
+    pub plan: HfWeightLayoutPlan,
+    pub layout_hash: u64,
+}
+
+impl HfWeightLayoutProbeSummary {
+    pub fn to_json(&self) -> String {
+        let status = match self.status {
+            HfWeightLayoutProbeStatus::Ok => "ok",
+        };
+        format!(
+            "{{\"status\":\"{}\",\"plan\":{},\"layout_hash\":{}}}",
+            status,
+            self.plan.to_json(),
+            self.layout_hash,
+        )
+    }
+}
+
+pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayoutPlan> {
+    metadata.block_shape().validate()?;
+    validate_hf_metadata(
+        metadata.hidden_size,
+        metadata.num_hidden_layers,
+        metadata.num_attention_heads,
+        metadata.num_key_value_heads,
+        metadata.intermediate_size,
+        metadata.vocab_size,
+    )?;
+    let dtype = metadata
+        .torch_dtype
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "HF weight layout requires torch_dtype".to_string(),
+        })?;
+    let kv_hidden = metadata
+        .num_key_value_heads
+        .checked_mul(metadata.head_dim())
+        .ok_or_else(|| NervaError::AllocationFailed {
+            bytes: 0,
+            reason: "KV hidden size overflow".to_string(),
+        })?;
+
+    let mut blocks = Vec::with_capacity(metadata.num_hidden_layers.saturating_mul(9) + 2);
+    blocks.push(WeightBlockSpec::new(
+        WeightBlockRole::TokenEmbedding,
+        None,
+        metadata.vocab_size,
+        metadata.hidden_size,
+        dtype,
+        MemoryTier::Dram,
+    )?);
+
+    for layer in 0..metadata.num_hidden_layers {
+        let layer = u32::try_from(layer).map_err(|_| NervaError::InvalidArgument {
+            reason: "layer index does not fit u32".to_string(),
+        })?;
+        push_layer_weight_blocks(&mut blocks, metadata, kv_hidden, dtype, layer)?;
+    }
+
+    blocks.push(WeightBlockSpec::new(
+        WeightBlockRole::LmHead,
+        None,
+        metadata.vocab_size,
+        metadata.hidden_size,
+        dtype,
+        MemoryTier::Dram,
+    )?);
+
+    let total_weight_bytes = sum_weight_bytes(&blocks)?;
+    let static_weight_bytes = blocks
+        .iter()
+        .filter(|block| block.layer.is_none())
+        .map(|block| block.bytes)
+        .try_fold(0usize, |acc, bytes| {
+            acc.checked_add(bytes)
+                .ok_or_else(|| NervaError::AllocationFailed {
+                    bytes,
+                    reason: "static weight byte count overflow".to_string(),
+                })
+        })?;
+    let per_layer_weight_bytes = total_weight_bytes
+        .checked_sub(static_weight_bytes)
+        .ok_or_else(|| NervaError::AllocationFailed {
+            bytes: total_weight_bytes,
+            reason: "weight byte accounting underflow".to_string(),
+        })?
+        / metadata.num_hidden_layers;
+
+    Ok(HfWeightLayoutPlan {
+        metadata: metadata.clone(),
+        dtype,
+        blocks,
+        total_weight_bytes,
+        per_layer_weight_bytes,
+        static_weight_bytes,
+    })
+}
+
+pub fn hf_weight_layout_probe() -> Result<HfWeightLayoutProbeSummary> {
+    let metadata = hf_metadata_probe()?.metadata;
+    let plan = plan_hf_weight_layout(&metadata)?;
+    Ok(HfWeightLayoutProbeSummary {
+        layout_hash: hash_weight_layout(&plan),
+        status: HfWeightLayoutProbeStatus::Ok,
+        plan,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct ReferenceTransformerBlock {
     shape: TransformerBlockShape,
@@ -1315,6 +1542,61 @@ fn dtype_from_hf_string(value: &str) -> Result<DType> {
     }
 }
 
+fn dtype_size_bytes(dtype: DType) -> Result<usize> {
+    match dtype {
+        DType::F16 | DType::BF16 => Ok(2),
+        DType::F32 => Ok(4),
+        _ => Err(NervaError::InvalidArgument {
+            reason: format!(
+                "dtype {} is not a supported exact weight dtype",
+                dtype_to_str(dtype)
+            ),
+        }),
+    }
+}
+
+fn push_layer_weight_blocks(
+    blocks: &mut Vec<WeightBlockSpec>,
+    metadata: &HfModelMetadata,
+    kv_hidden: usize,
+    dtype: DType,
+    layer: u32,
+) -> Result<()> {
+    let hidden = metadata.hidden_size;
+    let intermediate = metadata.intermediate_size;
+    for (role, rows, cols) in [
+        (WeightBlockRole::AttentionNorm, hidden, 1),
+        (WeightBlockRole::QueryProjection, hidden, hidden),
+        (WeightBlockRole::KeyProjection, kv_hidden, hidden),
+        (WeightBlockRole::ValueProjection, kv_hidden, hidden),
+        (WeightBlockRole::OutputProjection, hidden, hidden),
+        (WeightBlockRole::MlpNorm, hidden, 1),
+        (WeightBlockRole::GateProjection, intermediate, hidden),
+        (WeightBlockRole::UpProjection, intermediate, hidden),
+        (WeightBlockRole::DownProjection, hidden, intermediate),
+    ] {
+        blocks.push(WeightBlockSpec::new(
+            role,
+            Some(layer),
+            rows,
+            cols,
+            dtype,
+            MemoryTier::Dram,
+        )?);
+    }
+    Ok(())
+}
+
+fn sum_weight_bytes(blocks: &[WeightBlockSpec]) -> Result<usize> {
+    blocks.iter().try_fold(0usize, |acc, block| {
+        acc.checked_add(block.bytes)
+            .ok_or_else(|| NervaError::AllocationFailed {
+                bytes: block.bytes,
+                reason: "total weight byte count overflow".to_string(),
+            })
+    })
+}
+
 fn find_top_level_json_value<'a>(source: &'a str, key: &str) -> Result<Option<&'a str>> {
     let bytes = source.as_bytes();
     let mut index = skip_json_ws(bytes, 0);
@@ -1874,6 +2156,39 @@ fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
     hash
 }
 
+fn hash_weight_layout(plan: &HfWeightLayoutPlan) -> u64 {
+    let mut hash = hash_metadata(&plan.metadata);
+    for block in &plan.blocks {
+        for byte in block.role.as_str().as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        for value in [
+            block.layer.map(u64::from).unwrap_or(u64::MAX),
+            block.rows as u64,
+            block.cols as u64,
+            block.elements as u64,
+            block.bytes as u64,
+        ] {
+            for byte in value.to_le_bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+    }
+    for value in [
+        plan.total_weight_bytes as u64,
+        plan.per_layer_weight_bytes as u64,
+        plan.static_weight_bytes as u64,
+    ] {
+        for byte in value.to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
 fn token_ids_to_json(tokens: &[TokenId]) -> String {
     let mut out = String::from("[");
     for (index, token) in tokens.iter().enumerate() {
@@ -2011,6 +2326,60 @@ mod tests {
         assert_eq!(summary.metadata.kv_groups(), 4);
         assert_ne!(summary.metadata_hash, 0);
         assert!(summary.to_json().contains("\"metadata\""));
+    }
+
+    #[test]
+    fn plans_hf_weight_layout_from_metadata() {
+        let metadata = parse_hf_config_metadata(
+            r#"{
+                "model_type": "llama",
+                "hidden_size": 4,
+                "intermediate_size": 8,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 10,
+                "torch_dtype": "float16"
+            }"#,
+        )
+        .unwrap();
+        let plan = plan_hf_weight_layout(&metadata).unwrap();
+
+        assert_eq!(plan.blocks.len(), 20);
+        assert_eq!(plan.static_weight_bytes, 160);
+        assert_eq!(plan.per_layer_weight_bytes, 304);
+        assert_eq!(plan.total_weight_bytes, 768);
+        assert_eq!(plan.blocks[0].role, WeightBlockRole::TokenEmbedding);
+        assert_eq!(plan.blocks[2].role, WeightBlockRole::QueryProjection);
+        assert_eq!(plan.blocks[2].rows, 4);
+        assert_eq!(plan.blocks[2].cols, 4);
+        assert_eq!(plan.blocks[3].role, WeightBlockRole::KeyProjection);
+        assert_eq!(plan.blocks[3].rows, 2);
+        assert_eq!(plan.blocks[3].cols, 4);
+    }
+
+    #[test]
+    fn hf_weight_layout_probe_reports_llama_scale_counts() {
+        let summary = hf_weight_layout_probe().unwrap();
+
+        assert_eq!(summary.status, HfWeightLayoutProbeStatus::Ok);
+        assert_eq!(summary.plan.blocks.len(), 290);
+        assert_eq!(summary.plan.static_weight_bytes, 524_288_000);
+        assert_eq!(summary.plan.per_layer_weight_bytes, 354_435_072);
+        assert_eq!(summary.plan.total_weight_bytes, 11_866_210_304);
+        assert_eq!(summary.plan.dtype, DType::BF16);
+        assert_ne!(summary.layout_hash, 0);
+        assert!(summary.to_json().contains("\"blocks\":290"));
+    }
+
+    #[test]
+    fn weight_layout_requires_exact_declared_dtype() {
+        let mut metadata = hf_metadata_probe().unwrap().metadata;
+        metadata.torch_dtype = None;
+        assert!(plan_hf_weight_layout(&metadata).is_err());
+
+        metadata.torch_dtype = Some(DType::U8);
+        assert!(plan_hf_weight_layout(&metadata).is_err());
     }
 
     #[test]
