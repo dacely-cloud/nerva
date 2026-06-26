@@ -505,12 +505,16 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
             && topology.pci_device_count >= topology.pci_gpu_count
             && topology.pci_device_count >= topology.pci_network_count
             && topology.pci_device_count >= topology.pci_nvme_count
+            && (topology.pci_root_complex_count == 0
+                || topology.pci_bus_count >= topology.pci_root_complex_count)
             && topology.block_device_count >= topology.nvme_block_device_count,
         format!(
-            "cpu_count={} numa_nodes={} pci_devices={} pci_gpu={} pci_network={} pci_nvme={} block_devices={} nvme_block_devices={} rdma_devices={} iommu_groups={}",
+            "cpu_count={} numa_nodes={} pci_devices={} pci_roots={} pci_buses={} pci_gpu={} pci_network={} pci_nvme={} block_devices={} nvme_block_devices={} rdma_devices={} iommu_groups={} iommu_mode={}",
             topology.cpu_count,
             topology.numa_node_count,
             topology.pci_device_count,
+            topology.pci_root_complex_count,
+            topology.pci_bus_count,
             topology.pci_gpu_count,
             topology.pci_network_count,
             topology.pci_nvme_count,
@@ -518,6 +522,7 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
             topology.nvme_block_device_count,
             topology.rdma_device_count,
             topology.iommu_group_count,
+            topology.iommu_mode,
         ),
     );
 

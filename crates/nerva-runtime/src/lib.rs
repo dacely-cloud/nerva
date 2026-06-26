@@ -78,6 +78,8 @@ pub struct TopologySnapshot {
     pub cpu_count: usize,
     pub numa_node_count: usize,
     pub pci_device_count: usize,
+    pub pci_root_complex_count: usize,
+    pub pci_bus_count: usize,
     pub pci_gpu_count: usize,
     pub pci_network_count: usize,
     pub pci_nvme_count: usize,
@@ -85,16 +87,20 @@ pub struct TopologySnapshot {
     pub nvme_block_device_count: usize,
     pub rdma_device_count: usize,
     pub iommu_group_count: usize,
+    pub iommu_mode: String,
+    pub iommu_kernel_args: Option<String>,
 }
 
 impl TopologySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"cpu_online\":{},\"cpu_count\":{},\"numa_node_count\":{},\"pci_device_count\":{},\"pci_gpu_count\":{},\"pci_network_count\":{},\"pci_nvme_count\":{},\"block_device_count\":{},\"nvme_block_device_count\":{},\"rdma_device_count\":{},\"iommu_group_count\":{}}}",
+            "{{\"cpu_online\":{},\"cpu_count\":{},\"numa_node_count\":{},\"pci_device_count\":{},\"pci_root_complex_count\":{},\"pci_bus_count\":{},\"pci_gpu_count\":{},\"pci_network_count\":{},\"pci_nvme_count\":{},\"block_device_count\":{},\"nvme_block_device_count\":{},\"rdma_device_count\":{},\"iommu_group_count\":{},\"iommu_mode\":\"{}\",\"iommu_kernel_args\":{}}}",
             json_opt_string(self.cpu_online.as_deref()),
             self.cpu_count,
             self.numa_node_count,
             self.pci_device_count,
+            self.pci_root_complex_count,
+            self.pci_bus_count,
             self.pci_gpu_count,
             self.pci_network_count,
             self.pci_nvme_count,
@@ -102,6 +108,8 @@ impl TopologySnapshot {
             self.nvme_block_device_count,
             self.rdma_device_count,
             self.iommu_group_count,
+            json_escape(&self.iommu_mode),
+            json_opt_string(self.iommu_kernel_args.as_deref()),
         )
     }
 }
@@ -3468,20 +3476,63 @@ fn discover_topology_snapshot() -> TopologySnapshot {
         .filter(|count| *count > 0)
         .unwrap_or_else(|| count_prefixed_entries("/sys/devices/system/node", "node").max(1));
     let pci = pci_class_counts("/sys/bus/pci/devices");
+    let iommu_group_count = count_dirs("/sys/kernel/iommu_groups");
+    let kernel_cmdline = read_trimmed_first_line("/proc/cmdline");
+    let iommu_kernel_args = kernel_cmdline
+        .as_deref()
+        .and_then(extract_iommu_kernel_args);
+    let iommu_mode = discover_iommu_mode(iommu_group_count, iommu_kernel_args.as_deref());
 
     TopologySnapshot {
         cpu_online,
         cpu_count,
         numa_node_count,
         pci_device_count: pci.total,
+        pci_root_complex_count: count_prefixed_entries("/sys/devices", "pci"),
+        pci_bus_count: count_entries("/sys/class/pci_bus"),
         pci_gpu_count: pci.gpu,
         pci_network_count: pci.network,
         pci_nvme_count: pci.nvme,
         block_device_count: count_entries("/sys/block"),
         nvme_block_device_count: count_prefixed_entries("/sys/block", "nvme"),
         rdma_device_count: count_entries("/sys/class/infiniband"),
-        iommu_group_count: count_dirs("/sys/kernel/iommu_groups"),
+        iommu_group_count,
+        iommu_mode,
+        iommu_kernel_args,
     }
+}
+
+fn extract_iommu_kernel_args(cmdline: &str) -> Option<String> {
+    let args = cmdline
+        .split_whitespace()
+        .filter(|arg| arg.contains("iommu"))
+        .collect::<Vec<_>>();
+    (!args.is_empty()).then(|| args.join(" "))
+}
+
+fn discover_iommu_mode(iommu_group_count: usize, iommu_kernel_args: Option<&str>) -> String {
+    let args = iommu_kernel_args.unwrap_or_default();
+    if has_kernel_arg(args, &["iommu=off", "intel_iommu=off", "amd_iommu=off"]) {
+        return "disabled_by_kernel_arg".to_string();
+    }
+    if iommu_group_count > 0 && has_kernel_arg(args, &["iommu=pt"]) {
+        return "passthrough_groups_present".to_string();
+    }
+    if iommu_group_count > 0 {
+        return "enabled_groups_present".to_string();
+    }
+    if has_kernel_arg(args, &["iommu=pt"]) {
+        return "passthrough_requested".to_string();
+    }
+    if has_kernel_arg(args, &["iommu=on", "intel_iommu=on", "amd_iommu=on"]) {
+        return "enabled_requested".to_string();
+    }
+    "not_detected".to_string()
+}
+
+fn has_kernel_arg(args: &str, candidates: &[&str]) -> bool {
+    args.split_whitespace()
+        .any(|arg| candidates.iter().any(|candidate| arg == *candidate))
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -3814,6 +3865,8 @@ mod tests {
                 cpu_count: 2,
                 numa_node_count: 1,
                 pci_device_count: 3,
+                pci_root_complex_count: 1,
+                pci_bus_count: 2,
                 pci_gpu_count: 1,
                 pci_network_count: 1,
                 pci_nvme_count: 1,
@@ -3821,6 +3874,8 @@ mod tests {
                 nvme_block_device_count: 1,
                 rdma_device_count: 0,
                 iommu_group_count: 3,
+                iommu_mode: "passthrough_groups_present".to_string(),
+                iommu_kernel_args: Some("intel_iommu=on iommu=pt".to_string()),
             },
         };
 
@@ -3832,6 +3887,10 @@ mod tests {
         assert!(json.contains("\"cuda_device_total_memory_bytes\":25769803776"));
         assert!(json.contains("\"cuda_pci_bus_id\":\"0000:65:00.0\""));
         assert!(json.contains("\"cpu_online\":\"0-1\""));
+        assert!(json.contains("\"pci_root_complex_count\":1"));
+        assert!(json.contains("\"pci_bus_count\":2"));
+        assert!(json.contains("\"iommu_mode\":\"passthrough_groups_present\""));
+        assert!(json.contains("\"iommu_kernel_args\":\"intel_iommu=on iommu=pt\""));
     }
 
     #[test]
@@ -3844,10 +3903,17 @@ mod tests {
         assert!(snapshot.pci_device_count >= snapshot.pci_gpu_count);
         assert!(snapshot.pci_device_count >= snapshot.pci_network_count);
         assert!(snapshot.pci_device_count >= snapshot.pci_nvme_count);
+        if snapshot.pci_root_complex_count > 0 {
+            assert!(snapshot.pci_bus_count >= snapshot.pci_root_complex_count);
+        }
         assert!(snapshot.block_device_count >= snapshot.nvme_block_device_count);
+        assert!(!snapshot.iommu_mode.is_empty());
         let json = snapshot.to_json();
         assert!(json.contains("\"cpu_count\""));
         assert!(json.contains("\"pci_device_count\""));
+        assert!(json.contains("\"pci_root_complex_count\""));
+        assert!(json.contains("\"pci_bus_count\""));
+        assert!(json.contains("\"iommu_mode\""));
     }
 
     #[test]
@@ -3858,6 +3924,25 @@ mod tests {
         assert_eq!(parse_pci_class("0x030000"), Some(0x030000));
         assert_eq!(parse_pci_class("010802"), Some(0x010802));
         assert_eq!(parse_pci_class("not-hex"), None);
+        assert_eq!(
+            extract_iommu_kernel_args("root=/dev/sda intel_iommu=on quiet iommu=pt"),
+            Some("intel_iommu=on iommu=pt".to_string())
+        );
+        assert_eq!(extract_iommu_kernel_args("root=/dev/sda quiet"), None);
+        assert_eq!(
+            discover_iommu_mode(9, Some("intel_iommu=on iommu=pt")),
+            "passthrough_groups_present"
+        );
+        assert_eq!(
+            discover_iommu_mode(9, Some("intel_iommu=off")),
+            "disabled_by_kernel_arg"
+        );
+        assert_eq!(discover_iommu_mode(9, None), "enabled_groups_present");
+        assert_eq!(
+            discover_iommu_mode(0, Some("amd_iommu=on")),
+            "enabled_requested"
+        );
+        assert_eq!(discover_iommu_mode(0, None), "not_detected");
     }
 
     #[test]
