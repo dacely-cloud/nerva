@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use nerva_core::types::error::Result;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
@@ -23,6 +25,7 @@ pub(crate) fn run_warm_compute_candidate(
     let mut output = vec![0.0; rows];
     let footprint = WarmComputeFootprint::new(matrix.len(), input.len(), output.len());
 
+    let start = Instant::now();
     let visible_ns = match strategy {
         WarmComputeStrategy::CpuDram => {
             run_cpu_dram(rows, cols, matrix, input, &mut output, footprint, ledger)
@@ -37,10 +40,16 @@ pub(crate) fn run_warm_compute_candidate(
             run_hybrid_split(rows, cols, matrix, input, &mut output, ledger)?
         }
     };
+    let measured_ns = elapsed_ns(start);
 
     Ok(WarmComputeCandidate {
         strategy,
         visible_ns,
+        measured_ns,
         output_hash: hash_f32s(&output),
     })
+}
+
+fn elapsed_ns(start: Instant) -> u64 {
+    start.elapsed().as_nanos().max(1).min(u64::MAX as u128) as u64
 }

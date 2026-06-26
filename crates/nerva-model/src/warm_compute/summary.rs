@@ -4,6 +4,7 @@ use crate::warm_compute::strategy::WarmComputeStrategy;
 pub struct WarmComputeCandidate {
     pub strategy: WarmComputeStrategy,
     pub visible_ns: u64,
+    pub measured_ns: u64,
     pub output_hash: u64,
 }
 
@@ -22,6 +23,9 @@ pub struct WarmComputeProbeSummary {
     pub parity: bool,
     pub cpu_beats_staged: bool,
     pub execution_decisions: u64,
+    pub runtime_timestamp_decisions: u64,
+    pub measured_candidate_costs: u64,
+    pub estimated_candidate_costs: u64,
     pub cpu_events: u64,
     pub device_events: u64,
     pub copy_events: u64,
@@ -37,7 +41,7 @@ impl WarmComputeProbeSummary {
             WarmComputeProbeStatus::Ok => "ok",
         };
         format!(
-            "{{\"status\":\"{}\",\"rows\":{},\"cols\":{},\"selected_strategy\":\"{}\",\"parity\":{},\"cpu_beats_staged\":{},\"candidate_count\":{},\"execution_decisions\":{},\"cpu_events\":{},\"device_events\":{},\"copy_events\":{},\"copy_bytes\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"output_hash\":{}}}",
+            "{{\"status\":\"{}\",\"rows\":{},\"cols\":{},\"selected_strategy\":\"{}\",\"parity\":{},\"cpu_beats_staged\":{},\"candidate_count\":{},\"execution_decisions\":{},\"runtime_timestamp_decisions\":{},\"measured_candidate_costs\":{},\"estimated_candidate_costs\":{},\"cpu_events\":{},\"device_events\":{},\"copy_events\":{},\"copy_bytes\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"output_hash\":{}}}",
             status,
             self.rows,
             self.cols,
@@ -46,6 +50,9 @@ impl WarmComputeProbeSummary {
             self.cpu_beats_staged,
             self.candidates.len(),
             self.execution_decisions,
+            self.runtime_timestamp_decisions,
+            self.measured_candidate_costs,
+            self.estimated_candidate_costs,
             self.cpu_events,
             self.device_events,
             self.copy_events,

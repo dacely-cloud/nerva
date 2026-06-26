@@ -1,3 +1,4 @@
+use nerva_core::types::cost::source::CostSource;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_ledger::types::decision::{CandidateCost, ExecutionDecision};
 use nerva_ledger::types::event::LedgerEventKind;
@@ -60,16 +61,11 @@ pub fn warm_compute_probe() -> Result<WarmComputeProbeSummary> {
     ledger.record_execution_decision(ExecutionDecision {
         operation: "dense_matvec",
         executor_selected: selected_strategy.executor(),
-        candidate_costs: candidates
-            .iter()
-            .map(|candidate| {
-                CandidateCost::estimated(candidate.strategy.label(), candidate.visible_ns)
-            })
-            .collect(),
-        reason: "select exact candidate with lowest visible critical-path cost",
+        candidate_costs: candidate_costs(&candidates),
+        reason: "select exact candidate with lowest modeled visible cost and preserve measured probe cost",
         predicted_visible_ns: selected_visible_ns,
-        actual_visible_ns: Some(selected_visible_ns),
-        metric_source: MetricSource::EstimatedModel,
+        actual_visible_ns: Some(selected.measured_ns),
+        metric_source: MetricSource::RuntimeTimestamp,
     });
     ledger.require_zero_hot_path_allocations()?;
 
@@ -89,6 +85,9 @@ pub fn warm_compute_probe() -> Result<WarmComputeProbeSummary> {
         parity,
         cpu_beats_staged: cpu_visible < staged_visible,
         execution_decisions: ledger.execution_decisions.len() as u64,
+        runtime_timestamp_decisions: decisions_with_source(&ledger, MetricSource::RuntimeTimestamp),
+        measured_candidate_costs: candidate_costs_with_source(&ledger, CostSource::Measured),
+        estimated_candidate_costs: candidate_costs_with_source(&ledger, CostSource::Estimated),
         cpu_events: ledger.event_count(LedgerEventKind::CpuActivity),
         device_events: ledger.event_count(LedgerEventKind::DeviceActivity),
         copy_events: ledger.event_count(LedgerEventKind::Copy),
@@ -97,4 +96,38 @@ pub fn warm_compute_probe() -> Result<WarmComputeProbeSummary> {
         hot_path_allocations: ledger.hot_path_allocations,
         output_hash,
     })
+}
+
+fn candidate_costs(
+    candidates: &[crate::warm_compute::summary::WarmComputeCandidate],
+) -> Vec<CandidateCost> {
+    let mut costs = Vec::with_capacity(candidates.len() * 2);
+    for candidate in candidates {
+        costs.push(CandidateCost::estimated(
+            candidate.strategy.label(),
+            candidate.visible_ns,
+        ));
+        costs.push(CandidateCost::measured(
+            candidate.strategy.label(),
+            candidate.measured_ns,
+        ));
+    }
+    costs
+}
+
+fn decisions_with_source(ledger: &TokenLedger, source: MetricSource) -> u64 {
+    ledger
+        .execution_decisions
+        .iter()
+        .filter(|decision| decision.metric_source == source)
+        .count() as u64
+}
+
+fn candidate_costs_with_source(ledger: &TokenLedger, source: CostSource) -> u64 {
+    ledger
+        .execution_decisions
+        .iter()
+        .flat_map(|decision| decision.candidate_costs.iter())
+        .filter(|cost| cost.source == source)
+        .count() as u64
 }
