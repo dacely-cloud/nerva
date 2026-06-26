@@ -114,6 +114,13 @@ pub(crate) fn run_resident_shard_probe(
     checkpoint_dir: Option<String>,
     max_task_bytes: usize,
 ) -> Result<String, String> {
+    let checkpoint_dir_for_io = checkpoint_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            "sharded safetensors probes require config.json, model.safetensors.index.json, and checkpoint_dir"
+                .to_string()
+        })?;
     let shard_plan = load_safetensors_shard_plan(config_path, index_path, checkpoint_dir)?;
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
@@ -124,8 +131,12 @@ pub(crate) fn run_resident_shard_probe(
         .plan_resident_weight_prefetch(&table, max_task_bytes)
         .map_err(|err| format!("resident weight prefetch planning failed: {err:?}"))?;
     let execution = runtime
-        .execute_resident_weight_prefetch_plan(&mut table, &prefetch)
-        .map_err(|err| format!("resident weight prefetch execution failed: {err:?}"))?;
+        .execute_resident_weight_prefetch_plan_from_files(
+            &mut table,
+            &prefetch,
+            checkpoint_dir_for_io,
+        )
+        .map_err(|err| format!("resident weight file prefetch execution failed: {err:?}"))?;
     Ok(format!(
         "{{\"status\":\"ok\",\"blocks\":{},\"total_weight_bytes\":{},\"dram_used_bytes\":{},\"residency_decisions\":{},\"manifest_hash\":{},\"prefetch\":{},\"execution\":{}}}",
         table.entries.len(),

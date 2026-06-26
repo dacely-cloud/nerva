@@ -93,6 +93,37 @@ impl ResidentWeightPrefetchExecutionSummary {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightPrefetchIoSummary {
+    pub tasks: usize,
+    pub completed_blocks: usize,
+    pub total_bytes: usize,
+    pub shard_count: usize,
+    pub disk_read_events: u64,
+    pub copy_events: u64,
+    pub ready_blocks: usize,
+    pub data_hash: u64,
+    pub hot_path_allocations: u64,
+    pub ledger: TokenLedger,
+}
+
+impl ResidentWeightPrefetchIoSummary {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"tasks\":{},\"completed_blocks\":{},\"total_bytes\":{},\"shard_count\":{},\"disk_read_events\":{},\"copy_events\":{},\"ready_blocks\":{},\"data_hash\":{},\"hot_path_allocations\":{}}}",
+            self.tasks,
+            self.completed_blocks,
+            self.total_bytes,
+            self.shard_count,
+            self.disk_read_events,
+            self.copy_events,
+            self.ready_blocks,
+            self.data_hash,
+            self.hot_path_allocations,
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResidentWeightHotsetSummary {
     pub promoted_blocks: usize,
     pub promoted_bytes: usize,

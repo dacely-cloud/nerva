@@ -44,19 +44,38 @@ fn tiny_shard_plan() -> (
     nerva_model::weights::safetensors::SafetensorsShardPlan,
     usize,
 ) {
+    let (plan, header) = tiny_shard_plan_with_header();
+    let header_len = header.len();
+    (plan, header_len)
+}
+
+fn tiny_shard_plan_with_header() -> (
+    nerva_model::weights::safetensors::SafetensorsShardPlan,
+    String,
+) {
     let manifest = tiny_llama_manifest();
     let index = single_shard_index_json(&manifest);
     let header =
         nerva_model::weights::safetensors::synthetic_safetensors_header_for_manifest(&manifest)
             .unwrap();
-    let header_len = header.len();
     let plan = nerva_model::weights::safetensors::plan_safetensors_shards_for_manifest(
         &index,
         &[nerva_model::weights::safetensors::SafetensorsShardHeader::new(SHARD_ONE, &header)],
         &manifest,
     )
     .unwrap();
-    (plan, header_len)
+    (plan, header)
+}
+
+fn write_tiny_shard_file(dir: &std::path::Path, header: &str, payload_bytes: usize) {
+    let path = dir.join(SHARD_ONE);
+    let mut bytes = Vec::with_capacity(8 + header.len() + payload_bytes);
+    bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(header.as_bytes());
+    for index in 0..payload_bytes {
+        bytes.push(((index * 31 + 7) % 251) as u8);
+    }
+    std::fs::write(path, bytes).unwrap();
 }
 
 #[test]
@@ -620,6 +639,65 @@ fn resident_weight_prefetch_execution_marks_blocks_ready() {
             .block(entry.block_id)
             .is_some_and(|block| block.state == ResidencyState::Ready)
     }));
+}
+
+#[test]
+fn resident_weight_file_prefetch_reads_shard_ranges() {
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let (plan, header) = tiny_shard_plan_with_header();
+    let dir = std::env::temp_dir().join(format!("nerva-runtime-prefetch-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    write_tiny_shard_file(&dir, &header, plan.total_weight_bytes);
+
+    let mut table = runtime.materialize_safetensors_shard_plan(&plan).unwrap();
+    let prefetch = runtime.plan_resident_weight_prefetch(&table, 16).unwrap();
+    let summary = runtime
+        .execute_resident_weight_prefetch_plan_from_files(&mut table, &prefetch, &dir)
+        .unwrap();
+
+    assert_eq!(summary.tasks, prefetch.tasks.len());
+    assert_eq!(summary.completed_blocks, table.entries.len());
+    assert_eq!(summary.total_bytes, table.total_weight_bytes);
+    assert_eq!(summary.shard_count, 1);
+    assert_eq!(summary.disk_read_events, prefetch.tasks.len() as u64);
+    assert_eq!(summary.copy_events, prefetch.tasks.len() as u64);
+    assert_eq!(summary.ready_blocks, table.entries.len());
+    assert_ne!(summary.data_hash, 0);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert!(summary.to_json().contains("\"data_hash\""));
+    assert!(table.entries.iter().all(|entry| {
+        table
+            .registry
+            .block(entry.block_id)
+            .is_some_and(|block| block.state == ResidencyState::Ready)
+    }));
+
+    let _ = std::fs::remove_file(dir.join(SHARD_ONE));
+    let _ = std::fs::remove_dir(dir);
+}
+
+#[test]
+fn resident_weight_file_prefetch_rejects_short_shard() {
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let (plan, header) = tiny_shard_plan_with_header();
+    let dir = std::env::temp_dir().join(format!(
+        "nerva-runtime-prefetch-short-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    write_tiny_shard_file(&dir, &header, plan.total_weight_bytes - 1);
+
+    let mut table = runtime.materialize_safetensors_shard_plan(&plan).unwrap();
+    let prefetch = runtime.plan_resident_weight_prefetch(&table, 16).unwrap();
+
+    assert!(
+        runtime
+            .execute_resident_weight_prefetch_plan_from_files(&mut table, &prefetch, &dir)
+            .is_err()
+    );
+
+    let _ = std::fs::remove_file(dir.join(SHARD_ONE));
+    let _ = std::fs::remove_dir(dir);
 }
 
 #[test]

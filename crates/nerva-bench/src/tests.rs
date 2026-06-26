@@ -115,6 +115,8 @@ fn safetensors_shard_probe_reads_index_and_headers() {
     assert!(resident_json.contains("\"prefetch\""));
     assert!(resident_json.contains("\"execution\""));
     assert!(resident_json.contains("\"tasks\":20"));
+    assert!(resident_json.contains("\"disk_read_events\""));
+    assert!(resident_json.contains("\"data_hash\""));
 
     let hotset_json =
         run_hotset_probe(Some(config_path.to_string_lossy().into_owned()), 256, 200).unwrap();
@@ -248,6 +250,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"fp16_bf16_precision_block\""));
     assert!(json.contains("\"hf_model_manifest\""));
     assert!(json.contains("\"safetensors_file_header\""));
+    assert!(json.contains("\"safetensors_file_prefetch\""));
     assert!(json.contains("\"vllm_token_identity_parity\""));
     assert!(json.contains("\"kv_residency_tiering\""));
     assert!(json.contains("\"transport_pinned_fallback\""));

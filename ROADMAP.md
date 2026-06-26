@@ -34,6 +34,7 @@
 - FP16/BF16 exact block path.
 - HF metadata parser.
 - Bounded safetensors header loader.
+- File-backed safetensors prefetch execution.
 - vLLM-style token identity parity harness.
 
 ## Future
