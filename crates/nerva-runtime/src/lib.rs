@@ -6,8 +6,9 @@ compile_error!("NERVA currently supports Linux only.");
 use std::collections::BTreeMap;
 
 use nerva_core::{
-    AllocationId, DeviceOrdinal, HostArch, MemoryFabricKind, MemoryTier, NervaError, RequestId,
-    Result, SequenceId, TokenId, TransactionId, ensure_supported_linux_host, host_arch,
+    AllocationId, DeviceOrdinal, ExecutionOwner, HostArch, MemoryFabricKind, MemoryTier,
+    NervaError, RequestId, Result, SequenceId, TokenId, TransactionId, ensure_supported_linux_host,
+    host_arch,
 };
 use nerva_ledger::{LedgerEvent, LedgerEventKind, TokenLedger};
 use nerva_memory::{
@@ -95,6 +96,163 @@ impl CapabilitySnapshot {
             self.dma_buf_export.as_str(),
             self.cxl.as_str(),
         )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum TransferMode {
+    Decode,
+    Prefill,
+}
+
+impl TransferMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Decode => "decode",
+            Self::Prefill => "prefill",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum TransportPathKind {
+    TrueGpuDirectRdma,
+    OptimizedPinnedHostBounce,
+    CpuProducedBoundary,
+    MappedPinnedHostWrite,
+}
+
+impl TransportPathKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TrueGpuDirectRdma => "true_gpu_direct_rdma",
+            Self::OptimizedPinnedHostBounce => "optimized_pinned_host_bounce",
+            Self::CpuProducedBoundary => "cpu_produced_boundary",
+            Self::MappedPinnedHostWrite => "mapped_pinned_host_write",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum TransportPathClass {
+    GpuDirect,
+    HostStaged,
+    CpuProduced,
+    MappedPinned,
+}
+
+impl TransportPathClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GpuDirect => "GPU_DIRECT",
+            Self::HostStaged => "HOST_STAGED",
+            Self::CpuProduced => "CPU_PRODUCED",
+            Self::MappedPinned => "MAPPED_PINNED",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct TransportPathRequest {
+    pub source_tier: MemoryTier,
+    pub destination_tier: MemoryTier,
+    pub bytes: usize,
+    pub mode: TransferMode,
+    pub producer: ExecutionOwner,
+    pub gpu_direct_rdma: CapabilityState,
+    pub mapped_pinned_output: CapabilityState,
+    pub pinned_host_staging: CapabilityState,
+}
+
+impl TransportPathRequest {
+    pub const fn new(
+        source_tier: MemoryTier,
+        destination_tier: MemoryTier,
+        bytes: usize,
+        mode: TransferMode,
+        producer: ExecutionOwner,
+        gpu_direct_rdma: CapabilityState,
+        mapped_pinned_output: CapabilityState,
+        pinned_host_staging: CapabilityState,
+    ) -> Self {
+        Self {
+            source_tier,
+            destination_tier,
+            bytes,
+            mode,
+            producer,
+            gpu_direct_rdma,
+            mapped_pinned_output,
+            pinned_host_staging,
+        }
+    }
+
+    pub fn from_capabilities(
+        source_tier: MemoryTier,
+        destination_tier: MemoryTier,
+        bytes: usize,
+        mode: TransferMode,
+        producer: ExecutionOwner,
+        capabilities: &CapabilitySnapshot,
+    ) -> Self {
+        Self::new(
+            source_tier,
+            destination_tier,
+            bytes,
+            mode,
+            producer,
+            capabilities.gpu_direct_rdma,
+            CapabilityState::Unsupported,
+            capabilities.pinned_host_staging,
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct TransportPathDecision {
+    pub path: TransportPathKind,
+    pub class: TransportPathClass,
+    pub request: TransportPathRequest,
+    pub reason: &'static str,
+    pub estimated_visible_ns: u64,
+    pub explicit_copy_bytes: usize,
+    pub nic_tx_bytes: usize,
+    pub nic_rx_bytes: usize,
+    pub pageable_copy: bool,
+    pub per_token_registration: bool,
+}
+
+impl TransportPathDecision {
+    pub fn record_to_ledger(self, ledger: &mut TokenLedger) {
+        if self.explicit_copy_bytes > 0 {
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::Copy,
+                block_id: None,
+                from_tier: Some(self.request.source_tier),
+                to_tier: Some(MemoryTier::PinnedDram),
+                bytes: self.explicit_copy_bytes,
+                latency_ns: self.estimated_visible_ns / 2,
+                label: "transport_explicit_copy",
+            });
+        }
+        ledger.record(LedgerEvent {
+            kind: LedgerEventKind::Transport,
+            block_id: None,
+            from_tier: Some(self.request.source_tier),
+            to_tier: Some(self.request.destination_tier),
+            bytes: self.request.bytes,
+            latency_ns: self.estimated_visible_ns,
+            label: self.path.as_str(),
+        });
+        ledger.record(LedgerEvent {
+            kind: LedgerEventKind::Sync,
+            block_id: None,
+            from_tier: Some(self.request.source_tier),
+            to_tier: Some(self.request.destination_tier),
+            bytes: 0,
+            latency_ns: 1,
+            label: "transport_ordering_barrier",
+        });
     }
 }
 
@@ -730,6 +888,132 @@ pub struct KvResidencyProbeSummary {
     pub error: Option<&'static str>,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum TransportPathProbeStatus {
+    Ok,
+    Failed,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct TransportPathProbeSummary {
+    pub status: TransportPathProbeStatus,
+    pub requests: u64,
+    pub decode_requests: u64,
+    pub prefill_requests: u64,
+    pub gpu_direct_paths: u64,
+    pub pinned_host_paths: u64,
+    pub cpu_produced_paths: u64,
+    pub mapped_pinned_paths: u64,
+    pub transport_events: u64,
+    pub copy_events: u64,
+    pub sync_events: u64,
+    pub nic_tx_bytes: usize,
+    pub nic_rx_bytes: usize,
+    pub explicit_copy_bytes: usize,
+    pub pageable_copies: u64,
+    pub per_token_registrations: u64,
+    pub total_latency_ns: u64,
+    pub hot_path_allocations: u64,
+    pub error: Option<&'static str>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TransportProbeAccumulator {
+    ledger: TokenLedger,
+    requests: u64,
+    decode_requests: u64,
+    prefill_requests: u64,
+    gpu_direct_paths: u64,
+    pinned_host_paths: u64,
+    cpu_produced_paths: u64,
+    mapped_pinned_paths: u64,
+    nic_tx_bytes: usize,
+    nic_rx_bytes: usize,
+    explicit_copy_bytes: usize,
+    pageable_copies: u64,
+    per_token_registrations: u64,
+}
+
+impl TransportProbeAccumulator {
+    fn new() -> Self {
+        Self {
+            ledger: TokenLedger::new(0),
+            requests: 0,
+            decode_requests: 0,
+            prefill_requests: 0,
+            gpu_direct_paths: 0,
+            pinned_host_paths: 0,
+            cpu_produced_paths: 0,
+            mapped_pinned_paths: 0,
+            nic_tx_bytes: 0,
+            nic_rx_bytes: 0,
+            explicit_copy_bytes: 0,
+            pageable_copies: 0,
+            per_token_registrations: 0,
+        }
+    }
+
+    fn record(&mut self, decision: TransportPathDecision) {
+        self.requests = self.requests.saturating_add(1);
+        match decision.request.mode {
+            TransferMode::Decode => self.decode_requests = self.decode_requests.saturating_add(1),
+            TransferMode::Prefill => {
+                self.prefill_requests = self.prefill_requests.saturating_add(1)
+            }
+        }
+        match decision.path {
+            TransportPathKind::TrueGpuDirectRdma => {
+                self.gpu_direct_paths = self.gpu_direct_paths.saturating_add(1)
+            }
+            TransportPathKind::OptimizedPinnedHostBounce => {
+                self.pinned_host_paths = self.pinned_host_paths.saturating_add(1)
+            }
+            TransportPathKind::CpuProducedBoundary => {
+                self.cpu_produced_paths = self.cpu_produced_paths.saturating_add(1)
+            }
+            TransportPathKind::MappedPinnedHostWrite => {
+                self.mapped_pinned_paths = self.mapped_pinned_paths.saturating_add(1)
+            }
+        }
+        self.nic_tx_bytes = self.nic_tx_bytes.saturating_add(decision.nic_tx_bytes);
+        self.nic_rx_bytes = self.nic_rx_bytes.saturating_add(decision.nic_rx_bytes);
+        self.explicit_copy_bytes = self
+            .explicit_copy_bytes
+            .saturating_add(decision.explicit_copy_bytes);
+        if decision.pageable_copy {
+            self.pageable_copies = self.pageable_copies.saturating_add(1);
+        }
+        if decision.per_token_registration {
+            self.per_token_registrations = self.per_token_registrations.saturating_add(1);
+        }
+        decision.record_to_ledger(&mut self.ledger);
+    }
+
+    fn finish(self) -> TransportPathProbeSummary {
+        TransportPathProbeSummary {
+            status: TransportPathProbeStatus::Ok,
+            requests: self.requests,
+            decode_requests: self.decode_requests,
+            prefill_requests: self.prefill_requests,
+            gpu_direct_paths: self.gpu_direct_paths,
+            pinned_host_paths: self.pinned_host_paths,
+            cpu_produced_paths: self.cpu_produced_paths,
+            mapped_pinned_paths: self.mapped_pinned_paths,
+            transport_events: self.ledger.event_count(LedgerEventKind::Transport),
+            copy_events: self.ledger.event_count(LedgerEventKind::Copy),
+            sync_events: self.ledger.event_count(LedgerEventKind::Sync),
+            nic_tx_bytes: self.nic_tx_bytes,
+            nic_rx_bytes: self.nic_rx_bytes,
+            explicit_copy_bytes: self.explicit_copy_bytes,
+            pageable_copies: self.pageable_copies,
+            per_token_registrations: self.per_token_registrations,
+            total_latency_ns: self.ledger.total_latency_ns(),
+            hot_path_allocations: self.ledger.hot_path_allocations,
+            error: None,
+        }
+    }
+}
+
 impl KvResidencyProbeSummary {
     pub fn to_json(self) -> String {
         let status = match self.status {
@@ -760,6 +1044,37 @@ impl KvResidencyProbeSummary {
             self.hot_path_allocations,
             self.vram_used_bytes,
             self.dram_used_bytes,
+            json_opt_static_str(self.error),
+        )
+    }
+}
+
+impl TransportPathProbeSummary {
+    pub fn to_json(self) -> String {
+        let status = match self.status {
+            TransportPathProbeStatus::Ok => "ok",
+            TransportPathProbeStatus::Failed => "failed",
+        };
+        format!(
+            "{{\"status\":\"{}\",\"requests\":{},\"decode_requests\":{},\"prefill_requests\":{},\"gpu_direct_paths\":{},\"pinned_host_paths\":{},\"cpu_produced_paths\":{},\"mapped_pinned_paths\":{},\"transport_events\":{},\"copy_events\":{},\"sync_events\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"explicit_copy_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            status,
+            self.requests,
+            self.decode_requests,
+            self.prefill_requests,
+            self.gpu_direct_paths,
+            self.pinned_host_paths,
+            self.cpu_produced_paths,
+            self.mapped_pinned_paths,
+            self.transport_events,
+            self.copy_events,
+            self.sync_events,
+            self.nic_tx_bytes,
+            self.nic_rx_bytes,
+            self.explicit_copy_bytes,
+            self.pageable_copies,
+            self.per_token_registrations,
+            self.total_latency_ns,
+            self.hot_path_allocations,
             json_opt_static_str(self.error),
         )
     }
@@ -867,6 +1182,125 @@ impl Runtime {
             dma_buf_export: CapabilityState::Unsupported,
             cxl: CapabilityState::Unsupported,
         }
+    }
+
+    pub fn plan_transport_path(
+        &self,
+        request: TransportPathRequest,
+    ) -> Result<TransportPathDecision> {
+        let _ = self.config;
+        if request.bytes == 0 {
+            return Err(NervaError::InvalidArgument {
+                reason: "transport path request bytes must be non-zero".to_string(),
+            });
+        }
+
+        if matches!(request.producer, ExecutionOwner::Cpu)
+            && matches!(
+                request.source_tier,
+                MemoryTier::Dram | MemoryTier::PinnedDram
+            )
+        {
+            return Ok(make_transport_decision(
+                request,
+                TransportPathKind::CpuProducedBoundary,
+                TransportPathClass::CpuProduced,
+                "CPU owns boundary result and can produce it into a registered send buffer",
+                0,
+            ));
+        }
+
+        if request.source_tier == MemoryTier::Vram
+            && request.destination_tier == MemoryTier::Vram
+            && request.gpu_direct_rdma == CapabilityState::SupportedAndVerified
+        {
+            return Ok(make_transport_decision(
+                request,
+                TransportPathKind::TrueGpuDirectRdma,
+                TransportPathClass::GpuDirect,
+                "verified GPU-direct RDMA path avoids host staging",
+                0,
+            ));
+        }
+
+        if request.source_tier == MemoryTier::Vram
+            && request.mode == TransferMode::Decode
+            && request.bytes <= 256 * 1024
+            && request.mapped_pinned_output == CapabilityState::SupportedAndVerified
+        {
+            return Ok(make_transport_decision(
+                request,
+                TransportPathKind::MappedPinnedHostWrite,
+                TransportPathClass::MappedPinned,
+                "small decode payload can be written directly to mapped pinned output",
+                0,
+            ));
+        }
+
+        if matches!(
+            request.pinned_host_staging,
+            CapabilityState::SupportedAndVerified | CapabilityState::SupportedUnverified
+        ) {
+            let copy_bytes = if request.source_tier == MemoryTier::Vram
+                && request.destination_tier == MemoryTier::Vram
+            {
+                request.bytes.saturating_mul(2)
+            } else {
+                request.bytes
+            };
+            return Ok(make_transport_decision(
+                request,
+                TransportPathKind::OptimizedPinnedHostBounce,
+                TransportPathClass::HostStaged,
+                "GPU-direct path is not verified; using preallocated pinned-host staging",
+                copy_bytes,
+            ));
+        }
+
+        Err(NervaError::BackendUnavailable {
+            backend: "transport",
+            reason: "no verified direct path and pinned-host staging is unavailable".to_string(),
+        })
+    }
+
+    pub fn run_transport_path_probe(&self) -> Result<TransportPathProbeSummary> {
+        let capabilities = self.discover_capabilities();
+        let sizes = [
+            (32 * 1024, TransferMode::Decode),
+            (256 * 1024, TransferMode::Decode),
+            (1024 * 1024, TransferMode::Decode),
+            (16 * 1024 * 1024, TransferMode::Prefill),
+            (64 * 1024 * 1024, TransferMode::Prefill),
+            (256 * 1024 * 1024, TransferMode::Prefill),
+        ];
+        let mut probe = TransportProbeAccumulator::new();
+
+        for (bytes, mode) in sizes {
+            let request = TransportPathRequest::from_capabilities(
+                MemoryTier::Vram,
+                MemoryTier::Vram,
+                bytes,
+                mode,
+                ExecutionOwner::Gpu(self.config.device),
+                &capabilities,
+            );
+            let decision = self.plan_transport_path(request)?;
+            probe.record(decision);
+        }
+
+        let cpu_request = TransportPathRequest::from_capabilities(
+            MemoryTier::Dram,
+            MemoryTier::PinnedDram,
+            32 * 1024,
+            TransferMode::Decode,
+            ExecutionOwner::Cpu,
+            &capabilities,
+        );
+        let cpu_decision = self.plan_transport_path(cpu_request)?;
+        probe.record(cpu_decision);
+        probe.ledger.require_zero_hot_path_allocations()?;
+
+        Ok(probe.finish())
     }
 
     pub fn run_synthetic_decode(
@@ -1132,6 +1566,51 @@ pub fn cuda_smoke() -> nerva_cuda::CudaSmokeSummary {
     nerva_cuda::smoke()
 }
 
+fn make_transport_decision(
+    request: TransportPathRequest,
+    path: TransportPathKind,
+    class: TransportPathClass,
+    reason: &'static str,
+    explicit_copy_bytes: usize,
+) -> TransportPathDecision {
+    TransportPathDecision {
+        path,
+        class,
+        request,
+        reason,
+        estimated_visible_ns: estimate_transport_visible_ns(path, request.bytes, request.mode),
+        explicit_copy_bytes,
+        nic_tx_bytes: request.bytes,
+        nic_rx_bytes: request.bytes,
+        pageable_copy: false,
+        per_token_registration: false,
+    }
+}
+
+fn estimate_transport_visible_ns(path: TransportPathKind, bytes: usize, mode: TransferMode) -> u64 {
+    let setup_ns = match (path, mode) {
+        (TransportPathKind::TrueGpuDirectRdma, TransferMode::Decode) => 900,
+        (TransportPathKind::TrueGpuDirectRdma, TransferMode::Prefill) => 1_500,
+        (TransportPathKind::OptimizedPinnedHostBounce, TransferMode::Decode) => 2_500,
+        (TransportPathKind::OptimizedPinnedHostBounce, TransferMode::Prefill) => 4_000,
+        (TransportPathKind::CpuProducedBoundary, TransferMode::Decode) => 1_200,
+        (TransportPathKind::CpuProducedBoundary, TransferMode::Prefill) => 2_400,
+        (TransportPathKind::MappedPinnedHostWrite, TransferMode::Decode) => 1_700,
+        (TransportPathKind::MappedPinnedHostWrite, TransferMode::Prefill) => 4_500,
+    };
+    let bytes_per_ns = match path {
+        TransportPathKind::TrueGpuDirectRdma => 64,
+        TransportPathKind::OptimizedPinnedHostBounce => 24,
+        TransportPathKind::CpuProducedBoundary => 48,
+        TransportPathKind::MappedPinnedHostWrite => 32,
+    };
+    setup_ns + div_ceil_u64(bytes as u64, bytes_per_ns)
+}
+
+fn div_ceil_u64(value: u64, divisor: u64) -> u64 {
+    value / divisor + u64::from(value % divisor != 0)
+}
+
 fn mix_u32(out: &mut [u8; 32], offset: usize, value: u32) {
     let bytes = value.to_le_bytes();
     for (idx, byte) in bytes.iter().enumerate() {
@@ -1248,6 +1727,106 @@ mod tests {
 
         let json = snapshot.to_json();
         assert!(json.contains("quote\\\" slash\\\\ newline\\n"));
+    }
+
+    #[test]
+    fn transport_planner_uses_verified_gpu_direct_only() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let decision = runtime
+            .plan_transport_path(TransportPathRequest::new(
+                MemoryTier::Vram,
+                MemoryTier::Vram,
+                32 * 1024,
+                TransferMode::Decode,
+                ExecutionOwner::Gpu(DeviceOrdinal(0)),
+                CapabilityState::SupportedAndVerified,
+                CapabilityState::Unsupported,
+                CapabilityState::SupportedUnverified,
+            ))
+            .unwrap();
+
+        assert_eq!(decision.path, TransportPathKind::TrueGpuDirectRdma);
+        assert_eq!(decision.class, TransportPathClass::GpuDirect);
+        assert_eq!(decision.explicit_copy_bytes, 0);
+        assert!(!decision.pageable_copy);
+        assert!(!decision.per_token_registration);
+    }
+
+    #[test]
+    fn transport_planner_degrades_unverified_direct_path_to_pinned_host() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let decision = runtime
+            .plan_transport_path(TransportPathRequest::new(
+                MemoryTier::Vram,
+                MemoryTier::Vram,
+                32 * 1024,
+                TransferMode::Decode,
+                ExecutionOwner::Gpu(DeviceOrdinal(0)),
+                CapabilityState::SupportedUnverified,
+                CapabilityState::Unsupported,
+                CapabilityState::SupportedUnverified,
+            ))
+            .unwrap();
+
+        assert_eq!(decision.path, TransportPathKind::OptimizedPinnedHostBounce);
+        assert_eq!(decision.class, TransportPathClass::HostStaged);
+        assert_eq!(decision.explicit_copy_bytes, 64 * 1024);
+        assert!(!decision.pageable_copy);
+        assert!(!decision.per_token_registration);
+    }
+
+    #[test]
+    fn transport_planner_can_select_mapped_pinned_for_small_decode_only() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let small_decode = runtime
+            .plan_transport_path(TransportPathRequest::new(
+                MemoryTier::Vram,
+                MemoryTier::PinnedDram,
+                32 * 1024,
+                TransferMode::Decode,
+                ExecutionOwner::Gpu(DeviceOrdinal(0)),
+                CapabilityState::Unsupported,
+                CapabilityState::SupportedAndVerified,
+                CapabilityState::SupportedUnverified,
+            ))
+            .unwrap();
+        let prefill = runtime
+            .plan_transport_path(TransportPathRequest::new(
+                MemoryTier::Vram,
+                MemoryTier::PinnedDram,
+                16 * 1024 * 1024,
+                TransferMode::Prefill,
+                ExecutionOwner::Gpu(DeviceOrdinal(0)),
+                CapabilityState::Unsupported,
+                CapabilityState::SupportedAndVerified,
+                CapabilityState::SupportedUnverified,
+            ))
+            .unwrap();
+
+        assert_eq!(small_decode.path, TransportPathKind::MappedPinnedHostWrite);
+        assert_eq!(small_decode.class, TransportPathClass::MappedPinned);
+        assert_eq!(prefill.path, TransportPathKind::OptimizedPinnedHostBounce);
+    }
+
+    #[test]
+    fn transport_path_probe_reports_explicit_fallback_without_hot_allocations() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let summary = runtime.run_transport_path_probe().unwrap();
+
+        assert_eq!(summary.status, TransportPathProbeStatus::Ok);
+        assert_eq!(summary.requests, 7);
+        assert_eq!(summary.decode_requests, 4);
+        assert_eq!(summary.prefill_requests, 3);
+        assert_eq!(summary.pinned_host_paths, 6);
+        assert_eq!(summary.cpu_produced_paths, 1);
+        assert_eq!(summary.transport_events, 7);
+        assert_eq!(summary.copy_events, 6);
+        assert_eq!(summary.sync_events, 7);
+        assert_eq!(summary.pageable_copies, 0);
+        assert_eq!(summary.per_token_registrations, 0);
+        assert_eq!(summary.hot_path_allocations, 0);
+        assert!(summary.explicit_copy_bytes > 0);
+        assert!(summary.to_json().contains("\"pinned_host_paths\":6"));
     }
 
     #[test]
