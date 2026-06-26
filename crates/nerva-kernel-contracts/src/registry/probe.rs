@@ -2,7 +2,7 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::Result;
 
 use crate::registry::bootstrap::bootstrap_registry;
-use crate::registry::{
+use crate::registry::types::{
     KernelBackend, KernelFallback, KernelFallbackClass, KernelOperation, KernelPlan, KernelQuery,
 };
 

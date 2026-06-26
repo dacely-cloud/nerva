@@ -2,7 +2,7 @@ use nerva_core::types::block::ResidencyState;
 use nerva_core::types::error::Result;
 use nerva_core::types::id::AllocationId;
 
-use crate::kv::residency::{KvResidencyAction, KvResidencyPlan};
+use crate::kv::residency::types::{KvResidencyAction, KvResidencyPlan};
 use crate::registry::BlockRegistry;
 
 impl KvResidencyPlan {

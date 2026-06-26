@@ -1,6 +1,6 @@
 use nerva_core::types::dtype::DType;
 
-use crate::registry::{
+use crate::registry::types::{
     ArchitectureRange, KernelBackend, KernelContractRegistry, KernelExactness, KernelFallback,
     KernelFallbackClass, KernelImplementation, KernelOperation,
 };

@@ -1,9 +1,13 @@
 use nerva_core::types::error::Result;
 
 use crate::engine::runtime::Runtime;
-use crate::transport::matrix::{self, TransportCapabilityMatrixSummary};
+use crate::transport::matrix::run as matrix_run;
+use crate::transport::matrix::types::TransportCapabilityMatrixSummary;
 use crate::transport::path::{self, TransportPathDecision, TransportPathRequest};
 use crate::transport::probe::{self, TransportPathProbeSummary};
+use crate::transport::stage::config::StagePipelineConfig;
+use crate::transport::stage::run;
+use crate::transport::stage::summary::StagePipelineSummary;
 
 impl Runtime {
     pub fn plan_transport_path(
@@ -23,6 +27,14 @@ impl Runtime {
         &self,
     ) -> Result<TransportCapabilityMatrixSummary> {
         let capabilities = self.discover_capabilities();
-        matrix::run_transport_capability_matrix_probe(self.config.device, &capabilities)
+        matrix_run::run_transport_capability_matrix_probe(self.config.device, &capabilities)
+    }
+
+    pub fn run_stage_pipeline_probe(
+        &self,
+        config: StagePipelineConfig,
+    ) -> Result<StagePipelineSummary> {
+        let capabilities = self.discover_capabilities();
+        run::run_stage_pipeline_probe(config, self.config.device, &capabilities)
     }
 }

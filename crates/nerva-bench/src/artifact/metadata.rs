@@ -1,10 +1,10 @@
 use std::process::Command;
 
 use crate::json::{json_env_string, json_escape, json_string_array};
-use crate::probes::run_capabilities;
+use crate::probes::runtime;
 
 pub(crate) fn artifact_metadata_json(command: &str, args: &[String]) -> String {
-    let capabilities = run_capabilities().unwrap_or_else(|reason| {
+    let capabilities = runtime::run_capabilities().unwrap_or_else(|reason| {
         format!(
             "{{\"status\":\"failed\",\"error\":\"{}\"}}",
             json_escape(&reason)

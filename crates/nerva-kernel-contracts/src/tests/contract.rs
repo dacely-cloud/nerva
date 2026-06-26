@@ -2,9 +2,9 @@ use nerva_core::types::block::BlockKind;
 use nerva_core::types::dtype::DType;
 use nerva_core::types::memory::MemoryTier;
 
-use crate::contract::{
-    KernelBufferContract, KernelBufferRole, KernelContract, KernelContractKind,
-    KernelContractProbeStatus, LaunchBounds, kernel_contract_probe,
+use crate::contract::probe::{KernelContractProbeStatus, kernel_contract_probe};
+use crate::contract::types::{
+    KernelBufferContract, KernelBufferRole, KernelContract, KernelContractKind, LaunchBounds,
 };
 
 #[test]

@@ -11,10 +11,7 @@ use crate::{
     },
     parity::run_vllm_token_identity_parity,
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
-    probes::{
-        run_capabilities, run_kv_probe, run_synthetic, run_synthetic_ledger_probe,
-        run_topology_probe, run_transport_matrix_probe, run_transport_probe,
-    },
+    probes::{kv, runtime, synthetic, transport},
 };
 
 pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
@@ -50,14 +47,14 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
             )
             .to_json())
         }
-        "capabilities" => run_capabilities(),
-        "topology" => run_topology_probe(),
+        "capabilities" => runtime::run_capabilities(),
+        "topology" => runtime::run_topology_probe(),
         "synthetic" => {
             let steps = parse_optional_u64(args.first().cloned(), 1024, "steps")?;
             let ring_capacity = parse_optional_usize(args.get(1).cloned(), 64, "ring_capacity")?;
-            run_synthetic(steps, ring_capacity)
+            synthetic::run_synthetic(steps, ring_capacity)
         }
-        "ledger" => run_synthetic_ledger_probe(),
+        "ledger" => synthetic::run_synthetic_ledger_probe(),
         "block" => nerva_model::reference::smoke::reference_block_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("reference block failed: {err:?}")),
@@ -135,9 +132,10 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "contracts" => nerva_kernel_contracts::registry::probe::kernel_registry_probe()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("kernel contract probe failed: {err:?}")),
-        "kv" => run_kv_probe(),
-        "transport" => run_transport_probe(),
-        "transport-matrix" => run_transport_matrix_probe(),
+        "kv" => kv::run_kv_probe(),
+        "transport" => transport::run_transport_probe(),
+        "transport-matrix" => transport::run_transport_matrix_probe(),
+        "stage-pipeline" => transport::run_stage_pipeline_probe(),
         "acceptance" => run_acceptance_probe(),
         _ => Err(format!("unknown artifact probe '{command}'")),
     }

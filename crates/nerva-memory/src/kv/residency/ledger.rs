@@ -5,7 +5,7 @@ use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::TokenLedger;
 
-use crate::kv::residency::{KvResidencyAction, KvResidencyPlan, KvResidencyPlanEntry};
+use crate::kv::residency::types::{KvResidencyAction, KvResidencyPlan, KvResidencyPlanEntry};
 
 impl KvResidencyPlan {
     pub fn record_decisions_to_ledger(&self, ledger: &mut TokenLedger) {

@@ -1,6 +1,8 @@
 use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState};
 use crate::transport::estimate::{effective_payload_bandwidth_bps, transport_resource_estimate};
-use crate::transport::matrix::{TransportCapabilityMatrixEntry, TransportMatrixRequestedPath};
+use crate::transport::matrix::types::{
+    TransportCapabilityMatrixEntry, TransportMatrixRequestedPath,
+};
 use crate::transport::path::{
     TransferMode, TransportPathClass, TransportPathDecision, TransportPathRequest,
     plan_transport_path,

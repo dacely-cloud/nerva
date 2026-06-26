@@ -38,9 +38,10 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     model::push_warm_compute(&mut report);
     model::push_kernel_contracts(&mut report);
 
-    transport::push_kv_residency(&mut report, &runtime);
-    transport::push_transport_path(&mut report, &runtime);
-    transport::push_transport_matrix(&mut report, &runtime);
+    transport::kv::push_kv_residency(&mut report, &runtime);
+    transport::path::push_transport_path(&mut report, &runtime);
+    transport::matrix::push_transport_matrix(&mut report, &runtime);
+    transport::stage::push_stage_pipeline(&mut report, &runtime);
 
     match resident_weights::resident_weight_execution_acceptance(&runtime) {
         Ok((passed, details)) => report.push("resident_weight_execution", passed, details),

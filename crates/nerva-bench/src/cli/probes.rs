@@ -2,23 +2,27 @@ use std::process::ExitCode;
 
 use crate::cli::exit;
 use crate::parse::{parse_optional_u64, parse_optional_usize};
-use crate::probes::{
-    run_capabilities, run_kv_probe, run_synthetic, run_synthetic_ledger_probe, run_topology_probe,
-    run_transport_matrix_probe, run_transport_probe,
-};
+use crate::probes::{kv, runtime, synthetic, transport};
 
 pub(crate) fn dispatch(
     command: Option<&str>,
     args: &mut impl Iterator<Item = String>,
 ) -> Option<ExitCode> {
     match command {
-        Some("capabilities") => Some(exit::print_json_result(run_capabilities())),
-        Some("topology") => Some(exit::print_json_result(run_topology_probe())),
+        Some("capabilities") => Some(exit::print_json_result(runtime::run_capabilities())),
+        Some("topology") => Some(exit::print_json_result(runtime::run_topology_probe())),
         Some("synthetic") => Some(run_synthetic_command(args)),
-        Some("ledger") => Some(exit::print_json_result(run_synthetic_ledger_probe())),
-        Some("kv") => Some(exit::print_json_result(run_kv_probe())),
-        Some("transport") => Some(exit::print_json_result(run_transport_probe())),
-        Some("transport-matrix") => Some(exit::print_json_result(run_transport_matrix_probe())),
+        Some("ledger") => Some(exit::print_json_result(
+            synthetic::run_synthetic_ledger_probe(),
+        )),
+        Some("kv") => Some(exit::print_json_result(kv::run_kv_probe())),
+        Some("transport") => Some(exit::print_json_result(transport::run_transport_probe())),
+        Some("transport-matrix") => Some(exit::print_json_result(
+            transport::run_transport_matrix_probe(),
+        )),
+        Some("stage-pipeline") => Some(exit::print_json_result(
+            transport::run_stage_pipeline_probe(),
+        )),
         _ => None,
     }
 }
@@ -32,5 +36,5 @@ fn run_synthetic_command(args: &mut impl Iterator<Item = String>) -> ExitCode {
         Ok(ring_capacity) => ring_capacity,
         Err(reason) => return exit::parse_error(reason),
     };
-    exit::print_json_result(run_synthetic(steps, ring_capacity))
+    exit::print_json_result(synthetic::run_synthetic(steps, ring_capacity))
 }

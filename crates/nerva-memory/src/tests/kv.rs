@@ -2,7 +2,7 @@ use crate::arena::kind::ArenaKind;
 use crate::arena::set::StaticArenaSet;
 use crate::kv::page::{KvPageSpec, KvPrefixKey};
 use crate::kv::pool::KvPagePool;
-use crate::kv::residency::{KvResidencyAction, KvResidencyPlanner, KvResidencyPolicy};
+use crate::kv::residency::types::{KvResidencyAction, KvResidencyPlanner, KvResidencyPolicy};
 use crate::registry::BlockRegistry;
 use nerva_core::types::block::ResidencyState;
 use nerva_core::types::memory::MemoryTier;

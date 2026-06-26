@@ -2,7 +2,7 @@ use nerva_core::types::dtype::DType;
 
 use crate::registry::bootstrap::bootstrap_registry;
 use crate::registry::probe::{KernelRegistryProbeStatus, kernel_registry_probe};
-use crate::registry::{
+use crate::registry::types::{
     KernelBackend, KernelContractRegistry, KernelExactness, KernelFallback, KernelFallbackClass,
     KernelImplementation, KernelOperation, KernelPlan, KernelQuery,
 };

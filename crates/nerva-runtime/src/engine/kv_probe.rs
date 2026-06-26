@@ -7,7 +7,9 @@ use nerva_memory::arena::kind::ArenaKind;
 use nerva_memory::arena::set::StaticArenaSet;
 use nerva_memory::kv::page::{KvPageSpec, KvPrefixKey};
 use nerva_memory::kv::pool::KvPagePool;
-use nerva_memory::kv::residency::{KvResidencyAction, KvResidencyPlanner, KvResidencyPolicy};
+use nerva_memory::kv::residency::types::{
+    KvResidencyAction, KvResidencyPlanner, KvResidencyPolicy,
+};
 
 use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;

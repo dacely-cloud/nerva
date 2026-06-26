@@ -3,7 +3,7 @@ use nerva_core::types::memory::MemoryTier;
 
 use crate::kv::page::KvPageDescriptor;
 use crate::kv::pool::KvPagePool;
-use crate::kv::residency::{
+use crate::kv::residency::types::{
     KvResidencyAction, KvResidencyPlan, KvResidencyPlanEntry, KvResidencyPlanner, KvResidencyPolicy,
 };
 use crate::registry::BlockRegistry;

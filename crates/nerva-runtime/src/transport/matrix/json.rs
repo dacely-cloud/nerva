@@ -1,5 +1,5 @@
 use crate::transport::json::{json_opt_static_str, memory_tier_to_str};
-use crate::transport::matrix::{
+use crate::transport::matrix::types::{
     TransportCapabilityMatrixEntry, TransportCapabilityMatrixStatus,
     TransportCapabilityMatrixSummary, TransportMatrixRequestedPath,
 };

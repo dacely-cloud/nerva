@@ -1,13 +1,6 @@
-mod entry;
-mod json;
-mod summary;
-
-use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState};
+use crate::capabilities::snapshot::CapabilityState;
 use crate::transport::path::{TransferMode, TransportPathClass, TransportPathKind};
-use nerva_core::types::error::Result;
-use nerva_core::types::id::DeviceOrdinal;
 use nerva_core::types::memory::MemoryTier;
-use nerva_ledger::types::token::TokenLedger;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum TransportCapabilityMatrixStatus {
@@ -83,18 +76,4 @@ pub struct TransportCapabilityMatrixSummary {
     pub credit_stall_ns: u64,
     pub hot_path_allocations: u64,
     pub error: Option<&'static str>,
-}
-
-pub fn run_transport_capability_matrix_probe(
-    device: DeviceOrdinal,
-    capabilities: &CapabilitySnapshot,
-) -> Result<TransportCapabilityMatrixSummary> {
-    let (sizes, entries) = entry::build_entries(device, capabilities)?;
-    let ledger = TokenLedger::new(0);
-    ledger.require_zero_hot_path_allocations()?;
-    Ok(summary::transport_capability_matrix_summary(
-        sizes,
-        entries,
-        ledger.hot_path_allocations,
-    ))
 }

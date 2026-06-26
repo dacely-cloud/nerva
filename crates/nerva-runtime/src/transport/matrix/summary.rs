@@ -1,6 +1,6 @@
 use crate::capabilities::snapshot::CapabilityState;
 use crate::transport::estimate::div_ceil_u64;
-use crate::transport::matrix::{
+use crate::transport::matrix::types::{
     TransportCapabilityMatrixEntry, TransportCapabilityMatrixStatus,
     TransportCapabilityMatrixSummary,
 };

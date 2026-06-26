@@ -3,7 +3,9 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::memory::MemoryTier;
 use nerva_core::types::ownership::ExecutionOwner;
 use nerva_kernel_contracts::registry::bootstrap::bootstrap_registry;
-use nerva_kernel_contracts::registry::{KernelBackend, KernelOperation, KernelPlan, KernelQuery};
+use nerva_kernel_contracts::registry::types::{
+    KernelBackend, KernelOperation, KernelPlan, KernelQuery,
+};
 use nerva_ledger::types::decision::{BlockVersionDependency, CandidateCost, ExecutionDecision};
 use nerva_ledger::types::fallback::{FallbackClass, FallbackDecision};
 use nerva_ledger::types::metric::MetricSource;
