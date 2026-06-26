@@ -937,8 +937,7 @@ nerva/
     cuda/
       CMakeLists.txt
       nerva_cuda_api.h
-      nerva_cuda_api.cpp
-      smoke_kernel.cu
+      nerva_cuda_device_smoke.cu
       graph_executor.cu
       token_ring_kernels.cu
       synthetic_decode.cu
@@ -1464,8 +1463,7 @@ nerva/
     cuda/
       CMakeLists.txt
       nerva_cuda_api.h
-      nerva_cuda_api.cpp
-      smoke_kernel.cu
+      nerva_cuda_device_smoke.cu
       graph_executor.cu
       token_ring_kernels.cu
       synthetic_decode.cu
