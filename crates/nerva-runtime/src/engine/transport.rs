@@ -22,6 +22,9 @@ use crate::transport::registration::summary::TransportRegistrationSummary;
 use crate::transport::stage::config::StagePipelineConfig;
 use crate::transport::stage::run;
 use crate::transport::stage::summary::StagePipelineSummary;
+use crate::transport::tcp_control::config::TcpControlProbeConfig;
+use crate::transport::tcp_control::run::run_tcp_control_probe;
+use crate::transport::tcp_control::summary::TcpControlSummary;
 
 impl Runtime {
     pub fn plan_transport_path(
@@ -81,5 +84,13 @@ impl Runtime {
     ) -> Result<StagePipelineSummary> {
         let capabilities = self.discover_capabilities();
         run::run_stage_pipeline_probe(config, self.config.device, &capabilities)
+    }
+
+    pub fn run_tcp_control_probe(
+        &self,
+        config: TcpControlProbeConfig,
+    ) -> Result<TcpControlSummary> {
+        let _ = self.config;
+        run_tcp_control_probe(config)
     }
 }

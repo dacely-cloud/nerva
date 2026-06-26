@@ -63,6 +63,9 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("credit_stall_ns=1500"));
     assert!(json.contains("\"kernel_udp_loopback_baseline\""));
     assert!(json.contains("\"kernel_udp_measured_matrix\""));
+    assert!(json.contains("\"tcp_control_debug_only\""));
+    assert!(json.contains("tensor_payload_bytes=0"));
+    assert!(json.contains("production_tensor_data_plane=false"));
     assert!(json.contains("\"measured_transport_selector\""));
     assert!(json.contains("\"transport_metric_provenance\""));
     assert!(json.contains("\"transport_pinned_fallback\""));

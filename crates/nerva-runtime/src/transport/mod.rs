@@ -11,3 +11,4 @@ pub mod probe;
 pub mod provenance;
 pub mod registration;
 pub mod stage;
+pub mod tcp_control;

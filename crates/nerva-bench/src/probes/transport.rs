@@ -2,6 +2,7 @@ use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 use nerva_runtime::transport::dpdk_udp::config::DpdkUdpProbeConfig;
 use nerva_runtime::transport::kernel_udp::config::KernelUdpProbeConfig;
 use nerva_runtime::transport::stage::config::StagePipelineConfig;
+use nerva_runtime::transport::tcp_control::config::TcpControlProbeConfig;
 
 pub(crate) fn run_transport_probe() -> Result<String, String> {
     let runtime = Runtime::new(RuntimeConfig::default())
@@ -57,6 +58,15 @@ pub(crate) fn run_kernel_udp_matrix_probe() -> Result<String, String> {
     let summary = runtime
         .run_kernel_udp_baseline_matrix_probe()
         .map_err(|err| format!("kernel UDP baseline matrix probe failed: {err:?}"))?;
+    Ok(summary.to_json())
+}
+
+pub(crate) fn run_tcp_control_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let summary = runtime
+        .run_tcp_control_probe(TcpControlProbeConfig::reference_handshake())
+        .map_err(|err| format!("TCP control probe failed: {err:?}"))?;
     Ok(summary.to_json())
 }
 

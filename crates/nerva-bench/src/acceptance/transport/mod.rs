@@ -9,3 +9,4 @@ pub(crate) mod path;
 pub(crate) mod provenance;
 pub(crate) mod registration;
 pub(crate) mod stage;
+pub(crate) mod tcp_control;

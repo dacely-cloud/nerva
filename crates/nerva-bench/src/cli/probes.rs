@@ -67,6 +67,7 @@ pub(crate) fn dispatch(
         Some("kernel-udp-matrix") => Some(exit::print_json_result(
             transport::run_kernel_udp_matrix_probe(),
         )),
+        Some("tcp-control") => Some(exit::print_json_result(transport::run_tcp_control_probe())),
         Some("measured-transport") => Some(exit::print_json_result(
             transport::run_measured_transport_selector_probe(),
         )),
