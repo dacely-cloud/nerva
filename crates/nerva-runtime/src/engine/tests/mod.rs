@@ -2,6 +2,7 @@ mod arenas;
 mod basic;
 mod capabilities;
 mod graph;
+mod hot_path;
 mod kv;
 mod memory_loop;
 mod multi_gpu;

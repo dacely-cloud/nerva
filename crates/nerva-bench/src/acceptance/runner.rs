@@ -21,6 +21,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     cuda::sampler::push_device_sampler(&mut report);
 
     runtime_checks::push_static_arenas(&mut report, &runtime);
+    runtime_checks::push_hot_path_guard(&mut report, &runtime);
     environment::push_topology_snapshot(&mut report, &runtime);
     runtime_checks::push_synthetic_decode(&mut report, &runtime);
     token::push_token_policy(&mut report, &runtime);

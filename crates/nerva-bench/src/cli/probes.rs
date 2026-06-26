@@ -15,6 +15,9 @@ pub(crate) fn dispatch(
         Some("backend-contract") => Some(exit::print_json_result(
             backend::run_backend_contract_probe(),
         )),
+        Some("hot-path-guard") => {
+            Some(exit::print_json_result(runtime::run_hot_path_guard_probe()))
+        }
         Some("topology") => Some(exit::print_json_result(runtime::run_topology_probe())),
         Some("synthetic") => Some(run_synthetic_command(args)),
         Some("ledger") => Some(exit::print_json_result(

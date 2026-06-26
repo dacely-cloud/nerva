@@ -1,4 +1,5 @@
 pub mod cuda;
+pub mod hot_path;
 pub mod kv_probe;
 pub mod memory_loop;
 pub mod multi_gpu;

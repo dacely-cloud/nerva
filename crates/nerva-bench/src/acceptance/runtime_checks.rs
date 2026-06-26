@@ -1,4 +1,5 @@
 use nerva_core::types::id::TokenId;
+use nerva_runtime::engine::hot_path::status::HotPathGuardStatus;
 use nerva_runtime::engine::residency::ResidencyBudget;
 use nerva_runtime::engine::runtime::Runtime;
 use nerva_runtime::engine::synthetic::config::SyntheticDecodeConfig;
@@ -34,6 +35,42 @@ pub(crate) fn push_static_arenas(report: &mut AcceptanceReport, runtime: &Runtim
             ),
         ),
         Err(err) => report.push("static_arenas", false, format!("{err:?}")),
+    }
+}
+
+pub(crate) fn push_hot_path_guard(report: &mut AcceptanceReport, runtime: &Runtime) {
+    match runtime.run_hot_path_guard_probe(ResidencyBudget::new(1024, 2048, 4096)) {
+        Ok(summary) => report.push(
+            "hot_path_guard",
+            summary.status == HotPathGuardStatus::Ok
+                && summary.passed()
+                && summary.entered_scopes == 2
+                && summary.exited_scopes == 2
+                && summary.active_scopes_after_probe == 0
+                && summary.clean_scope_allocation_attempts == 0
+                && summary.deliberate_allocation_attempts == 3
+                && summary.deliberate_rejections == 3
+                && summary.ledger_allocation_events == 3
+                && summary.ledger_hot_path_allocations == 3
+                && summary.release_to_system_calls == 0
+                && summary.usage_preserved_after_rejections,
+            format!(
+                "status={:?} entered_scopes={} exited_scopes={} active_scopes={} clean_scope_allocation_attempts={} deliberate_attempts={} deliberate_rejections={} ledger_allocation_events={} ledger_hot_path_allocations={} attempted_bytes={} release_to_system_calls={} usage_preserved={}",
+                summary.status,
+                summary.entered_scopes,
+                summary.exited_scopes,
+                summary.active_scopes_after_probe,
+                summary.clean_scope_allocation_attempts,
+                summary.deliberate_allocation_attempts,
+                summary.deliberate_rejections,
+                summary.ledger_allocation_events,
+                summary.ledger_hot_path_allocations,
+                summary.attempted_bytes,
+                summary.release_to_system_calls,
+                summary.usage_preserved_after_rejections,
+            ),
+        ),
+        Err(err) => report.push("hot_path_guard", false, format!("{err:?}")),
     }
 }
 
