@@ -118,6 +118,8 @@ pub struct CapabilitySnapshot {
     pub cuda_error: Option<String>,
     pub cuda_visible_devices: Option<String>,
     pub cuda_compute_capability: Option<String>,
+    pub cuda_device_total_memory_bytes: Option<usize>,
+    pub cuda_pci_bus_id: Option<String>,
     pub hip: CapabilityState,
     pub hip_visible_devices: Option<String>,
     pub nvidia_driver_version: Option<String>,
@@ -132,7 +134,7 @@ pub struct CapabilitySnapshot {
 impl CapabilitySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
+            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_pci_bus_id\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
             host_arch_to_str(self.host_arch),
             self.target_os,
             self.target_arch,
@@ -143,6 +145,8 @@ impl CapabilitySnapshot {
             json_opt_string(self.cuda_error.as_deref()),
             json_opt_string(self.cuda_visible_devices.as_deref()),
             json_opt_string(self.cuda_compute_capability.as_deref()),
+            json_opt_usize(self.cuda_device_total_memory_bytes),
+            json_opt_string(self.cuda_pci_bus_id.as_deref()),
             self.hip.as_str(),
             json_opt_string(self.hip_visible_devices.as_deref()),
             json_opt_string(self.nvidia_driver_version.as_deref()),
@@ -1701,6 +1705,8 @@ impl Runtime {
             nerva_cuda::SmokeStatus::Failed => "failed",
         };
         let cuda_compute_capability = cuda_compute_capability(&cuda_smoke);
+        let cuda_device_total_memory_bytes = cuda_smoke.device_total_memory_bytes;
+        let cuda_pci_bus_id = cuda_smoke.pci_bus_id.clone();
 
         CapabilitySnapshot {
             host_arch: host_arch(),
@@ -1713,6 +1719,8 @@ impl Runtime {
             cuda_error: cuda_smoke.error,
             cuda_visible_devices: env::var("CUDA_VISIBLE_DEVICES").ok(),
             cuda_compute_capability,
+            cuda_device_total_memory_bytes,
+            cuda_pci_bus_id,
             hip: CapabilityState::Unsupported,
             hip_visible_devices: env::var("HIP_VISIBLE_DEVICES").ok(),
             nvidia_driver_version: read_trimmed_first_line("/proc/driver/nvidia/version"),
@@ -3608,6 +3616,10 @@ fn json_opt_block_id(value: Option<ResidentBlockId>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.0.to_string())
 }
 
+fn json_opt_usize(value: Option<usize>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
 fn host_arch_to_str(value: HostArch) -> &'static str {
     match value {
         HostArch::X86_64 => "x86_64",
@@ -3767,6 +3779,8 @@ mod tests {
         assert!(json.contains("\"kernel_release\""));
         assert!(json.contains("\"fabric\":\"DiscreteExplicit\""));
         assert!(json.contains("\"cuda_compute_capability\""));
+        assert!(json.contains("\"cuda_device_total_memory_bytes\""));
+        assert!(json.contains("\"cuda_pci_bus_id\""));
         assert!(json.contains("\"gpu_direct_rdma\":\"DEGRADED_TO_PINNED_HOST\""));
         assert!(json.contains("\"topology\""));
         assert!(json.contains("\"cpu_count\""));
@@ -3785,6 +3799,8 @@ mod tests {
             cuda_error: Some("quote\" slash\\ newline\n".to_string()),
             cuda_visible_devices: Some("0,1".to_string()),
             cuda_compute_capability: Some("8.9".to_string()),
+            cuda_device_total_memory_bytes: Some(24 * 1024 * 1024 * 1024),
+            cuda_pci_bus_id: Some("0000:65:00.0".to_string()),
             hip: CapabilityState::Unsupported,
             hip_visible_devices: Some("2".to_string()),
             nvidia_driver_version: Some("driver\\version".to_string()),
@@ -3813,6 +3829,8 @@ mod tests {
         assert!(json.contains("kernel\\\" release"));
         assert!(json.contains("driver\\\\version"));
         assert!(json.contains("\"cuda_compute_capability\":\"8.9\""));
+        assert!(json.contains("\"cuda_device_total_memory_bytes\":25769803776"));
+        assert!(json.contains("\"cuda_pci_bus_id\":\"0000:65:00.0\""));
         assert!(json.contains("\"cpu_online\":\"0-1\""));
     }
 

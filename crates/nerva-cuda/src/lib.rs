@@ -58,6 +58,8 @@ pub struct CudaSmokeSummary {
     pub runtime_version: Option<i32>,
     pub compute_capability_major: Option<i32>,
     pub compute_capability_minor: Option<i32>,
+    pub device_total_memory_bytes: Option<usize>,
+    pub pci_bus_id: Option<String>,
     pub device_arena_bytes: usize,
     pub pinned_host_bytes: usize,
     pub kernel_value: Option<u32>,
@@ -73,13 +75,15 @@ impl CudaSmokeSummary {
             SmokeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"gpu_name\":{},\"driver_version\":{},\"runtime_version\":{},\"compute_capability_major\":{},\"compute_capability_minor\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"kernel_value\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"gpu_name\":{},\"driver_version\":{},\"runtime_version\":{},\"compute_capability_major\":{},\"compute_capability_minor\":{},\"device_total_memory_bytes\":{},\"pci_bus_id\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"kernel_value\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             json_opt_str(self.gpu_name.as_deref()),
             json_opt_i32(self.driver_version),
             json_opt_i32(self.runtime_version),
             json_opt_i32(self.compute_capability_major),
             json_opt_i32(self.compute_capability_minor),
+            json_opt_usize(self.device_total_memory_bytes),
+            json_opt_str(self.pci_bus_id.as_deref()),
             self.device_arena_bytes,
             self.pinned_host_bytes,
             json_opt_u32(self.kernel_value),
@@ -96,6 +100,8 @@ impl CudaSmokeSummary {
             runtime_version: cuda_runtime_version(),
             compute_capability_major: None,
             compute_capability_minor: None,
+            device_total_memory_bytes: None,
+            pci_bus_id: None,
             device_arena_bytes: 0,
             pinned_host_bytes: 0,
             kernel_value: None,
@@ -112,6 +118,8 @@ impl CudaSmokeSummary {
             runtime_version: cuda_runtime_version(),
             compute_capability_major: None,
             compute_capability_minor: None,
+            device_total_memory_bytes: None,
+            pci_bus_id: None,
             device_arena_bytes: 0,
             pinned_host_bytes: 0,
             kernel_value: None,
@@ -207,6 +215,9 @@ struct CudaDriver {
     cu_driver_get_version: unsafe extern "C" fn(*mut c_int) -> CuResult,
     cu_device_get: unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult,
     cu_device_get_attribute: unsafe extern "C" fn(*mut c_int, c_int, CuDevice) -> CuResult,
+    cu_device_total_mem: unsafe extern "C" fn(*mut usize, CuDevice) -> CuResult,
+    cu_device_get_pci_bus_id:
+        Option<unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult>,
     cu_device_get_name: unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult,
     cu_device_primary_ctx_retain: unsafe extern "C" fn(*mut CuContext, CuDevice) -> CuResult,
     cu_device_primary_ctx_release: unsafe extern "C" fn(CuDevice) -> CuResult,
@@ -245,6 +256,8 @@ impl CudaDriver {
             cu_driver_get_version: lib.symbol(c"cuDriverGetVersion")?,
             cu_device_get: lib.symbol(c"cuDeviceGet")?,
             cu_device_get_attribute: lib.symbol(c"cuDeviceGetAttribute")?,
+            cu_device_total_mem: lib.symbol_any(&[c"cuDeviceTotalMem_v2", c"cuDeviceTotalMem"])?,
+            cu_device_get_pci_bus_id: lib.symbol_opt(c"cuDeviceGetPCIBusId"),
             cu_device_get_name: lib.symbol(c"cuDeviceGetName")?,
             cu_device_primary_ctx_retain: lib.symbol(c"cuDevicePrimaryCtxRetain")?,
             cu_device_primary_ctx_release: lib.symbol_any(&[
@@ -405,6 +418,8 @@ fn run_smoke() -> Result<CudaSmokeSummary, SmokeError> {
     }
 
     let (compute_capability_major, compute_capability_minor) = compute_capability(&driver, device)?;
+    let device_total_memory_bytes = device_total_memory(&driver, device)?;
+    let pci_bus_id = pci_bus_id(&driver, device);
 
     let mut name_buf = [0 as c_char; 128];
     let result = unsafe { (driver.cu_device_get_name)(name_buf.as_mut_ptr(), 128, device) };
@@ -465,6 +480,8 @@ fn run_smoke() -> Result<CudaSmokeSummary, SmokeError> {
             runtime_version: cuda_runtime_version(),
             compute_capability_major: Some(compute_capability_major),
             compute_capability_minor: Some(compute_capability_minor),
+            device_total_memory_bytes: Some(device_total_memory_bytes),
+            pci_bus_id,
             device_arena_bytes: 4,
             pinned_host_bytes: 4,
             kernel_value: Some(value),
@@ -498,6 +515,26 @@ fn compute_capability(driver: &CudaDriver, device: CuDevice) -> Result<(i32, i32
     };
     driver.check(result, "cuDeviceGetAttribute(CC_MINOR)")?;
     Ok((major, minor))
+}
+
+fn device_total_memory(driver: &CudaDriver, device: CuDevice) -> Result<usize, SmokeError> {
+    let mut bytes = 0;
+    let result = unsafe { (driver.cu_device_total_mem)(&mut bytes, device) };
+    driver.check(result, "cuDeviceTotalMem")?;
+    Ok(bytes)
+}
+
+fn pci_bus_id(driver: &CudaDriver, device: CuDevice) -> Option<String> {
+    let get_pci_bus_id = driver.cu_device_get_pci_bus_id?;
+    let mut buf = [0 as c_char; 32];
+    let result = unsafe { get_pci_bus_id(buf.as_mut_ptr(), buf.len() as c_int, device) };
+    if result != CUDA_SUCCESS {
+        return None;
+    }
+    let value = unsafe { CStr::from_ptr(buf.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    (!value.is_empty()).then_some(value)
 }
 
 fn cuda_runtime_version() -> Option<i32> {
@@ -561,6 +598,10 @@ fn cuda_runtime_library_names() -> &'static [&'static CStr] {
 }
 
 fn json_opt_i32(value: Option<i32>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
+fn json_opt_usize(value: Option<usize>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.to_string())
 }
 
@@ -720,6 +761,8 @@ mod tests {
         assert!(json.contains("\"status\":\"unavailable\""));
         assert!(json.contains("\"compute_capability_major\":null"));
         assert!(json.contains("\"compute_capability_minor\":null"));
+        assert!(json.contains("\"device_total_memory_bytes\":null"));
+        assert!(json.contains("\"pci_bus_id\":null"));
         assert!(json.contains("\"hot_path_allocations\":0"));
     }
 

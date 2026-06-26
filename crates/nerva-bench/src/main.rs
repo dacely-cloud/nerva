@@ -1445,6 +1445,8 @@ mod tests {
         assert!(json.contains("\"capabilities\""));
         assert!(json.contains("\"target_os\":\"linux\""));
         assert!(json.contains("\"cuda_compute_capability\""));
+        assert!(json.contains("\"cuda_device_total_memory_bytes\""));
+        assert!(json.contains("\"cuda_pci_bus_id\""));
         assert!(json.contains("\"topology\""));
         assert!(json.contains("\"summary\""));
         assert!(json.contains("\"observed_token_hash\""));
