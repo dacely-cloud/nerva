@@ -19,9 +19,10 @@ pub fn tiny_decode_smoke(steps: u32, ring_capacity: u32, seed_token: u32) -> Cud
         && out.token_ledgers == steps as u64
         && out.graph_replay_events == steps as u64
         && out.device_activity_events == steps as u64
-        && out.copy_events == steps as u64
-        && out.soft_visibility_syncs == steps as u64
+        && out.copy_events == 3
+        && out.soft_visibility_syncs == 1
         && out.hard_syncs == 0
+        && out.sync_calls == 1
         && out.host_event_wait_ns > 0
         && out.gpu_active_ns > 0
         && out.gpu_idle_ns == 0

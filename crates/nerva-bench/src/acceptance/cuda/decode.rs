@@ -15,13 +15,14 @@ pub(crate) fn push_tiny_decode_check(
         && cuda_decode.hidden == 2
         && cuda_decode.last_token == summary.tokens.last().map(|token| token.0)
         && cuda_decode.graph_replays == summary.steps as u64
+        && cuda_decode.graph_nodes == 1
         && cuda_decode.graph_launches == summary.steps as u64
         && cuda_decode.kernel_launches == summary.steps as u64
         && cuda_decode.token_ledgers == summary.steps as u64
         && cuda_decode.graph_replay_events == summary.steps as u64
         && cuda_decode.device_activity_events == summary.steps as u64
-        && cuda_decode.copy_events == summary.steps as u64
-        && cuda_decode.soft_visibility_syncs == summary.steps as u64
+        && cuda_decode.copy_events == 3
+        && cuda_decode.soft_visibility_syncs == 1
         && cuda_decode.hard_syncs == 0
         && cuda_decode.host_event_wait_ns > 0
         && cuda_decode.gpu_active_ns > 0
@@ -36,7 +37,7 @@ pub(crate) fn push_tiny_decode_check(
         && cuda_decode.resident_weight_bytes == 64
         && cuda_decode.h2d_bytes >= cuda_decode.resident_weight_bytes
         && cuda_decode.d2h_bytes > 0
-        && cuda_decode.sync_calls == summary.steps as u64
+        && cuda_decode.sync_calls == 1
         && cuda_decode.hot_path_allocations == 0
         && cuda_decode.stale_tokens == 0
         && cuda_decode.missing_tokens == 0
