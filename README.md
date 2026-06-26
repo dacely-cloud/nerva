@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./images/logo.svg" alt="Nerva" width="500" />
+<img src="./images/logo.svg" alt="Nerva" width="400" />
 
 ### AI inference beyond the VRAM wall.
 
