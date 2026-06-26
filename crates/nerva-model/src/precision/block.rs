@@ -1,5 +1,6 @@
-use nerva_core::types::{DType, NervaError, Result};
-use nerva_ledger::types::TokenLedger;
+use nerva_core::types::dtype::DType;
+use nerva_core::types::error::{NervaError, Result};
+use nerva_ledger::types::token::TokenLedger;
 
 use crate::common::math::{silu, single_token_attention};
 use crate::common::shape::TransformerBlockShape;
@@ -68,6 +69,54 @@ impl PrecisionTransformerBlock {
             w_gate: encode_vec(dtype, w_gate)?,
             w_up: encode_vec(dtype, w_up)?,
             w_down: encode_vec(dtype, w_down)?,
+            rms_eps,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_encoded(
+        dtype: DType,
+        shape: TransformerBlockShape,
+        rms_attn_weight: Vec<u16>,
+        rms_mlp_weight: Vec<u16>,
+        w_q: Vec<u16>,
+        w_k: Vec<u16>,
+        w_v: Vec<u16>,
+        w_o: Vec<u16>,
+        w_gate: Vec<u16>,
+        w_up: Vec<u16>,
+        w_down: Vec<u16>,
+        rms_eps: f32,
+    ) -> Result<Self> {
+        shape.validate()?;
+        validate_dtype(dtype)?;
+        require_len("rms_attn_weight", rms_attn_weight.len(), shape.hidden)?;
+        require_len("rms_mlp_weight", rms_mlp_weight.len(), shape.hidden)?;
+        require_len("w_q", w_q.len(), shape.hidden * shape.hidden)?;
+        require_len("w_k", w_k.len(), shape.hidden * shape.hidden)?;
+        require_len("w_v", w_v.len(), shape.hidden * shape.hidden)?;
+        require_len("w_o", w_o.len(), shape.hidden * shape.hidden)?;
+        require_len("w_gate", w_gate.len(), shape.intermediate * shape.hidden)?;
+        require_len("w_up", w_up.len(), shape.intermediate * shape.hidden)?;
+        require_len("w_down", w_down.len(), shape.hidden * shape.intermediate)?;
+        if rms_eps <= 0.0 || !rms_eps.is_finite() {
+            return Err(NervaError::InvalidArgument {
+                reason: "rms epsilon must be positive and finite".to_string(),
+            });
+        }
+
+        Ok(Self {
+            dtype,
+            shape,
+            rms_attn_weight,
+            rms_mlp_weight,
+            w_q,
+            w_k,
+            w_v,
+            w_o,
+            w_gate,
+            w_up,
+            w_down,
             rms_eps,
         })
     }

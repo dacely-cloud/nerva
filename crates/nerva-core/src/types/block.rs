@@ -1,78 +1,12 @@
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum HostArch {
-    X86_64,
-    Aarch64,
-    Other,
-}
-
-pub fn host_arch() -> HostArch {
-    #[cfg(target_arch = "x86_64")]
-    {
-        HostArch::X86_64
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        HostArch::Aarch64
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        HostArch::Other
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct DeviceOrdinal(pub i32);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct ResidentBlockId(pub u64);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct MemoryDomainId(pub u32);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct AllocationId(pub u64);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct ReplicaId(pub u64);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct LayoutId(pub u32);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct TransportDeviceId(pub u32);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct UseDistance(pub u64);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct RequestId(pub u64);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct SequenceId(pub u64);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct TokenId(pub u32);
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct TransactionId(pub u64);
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum MemoryFabricKind {
-    DiscreteExplicit,
-    UnifiedVirtualManaged,
-    CoherentSharedPhysical,
-    CxlCoherentFabric,
-}
-
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum MemoryTier {
-    Vram,
-    SharedHbmOrLpddr,
-    PinnedDram,
-    Dram,
-    Cxl,
-    Disk,
-}
+use crate::types::cost::CostEstimate;
+use crate::types::dtype::DType;
+use crate::types::error::{NervaError, Result};
+use crate::types::id::{
+    AllocationId, LayoutId, MemoryDomainId, ReplicaId, ResidentBlockId, UseDistance,
+};
+use crate::types::memory::{MemoryFabricKind, MemoryTier};
+use crate::types::ownership::{AccessPolicy, CoherencePolicy, ExecutionOwner, MutationSemantics};
+use crate::types::shape::BlockShape;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BlockKind {
@@ -87,84 +21,6 @@ pub enum BlockKind {
     TransportBuffer,
     Ledger,
     Metadata,
-}
-
-pub type ResidentBlockKind = BlockKind;
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum DType {
-    U8,
-    U16,
-    U32,
-    I32,
-    F16,
-    BF16,
-    F32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BlockShape {
-    dims: Vec<u64>,
-}
-
-impl BlockShape {
-    pub fn scalar() -> Self {
-        Self { dims: Vec::new() }
-    }
-
-    pub fn from_dims(dims: impl Into<Vec<u64>>) -> Result<Self> {
-        let dims = dims.into();
-        if dims.iter().any(|dim| *dim == 0) {
-            return Err(NervaError::InvalidArgument {
-                reason: "block shape dimensions must be non-zero".to_string(),
-            });
-        }
-        Ok(Self { dims })
-    }
-
-    pub fn dims(&self) -> &[u64] {
-        &self.dims
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum ExecutionOwner {
-    Cpu,
-    Gpu(DeviceOrdinal),
-    Nic(TransportDeviceId),
-    SharedReadOnly,
-    PhaseTransition,
-    None,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum CoherencePolicy {
-    ExplicitVersioned,
-    CoherentReadMostly,
-    CoherentPhaseOwned,
-    AtomicControlOnly,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum AccessPolicy {
-    CpuOnly,
-    GpuOnly,
-    NicOnly,
-    CpuGpuReadOnly,
-    CpuThenGpu,
-    GpuThenCpu,
-    GpuThenNic,
-    NicThenGpu,
-    PhaseOwned,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum MutationSemantics {
-    Immutable,
-    AppendOnly,
-    SingleWriter,
-    Ephemeral,
-    AtomicControl,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -193,42 +49,6 @@ pub enum Hotness {
     Cold,
     Warm,
     Hot,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum CostSource {
-    Unknown,
-    Estimated,
-    Measured,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct CostEstimate {
-    pub nanos: Option<u64>,
-    pub source: CostSource,
-}
-
-impl CostEstimate {
-    pub const fn unknown() -> Self {
-        Self {
-            nanos: None,
-            source: CostSource::Unknown,
-        }
-    }
-
-    pub const fn estimated_nanos(nanos: u64) -> Self {
-        Self {
-            nanos: Some(nanos),
-            source: CostSource::Estimated,
-        }
-    }
-
-    pub const fn measured_nanos(nanos: u64) -> Self {
-        Self {
-            nanos: Some(nanos),
-            source: CostSource::Measured,
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -348,7 +168,7 @@ impl ResidentBlock {
             kind,
             bytes,
             dtype: DType::U8,
-            shape: BlockShape { dims: Vec::new() },
+            shape: BlockShape::scalar(),
             layout: LayoutId(0),
             address: GlobalBlockAddress {
                 domain,
@@ -444,26 +264,6 @@ impl ResidentBlock {
     }
 }
 
-impl MemoryDomainId {
-    pub const CPU_DRAM: Self = Self(1);
-    pub const GPU_VRAM: Self = Self(2);
-    pub const PINNED_DRAM: Self = Self(3);
-    pub const SHARED_HBM_OR_LPDDR: Self = Self(4);
-    pub const CXL: Self = Self(5);
-    pub const DISK: Self = Self(6);
-
-    pub const fn for_tier(tier: MemoryTier) -> Self {
-        match tier {
-            MemoryTier::Vram => Self::GPU_VRAM,
-            MemoryTier::SharedHbmOrLpddr => Self::SHARED_HBM_OR_LPDDR,
-            MemoryTier::PinnedDram => Self::PINNED_DRAM,
-            MemoryTier::Dram => Self::CPU_DRAM,
-            MemoryTier::Cxl => Self::CXL,
-            MemoryTier::Disk => Self::DISK,
-        }
-    }
-}
-
 const fn default_mutation_semantics(kind: BlockKind) -> MutationSemantics {
     match kind {
         BlockKind::Weight => MutationSemantics::Immutable,
@@ -500,36 +300,5 @@ const fn default_hotness(tier: MemoryTier) -> Hotness {
         MemoryTier::Vram | MemoryTier::SharedHbmOrLpddr => Hotness::Hot,
         MemoryTier::PinnedDram | MemoryTier::Dram | MemoryTier::Cxl => Hotness::Warm,
         MemoryTier::Disk => Hotness::Cold,
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum NervaError {
-    UnsupportedHost {
-        arch: HostArch,
-    },
-    BackendUnavailable {
-        backend: &'static str,
-        reason: String,
-    },
-    AllocationFailed {
-        bytes: usize,
-        reason: String,
-    },
-    InvalidArgument {
-        reason: String,
-    },
-    ResidencyViolation {
-        block_id: ResidentBlockId,
-        reason: String,
-    },
-}
-
-pub type Result<T> = std::result::Result<T, NervaError>;
-
-pub fn ensure_supported_linux_host() -> Result<()> {
-    match host_arch() {
-        HostArch::X86_64 | HostArch::Aarch64 => Ok(()),
-        arch => Err(NervaError::UnsupportedHost { arch }),
     }
 }

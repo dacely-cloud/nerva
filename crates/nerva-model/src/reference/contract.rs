@@ -1,4 +1,6 @@
-use nerva_core::types::{BlockKind, DType, MemoryTier};
+use nerva_core::types::block::BlockKind;
+use nerva_core::types::dtype::DType;
+use nerva_core::types::memory::MemoryTier;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ModelBlockContract {

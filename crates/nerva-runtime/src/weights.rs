@@ -1,5 +1,8 @@
-use nerva_core::types::{DType, ExecutionOwner, MemoryTier, ResidentBlockId};
-use nerva_ledger::types::TokenLedger;
+use nerva_core::types::dtype::DType;
+use nerva_core::types::id::ResidentBlockId;
+use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::ownership::ExecutionOwner;
+use nerva_ledger::types::token::TokenLedger;
 use nerva_memory::registry::BlockRegistry;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

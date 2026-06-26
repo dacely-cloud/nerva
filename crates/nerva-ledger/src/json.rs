@@ -1,9 +1,15 @@
-use nerva_core::types::{CostSource, ExecutionOwner, MemoryTier, ResidentBlockId};
+use nerva_core::types::cost::CostSource;
+use nerva_core::types::id::ResidentBlockId;
+use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::ownership::ExecutionOwner;
 
-use crate::types::{
-    BlockVersionDependency, CandidateCost, DeviceTimelineSpan, ExecutionDecision, FallbackDecision,
-    LedgerEvent, ResidencyDecision, SyncClass, TokenLedger,
+use crate::types::decision::{
+    BlockVersionDependency, CandidateCost, ExecutionDecision, ResidencyDecision,
 };
+use crate::types::event::{DeviceTimelineSpan, LedgerEvent};
+use crate::types::fallback::FallbackDecision;
+use crate::types::sync::SyncClass;
+use crate::types::token::TokenLedger;
 
 impl TokenLedger {
     pub fn to_json(&self) -> String {

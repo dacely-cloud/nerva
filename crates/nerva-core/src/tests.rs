@@ -1,8 +1,10 @@
-use crate::types::{
-    BlockKind, BlockShape, DeviceOrdinal, ExecutionOwner, HostArch, MemoryDomainId, MemoryTier,
-    MutationSemantics, NervaError, ReplicaId, ResidentBlock, ResidentBlockId,
-    ensure_supported_linux_host, host_arch,
-};
+use crate::types::arch::{HostArch, ensure_supported_linux_host, host_arch};
+use crate::types::block::{BlockKind, ResidentBlock};
+use crate::types::error::NervaError;
+use crate::types::id::{DeviceOrdinal, MemoryDomainId, ReplicaId, ResidentBlockId};
+use crate::types::memory::MemoryTier;
+use crate::types::ownership::{ExecutionOwner, MutationSemantics};
+use crate::types::shape::BlockShape;
 
 #[test]
 fn linux_host_gate_accepts_build_host_or_reports_other() {

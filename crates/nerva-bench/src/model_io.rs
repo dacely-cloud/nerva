@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use nerva_runtime::engine::{ResidencyBudget, Runtime, RuntimeConfig};
+use nerva_runtime::engine::residency::ResidencyBudget;
+use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 pub(crate) fn run_metadata_probe(config_path: Option<String>) -> Result<String, String> {
     match config_path {
@@ -143,7 +144,7 @@ pub(crate) fn run_resident_shard_probe(
         table.total_weight_bytes,
         table
             .registry
-            .used_bytes(nerva_core::types::MemoryTier::Dram),
+            .used_bytes(nerva_core::types::memory::MemoryTier::Dram),
         table.ledger.residency_decisions.len(),
         table.manifest_hash,
         prefetch.to_json(),
@@ -237,7 +238,7 @@ pub(crate) fn run_resident_weight_probe(config_path: Option<String>) -> Result<S
                 table.total_weight_bytes,
                 table
                     .registry
-                    .used_bytes(nerva_core::types::MemoryTier::Dram),
+                    .used_bytes(nerva_core::types::memory::MemoryTier::Dram),
                 table.manifest_hash,
                 table.ledger.hot_path_allocations,
             ))

@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use nerva_core::types::{NervaError, Result};
+use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::json::json_escape;
 

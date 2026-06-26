@@ -1,5 +1,35 @@
-use super::*;
-use nerva_core::types::ResidentBlockId;
+use std::env;
+
+use nerva_core::types::arch::{HostArch, host_arch};
+use nerva_core::types::block::{BlockKind, ResidencyState};
+use nerva_core::types::error::NervaError;
+use nerva_core::types::id::{
+    DeviceOrdinal, LayoutId, RequestId, ResidentBlockId, SequenceId, TokenId,
+};
+use nerva_core::types::memory::{MemoryFabricKind, MemoryTier};
+use nerva_core::types::ownership::ExecutionOwner;
+use nerva_ledger::types::event::LedgerEventKind;
+use nerva_ledger::types::fallback::FallbackClass;
+use nerva_ledger::types::sync::SyncClass;
+
+use crate::capabilities::discovery::gpu_direct_rdma_capability;
+use crate::capabilities::json::json_string_array;
+use crate::capabilities::linux::{
+    count_linux_id_list, discover_iommu_mode, extract_iommu_kernel_args, parse_pci_class,
+};
+use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState, TopologySnapshot};
+use crate::engine::kv_probe::{KvResidencyProbeConfig, KvResidencyProbeStatus};
+use crate::engine::residency::ResidencyBudget;
+use crate::engine::runtime::{Runtime, RuntimeConfig};
+use crate::engine::synthetic::{SyntheticDecodeConfig, SyntheticDecodeStatus};
+use crate::graph::{GraphKey, GraphLayout, GraphPool};
+use crate::token::{DeviceTokenRef, DeviceTokenRing, TokenInputSource};
+use crate::transport::matrix::TransportCapabilityMatrixStatus;
+use crate::transport::path::{
+    TransferMode, TransportPathClass, TransportPathKind, TransportPathRequest,
+};
+use crate::transport::probe::TransportPathProbeStatus;
+use crate::weights::{ResidentWeightExecutionStrategy, ResidentWeightProbeStatus};
 
 const SHARD_ONE: &str = "model-00001-of-00001.safetensors";
 
@@ -481,7 +511,7 @@ fn materializes_hf_weight_manifest_as_dram_resident_blocks() {
     assert_eq!(block.kind, BlockKind::Weight);
     assert_eq!(
         block.semantics,
-        nerva_core::types::MutationSemantics::Immutable
+        nerva_core::types::ownership::MutationSemantics::Immutable
     );
     assert_eq!(block.tier, MemoryTier::Dram);
     assert_eq!(block.dtype, first.dtype);

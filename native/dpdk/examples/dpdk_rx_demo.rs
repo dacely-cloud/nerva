@@ -23,7 +23,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use dpdk_shim::{Eal, EalArgs, Mempool, Port, PortConfig, RxQueue, install_tcp_port_flow_rule};
+use dpdk_shim::eal::{Eal, EalArgs};
+use dpdk_shim::flow::install_tcp_port_flow_rule;
+use dpdk_shim::mempool::Mempool;
+use dpdk_shim::port::{Port, PortConfig};
+use dpdk_shim::queue::RxQueue;
 
 fn main() -> anyhow::Result<()> {
     // Pull off our own --flow-port=<u16> flag before handing the rest

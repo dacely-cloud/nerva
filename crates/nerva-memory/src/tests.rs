@@ -1,16 +1,19 @@
-use crate::arena::{
-    AllocationPhase, ArenaKind, ArenaReservation, HostArena, StaticArena, StaticArenaBootstrapSpec,
-    StaticArenaSet, resident_block_for_reservation,
-};
-use crate::kv::{
-    KvPagePool, KvPageSpec, KvPrefixKey, KvResidencyAction, KvResidencyPlanner, KvResidencyPolicy,
-};
+use crate::arena::host::HostArena;
+use crate::arena::kind::{AllocationPhase, ArenaKind};
+use crate::arena::region::ArenaReservation;
+use crate::arena::resident::resident_block_for_reservation;
+use crate::arena::set::{StaticArenaBootstrapSpec, StaticArenaSet};
+use crate::arena::static_arena::StaticArena;
+use crate::kv::page::{KvPageSpec, KvPrefixKey};
+use crate::kv::pool::KvPagePool;
+use crate::kv::residency::{KvResidencyAction, KvResidencyPlanner, KvResidencyPolicy};
 use crate::registry::{BlockAllocationRequest, BlockRegistry};
-use nerva_core::types::{
-    AllocationId, BlockKind, MemoryDomainId, MemoryTier, NervaError, ResidencyState,
-    ResidentBlockId,
-};
-use nerva_ledger::types::TokenLedger;
+use nerva_core::types::block::{BlockKind, ResidencyState};
+use nerva_core::types::error::NervaError;
+use nerva_core::types::id::{AllocationId, MemoryDomainId, ResidentBlockId};
+use nerva_core::types::memory::MemoryTier;
+use nerva_ledger::types::event::LedgerEventKind;
+use nerva_ledger::types::token::TokenLedger;
 
 #[test]
 fn host_arena_respects_alignment() {
@@ -217,10 +220,7 @@ fn hot_path_arena_attempts_are_rejected_and_ledgered() {
 
     assert_eq!(ledger.hot_path_allocations, 3);
     assert_eq!(ledger.events.len(), 3);
-    assert_eq!(
-        ledger.event_count(nerva_ledger::types::LedgerEventKind::Allocation),
-        3
-    );
+    assert_eq!(ledger.event_count(LedgerEventKind::Allocation), 3);
     assert!(ledger.require_zero_hot_path_allocations().is_err());
 }
 
@@ -423,20 +423,8 @@ fn kv_residency_plan_records_ledger_decisions() {
         decision.reason,
         "KV page next use is within prefetch window"
     );
-    assert_eq!(
-        ledger.event_count(nerva_ledger::types::LedgerEventKind::Prefetch),
-        1
-    );
-    assert_eq!(
-        ledger.event_count(nerva_ledger::types::LedgerEventKind::Copy),
-        1
-    );
-    assert_eq!(
-        ledger.event_count(nerva_ledger::types::LedgerEventKind::Stall),
-        1
-    );
-    assert_eq!(
-        ledger.latency_ns_for(nerva_ledger::types::LedgerEventKind::Stall),
-        228
-    );
+    assert_eq!(ledger.event_count(LedgerEventKind::Prefetch), 1);
+    assert_eq!(ledger.event_count(LedgerEventKind::Copy), 1);
+    assert_eq!(ledger.event_count(LedgerEventKind::Stall), 1);
+    assert_eq!(ledger.latency_ns_for(LedgerEventKind::Stall), 228);
 }

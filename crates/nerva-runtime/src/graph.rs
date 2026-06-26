@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use nerva_core::types::{NervaError, Result};
+use nerva_core::types::error::{NervaError, Result};
 use nerva_cuda::graph::CudaSyntheticGraphSummary;
 
 pub fn cuda_synthetic_graph_smoke(
@@ -8,7 +8,7 @@ pub fn cuda_synthetic_graph_smoke(
     ring_capacity: u32,
     seed_token: u32,
 ) -> CudaSyntheticGraphSummary {
-    crate::engine::cuda_synthetic_graph_smoke(steps, ring_capacity, seed_token)
+    crate::engine::cuda::cuda_synthetic_graph_smoke(steps, ring_capacity, seed_token)
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

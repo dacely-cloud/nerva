@@ -1,4 +1,4 @@
-use nerva_core::types::{NervaError, Result};
+use nerva_core::types::error::{NervaError, Result};
 
 pub(crate) fn require_len(label: &'static str, got: usize, expected: usize) -> Result<()> {
     if got == expected {

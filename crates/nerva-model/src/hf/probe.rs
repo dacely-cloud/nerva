@@ -1,4 +1,4 @@
-use nerva_core::types::Result;
+use nerva_core::types::error::Result;
 
 use crate::hf::hash::hash_metadata;
 use crate::hf::metadata::HfModelMetadata;

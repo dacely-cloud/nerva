@@ -1,4 +1,5 @@
-use nerva_core::types::{DType, NervaError, Result};
+use nerva_core::types::dtype::DType;
+use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::json::{
     optional_bool, optional_f32, optional_first_string, optional_string, optional_usize,

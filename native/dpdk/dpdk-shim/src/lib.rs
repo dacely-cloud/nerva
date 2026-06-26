@@ -22,29 +22,12 @@ pub mod ffi {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-mod eal;
-mod flow;
-mod mbuf;
-mod mempool;
-mod port;
-mod queue;
-
-pub use eal::{Eal, EalArgs};
-pub use flow::{
-    install_arp_to_queue_rule, install_icmp_to_queue_rule, install_tcp_port_flow_rule,
-    install_tcp_rss_flow_rule, install_udp_rss_flow_rule,
-};
-pub use mbuf::Mbuf;
-pub use mempool::Mempool;
-pub use port::{
-    DESIRED_RX_OFFLOADS, DESIRED_TX_OFFLOADS, OffloadCaps, Port, PortConfig, RSS_HF_TCP, RSS_HF_TCP_UDP, RSS_HF_IP, rss_hf_from_alias,
-    RTE_ETH_RSS_IPV4, RTE_ETH_RSS_IPV6, RTE_ETH_RSS_NONFRAG_IPV4_TCP, RTE_ETH_RSS_NONFRAG_IPV4_UDP,
-    RTE_ETH_RSS_NONFRAG_IPV6_TCP, RTE_ETH_RSS_NONFRAG_IPV6_UDP, RTE_ETH_RX_OFFLOAD_IPV4_CKSUM,
-    RTE_ETH_RX_OFFLOAD_TCP_CKSUM, RTE_ETH_RX_OFFLOAD_UDP_CKSUM, RTE_ETH_TX_OFFLOAD_IPV4_CKSUM,
-    RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE, RTE_ETH_TX_OFFLOAD_TCP_CKSUM, RTE_ETH_TX_OFFLOAD_TCP_TSO,
-    RTE_ETH_TX_OFFLOAD_UDP_CKSUM,
-};
-pub use queue::{RxQueue, TxQueue};
+pub mod eal;
+pub mod flow;
+pub mod mbuf;
+pub mod mempool;
+pub mod port;
+pub mod queue;
 
 /// Register the current thread with DPDK so its calls into mempool /
 /// ring / PMD code see a real `rte_lcore_id` instead of

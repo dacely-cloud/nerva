@@ -1,4 +1,4 @@
-use nerva_core::types::DType;
+use nerva_core::types::dtype::DType;
 
 use crate::common::dtype::json_opt_dtype;
 use crate::common::json::{json_opt_f32, json_opt_usize};

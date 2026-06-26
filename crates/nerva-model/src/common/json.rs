@@ -1,4 +1,4 @@
-use nerva_core::types::{NervaError, Result};
+use nerva_core::types::error::{NervaError, Result};
 
 pub(crate) fn required_usize(config_json: &str, key: &'static str) -> Result<usize> {
     optional_usize(config_json, key)?.ok_or_else(|| NervaError::InvalidArgument {

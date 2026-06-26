@@ -12,6 +12,9 @@ use crate::precision::bits::{
     bf16_bits_to_f32, f16_bits_to_f32, f32_to_bf16_bits, f32_to_f16_bits,
 };
 use crate::precision::block::PrecisionTransformerBlock;
+use crate::precision::file_smoke::{
+    PrecisionSafetensorsBlockSmokeStatus, precision_block_from_safetensors_smoke,
+};
 use crate::precision::scratch::PrecisionTransformerBlockScratch;
 use crate::precision::smoke::{PrecisionBlockSmokeStatus, precision_block_smoke};
 use crate::reference::block::ReferenceTransformerBlock;
@@ -35,8 +38,11 @@ use crate::weights::safetensors::{
     safetensors_header_probe, synthetic_safetensors_header_for_manifest,
     validate_safetensors_header_for_manifest,
 };
-use nerva_core::types::{DType, MemoryTier, TokenId};
-use nerva_ledger::types::{LedgerEventKind, TokenLedger};
+use nerva_core::types::dtype::DType;
+use nerva_core::types::id::TokenId;
+use nerva_core::types::memory::MemoryTier;
+use nerva_ledger::types::event::LedgerEventKind;
+use nerva_ledger::types::token::TokenLedger;
 
 const SHARD_ONE: &str = "model-00001-of-00002.safetensors";
 const SHARD_TWO: &str = "model-00002-of-00002.safetensors";
@@ -771,6 +777,21 @@ fn precision_block_smoke_reports_f16_and_bf16_bit_parity() {
     assert_eq!(summary.bf16.output_hash, summary.bf16.expected_hash);
     assert!(summary.to_json().contains("\"dtype\":\"float16\""));
     assert!(summary.to_json().contains("\"dtype\":\"bfloat16\""));
+}
+
+#[test]
+fn precision_block_loads_weights_from_safetensors_payload() {
+    let summary = precision_block_from_safetensors_smoke().unwrap();
+
+    assert_eq!(summary.status, PrecisionSafetensorsBlockSmokeStatus::Ok);
+    assert!(summary.passed());
+    assert_eq!(summary.tensors_loaded, 9);
+    assert_eq!(summary.bytes_loaded, 64);
+    assert_ne!(summary.data_hash, 0);
+    assert_eq!(summary.output_hash, summary.expected_hash);
+    assert!(summary.bit_parity);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert!(summary.to_json().contains("\"tensors_loaded\":9"));
 }
 
 #[test]

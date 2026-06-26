@@ -1,12 +1,15 @@
 use std::{fs, path::Path};
 
-use nerva_core::types::{DType, MemoryFabricKind, TokenId};
-use nerva_runtime::capabilities::CapabilityState;
-use nerva_runtime::engine::{
-    KvResidencyProbeConfig, KvResidencyProbeStatus, ResidencyBudget, Runtime, RuntimeConfig,
-    SyntheticDecodeConfig, SyntheticDecodeStatus,
-};
-use nerva_runtime::transport::{TransportCapabilityMatrixStatus, TransportPathProbeStatus};
+use nerva_core::types::dtype::DType;
+use nerva_core::types::id::TokenId;
+use nerva_core::types::memory::MemoryFabricKind;
+use nerva_runtime::capabilities::snapshot::CapabilityState;
+use nerva_runtime::engine::kv_probe::{KvResidencyProbeConfig, KvResidencyProbeStatus};
+use nerva_runtime::engine::residency::ResidencyBudget;
+use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
+use nerva_runtime::engine::synthetic::{SyntheticDecodeConfig, SyntheticDecodeStatus};
+use nerva_runtime::transport::matrix::TransportCapabilityMatrixStatus;
+use nerva_runtime::transport::probe::TransportPathProbeStatus;
 
 use crate::{json::json_escape, parity::compare_vllm_token_identity};
 
@@ -418,7 +421,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     let (audit_passed, audit_details) = audit_acceptance();
     report.push("vllm_rvllm_audit", audit_passed, audit_details);
 
-    let cuda_smoke = nerva_runtime::capabilities::cuda_smoke();
+    let cuda_smoke = nerva_runtime::capabilities::discovery::cuda_smoke();
     let cuda_smoke_passed = format!("{:?}", cuda_smoke.status) == "Ok"
         && cuda_smoke.kernel_value == Some(0x4e45_5256)
         && cuda_smoke.hot_path_allocations == 0;
@@ -447,7 +450,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         ),
     );
 
-    let cuda_graph = nerva_runtime::engine::cuda_synthetic_graph_smoke(1024, 64, 1);
+    let cuda_graph = nerva_runtime::engine::cuda::cuda_synthetic_graph_smoke(1024, 64, 1);
     let cuda_graph_passed = format!("{:?}", cuda_graph.status) == "Ok"
         && cuda_graph.steps == 1024
         && cuda_graph.ring_capacity == 64
@@ -670,6 +673,24 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
             ),
         ),
         Err(err) => report.push("fp16_bf16_precision_block", false, format!("{err:?}")),
+    }
+
+    match nerva_model::precision::file_smoke::precision_block_from_safetensors_smoke() {
+        Ok(summary) => report.push(
+            "safetensors_precision_block",
+            summary.passed(),
+            format!(
+                "tensors_loaded={} bytes_loaded={} data_hash={} output_hash={} expected_hash={} bit_parity={} hot_path_allocations={}",
+                summary.tensors_loaded,
+                summary.bytes_loaded,
+                summary.data_hash,
+                summary.output_hash,
+                summary.expected_hash,
+                summary.bit_parity,
+                summary.hot_path_allocations,
+            ),
+        ),
+        Err(err) => report.push("safetensors_precision_block", false, format!("{err:?}")),
     }
 
     match nerva_model::tiny::tiny_greedy_decode_smoke(8) {

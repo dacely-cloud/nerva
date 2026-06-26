@@ -3,3 +3,4 @@ pub mod hash;
 pub mod layout;
 pub mod manifest;
 pub mod safetensors;
+pub mod tensor;

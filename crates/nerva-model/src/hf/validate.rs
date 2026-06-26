@@ -1,4 +1,4 @@
-use nerva_core::types::{NervaError, Result};
+use nerva_core::types::error::{NervaError, Result};
 
 pub(crate) fn validate_hf_metadata(
     hidden_size: usize,

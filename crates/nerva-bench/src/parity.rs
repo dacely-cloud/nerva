@@ -1,6 +1,6 @@
 use std::fs;
 
-use nerva_core::types::TokenId;
+use nerva_core::types::id::TokenId;
 
 use crate::json::json_escape;
 
@@ -326,7 +326,7 @@ fn json_opt_usize(value: Option<usize>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{TokenIdentityParityStatus, compare_vllm_token_identity};
 
     #[test]
     fn accepts_vllm_nested_token_ids_for_exact_identity() {

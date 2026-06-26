@@ -1,7 +1,7 @@
-use nerva_core::types::{RequestId, SequenceId, TokenId};
-use nerva_runtime::engine::{
-    KvResidencyProbeConfig, Runtime, RuntimeConfig, SyntheticDecodeConfig,
-};
+use nerva_core::types::id::{RequestId, SequenceId, TokenId};
+use nerva_runtime::engine::kv_probe::KvResidencyProbeConfig;
+use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
+use nerva_runtime::engine::synthetic::SyntheticDecodeConfig;
 
 pub(crate) fn run_capabilities() -> Result<String, String> {
     let runtime = Runtime::new(RuntimeConfig::default())

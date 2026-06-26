@@ -1,5 +1,5 @@
-use nerva_core::types::{NervaError, Result};
-use nerva_ledger::types::TokenLedger;
+use nerva_core::types::error::{NervaError, Result};
+use nerva_ledger::types::token::TokenLedger;
 
 use crate::common::math::{mat_vec_row_major, rms_norm_into, silu, single_token_attention};
 use crate::common::shape::TransformerBlockShape;

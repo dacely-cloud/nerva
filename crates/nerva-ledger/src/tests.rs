@@ -1,10 +1,15 @@
-use nerva_core::types::{DeviceOrdinal, ExecutionOwner, MemoryTier, ResidentBlockId};
+use nerva_core::types::id::{DeviceOrdinal, ResidentBlockId};
+use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::ownership::ExecutionOwner;
 
-use crate::types::{
-    BlockVersionDependency, CandidateCost, DeviceTimelineSpan, ExecutionDecision, FallbackClass,
-    FallbackDecision, LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, SyncClass,
-    TokenLedger,
+use crate::types::decision::{
+    BlockVersionDependency, CandidateCost, ExecutionDecision, ResidencyDecision,
 };
+use crate::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
+use crate::types::fallback::{FallbackClass, FallbackDecision};
+use crate::types::metric::MetricSource;
+use crate::types::sync::SyncClass;
+use crate::types::token::TokenLedger;
 
 #[test]
 fn allocation_events_increment_hot_path_count() {

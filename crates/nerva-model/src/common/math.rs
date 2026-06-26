@@ -30,9 +30,9 @@ pub(crate) fn mat_vec_row_range(
     row_start: usize,
     row_end: usize,
     output: &mut [f32],
-) -> nerva_core::types::Result<()> {
+) -> nerva_core::types::error::Result<()> {
     if row_start > row_end || row_end > output.len() {
-        return Err(nerva_core::types::NervaError::InvalidArgument {
+        return Err(nerva_core::types::error::NervaError::InvalidArgument {
             reason: "matvec row range is invalid".to_string(),
         });
     }

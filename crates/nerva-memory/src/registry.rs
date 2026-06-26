@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
-use nerva_core::types::{
-    AllocationId, BlockKind, DType, GlobalBlockAddress, LayoutId, MemoryDomainId, MemoryTier,
-    NervaError, ResidencyState, ResidentBlock, ResidentBlockId, Result,
-};
+use nerva_core::types::block::{BlockKind, GlobalBlockAddress, ResidencyState, ResidentBlock};
+use nerva_core::types::dtype::DType;
+use nerva_core::types::error::{NervaError, Result};
+use nerva_core::types::id::{AllocationId, LayoutId, MemoryDomainId, ResidentBlockId};
+use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::shape::BlockShape;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct TierAccount {
@@ -109,7 +111,7 @@ impl BlockRegistry {
 
         let block = ResidentBlock::new(id, request.kind, request.tier, request.bytes).with_shape(
             request.dtype,
-            nerva_core::types::BlockShape::scalar(),
+            BlockShape::scalar(),
             request.layout,
         );
         self.blocks.insert(id, block);

@@ -75,7 +75,7 @@ fn usage() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::usage;
 
     #[test]
     fn usage_mentions_tolerance() {

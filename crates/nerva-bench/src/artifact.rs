@@ -28,15 +28,17 @@ pub(crate) fn run_artifact(command: Option<String>, args: Vec<String>) -> Result
 
 fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
     match command {
-        "smoke" => Ok(nerva_runtime::capabilities::cuda_smoke().to_json()),
+        "smoke" => Ok(nerva_runtime::capabilities::discovery::cuda_smoke().to_json()),
         "cuda-graph" => {
             let steps = parse_optional_u32(args.first().cloned(), 1024, "steps")?;
             let ring_capacity = parse_optional_u32(args.get(1).cloned(), 64, "ring_capacity")?;
             let seed_token = parse_optional_u32(args.get(2).cloned(), 1, "seed_token")?;
-            Ok(
-                nerva_runtime::engine::cuda_synthetic_graph_smoke(steps, ring_capacity, seed_token)
-                    .to_json(),
+            Ok(nerva_runtime::engine::cuda::cuda_synthetic_graph_smoke(
+                steps,
+                ring_capacity,
+                seed_token,
             )
+            .to_json())
         }
         "capabilities" => run_capabilities(),
         "topology" => run_topology_probe(),
@@ -52,6 +54,11 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
         "precision" => nerva_model::precision::smoke::precision_block_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("precision block failed: {err:?}")),
+        "safetensors-block" => {
+            nerva_model::precision::file_smoke::precision_block_from_safetensors_smoke()
+                .map(|summary| summary.to_json())
+                .map_err(|err| format!("safetensors precision block failed: {err:?}"))
+        }
         "model" => {
             let steps = parse_optional_usize(args.first().cloned(), 8, "steps")?;
             nerva_model::tiny::tiny_greedy_decode_smoke(steps)

@@ -1,4 +1,6 @@
-use nerva_core::types::{DType, MemoryTier, NervaError, Result};
+use nerva_core::types::dtype::DType;
+use nerva_core::types::error::{NervaError, Result};
+use nerva_core::types::memory::MemoryTier;
 
 use crate::common::dtype::{dtype_size_bytes, dtype_to_str};
 use crate::hf::metadata::HfModelMetadata;

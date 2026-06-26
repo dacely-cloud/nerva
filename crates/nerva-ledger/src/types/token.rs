@@ -1,209 +1,12 @@
-use nerva_core::types::{
-    CostSource, DeviceOrdinal, ExecutionOwner, MemoryTier, NervaError, ResidentBlockId, Result,
-};
+use nerva_core::types::error::{NervaError, Result};
+use nerva_core::types::id::DeviceOrdinal;
+use nerva_core::types::memory::MemoryTier;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum LedgerEventKind {
-    GraphReplay,
-    KernelLaunch,
-    CpuActivity,
-    DeviceActivity,
-    Copy,
-    Sync,
-    Allocation,
-    Eviction,
-    Prefetch,
-    Stall,
-    Transport,
-}
-
-impl LedgerEventKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::GraphReplay => "graph_replay",
-            Self::KernelLaunch => "kernel_launch",
-            Self::CpuActivity => "cpu_activity",
-            Self::DeviceActivity => "device_activity",
-            Self::Copy => "copy",
-            Self::Sync => "sync",
-            Self::Allocation => "allocation",
-            Self::Eviction => "eviction",
-            Self::Prefetch => "prefetch",
-            Self::Stall => "stall",
-            Self::Transport => "transport",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum MetricSource {
-    RuntimeTimestamp,
-    GpuEvent,
-    HardwareCounter,
-    Profiler,
-    TransportCompletion,
-    EstimatedModel,
-}
-
-impl MetricSource {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::RuntimeTimestamp => "runtime_timestamp",
-            Self::GpuEvent => "gpu_event",
-            Self::HardwareCounter => "hardware_counter",
-            Self::Profiler => "profiler",
-            Self::TransportCompletion => "transport_completion",
-            Self::EstimatedModel => "estimated_model",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum SyncClass {
-    HardSync,
-    SoftVisibilitySync,
-    PolicySync,
-    PhaseHandoff,
-    DebugSync,
-}
-
-impl SyncClass {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::HardSync => "hard_sync",
-            Self::SoftVisibilitySync => "soft_visibility_sync",
-            Self::PolicySync => "policy_sync",
-            Self::PhaseHandoff => "phase_handoff",
-            Self::DebugSync => "debug_sync",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum FallbackClass {
-    ExactNamed,
-    CapabilityDegraded,
-    PolicySelected,
-    DebugOnly,
-}
-
-impl FallbackClass {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ExactNamed => "exact_named",
-            Self::CapabilityDegraded => "capability_degraded",
-            Self::PolicySelected => "policy_selected",
-            Self::DebugOnly => "debug_only",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LedgerEvent {
-    pub kind: LedgerEventKind,
-    pub sync_class: Option<SyncClass>,
-    pub metric_source: MetricSource,
-    pub block_id: Option<ResidentBlockId>,
-    pub from_tier: Option<MemoryTier>,
-    pub to_tier: Option<MemoryTier>,
-    pub bytes: usize,
-    pub latency_ns: u64,
-    pub label: &'static str,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeviceTimelineSpan {
-    pub device: DeviceOrdinal,
-    pub start_ns: u64,
-    pub end_ns: u64,
-    pub metric_source: MetricSource,
-    pub label: &'static str,
-}
-
-impl DeviceTimelineSpan {
-    pub const fn new(
-        device: DeviceOrdinal,
-        start_ns: u64,
-        end_ns: u64,
-        metric_source: MetricSource,
-        label: &'static str,
-    ) -> Self {
-        Self {
-            device,
-            start_ns,
-            end_ns,
-            metric_source,
-            label,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FallbackDecision {
-    pub label: &'static str,
-    pub class: FallbackClass,
-    pub requested: &'static str,
-    pub selected: &'static str,
-    pub reason: &'static str,
-    pub visible_ns: Option<u64>,
-    pub metric_source: MetricSource,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BlockVersionDependency {
-    pub block_id: ResidentBlockId,
-    pub required_version: u64,
-    pub observed_version: u64,
-    pub label: &'static str,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CandidateCost {
-    pub label: &'static str,
-    pub visible_ns: Option<u64>,
-    pub source: CostSource,
-}
-
-impl CandidateCost {
-    pub const fn estimated(label: &'static str, visible_ns: u64) -> Self {
-        Self {
-            label,
-            visible_ns: Some(visible_ns),
-            source: CostSource::Estimated,
-        }
-    }
-
-    pub const fn measured(label: &'static str, visible_ns: u64) -> Self {
-        Self {
-            label,
-            visible_ns: Some(visible_ns),
-            source: CostSource::Measured,
-        }
-    }
-}
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResidencyDecision {
-    pub block_id: ResidentBlockId,
-    pub old_tier: MemoryTier,
-    pub new_tier: MemoryTier,
-    pub executor_selected: ExecutionOwner,
-    pub candidate_costs: Vec<CandidateCost>,
-    pub reason: &'static str,
-    pub predicted_overlap_ns: u64,
-    pub actual_visible_ns: Option<u64>,
-    pub metric_source: MetricSource,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExecutionDecision {
-    pub operation: &'static str,
-    pub executor_selected: ExecutionOwner,
-    pub candidate_costs: Vec<CandidateCost>,
-    pub reason: &'static str,
-    pub predicted_visible_ns: u64,
-    pub actual_visible_ns: Option<u64>,
-    pub metric_source: MetricSource,
-}
+use crate::types::decision::{BlockVersionDependency, ExecutionDecision, ResidencyDecision};
+use crate::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
+use crate::types::fallback::{FallbackClass, FallbackDecision};
+use crate::types::metric::MetricSource;
+use crate::types::sync::SyncClass;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TokenLedger {
@@ -238,10 +41,11 @@ impl TokenLedger {
         self.events.push(event);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_sync(
         &mut self,
         sync_class: SyncClass,
-        block_id: Option<ResidentBlockId>,
+        block_id: Option<nerva_core::types::id::ResidentBlockId>,
         from_tier: Option<MemoryTier>,
         to_tier: Option<MemoryTier>,
         bytes: usize,

@@ -1,4 +1,5 @@
-use nerva_core::types::{DType, NervaError, Result};
+use nerva_core::types::dtype::DType;
+use nerva_core::types::error::{NervaError, Result};
 
 pub(crate) fn dtype_size_bytes(dtype: DType) -> Result<usize> {
     match dtype {

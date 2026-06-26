@@ -1,4 +1,6 @@
-use nerva_core::types::{DType, MemoryTier, NervaError, Result};
+use nerva_core::types::dtype::DType;
+use nerva_core::types::error::{NervaError, Result};
+use nerva_core::types::memory::MemoryTier;
 
 use crate::common::json::json_opt_str;
 use crate::hf::architecture::HfArchitectureKind;

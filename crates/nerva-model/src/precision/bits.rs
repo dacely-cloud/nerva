@@ -1,4 +1,5 @@
-use nerva_core::types::{DType, NervaError, Result};
+use nerva_core::types::dtype::DType;
+use nerva_core::types::error::{NervaError, Result};
 
 pub fn bf16_bits_to_f32(bits: u16) -> f32 {
     f32::from_bits(u32::from(bits) << 16)

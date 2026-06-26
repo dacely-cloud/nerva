@@ -1,4 +1,4 @@
-use nerva_core::types::{NervaError, Result};
+use nerva_core::types::error::{NervaError, Result};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct TransformerBlockShape {

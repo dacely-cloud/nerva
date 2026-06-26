@@ -307,7 +307,7 @@ fn json_opt_i128(value: Option<i128>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{FieldStatus, compare_ledgers, json_escape};
 
     #[test]
     fn comparison_reports_matching_core_summary_fields() {
