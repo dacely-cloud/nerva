@@ -10,7 +10,7 @@ fn synthetic_graph_summary_serializes_token_audit_fields() {
         seed_token: 1,
         last_token: Some(1025),
         graph_replays: 1024,
-        graph_nodes: 2,
+        graph_nodes: 1,
         observed_tokens: 1024,
         observed_token_hash: 42,
         token_ring_slots_touched: 64,
@@ -21,20 +21,20 @@ fn synthetic_graph_summary_serializes_token_audit_fields() {
         extra_tokens: 0,
         mismatched_tokens: 0,
         host_causality_edges: 0,
-        device_arena_bytes: 4096,
-        pinned_host_bytes: 40,
+        device_arena_bytes: 6672,
+        pinned_host_bytes: 6672,
         graph_launches: 1024,
-        sync_calls: 1024,
-        d2h_bytes: 40960,
+        sync_calls: 1,
+        d2h_bytes: 6672,
         hot_path_allocations: 0,
         error: None,
     };
     let json = summary.to_json();
     assert!(json.contains("\"status\":\"ok\""));
     assert!(json.contains("\"graph_replays\":1024"));
-    assert!(json.contains("\"graph_nodes\":2"));
+    assert!(json.contains("\"graph_nodes\":1"));
     assert!(json.contains("\"token_ring_reuses\":960"));
     assert!(json.contains("\"host_causality_edges\":0"));
-    assert!(json.contains("\"D2H_bytes\":40960"));
+    assert!(json.contains("\"D2H_bytes\":6672"));
     assert!(json.contains("\"hot_path_allocations\":0"));
 }

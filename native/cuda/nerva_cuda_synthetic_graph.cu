@@ -1,7 +1,6 @@
 #include "nerva_cuda_api.h"
 
 #include <cuda_runtime.h>
-#include <new>
 #include <stdint.h>
 #include <string.h>
 
@@ -24,7 +23,8 @@ __device__ __forceinline__ uint32_t wrapping_add_one(uint32_t value) {
 __global__ void nerva_synthetic_graph_step_kernel(
     NervaCudaSyntheticState *state,
     NervaCudaSyntheticTokenSlot *ring,
-    NervaCudaSyntheticTokenSlot *observation,
+    uint32_t *history,
+    uint32_t history_capacity,
     uint32_t ring_capacity) {
   if (threadIdx.x != 0 || blockIdx.x != 0 || ring_capacity == 0) {
     return;
@@ -45,7 +45,9 @@ __global__ void nerva_synthetic_graph_step_kernel(
 
   state->token = token;
   state->next_index = token_index + 1ull;
-  *observation = *slot;
+  if (history != nullptr && token_index < history_capacity) {
+    history[token_index] = token;
+  }
 }
 
 void clear_result(NervaCudaSyntheticGraphResult *out) {
@@ -107,19 +109,23 @@ extern "C" int nerva_cuda_synthetic_graph_smoke(
   }
 
   NervaCudaSyntheticState *device_state = nullptr;
+  NervaCudaSyntheticState *host_state = nullptr;
   NervaCudaSyntheticTokenSlot *device_ring = nullptr;
-  NervaCudaSyntheticTokenSlot *device_observation = nullptr;
-  NervaCudaSyntheticTokenSlot *host_observation = nullptr;
+  NervaCudaSyntheticTokenSlot *host_ring = nullptr;
+  uint32_t *device_history = nullptr;
+  uint32_t *host_history = nullptr;
   cudaStream_t stream = nullptr;
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t graph_exec = nullptr;
 
   const uint64_t ring_bytes =
       static_cast<uint64_t>(ring_capacity) * sizeof(NervaCudaSyntheticTokenSlot);
+  const uint64_t history_bytes =
+      static_cast<uint64_t>(steps) * sizeof(uint32_t);
   out->device_arena_bytes =
-      sizeof(NervaCudaSyntheticState) + ring_bytes +
-      sizeof(NervaCudaSyntheticTokenSlot);
-  out->pinned_host_bytes = sizeof(NervaCudaSyntheticTokenSlot);
+      sizeof(NervaCudaSyntheticState) + ring_bytes + history_bytes;
+  out->pinned_host_bytes =
+      sizeof(NervaCudaSyntheticState) + ring_bytes + history_bytes;
 
   err = cudaMalloc(reinterpret_cast<void **>(&device_state),
                    sizeof(NervaCudaSyntheticState));
@@ -132,28 +138,53 @@ extern "C" int nerva_cuda_synthetic_graph_smoke(
     cudaFree(device_state);
     return fail(out, err);
   }
-  err = cudaMalloc(reinterpret_cast<void **>(&device_observation),
-                   sizeof(NervaCudaSyntheticTokenSlot));
+  err = cudaMalloc(reinterpret_cast<void **>(&device_history),
+                   static_cast<size_t>(history_bytes));
   if (err != cudaSuccess) {
     cudaFree(device_ring);
     cudaFree(device_state);
     return fail(out, err);
   }
-  err = cudaHostAlloc(reinterpret_cast<void **>(&host_observation),
-                      sizeof(NervaCudaSyntheticTokenSlot),
+  err = cudaHostAlloc(reinterpret_cast<void **>(&host_state),
+                      sizeof(NervaCudaSyntheticState),
                       cudaHostAllocDefault);
   if (err != cudaSuccess) {
-    cudaFree(device_observation);
+    cudaFree(device_history);
     cudaFree(device_ring);
     cudaFree(device_state);
     return fail(out, err);
   }
-  memset(host_observation, 0, sizeof(*host_observation));
+  err = cudaHostAlloc(reinterpret_cast<void **>(&host_ring),
+                      static_cast<size_t>(ring_bytes),
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) {
+    cudaFreeHost(host_state);
+    cudaFree(device_history);
+    cudaFree(device_ring);
+    cudaFree(device_state);
+    return fail(out, err);
+  }
+  err = cudaHostAlloc(reinterpret_cast<void **>(&host_history),
+                      static_cast<size_t>(history_bytes),
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) {
+    cudaFreeHost(host_ring);
+    cudaFreeHost(host_state);
+    cudaFree(device_history);
+    cudaFree(device_ring);
+    cudaFree(device_state);
+    return fail(out, err);
+  }
+  memset(host_state, 0, sizeof(*host_state));
+  memset(host_ring, 0, static_cast<size_t>(ring_bytes));
+  memset(host_history, 0, static_cast<size_t>(history_bytes));
 
   err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   if (err != cudaSuccess) {
-    cudaFreeHost(host_observation);
-    cudaFree(device_observation);
+    cudaFreeHost(host_history);
+    cudaFreeHost(host_ring);
+    cudaFreeHost(host_state);
+    cudaFree(device_history);
     cudaFree(device_ring);
     cudaFree(device_state);
     return fail(out, err);
@@ -162,8 +193,8 @@ extern "C" int nerva_cuda_synthetic_graph_smoke(
   NervaCudaSyntheticState initial_state{seed_token, 0ull};
   err = cudaMemsetAsync(device_ring, 0, static_cast<size_t>(ring_bytes), stream);
   if (err == cudaSuccess) {
-    err = cudaMemsetAsync(device_observation, 0,
-                          sizeof(NervaCudaSyntheticTokenSlot), stream);
+    err = cudaMemsetAsync(device_history, 0,
+                          static_cast<size_t>(history_bytes), stream);
   }
   if (err == cudaSuccess) {
     err = cudaMemcpyAsync(device_state, &initial_state,
@@ -175,8 +206,10 @@ extern "C" int nerva_cuda_synthetic_graph_smoke(
   }
   if (err != cudaSuccess) {
     cudaStreamDestroy(stream);
-    cudaFreeHost(host_observation);
-    cudaFree(device_observation);
+    cudaFreeHost(host_history);
+    cudaFreeHost(host_ring);
+    cudaFreeHost(host_state);
+    cudaFree(device_history);
     cudaFree(device_ring);
     cudaFree(device_state);
     return fail(out, err);
@@ -185,13 +218,8 @@ extern "C" int nerva_cuda_synthetic_graph_smoke(
   err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
   if (err == cudaSuccess) {
     nerva_synthetic_graph_step_kernel<<<1, 1, 0, stream>>>(
-        device_state, device_ring, device_observation, ring_capacity);
+        device_state, device_ring, device_history, steps, ring_capacity);
     err = cudaGetLastError();
-  }
-  if (err == cudaSuccess) {
-    err = cudaMemcpyAsync(host_observation, device_observation,
-                          sizeof(NervaCudaSyntheticTokenSlot),
-                          cudaMemcpyDeviceToHost, stream);
   }
   if (err == cudaSuccess) {
     err = cudaStreamEndCapture(stream, &graph);
@@ -203,8 +231,10 @@ extern "C" int nerva_cuda_synthetic_graph_smoke(
       cudaGraphDestroy(graph);
     }
     cudaStreamDestroy(stream);
-    cudaFreeHost(host_observation);
-    cudaFree(device_observation);
+    cudaFreeHost(host_history);
+    cudaFreeHost(host_ring);
+    cudaFreeHost(host_state);
+    cudaFree(device_history);
     cudaFree(device_ring);
     cudaFree(device_state);
     return fail(out, err);
@@ -215,8 +245,10 @@ extern "C" int nerva_cuda_synthetic_graph_smoke(
   if (err != cudaSuccess) {
     cudaGraphDestroy(graph);
     cudaStreamDestroy(stream);
-    cudaFreeHost(host_observation);
-    cudaFree(device_observation);
+    cudaFreeHost(host_history);
+    cudaFreeHost(host_ring);
+    cudaFreeHost(host_state);
+    cudaFree(device_history);
     cudaFree(device_ring);
     cudaFree(device_state);
     return fail(out, err);
@@ -227,91 +259,128 @@ extern "C" int nerva_cuda_synthetic_graph_smoke(
   if (err != cudaSuccess) {
     cudaGraphDestroy(graph);
     cudaStreamDestroy(stream);
-    cudaFreeHost(host_observation);
-    cudaFree(device_observation);
+    cudaFreeHost(host_history);
+    cudaFreeHost(host_ring);
+    cudaFreeHost(host_state);
+    cudaFree(device_history);
     cudaFree(device_ring);
     cudaFree(device_state);
     return fail(out, err);
   }
 
   out->observed_token_hash = kHashSeed;
-  bool *slot_seen = new (std::nothrow) bool[ring_capacity]();
-  if (slot_seen == nullptr) {
-    cudaGraphExecDestroy(graph_exec);
-    cudaGraphDestroy(graph);
-    cudaStreamDestroy(stream);
-    cudaFreeHost(host_observation);
-    cudaFree(device_observation);
-    cudaFree(device_ring);
-    cudaFree(device_state);
-    return fail(out, cudaErrorMemoryAllocation);
-  }
 
   for (uint32_t step = 0; step < steps; ++step) {
     err = cudaGraphLaunch(graph_exec, stream);
     if (err == cudaSuccess) {
       out->graph_launches += 1ull;
-      err = cudaStreamSynchronize(stream);
-      out->sync_calls += 1ull;
     }
     if (err != cudaSuccess) {
-      delete[] slot_seen;
       cudaGraphExecDestroy(graph_exec);
       cudaGraphDestroy(graph);
       cudaStreamDestroy(stream);
-      cudaFreeHost(host_observation);
-      cudaFree(device_observation);
+      cudaFreeHost(host_history);
+      cudaFreeHost(host_ring);
+      cudaFreeHost(host_state);
+      cudaFree(device_history);
       cudaFree(device_ring);
       cudaFree(device_state);
       return fail(out, err);
     }
+  }
 
-    const uint64_t token_index = host_observation->token_index;
-    const uint32_t slot_index =
-        static_cast<uint32_t>(token_index % ring_capacity);
+  err = cudaMemcpyAsync(host_history, device_history,
+                        static_cast<size_t>(history_bytes),
+                        cudaMemcpyDeviceToHost, stream);
+  if (err == cudaSuccess) {
+    out->d2h_bytes += history_bytes;
+    err = cudaMemcpyAsync(host_ring, device_ring,
+                          static_cast<size_t>(ring_bytes),
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    out->d2h_bytes += ring_bytes;
+    err = cudaMemcpyAsync(host_state, device_state,
+                          sizeof(NervaCudaSyntheticState),
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    out->d2h_bytes += sizeof(NervaCudaSyntheticState);
+    err = cudaStreamSynchronize(stream);
+    out->sync_calls += 1ull;
+  }
+  if (err != cudaSuccess) {
+    cudaGraphExecDestroy(graph_exec);
+    cudaGraphDestroy(graph);
+    cudaStreamDestroy(stream);
+    cudaFreeHost(host_history);
+    cudaFreeHost(host_ring);
+    cudaFreeHost(host_state);
+    cudaFree(device_history);
+    cudaFree(device_ring);
+    cudaFree(device_state);
+    return fail(out, err);
+  }
+
+  out->graph_replays = static_cast<uint64_t>(steps);
+  out->observed_tokens = static_cast<uint64_t>(steps);
+  out->last_token = host_state->token;
+
+  if (host_state->next_index < static_cast<uint64_t>(steps)) {
+    out->missing_tokens =
+        static_cast<uint64_t>(steps) - host_state->next_index;
+  } else if (host_state->next_index > static_cast<uint64_t>(steps)) {
+    out->extra_tokens = host_state->next_index - static_cast<uint64_t>(steps);
+  }
+
+  for (uint32_t step = 0; step < steps; ++step) {
     const uint32_t expected_token = seed_token + step + 1u;
-    const uint64_t expected_version =
-        expected_slot_version(token_index, ring_capacity);
-
-    out->graph_replays += 1ull;
-    out->observed_tokens += 1ull;
-    out->d2h_bytes += sizeof(NervaCudaSyntheticTokenSlot);
-    out->last_token = host_observation->token;
-    out->observed_token_hash = hash_observed_token(
-        out->observed_token_hash, token_index, host_observation->token);
-
-    if (!slot_seen[slot_index]) {
-      slot_seen[slot_index] = true;
-      out->token_ring_slots_touched += 1ull;
-    }
-    if (host_observation->version > 1ull) {
-      out->token_ring_reuses += 1ull;
-    }
-    if (host_observation->version > out->token_ring_max_slot_version) {
-      out->token_ring_max_slot_version = host_observation->version;
-    }
-    if (token_index < step) {
-      out->stale_tokens += 1ull;
-    } else if (token_index > step) {
-      out->extra_tokens += 1ull;
-    }
-    if (host_observation->request_id != kRequestId ||
-        host_observation->sequence_id != kSequenceId ||
-        host_observation->completion != kCompletionDeviceComplete ||
-        host_observation->token != expected_token ||
-        host_observation->version != expected_version) {
+    const uint32_t observed_token = host_history[step];
+    out->observed_token_hash =
+        hash_observed_token(out->observed_token_hash, step, observed_token);
+    if (observed_token != expected_token) {
       out->mismatched_tokens += 1ull;
     }
   }
 
-  out->missing_tokens = static_cast<uint64_t>(steps) - out->observed_tokens;
-  delete[] slot_seen;
+  for (uint32_t slot_index = 0; slot_index < ring_capacity; ++slot_index) {
+    if (slot_index >= steps) {
+      continue;
+    }
+    out->token_ring_slots_touched += 1ull;
+    const uint64_t token_index =
+        static_cast<uint64_t>(slot_index) +
+        ((static_cast<uint64_t>(steps - 1u - slot_index) /
+          static_cast<uint64_t>(ring_capacity)) *
+         static_cast<uint64_t>(ring_capacity));
+    const uint32_t expected_token =
+        seed_token + static_cast<uint32_t>(token_index) + 1u;
+    const uint64_t expected_version =
+        expected_slot_version(token_index, ring_capacity);
+    const NervaCudaSyntheticTokenSlot *slot = &host_ring[slot_index];
+    if (slot->version > out->token_ring_max_slot_version) {
+      out->token_ring_max_slot_version = slot->version;
+    }
+    if (slot->request_id != kRequestId || slot->sequence_id != kSequenceId ||
+        slot->completion != kCompletionDeviceComplete ||
+        slot->token_index != token_index || slot->token != expected_token ||
+        slot->version != expected_version) {
+      out->mismatched_tokens += 1ull;
+    }
+  }
+
+  if (steps > ring_capacity) {
+    out->token_ring_reuses =
+        static_cast<uint64_t>(steps - ring_capacity);
+  }
 
   cudaGraphExecDestroy(graph_exec);
   cudaGraphDestroy(graph);
   cudaStreamDestroy(stream);
-  cudaFreeHost(host_observation);
-  cudaFree(device_observation);
+  cudaFreeHost(host_history);
+  cudaFreeHost(host_ring);
+  cudaFreeHost(host_state);
+  cudaFree(device_history);
   cudaFree(device_ring);
   cudaFree(device_state);
 

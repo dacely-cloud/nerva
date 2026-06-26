@@ -8,14 +8,16 @@ pub(crate) fn push_transaction(report: &mut AcceptanceReport) {
         && cuda_graph.last_token == Some(1025)
         && cuda_graph.graph_replays == 1024
         && cuda_graph.graph_launches == 1024
-        && cuda_graph.graph_nodes >= 2
+        && cuda_graph.graph_nodes == 1
         && cuda_graph.observed_tokens == 1024
         && cuda_graph.observed_token_hash != 0
         && cuda_graph.token_ring_slots_touched == 64
         && cuda_graph.token_ring_reuses == 960
         && cuda_graph.token_ring_max_slot_version == 16
-        && cuda_graph.sync_calls == 1024
+        && cuda_graph.sync_calls == 1
         && cuda_graph.d2h_bytes > 0
+        && cuda_graph.d2h_bytes == cuda_graph.device_arena_bytes
+        && cuda_graph.d2h_bytes == cuda_graph.pinned_host_bytes
         && cuda_graph.device_arena_bytes > 0
         && cuda_graph.pinned_host_bytes > 0
         && cuda_graph.hot_path_allocations == 0
