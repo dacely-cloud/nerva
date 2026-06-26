@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use crate::cli::exit;
 use crate::parse::{parse_optional_u64, parse_optional_usize};
 use crate::probes::{
-    kv, memory_loop, mgpu, phase, queue, runtime, synthetic, token, transaction, transport,
+    backend, kv, memory_loop, mgpu, phase, queue, runtime, synthetic, token, transaction, transport,
 };
 
 pub(crate) fn dispatch(
@@ -12,6 +12,9 @@ pub(crate) fn dispatch(
 ) -> Option<ExitCode> {
     match command {
         Some("capabilities") => Some(exit::print_json_result(runtime::run_capabilities())),
+        Some("backend-contract") => Some(exit::print_json_result(
+            backend::run_backend_contract_probe(),
+        )),
         Some("topology") => Some(exit::print_json_result(runtime::run_topology_probe())),
         Some("synthetic") => Some(run_synthetic_command(args)),
         Some("ledger") => Some(exit::print_json_result(
