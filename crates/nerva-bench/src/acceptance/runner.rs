@@ -29,6 +29,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     phase::push_phase_handoff(&mut report, &runtime);
     queue::push_shared_queue(&mut report, &runtime);
     execution::push_transaction_planner(&mut report, &runtime);
+    execution::push_compute_near_data(&mut report, &runtime);
     memory_loop::push_memory_fabric_loop(&mut report, &runtime);
 
     model::push_reference_block(&mut report);
