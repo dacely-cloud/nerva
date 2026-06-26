@@ -19,6 +19,15 @@ fn transport_capability_matrix_reports_required_sizes_and_degradation() {
     assert_eq!(summary.supported_unverified_entries, 6);
     assert_eq!(summary.supported_verified_entries, 6);
     assert_eq!(summary.unsupported_entries, 0);
+    assert_eq!(summary.false_gpu_direct_claims, 0);
+    assert!(
+        summary.gpu_memory_export_verified_entries >= summary.gpu_export_without_nic_direct_entries
+    );
+    assert!(
+        summary.cuda_vmm_posix_fd_export_verified_entries
+            <= summary.gpu_memory_export_verified_entries
+    );
+    assert!(summary.gpu_direct_rdma_verified_entries <= summary.gpu_memory_export_verified_entries);
     assert!(summary.total_payload_bytes > 0);
     assert_eq!(summary.pageable_copies, 0);
     assert_eq!(summary.per_token_registrations, 0);
@@ -76,6 +85,10 @@ fn transport_capability_matrix_reports_required_sizes_and_degradation() {
             .iter()
             .all(|entry| entry.registration_cache_hit)
     );
+    assert!(summary.entries.iter().all(|entry| {
+        !entry.gpu_export_without_nic_direct
+            || (entry.gpu_memory_export_verified && !entry.gpu_direct_rdma_verified)
+    }));
     let json = summary.to_json();
     assert!(json.contains("\"requested_path\":\"A_GPU_DIRECT_RDMA\""));
     assert!(json.contains("\"size_bytes\":32768"));
@@ -95,4 +108,10 @@ fn transport_capability_matrix_reports_required_sizes_and_degradation() {
     assert!(json.contains("\"registration_cache_hit_rate_per_mille\""));
     assert!(json.contains("\"estimated_nic_utilization_per_mille\""));
     assert!(json.contains("\"credit_stall_ns\""));
+    assert!(json.contains("\"gpu_memory_export_verified\""));
+    assert!(json.contains("\"cuda_vmm_posix_fd_export_verified\""));
+    assert!(json.contains("\"gpu_direct_rdma_verified\""));
+    assert!(json.contains("\"gpu_export_without_nic_direct\""));
+    assert!(json.contains("\"gpu_memory_export_verified_entries\""));
+    assert!(json.contains("\"false_gpu_direct_claims\""));
 }

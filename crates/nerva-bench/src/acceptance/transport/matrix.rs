@@ -23,15 +23,23 @@ pub(crate) fn push_transport_matrix(report: &mut AcceptanceReport, runtime: &Run
                 && summary.estimated_cpu_core_ns > 0
                 && summary.pcie_tx_bytes > 0
                 && summary.pcie_rx_bytes > 0
+                && summary.false_gpu_direct_claims == 0
+                && summary.gpu_export_without_nic_direct_entries
+                    <= summary.gpu_memory_export_verified_entries
                 && summary.credit_stall_ns == 0
                 && summary.hot_path_allocations == 0,
             format!(
-                "sizes={} entries={} host_staged={} gpu_direct={} degraded_to_pinned_host={} p95_estimated_visible_ns={} visible_non_overlapped_ns={} host_event_wait_ns={} gpu_idle_ns={} cpu_core_ns={} pcie_tx_bytes={} pcie_rx_bytes={} registration_cache_hits={} registration_cache_hit_rate_per_mille={} estimated_nic_utilization_per_mille={} max_queue_depth={} pageable_copies={} per_token_registrations={} credit_stall_ns={} hot_path_allocations={}",
+                "sizes={} entries={} host_staged={} gpu_direct={} degraded_to_pinned_host={} gpu_memory_export_verified={} cuda_vmm_posix_fd_export_verified={} gpu_direct_rdma_verified={} gpu_export_without_nic_direct={} false_gpu_direct_claims={} p95_estimated_visible_ns={} visible_non_overlapped_ns={} host_event_wait_ns={} gpu_idle_ns={} cpu_core_ns={} pcie_tx_bytes={} pcie_rx_bytes={} registration_cache_hits={} registration_cache_hit_rate_per_mille={} estimated_nic_utilization_per_mille={} max_queue_depth={} pageable_copies={} per_token_registrations={} credit_stall_ns={} hot_path_allocations={}",
                 summary.sizes,
                 summary.entries.len(),
                 summary.host_staged_entries,
                 summary.gpu_direct_entries,
                 summary.degraded_to_pinned_host_entries,
+                summary.gpu_memory_export_verified_entries,
+                summary.cuda_vmm_posix_fd_export_verified_entries,
+                summary.gpu_direct_rdma_verified_entries,
+                summary.gpu_export_without_nic_direct_entries,
+                summary.false_gpu_direct_claims,
                 summary.p95_estimated_visible_ns,
                 summary.visible_non_overlapped_ns,
                 summary.host_event_wait_ns,

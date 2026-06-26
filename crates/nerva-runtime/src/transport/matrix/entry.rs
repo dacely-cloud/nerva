@@ -1,5 +1,6 @@
 use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState};
 use crate::transport::estimate::{effective_payload_bandwidth_bps, transport_resource_estimate};
+use crate::transport::matrix::export::transport_matrix_export_evidence;
 use crate::transport::matrix::types::{
     TransportCapabilityMatrixEntry, TransportMatrixRequestedPath,
 };
@@ -41,6 +42,7 @@ pub(crate) fn build_entries(
             let decision = plan_transport_path(request)?;
             let capability_result =
                 transport_matrix_capability_result(requested_path, decision, capabilities);
+            let export_evidence = transport_matrix_export_evidence(requested_path, capabilities);
             let resource = transport_resource_estimate(decision);
             entries.push(TransportCapabilityMatrixEntry {
                 requested_path,
@@ -51,6 +53,11 @@ pub(crate) fn build_entries(
                 selected_path: decision.path,
                 class: decision.class,
                 capability_result,
+                gpu_memory_export_verified: export_evidence.gpu_memory_export_verified,
+                cuda_vmm_posix_fd_export_verified: export_evidence
+                    .cuda_vmm_posix_fd_export_verified,
+                gpu_direct_rdma_verified: export_evidence.gpu_direct_rdma_verified,
+                gpu_export_without_nic_direct: export_evidence.gpu_export_without_nic_direct,
                 estimated_visible_ns: decision.estimated_visible_ns,
                 visible_non_overlapped_ns: decision.estimated_visible_ns,
                 effective_payload_bandwidth_bps: effective_payload_bandwidth_bps(

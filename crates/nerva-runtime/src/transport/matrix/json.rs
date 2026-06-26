@@ -18,7 +18,7 @@ impl TransportMatrixRequestedPath {
 impl TransportCapabilityMatrixEntry {
     pub fn to_json(self) -> String {
         format!(
-            "{{\"requested_path\":\"{}\",\"size_bytes\":{},\"mode\":\"{}\",\"source_tier\":\"{}\",\"destination_tier\":\"{}\",\"selected_path\":\"{}\",\"class\":\"{}\",\"capability_result\":\"{}\",\"estimated_visible_ns\":{},\"visible_non_overlapped_ns\":{},\"metric_source\":\"estimated_model\",\"effective_payload_bandwidth_bps\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copy\":{},\"per_token_registration\":{},\"registration_cache_hit\":{},\"queue_depth\":{},\"credit_stall_ns\":{}}}",
+            "{{\"requested_path\":\"{}\",\"size_bytes\":{},\"mode\":\"{}\",\"source_tier\":\"{}\",\"destination_tier\":\"{}\",\"selected_path\":\"{}\",\"class\":\"{}\",\"capability_result\":\"{}\",\"gpu_memory_export_verified\":{},\"cuda_vmm_posix_fd_export_verified\":{},\"gpu_direct_rdma_verified\":{},\"gpu_export_without_nic_direct\":{},\"estimated_visible_ns\":{},\"visible_non_overlapped_ns\":{},\"metric_source\":\"estimated_model\",\"effective_payload_bandwidth_bps\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copy\":{},\"per_token_registration\":{},\"registration_cache_hit\":{},\"queue_depth\":{},\"credit_stall_ns\":{}}}",
             self.requested_path.as_str(),
             self.size_bytes,
             self.mode.as_str(),
@@ -27,6 +27,10 @@ impl TransportCapabilityMatrixEntry {
             self.selected_path.as_str(),
             self.class.as_str(),
             self.capability_result.as_str(),
+            self.gpu_memory_export_verified,
+            self.cuda_vmm_posix_fd_export_verified,
+            self.gpu_direct_rdma_verified,
+            self.gpu_export_without_nic_direct,
             self.estimated_visible_ns,
             self.visible_non_overlapped_ns,
             self.effective_payload_bandwidth_bps,
@@ -64,7 +68,7 @@ impl TransportCapabilityMatrixSummary {
         }
         entries.push(']');
         format!(
-            "{{\"status\":\"{}\",\"sizes\":{},\"entries_count\":{},\"decode_entries\":{},\"prefill_entries\":{},\"gpu_direct_entries\":{},\"host_staged_entries\":{},\"cpu_produced_entries\":{},\"mapped_pinned_entries\":{},\"total_payload_bytes\":{},\"supported_verified_entries\":{},\"supported_unverified_entries\":{},\"degraded_to_pinned_host_entries\":{},\"unsupported_entries\":{},\"total_estimated_visible_ns\":{},\"visible_non_overlapped_ns\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"p50_estimated_visible_ns\":{},\"p95_estimated_visible_ns\":{},\"p99_estimated_visible_ns\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"registration_cache_hits\":{},\"registration_cache_hit_rate_per_mille\":{},\"max_queue_depth\":{},\"estimated_nic_utilization_per_mille\":{},\"credit_stall_ns\":{},\"hot_path_allocations\":{},\"error\":{},\"entries\":{}}}",
+            "{{\"status\":\"{}\",\"sizes\":{},\"entries_count\":{},\"decode_entries\":{},\"prefill_entries\":{},\"gpu_direct_entries\":{},\"host_staged_entries\":{},\"cpu_produced_entries\":{},\"mapped_pinned_entries\":{},\"total_payload_bytes\":{},\"supported_verified_entries\":{},\"supported_unverified_entries\":{},\"degraded_to_pinned_host_entries\":{},\"unsupported_entries\":{},\"gpu_memory_export_verified_entries\":{},\"cuda_vmm_posix_fd_export_verified_entries\":{},\"gpu_direct_rdma_verified_entries\":{},\"gpu_export_without_nic_direct_entries\":{},\"false_gpu_direct_claims\":{},\"total_estimated_visible_ns\":{},\"visible_non_overlapped_ns\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"p50_estimated_visible_ns\":{},\"p95_estimated_visible_ns\":{},\"p99_estimated_visible_ns\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"registration_cache_hits\":{},\"registration_cache_hit_rate_per_mille\":{},\"max_queue_depth\":{},\"estimated_nic_utilization_per_mille\":{},\"credit_stall_ns\":{},\"hot_path_allocations\":{},\"error\":{},\"entries\":{}}}",
             status,
             self.sizes,
             self.entries.len(),
@@ -79,6 +83,11 @@ impl TransportCapabilityMatrixSummary {
             self.supported_unverified_entries,
             self.degraded_to_pinned_host_entries,
             self.unsupported_entries,
+            self.gpu_memory_export_verified_entries,
+            self.cuda_vmm_posix_fd_export_verified_entries,
+            self.gpu_direct_rdma_verified_entries,
+            self.gpu_export_without_nic_direct_entries,
+            self.false_gpu_direct_claims,
             self.total_estimated_visible_ns,
             self.visible_non_overlapped_ns,
             self.host_event_wait_ns,
