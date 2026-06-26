@@ -1180,6 +1180,7 @@ pub struct SyntheticDecodeSummary {
     pub total_latency_ns: u64,
     pub hot_path_allocations: u64,
     pub observed_tokens: u64,
+    pub observed_token_hash: u64,
     pub stale_tokens: u64,
     pub missing_tokens: u64,
     pub extra_tokens: u64,
@@ -1605,7 +1606,7 @@ impl SyntheticDecodeSummary {
             SyntheticDecodeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"soft_visibility_syncs\":{},\"device_timeline_active_ns\":{},\"device_timeline_idle_ns\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"soft_visibility_sync_latency_ns\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"soft_visibility_syncs\":{},\"device_timeline_active_ns\":{},\"device_timeline_idle_ns\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"soft_visibility_sync_latency_ns\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
             status,
             self.steps,
             self.token_ring_capacity,
@@ -1630,6 +1631,7 @@ impl SyntheticDecodeSummary {
             self.total_latency_ns,
             self.hot_path_allocations,
             self.observed_tokens,
+            self.observed_token_hash,
             self.stale_tokens,
             self.missing_tokens,
             self.extra_tokens,
@@ -2884,6 +2886,7 @@ impl Runtime {
         let mut total_latency_ns: u64 = 0;
         let mut hot_path_allocations: u64 = 0;
         let mut observed_tokens: u64 = 0;
+        let mut observed_token_hash: u64 = TOKEN_STREAM_HASH_SEED;
         let mut stale_tokens: u64 = 0;
         let mut extra_tokens: u64 = 0;
         let mut mismatched_tokens: u64 = 0;
@@ -2945,6 +2948,8 @@ impl Runtime {
             hot_path_allocations =
                 hot_path_allocations.saturating_add(output.ledger.hot_path_allocations);
             observed_tokens = observed_tokens.saturating_add(1);
+            observed_token_hash =
+                hash_observed_token(observed_token_hash, output.token_index, output.token);
             if output.token_index < token_index {
                 stale_tokens = stale_tokens.saturating_add(1);
             } else if output.token_index > token_index {
@@ -3008,6 +3013,7 @@ impl Runtime {
             total_latency_ns,
             hot_path_allocations,
             observed_tokens,
+            observed_token_hash,
             stale_tokens,
             missing_tokens,
             extra_tokens,
@@ -3396,6 +3402,14 @@ fn estimate_transport_visible_ns(path: TransportPathKind, bytes: usize, mode: Tr
 
 fn div_ceil_u64(value: u64, divisor: u64) -> u64 {
     value / divisor + u64::from(value % divisor != 0)
+}
+
+const TOKEN_STREAM_HASH_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+
+fn hash_observed_token(current: u64, token_index: u64, token: TokenId) -> u64 {
+    let mut hash = current ^ token_index.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    hash = hash.rotate_left(13) ^ u64::from(token.0);
+    hash.wrapping_mul(0xff51_afd7_ed55_8ccd)
 }
 
 fn estimate_cpu_dram_weight_ns(bytes: usize) -> u64 {
@@ -4615,12 +4629,14 @@ mod tests {
         assert_eq!(summary.total_latency_ns, 6144);
         assert_eq!(summary.hot_path_allocations, 0);
         assert_eq!(summary.observed_tokens, 1024);
+        assert_ne!(summary.observed_token_hash, 0);
         assert_eq!(summary.stale_tokens, 0);
         assert_eq!(summary.missing_tokens, 0);
         assert_eq!(summary.extra_tokens, 0);
         assert_eq!(summary.mismatched_tokens, 0);
         assert_eq!(summary.host_causality_edges, 0);
         assert!(summary.to_json().contains("\"steps\":1024"));
+        assert!(summary.to_json().contains("\"observed_token_hash\""));
         assert!(summary.to_json().contains("\"host_causality_edges\":0"));
     }
 
