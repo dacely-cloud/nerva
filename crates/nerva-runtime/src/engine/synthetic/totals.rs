@@ -79,56 +79,48 @@ impl SyntheticDecodeTotals {
         token_index: u64,
         seed_token: TokenId,
     ) -> Result<()> {
-        let token_graph_events = output.ledger.event_count(LedgerEventKind::GraphReplay);
-        let token_device_events = output.ledger.event_count(LedgerEventKind::DeviceActivity);
-        let token_kernel_events = output.ledger.event_count(LedgerEventKind::KernelLaunch)
+        let ledger = &output.ledger;
+        let token_graph_events = ledger.event_count(LedgerEventKind::GraphReplay);
+        let token_device_events = ledger.event_count(LedgerEventKind::DeviceActivity);
+        let token_kernel_events = ledger.event_count(LedgerEventKind::KernelLaunch)
             + token_graph_events
             + token_device_events;
-
         self.graph_replay_events += token_graph_events;
         self.kernel_events += token_kernel_events;
         self.device_events += token_device_events;
-        self.copy_events += output.ledger.event_count(LedgerEventKind::Copy);
-        self.host_wait_events += output.ledger.event_count(LedgerEventKind::Sync);
-        self.soft_visibility_syncs += output.ledger.sync_count_for(SyncClass::SoftVisibilitySync);
+        self.copy_events += ledger.event_count(LedgerEventKind::Copy);
+        self.host_wait_events += ledger.event_count(LedgerEventKind::Sync);
+        self.soft_visibility_syncs += ledger.sync_count_for(SyncClass::SoftVisibilitySync);
         self.device_timeline_active_ns = self
             .device_timeline_active_ns
-            .saturating_add(output.ledger.device_active_ns(runtime.config.device)?);
+            .saturating_add(ledger.device_active_ns(runtime.config.device)?);
         self.device_timeline_idle_ns = self
             .device_timeline_idle_ns
-            .saturating_add(output.ledger.device_idle_ns(runtime.config.device)?);
+            .saturating_add(ledger.device_idle_ns(runtime.config.device)?);
         self.graph_replay_latency_ns = self
             .graph_replay_latency_ns
-            .saturating_add(output.ledger.latency_ns_for(LedgerEventKind::GraphReplay));
-        self.device_latency_ns = self.device_latency_ns.saturating_add(
-            output
-                .ledger
-                .latency_ns_for(LedgerEventKind::DeviceActivity),
-        );
+            .saturating_add(ledger.latency_ns_for(LedgerEventKind::GraphReplay));
+        self.device_latency_ns = self
+            .device_latency_ns
+            .saturating_add(ledger.latency_ns_for(LedgerEventKind::DeviceActivity));
         self.copy_latency_ns = self
             .copy_latency_ns
-            .saturating_add(output.ledger.latency_ns_for(LedgerEventKind::Copy));
+            .saturating_add(ledger.latency_ns_for(LedgerEventKind::Copy));
         self.host_wait_latency_ns = self
             .host_wait_latency_ns
-            .saturating_add(output.ledger.latency_ns_for(LedgerEventKind::Sync));
-        self.soft_visibility_sync_latency_ns = self.soft_visibility_sync_latency_ns.saturating_add(
-            output
-                .ledger
-                .sync_latency_ns_for(SyncClass::SoftVisibilitySync),
-        );
-        self.estimated_events = self.estimated_events.saturating_add(
-            output
-                .ledger
-                .event_count_for_source(MetricSource::EstimatedModel),
-        );
-        self.estimated_latency_ns = self.estimated_latency_ns.saturating_add(
-            output
-                .ledger
-                .latency_ns_for_source(MetricSource::EstimatedModel),
-        );
+            .saturating_add(ledger.latency_ns_for(LedgerEventKind::Sync));
+        self.soft_visibility_sync_latency_ns = self
+            .soft_visibility_sync_latency_ns
+            .saturating_add(ledger.sync_latency_ns_for(SyncClass::SoftVisibilitySync));
+        self.estimated_events = self
+            .estimated_events
+            .saturating_add(ledger.event_count_for_source(MetricSource::EstimatedModel));
+        self.estimated_latency_ns = self
+            .estimated_latency_ns
+            .saturating_add(ledger.latency_ns_for_source(MetricSource::EstimatedModel));
         self.total_latency_ns = self
             .total_latency_ns
-            .saturating_add(output.ledger.total_latency_ns());
+            .saturating_add(ledger.total_latency_ns());
         self.hot_path_allocations = self
             .hot_path_allocations
             .saturating_add(output.ledger.hot_path_allocations);

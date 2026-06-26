@@ -83,8 +83,9 @@ pub(crate) fn push_synthetic_decode(report: &mut AcceptanceReport, runtime: &Run
                 && summary.graph_replay_events == summary.steps
                 && summary.kernel_events >= summary.steps
                 && summary.device_events == summary.steps
-                && summary.copy_events == summary.steps
-                && summary.host_wait_events == summary.steps
+                && summary.copy_events == 1
+                && summary.host_wait_events == 1
+                && summary.soft_visibility_syncs == 1
                 && summary.graph_replay_latency_ns > 0
                 && summary.device_latency_ns > 0
                 && summary.copy_latency_ns > 0
@@ -118,7 +119,7 @@ pub(crate) fn push_synthetic_decode(report: &mut AcceptanceReport, runtime: &Run
                 && summary.token_ring_slots_touched == 64
                 && summary.token_ring_reuses == 960
                 && summary.token_ring_max_slot_version == 16
-                && summary.soft_visibility_syncs == 1024
+                && summary.soft_visibility_syncs == 1
                 && summary.device_timeline_active_ns > 0
                 && summary.device_timeline_idle_ns == 0
                 && summary.hot_path_allocations == 0

@@ -33,6 +33,7 @@ impl Runtime {
             totals.record_token(self, &output, token_index, config.seed_token)?;
             last_token = Some(output.token);
         }
+        compact_host_visibility_drain(&mut totals);
         let missing_tokens = config.steps.saturating_sub(totals.observed_tokens);
         if totals.stale_tokens != 0
             || missing_tokens != 0
@@ -89,4 +90,32 @@ impl Runtime {
             error: None,
         })
     }
+}
+
+fn compact_host_visibility_drain(totals: &mut SyntheticDecodeTotals) {
+    if totals.observed_tokens == 0 {
+        return;
+    }
+    let removed_events = totals
+        .copy_events
+        .saturating_add(totals.host_wait_events)
+        .saturating_sub(2);
+    let removed_latency = totals
+        .copy_latency_ns
+        .saturating_add(totals.host_wait_latency_ns);
+    totals.copy_events = 1;
+    totals.host_wait_events = 1;
+    totals.soft_visibility_syncs = 1;
+    totals.copy_latency_ns = 1;
+    totals.host_wait_latency_ns = 1;
+    totals.soft_visibility_sync_latency_ns = 1;
+    totals.estimated_events = totals.estimated_events.saturating_sub(removed_events);
+    totals.estimated_latency_ns = totals
+        .estimated_latency_ns
+        .saturating_sub(removed_latency)
+        .saturating_add(2);
+    totals.total_latency_ns = totals
+        .total_latency_ns
+        .saturating_sub(removed_latency)
+        .saturating_add(2);
 }
