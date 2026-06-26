@@ -36,6 +36,9 @@ pub struct TopologySnapshot {
     pub pci_nvme_count: usize,
     pub block_device_count: usize,
     pub nvme_block_device_count: usize,
+    pub cxl_device_count: usize,
+    pub cxl_memory_device_count: usize,
+    pub cxl_region_count: usize,
     pub rdma_device_count: usize,
     pub rdma_device_names: Vec<String>,
     pub rdma_netdev_links: Vec<String>,
@@ -47,7 +50,7 @@ pub struct TopologySnapshot {
 impl TopologySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"cpu_online\":{},\"cpu_count\":{},\"numa_node_count\":{},\"pci_device_count\":{},\"pci_root_complex_count\":{},\"pci_bus_count\":{},\"pci_gpu_count\":{},\"pci_network_count\":{},\"pci_nvme_count\":{},\"block_device_count\":{},\"nvme_block_device_count\":{},\"rdma_device_count\":{},\"rdma_device_names\":{},\"rdma_netdev_links\":{},\"iommu_group_count\":{},\"iommu_mode\":\"{}\",\"iommu_kernel_args\":{}}}",
+            "{{\"cpu_online\":{},\"cpu_count\":{},\"numa_node_count\":{},\"pci_device_count\":{},\"pci_root_complex_count\":{},\"pci_bus_count\":{},\"pci_gpu_count\":{},\"pci_network_count\":{},\"pci_nvme_count\":{},\"block_device_count\":{},\"nvme_block_device_count\":{},\"cxl_device_count\":{},\"cxl_memory_device_count\":{},\"cxl_region_count\":{},\"rdma_device_count\":{},\"rdma_device_names\":{},\"rdma_netdev_links\":{},\"iommu_group_count\":{},\"iommu_mode\":\"{}\",\"iommu_kernel_args\":{}}}",
             json_opt_string(self.cpu_online.as_deref()),
             self.cpu_count,
             self.numa_node_count,
@@ -59,6 +62,9 @@ impl TopologySnapshot {
             self.pci_nvme_count,
             self.block_device_count,
             self.nvme_block_device_count,
+            self.cxl_device_count,
+            self.cxl_memory_device_count,
+            self.cxl_region_count,
             self.rdma_device_count,
             json_string_array(&self.rdma_device_names),
             json_string_array(&self.rdma_netdev_links),

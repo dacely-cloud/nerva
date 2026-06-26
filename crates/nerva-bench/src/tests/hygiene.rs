@@ -5,13 +5,8 @@ const MAX_RUST_MODULE_LINES: usize = 200;
 
 #[test]
 fn rust_modules_do_not_use_reexport_shims() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("crate should live under repo_root/crates");
-    let mut files = Vec::new();
-    collect_rust_files(&repo_root.join("crates"), &mut files);
+    let repo_root = repo_root();
+    let files = rust_code_files(&repo_root);
 
     let mut violations = Vec::new();
     for path in files {
@@ -22,7 +17,7 @@ fn rust_modules_do_not_use_reexport_shims() {
             if is_forbidden_import(trimmed) {
                 violations.push(format!(
                     "{}:{}: {}",
-                    path.strip_prefix(repo_root).unwrap_or(&path).display(),
+                    path.strip_prefix(&repo_root).unwrap_or(&path).display(),
                     line_index + 1,
                     trimmed
                 ));
@@ -39,13 +34,8 @@ fn rust_modules_do_not_use_reexport_shims() {
 
 #[test]
 fn rust_modules_stay_split_by_responsibility() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("crate should live under repo_root/crates");
-    let mut files = Vec::new();
-    collect_rust_files(&repo_root.join("crates"), &mut files);
+    let repo_root = repo_root();
+    let files = rust_code_files(&repo_root);
 
     let mut violations = Vec::new();
     for path in files {
@@ -55,7 +45,7 @@ fn rust_modules_stay_split_by_responsibility() {
         if lines > MAX_RUST_MODULE_LINES {
             violations.push(format!(
                 "{}: {lines} lines",
-                path.strip_prefix(repo_root).unwrap_or(&path).display()
+                path.strip_prefix(&repo_root).unwrap_or(&path).display()
             ));
         }
     }
@@ -69,13 +59,8 @@ fn rust_modules_stay_split_by_responsibility() {
 
 #[test]
 fn mod_rs_files_only_declare_modules() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("crate should live under repo_root/crates");
-    let mut files = Vec::new();
-    collect_rust_files(&repo_root.join("crates"), &mut files);
+    let repo_root = repo_root();
+    let files = rust_code_files(&repo_root);
 
     let mut violations = Vec::new();
     for path in files {
@@ -89,7 +74,7 @@ fn mod_rs_files_only_declare_modules() {
             if !is_allowed_mod_rs_line(trimmed) {
                 violations.push(format!(
                     "{}:{}: {}",
-                    path.strip_prefix(repo_root).unwrap_or(&path).display(),
+                    path.strip_prefix(&repo_root).unwrap_or(&path).display(),
                     line_index + 1,
                     trimmed
                 ));
@@ -104,6 +89,22 @@ fn mod_rs_files_only_declare_modules() {
     );
 }
 
+fn repo_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("crate should live under repo_root/crates")
+        .to_path_buf()
+}
+
+fn rust_code_files(repo_root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_rust_files(&repo_root.join("crates"), &mut files);
+    collect_rust_files(&repo_root.join("native"), &mut files);
+    files
+}
+
 fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
     let entries =
         fs::read_dir(dir).unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()));
@@ -112,6 +113,9 @@ fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
             .unwrap_or_else(|err| panic!("failed to inspect {}: {err}", dir.display()))
             .path();
         if path.is_dir() {
+            if path.file_name().and_then(|name| name.to_str()) == Some("target") {
+                continue;
+            }
             collect_rust_files(&path, files);
         } else if path.extension().is_some_and(|extension| extension == "rs") {
             files.push(path);

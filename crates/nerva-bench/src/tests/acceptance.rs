@@ -29,6 +29,9 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("no_ready_selection_scanned_slots=2"));
     assert!(json.contains("no_ready_selection_skipped_slots=2"));
     assert!(json.contains("\"topology_snapshot\""));
+    assert!(json.contains("cxl_devices="));
+    assert!(json.contains("cxl_memory_devices="));
+    assert!(json.contains("cxl_regions="));
     assert!(json.contains("\"synthetic_transaction\""));
     assert!(json.contains("\"synthetic_device_token\""));
     assert!(json.contains("\"critical_path_observability\""));

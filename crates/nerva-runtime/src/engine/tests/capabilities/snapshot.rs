@@ -20,7 +20,14 @@ fn capability_snapshot_reports_conservative_discrete_profile() {
             .as_deref()
             .is_none_or(|value| !value.is_empty())
     );
-    assert_eq!(snapshot.fabric, MemoryFabricKind::DiscreteExplicit);
+    assert_eq!(
+        snapshot.fabric,
+        if snapshot.cxl == CapabilityState::Unsupported {
+            MemoryFabricKind::DiscreteExplicit
+        } else {
+            MemoryFabricKind::CxlCoherentFabric
+        }
+    );
     assert!(matches!(
         snapshot.cuda,
         CapabilityState::SupportedAndVerified | CapabilityState::Unsupported
@@ -36,13 +43,19 @@ fn capability_snapshot_reports_conservative_discrete_profile() {
     ));
     assert_eq!(snapshot.amd_peerdirect, CapabilityState::Unsupported);
     assert_eq!(snapshot.dma_buf_export, CapabilityState::Unsupported);
-    assert_eq!(snapshot.cxl, CapabilityState::Unsupported);
+    assert_eq!(
+        snapshot.cxl,
+        crate::capabilities::discovery::cxl_capability(
+            snapshot.topology.cxl_device_count,
+            snapshot.topology.cxl_memory_device_count,
+        )
+    );
     assert!(snapshot.topology.cpu_count > 0);
 
     let json = snapshot.to_json();
     assert!(json.contains("\"target_os\":\"linux\""));
     assert!(json.contains("\"kernel_release\""));
-    assert!(json.contains("\"fabric\":\"DiscreteExplicit\""));
+    assert!(json.contains("\"fabric\""));
     assert!(json.contains("\"cuda_compute_capability\""));
     assert!(json.contains("\"cuda_device_total_memory_bytes\""));
     assert!(json.contains("\"cuda_pci_bus_id\""));
@@ -52,6 +65,7 @@ fn capability_snapshot_reports_conservative_discrete_profile() {
     assert!(json.contains("\"gpu_direct_rdma\""));
     assert!(json.contains("\"topology\""));
     assert!(json.contains("\"cpu_count\""));
+    assert!(json.contains("\"cxl_device_count\""));
 }
 
 #[test]
@@ -110,6 +124,9 @@ fn capability_snapshot_json_escapes_cuda_error() {
             pci_nvme_count: 1,
             block_device_count: 2,
             nvme_block_device_count: 1,
+            cxl_device_count: 2,
+            cxl_memory_device_count: 1,
+            cxl_region_count: 1,
             rdma_device_count: 1,
             rdma_device_names: vec!["mlx5_0".to_string()],
             rdma_netdev_links: vec!["mlx5_0:enp1s0f0".to_string()],
@@ -133,6 +150,9 @@ fn capability_snapshot_json_escapes_cuda_error() {
     assert!(json.contains("\"cpu_online\":\"0-1\""));
     assert!(json.contains("\"pci_root_complex_count\":1"));
     assert!(json.contains("\"pci_bus_count\":2"));
+    assert!(json.contains("\"cxl_device_count\":2"));
+    assert!(json.contains("\"cxl_memory_device_count\":1"));
+    assert!(json.contains("\"cxl_region_count\":1"));
     assert!(json.contains("\"rdma_device_names\":[\"mlx5_0\"]"));
     assert!(json.contains("\"rdma_netdev_links\":[\"mlx5_0:enp1s0f0\"]"));
     assert!(json.contains("\"iommu_mode\":\"passthrough_groups_present\""));

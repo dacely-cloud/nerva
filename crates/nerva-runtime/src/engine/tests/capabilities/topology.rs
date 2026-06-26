@@ -1,10 +1,13 @@
-use crate::capabilities::discovery::gpu_direct_rdma_capability;
+use crate::capabilities::discovery::{
+    cxl_capability, detected_memory_fabric, gpu_direct_rdma_capability,
+};
 use crate::capabilities::json::json_string_array;
 use crate::capabilities::linux::{
     count_linux_id_list, discover_iommu_mode, extract_iommu_kernel_args, parse_pci_class,
 };
 use crate::capabilities::snapshot::CapabilityState;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
+use nerva_core::types::memory::fabric::MemoryFabricKind;
 
 #[test]
 fn topology_snapshot_reports_basic_sysfs_counts() {
@@ -20,6 +23,8 @@ fn topology_snapshot_reports_basic_sysfs_counts() {
         assert!(snapshot.pci_bus_count >= snapshot.pci_root_complex_count);
     }
     assert!(snapshot.block_device_count >= snapshot.nvme_block_device_count);
+    assert!(snapshot.cxl_device_count >= snapshot.cxl_memory_device_count);
+    assert!(snapshot.cxl_device_count >= snapshot.cxl_region_count);
     assert_eq!(snapshot.rdma_device_count, snapshot.rdma_device_names.len());
     assert!(snapshot.rdma_netdev_links.len() >= snapshot.rdma_device_names.len());
     assert!(!snapshot.iommu_mode.is_empty());
@@ -29,6 +34,9 @@ fn topology_snapshot_reports_basic_sysfs_counts() {
     assert!(json.contains("\"pci_root_complex_count\""));
     assert!(json.contains("\"pci_bus_count\""));
     assert!(json.contains("\"rdma_device_names\""));
+    assert!(json.contains("\"cxl_device_count\""));
+    assert!(json.contains("\"cxl_memory_device_count\""));
+    assert!(json.contains("\"cxl_region_count\""));
     assert!(json.contains("\"rdma_netdev_links\""));
     assert!(json.contains("\"iommu_mode\""));
 }
@@ -88,5 +96,17 @@ fn topology_helpers_parse_linux_id_and_pci_class_values() {
     assert_eq!(
         gpu_direct_rdma_capability(CapabilityState::SupportedAndVerified, 2, None),
         CapabilityState::DegradedToPinnedHost
+    );
+
+    assert_eq!(cxl_capability(0, 0), CapabilityState::Unsupported);
+    assert_eq!(cxl_capability(1, 0), CapabilityState::SupportedUnverified);
+    assert_eq!(cxl_capability(1, 1), CapabilityState::SupportedUnverified);
+    assert_eq!(
+        detected_memory_fabric(CapabilityState::Unsupported),
+        MemoryFabricKind::DiscreteExplicit
+    );
+    assert_eq!(
+        detected_memory_fabric(CapabilityState::SupportedUnverified),
+        MemoryFabricKind::CxlCoherentFabric
     );
 }

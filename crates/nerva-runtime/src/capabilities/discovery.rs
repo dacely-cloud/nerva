@@ -36,13 +36,15 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
         topology.rdma_device_count,
         nvidia_peer_memory_module.as_deref(),
     );
+    let cxl = cxl_capability(topology.cxl_device_count, topology.cxl_memory_device_count);
+    let fabric = detected_memory_fabric(cxl);
 
     CapabilitySnapshot {
         host_arch: host_arch(),
         target_os: env::consts::OS,
         target_arch: env::consts::ARCH,
         kernel_release: read_trimmed_first_line("/proc/sys/kernel/osrelease"),
-        fabric: MemoryFabricKind::DiscreteExplicit,
+        fabric,
         cuda,
         cuda_status,
         cuda_error: cuda_smoke.error,
@@ -60,7 +62,7 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
         gpu_direct_rdma,
         amd_peerdirect: CapabilityState::Unsupported,
         dma_buf_export: CapabilityState::Unsupported,
-        cxl: CapabilityState::Unsupported,
+        cxl,
         topology,
     }
 }
@@ -100,5 +102,24 @@ pub(crate) fn gpu_direct_rdma_capability(
         CapabilityState::SupportedUnverified
     } else {
         CapabilityState::DegradedToPinnedHost
+    }
+}
+
+pub(crate) fn cxl_capability(
+    cxl_device_count: usize,
+    cxl_memory_device_count: usize,
+) -> CapabilityState {
+    if cxl_memory_device_count > 0 || cxl_device_count > 0 {
+        CapabilityState::SupportedUnverified
+    } else {
+        CapabilityState::Unsupported
+    }
+}
+
+pub(crate) fn detected_memory_fabric(cxl: CapabilityState) -> MemoryFabricKind {
+    if cxl != CapabilityState::Unsupported {
+        MemoryFabricKind::CxlCoherentFabric
+    } else {
+        MemoryFabricKind::DiscreteExplicit
     }
 }

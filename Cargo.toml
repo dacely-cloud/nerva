@@ -11,6 +11,7 @@ members = [
     "crates/nerva-bench",
     "tools/compare_ledgers",
 ]
+exclude = ["native/dpdk/dpdk-shim"]
 
 [workspace.package]
 version = "0.1.0"

@@ -26,7 +26,8 @@ use std::time::Instant;
 use dpdk_shim::eal::{Eal, EalArgs};
 use dpdk_shim::flow::install_tcp_port_flow_rule;
 use dpdk_shim::mempool::Mempool;
-use dpdk_shim::port::{Port, PortConfig};
+use dpdk_shim::port::config::PortConfig;
+use dpdk_shim::port::device::Port;
 use dpdk_shim::queue::RxQueue;
 
 fn main() -> anyhow::Result<()> {
