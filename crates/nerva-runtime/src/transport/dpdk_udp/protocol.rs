@@ -1,5 +1,6 @@
 use crate::capabilities::snapshot::CapabilityState;
 use crate::transport::dpdk_udp::config::{DpdkUdpProbeConfig, validate_dpdk_udp_config};
+use crate::transport::dpdk_udp::math::{div_ceil_u32, div_ceil_usize};
 use nerva_core::types::error::{NervaError, Result};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -43,6 +44,7 @@ pub struct DpdkUdpProtocolPlan {
     pub preposted_receives: u32,
     pub credit_windows: u32,
     pub credit_stalls: u32,
+    pub credit_stall_ns: u64,
     pub sender_retention_chunks: u32,
     pub receiver_bitmap_words: u32,
     pub nack_ranges: u32,
@@ -131,6 +133,11 @@ pub fn plan_dpdk_udp_protocol(
         })?;
     let credit_windows = div_ceil_u32(chunk_count, config.credit_window_chunks);
     let credit_stalls = credit_windows.saturating_sub(1);
+    let credit_stall_ns = u64::from(credit_stalls)
+        .checked_mul(config.credit_stall_ns_per_window)
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "DPDK UDP credit stall cost overflowed".to_string(),
+        })?;
     let receiver_bitmap_words = div_ceil_u32(config.receiver_bitmap_chunks, 64);
 
     Ok(DpdkUdpProtocolPlan {
@@ -147,6 +154,7 @@ pub fn plan_dpdk_udp_protocol(
         preposted_receives: chunk_count,
         credit_windows,
         credit_stalls,
+        credit_stall_ns,
         sender_retention_chunks: config.sender_retention_chunks,
         receiver_bitmap_words,
         nack_ranges,
@@ -181,20 +189,4 @@ fn plan_chunks(config: DpdkUdpProbeConfig, chunk_count: u32) -> Result<Vec<DpdkU
         });
     }
     Ok(chunks)
-}
-
-fn div_ceil_usize(value: usize, divisor: usize) -> Result<u32> {
-    let count = value
-        .checked_add(divisor - 1)
-        .and_then(|sum| sum.checked_div(divisor))
-        .ok_or_else(|| NervaError::InvalidArgument {
-            reason: "DPDK UDP chunk count overflowed".to_string(),
-        })?;
-    u32::try_from(count).map_err(|_| NervaError::InvalidArgument {
-        reason: "DPDK UDP chunk count exceeds u32".to_string(),
-    })
-}
-
-fn div_ceil_u32(value: u32, divisor: u32) -> u32 {
-    value.saturating_add(divisor.saturating_sub(1)) / divisor
 }

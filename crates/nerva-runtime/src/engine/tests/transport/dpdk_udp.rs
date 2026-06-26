@@ -27,6 +27,7 @@ fn dpdk_udp_protocol_plans_bounded_decode_activation_chunks() {
     assert_eq!(plan.selective_retransmits, 1);
     assert_eq!(plan.ack_packets, 0);
     assert_eq!(plan.credit_stalls, 0);
+    assert_eq!(plan.credit_stall_ns, 0);
     assert!(plan.total_wire_bytes > config.payload_bytes);
     assert!(plan.chunks.iter().all(|chunk| chunk.retained_by_sender));
     assert_eq!(
@@ -63,6 +64,7 @@ fn dpdk_udp_protocol_reports_credit_pressure_windows() {
     assert_eq!(plan.chunk_count, 8);
     assert_eq!(plan.credit_windows, 3);
     assert_eq!(plan.credit_stalls, 2);
+    assert_eq!(plan.credit_stall_ns, 1_500);
     assert_eq!(plan.preposted_receives, 8);
     assert_eq!(plan.nack_ranges, 0);
     assert_eq!(plan.selective_retransmits, 0);
@@ -84,6 +86,7 @@ fn dpdk_udp_probe_reports_pinned_host_fallback_without_hot_allocations() {
     assert_eq!(summary.nack_ranges, 1);
     assert_eq!(summary.selective_retransmits, 1);
     assert_eq!(summary.ack_packets, 0);
+    assert_eq!(summary.credit_stall_ns, 0);
     assert_eq!(summary.pageable_copies, 0);
     assert_eq!(summary.per_token_registrations, 0);
     assert_eq!(summary.hot_path_allocations, 0);

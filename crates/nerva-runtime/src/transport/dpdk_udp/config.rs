@@ -13,6 +13,7 @@ pub struct DpdkUdpProbeConfig {
     pub protocol_header_bytes: usize,
     pub mode: TransferMode,
     pub credit_window_chunks: u32,
+    pub credit_stall_ns_per_window: u64,
     pub sender_retention_chunks: u32,
     pub receiver_bitmap_chunks: u32,
     pub packet_loss_period: u32,
@@ -31,6 +32,7 @@ impl DpdkUdpProbeConfig {
             protocol_header_bytes: 64,
             mode: TransferMode::Decode,
             credit_window_chunks: 8,
+            credit_stall_ns_per_window: 750,
             sender_retention_chunks: 16,
             receiver_bitmap_chunks: 64,
             packet_loss_period: 5,
@@ -91,6 +93,11 @@ pub(crate) fn validate_dpdk_udp_config(config: DpdkUdpProbeConfig) -> Result<()>
     if config.credit_window_chunks == 0 {
         return Err(NervaError::InvalidArgument {
             reason: "DPDK UDP credit window must be non-zero".to_string(),
+        });
+    }
+    if config.credit_stall_ns_per_window == 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: "DPDK UDP credit stall cost must be non-zero".to_string(),
         });
     }
     if config.sender_retention_chunks == 0 {

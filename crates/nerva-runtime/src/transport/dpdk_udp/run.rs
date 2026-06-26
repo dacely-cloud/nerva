@@ -56,6 +56,19 @@ pub fn run_dpdk_udp_protocol_probe(
             });
         }
     }
+    for _ in 0..plan.credit_stalls {
+        ledger.record(LedgerEvent {
+            kind: LedgerEventKind::Transport,
+            sync_class: None,
+            metric_source: MetricSource::EstimatedModel,
+            block_id: None,
+            from_tier: Some(MemoryTier::PinnedDram),
+            to_tier: Some(MemoryTier::PinnedDram),
+            bytes: 0,
+            latency_ns: config.credit_stall_ns_per_window,
+            label: "dpdk_udp_credit_window_stall",
+        });
+    }
 
     ledger.record_sync(
         SyncClass::PhaseHandoff,
@@ -89,6 +102,7 @@ pub fn run_dpdk_udp_protocol_probe(
         credit_window_chunks: config.credit_window_chunks,
         credit_windows: plan.credit_windows,
         credit_stalls: plan.credit_stalls,
+        credit_stall_ns: plan.credit_stall_ns,
         sender_retention_chunks: plan.sender_retention_chunks,
         receiver_bitmap_words: plan.receiver_bitmap_words,
         nack_ranges: plan.nack_ranges,

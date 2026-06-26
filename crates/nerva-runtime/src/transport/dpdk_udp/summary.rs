@@ -29,6 +29,7 @@ pub struct DpdkUdpProtocolSummary {
     pub credit_window_chunks: u32,
     pub credit_windows: u32,
     pub credit_stalls: u32,
+    pub credit_stall_ns: u64,
     pub sender_retention_chunks: u32,
     pub receiver_bitmap_words: u32,
     pub nack_ranges: u32,
@@ -57,6 +58,8 @@ impl DpdkUdpProtocolSummary {
         matches!(self.status, DpdkUdpProtocolStatus::Ok)
             && self.chunks > 0
             && self.preposted_receives == self.chunks
+            && ((self.credit_stalls == 0 && self.credit_stall_ns == 0)
+                || (self.credit_stalls > 0 && self.credit_stall_ns > 0))
             && self.sender_retention_chunks >= self.chunks
             && self.receiver_bitmap_words > 0
             && self.ack_packets == 0
@@ -77,7 +80,7 @@ impl DpdkUdpProtocolSummary {
             DpdkUdpProtocolStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"protocol_version\":{},\"request_id\":{},\"sequence_id\":{},\"block_id\":{},\"block_version\":{},\"mode\":\"{}\",\"selected_path\":\"{}\",\"capability_result\":\"{}\",\"payload_bytes\":{},\"chunk_payload_bytes\":{},\"chunks\":{},\"protocol_header_bytes\":{},\"total_wire_bytes\":{},\"preposted_receives\":{},\"credit_window_chunks\":{},\"credit_windows\":{},\"credit_stalls\":{},\"sender_retention_chunks\":{},\"receiver_bitmap_words\":{},\"nack_ranges\":{},\"selective_retransmits\":{},\"ack_packets\":{},\"mbufs_preallocated\":{},\"rings_preallocated\":{},\"direct_gpu_memory_claimed\":{},\"pinned_host_required\":{},\"fallback_decisions\":{},\"transport_events\":{},\"phase_handoff_syncs\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"protocol_version\":{},\"request_id\":{},\"sequence_id\":{},\"block_id\":{},\"block_version\":{},\"mode\":\"{}\",\"selected_path\":\"{}\",\"capability_result\":\"{}\",\"payload_bytes\":{},\"chunk_payload_bytes\":{},\"chunks\":{},\"protocol_header_bytes\":{},\"total_wire_bytes\":{},\"preposted_receives\":{},\"credit_window_chunks\":{},\"credit_windows\":{},\"credit_stalls\":{},\"credit_stall_ns\":{},\"sender_retention_chunks\":{},\"receiver_bitmap_words\":{},\"nack_ranges\":{},\"selective_retransmits\":{},\"ack_packets\":{},\"mbufs_preallocated\":{},\"rings_preallocated\":{},\"direct_gpu_memory_claimed\":{},\"pinned_host_required\":{},\"fallback_decisions\":{},\"transport_events\":{},\"phase_handoff_syncs\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             self.protocol_version,
             self.request_id,
@@ -96,6 +99,7 @@ impl DpdkUdpProtocolSummary {
             self.credit_window_chunks,
             self.credit_windows,
             self.credit_stalls,
+            self.credit_stall_ns,
             self.sender_retention_chunks,
             self.receiver_bitmap_words,
             self.nack_ranges,

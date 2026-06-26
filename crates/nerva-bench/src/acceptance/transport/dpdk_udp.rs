@@ -22,13 +22,14 @@ pub(crate) fn push_dpdk_udp_protocol(report: &mut AcceptanceReport, runtime: &Ru
                 && summary.nack_ranges == 1
                 && summary.selective_retransmits == 1
                 && summary.ack_packets == 0
+                && summary.credit_stall_ns == 0
                 && !summary.direct_gpu_memory_claimed
                 && summary.pinned_host_required
                 && summary.pageable_copies == 0
                 && summary.per_token_registrations == 0
                 && summary.hot_path_allocations == 0,
             format!(
-                "version={} request={} sequence={} block={} block_version={} path={} capability={:?} payload_bytes={} chunks={} wire_bytes={} preposted_receives={} credit_window={} credit_stalls={} sender_retention={} bitmap_words={} nack_ranges={} retransmits={} ack_packets={} mbufs={} rings={} direct_gpu_memory_claimed={} pinned_host_required={} fallback_decisions={} transport_events={} phase_handoff_syncs={} pageable_copies={} per_token_registrations={} hot_path_allocations={}",
+                "version={} request={} sequence={} block={} block_version={} path={} capability={:?} payload_bytes={} chunks={} wire_bytes={} preposted_receives={} credit_window={} credit_stalls={} credit_stall_ns={} sender_retention={} bitmap_words={} nack_ranges={} retransmits={} ack_packets={} mbufs={} rings={} direct_gpu_memory_claimed={} pinned_host_required={} fallback_decisions={} transport_events={} phase_handoff_syncs={} pageable_copies={} per_token_registrations={} hot_path_allocations={}",
                 summary.protocol_version,
                 summary.request_id,
                 summary.sequence_id,
@@ -42,6 +43,7 @@ pub(crate) fn push_dpdk_udp_protocol(report: &mut AcceptanceReport, runtime: &Ru
                 summary.preposted_receives,
                 summary.credit_window_chunks,
                 summary.credit_stalls,
+                summary.credit_stall_ns,
                 summary.sender_retention_chunks,
                 summary.receiver_bitmap_words,
                 summary.nack_ranges,
@@ -76,6 +78,7 @@ pub(crate) fn push_dpdk_udp_credit_pressure(report: &mut AcceptanceReport, runti
                 && summary.credit_window_chunks == 3
                 && summary.credit_windows == 3
                 && summary.credit_stalls == 2
+                && summary.credit_stall_ns == 1_500
                 && summary.nack_ranges == 0
                 && summary.selective_retransmits == 0
                 && summary.preposted_receives == summary.chunks
@@ -83,11 +86,12 @@ pub(crate) fn push_dpdk_udp_credit_pressure(report: &mut AcceptanceReport, runti
                 && summary.per_token_registrations == 0
                 && summary.hot_path_allocations == 0,
             format!(
-                "chunks={} credit_window={} credit_windows={} credit_stalls={} preposted_receives={} nack_ranges={} retransmits={} fallback_decisions={} pageable_copies={} per_token_registrations={} hot_path_allocations={}",
+                "chunks={} credit_window={} credit_windows={} credit_stalls={} credit_stall_ns={} preposted_receives={} nack_ranges={} retransmits={} fallback_decisions={} pageable_copies={} per_token_registrations={} hot_path_allocations={}",
                 summary.chunks,
                 summary.credit_window_chunks,
                 summary.credit_windows,
                 summary.credit_stalls,
+                summary.credit_stall_ns,
                 summary.preposted_receives,
                 summary.nack_ranges,
                 summary.selective_retransmits,
