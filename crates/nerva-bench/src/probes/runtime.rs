@@ -54,3 +54,9 @@ pub(crate) fn run_request_state_probe() -> Result<String, String> {
         .map(|summary| summary.to_json())
         .map_err(|err| format!("request state probe failed: {err:?}"))
 }
+
+pub(crate) fn run_request_scheduler_probe() -> Result<String, String> {
+    nerva_runtime::request::scheduler::probe::run_request_scheduler_probe()
+        .map(|summary| summary.to_json())
+        .map_err(|err| format!("request scheduler probe failed: {err:?}"))
+}

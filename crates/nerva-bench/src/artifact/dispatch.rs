@@ -68,6 +68,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "correctness" => runtime::run_correctness_validation_probe(),
         "production-invariants" => runtime::run_production_invariant_probe(),
         "request-state" => runtime::run_request_state_probe(),
+        "request-scheduler" => runtime::run_request_scheduler_probe(),
         "topology" => runtime::run_topology_probe(),
         "synthetic" => {
             let steps = parse_optional_u64(args.first().cloned(), 1024, "steps")?;

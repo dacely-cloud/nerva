@@ -20,6 +20,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"correctness_exactness_validation\""));
     assert!(json.contains("\"production_ledger_invariants\""));
     assert!(json.contains("\"request_state_machine\""));
+    assert!(json.contains("\"request_scheduler_admission\""));
     assert!(json.contains("\"topology_snapshot\""));
     assert!(json.contains("\"synthetic_transaction\""));
     assert!(json.contains("\"synthetic_device_token\""));

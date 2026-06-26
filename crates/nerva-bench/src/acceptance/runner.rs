@@ -28,6 +28,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     correctness::push_correctness_validation(&mut report, &runtime);
     production::push_production_invariants(&mut report, &runtime);
     request::push_request_state(&mut report);
+    request::push_request_scheduler(&mut report);
     environment::push_topology_snapshot(&mut report, &runtime);
     runtime_checks::push_synthetic_decode(&mut report, &runtime);
     runtime_checks::push_critical_path(&mut report, &runtime);

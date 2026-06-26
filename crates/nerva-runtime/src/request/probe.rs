@@ -72,7 +72,7 @@ fn tiny_prompt_tokens(prompt: &str) -> Result<Vec<TokenId>> {
         .map(|tokenization| tokenization.tokens)
 }
 
-fn next_cycle_token(seed: TokenId) -> TokenId {
+pub(crate) fn next_cycle_token(seed: TokenId) -> TokenId {
     TokenId((seed.0 + 1) % 4)
 }
 

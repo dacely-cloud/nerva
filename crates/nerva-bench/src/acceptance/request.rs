@@ -26,3 +26,30 @@ pub(crate) fn push_request_state(report: &mut AcceptanceReport) {
         Err(err) => report.push("request_state_machine", false, format!("{err:?}")),
     }
 }
+
+pub(crate) fn push_request_scheduler(report: &mut AcceptanceReport) {
+    match nerva_runtime::request::scheduler::probe::run_request_scheduler_probe() {
+        Ok(summary) => report.push(
+            "request_scheduler_admission",
+            summary.passed(),
+            format!(
+                "capacity={} admitted={} active={} completed={} full_rejections={} duplicate_rejections={} missing_request_rejections={} iterations={} max_active={} generated_tokens={} host_observed_tokens={} bounded_slots={} unbounded_queue_ops={} hot_path_allocations={}",
+                summary.capacity,
+                summary.admitted_requests,
+                summary.active_requests,
+                summary.completed_requests,
+                summary.full_rejections,
+                summary.duplicate_rejections,
+                summary.missing_request_rejections,
+                summary.scheduler_iterations,
+                summary.max_active_requests,
+                summary.generated_tokens,
+                summary.host_observed_tokens,
+                summary.bounded_slots,
+                summary.unbounded_queue_ops,
+                summary.hot_path_allocations,
+            ),
+        ),
+        Err(err) => report.push("request_scheduler_admission", false, format!("{err:?}")),
+    }
+}
