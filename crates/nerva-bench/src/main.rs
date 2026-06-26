@@ -131,6 +131,30 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("resident-shards") => {
+            let config_path = args.next();
+            let index_path = args.next();
+            let checkpoint_dir = args.next();
+            let max_task_bytes =
+                match parse_optional_usize(args.next(), 16 * 1024 * 1024, "max_task_bytes") {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        eprintln!("{reason}");
+                        return ExitCode::from(2);
+                    }
+                };
+            match run_resident_shard_probe(config_path, index_path, checkpoint_dir, max_task_bytes)
+            {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(reason) => {
+                    eprintln!("{reason}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         Some("resident-weights") => match run_resident_weight_probe(args.next()) {
             Ok(json) => {
                 println!("{json}");
@@ -193,7 +217,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
             );
             ExitCode::from(2)
         }
@@ -322,11 +346,49 @@ fn run_safetensors_shard_probe(
     index_path: Option<String>,
     checkpoint_dir: Option<String>,
 ) -> Result<String, String> {
+    let shard_plan = load_safetensors_shard_plan(config_path, index_path, checkpoint_dir)?;
+    Ok(format!(
+        "{{\"status\":\"ok\",\"plan\":{}}}",
+        shard_plan.to_json()
+    ))
+}
+
+fn run_resident_shard_probe(
+    config_path: Option<String>,
+    index_path: Option<String>,
+    checkpoint_dir: Option<String>,
+    max_task_bytes: usize,
+) -> Result<String, String> {
+    let shard_plan = load_safetensors_shard_plan(config_path, index_path, checkpoint_dir)?;
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let table = runtime
+        .materialize_safetensors_shard_plan(&shard_plan)
+        .map_err(|err| format!("resident shard materialization failed: {err:?}"))?;
+    let prefetch = runtime
+        .plan_resident_weight_prefetch(&table, max_task_bytes)
+        .map_err(|err| format!("resident weight prefetch planning failed: {err:?}"))?;
+    Ok(format!(
+        "{{\"status\":\"ok\",\"blocks\":{},\"total_weight_bytes\":{},\"dram_used_bytes\":{},\"residency_decisions\":{},\"manifest_hash\":{},\"prefetch\":{}}}",
+        table.entries.len(),
+        table.total_weight_bytes,
+        table.registry.used_bytes(nerva_core::MemoryTier::Dram),
+        table.ledger.residency_decisions.len(),
+        table.manifest_hash,
+        prefetch.to_json(),
+    ))
+}
+
+fn load_safetensors_shard_plan(
+    config_path: Option<String>,
+    index_path: Option<String>,
+    checkpoint_dir: Option<String>,
+) -> Result<nerva_model::SafetensorsShardPlan, String> {
     let (Some(config_path), Some(index_path), Some(checkpoint_dir)) =
         (config_path, index_path, checkpoint_dir)
     else {
         return Err(
-            "safetensors-shards requires config.json, model.safetensors.index.json, and checkpoint_dir"
+            "sharded safetensors probes require config.json, model.safetensors.index.json, and checkpoint_dir"
                 .to_string(),
         );
     };
@@ -354,16 +416,8 @@ fn run_safetensors_shard_probe(
             nerva_model::SafetensorsShardHeader::new(file_name, header_json)
         })
         .collect::<Vec<_>>();
-    let shard_plan = nerva_model::plan_safetensors_shards_for_manifest(
-        &index_json,
-        &shard_header_refs,
-        &manifest,
-    )
-    .map_err(|err| format!("safetensors shard plan failed: {err:?}"))?;
-    Ok(format!(
-        "{{\"status\":\"ok\",\"plan\":{}}}",
-        shard_plan.to_json()
-    ))
+    nerva_model::plan_safetensors_shards_for_manifest(&index_json, &shard_header_refs, &manifest)
+        .map_err(|err| format!("safetensors shard plan failed: {err:?}"))
 }
 
 fn read_safetensors_header_only(path: &Path) -> Result<String, String> {
@@ -524,6 +578,18 @@ mod tests {
         assert!(json.contains("\"status\":\"ok\""));
         assert!(json.contains("\"entries\":20"));
         assert!(json.contains("\"shards\":2"));
+
+        let resident_json = run_resident_shard_probe(
+            Some(config_path.to_string_lossy().into_owned()),
+            Some(index_path.to_string_lossy().into_owned()),
+            Some(dir.to_string_lossy().into_owned()),
+            128,
+        )
+        .unwrap();
+        assert!(resident_json.contains("\"status\":\"ok\""));
+        assert!(resident_json.contains("\"blocks\":20"));
+        assert!(resident_json.contains("\"prefetch\""));
+        assert!(resident_json.contains("\"tasks\":20"));
 
         let _ = std::fs::remove_file(dir.join(SHARD_ONE));
         let _ = std::fs::remove_file(dir.join(SHARD_TWO));
