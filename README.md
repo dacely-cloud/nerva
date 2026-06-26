@@ -47,6 +47,9 @@ cargo run -p nerva-bench -- smoke
 
 The smoke command dynamically loads the CUDA driver on Linux. It builds without
 a CUDA SDK, and reports `status=unavailable` if no NVIDIA driver/GPU is present.
+It must run with access to the NVIDIA device nodes; sandboxed processes that
+cannot see `/dev/nvidia*` will report CUDA as unavailable even when `nvidia-smi`
+works outside that sandbox.
 
 ## Native Setup
 

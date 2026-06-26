@@ -371,7 +371,7 @@ fn run_smoke() -> Result<CudaSmokeSummary, SmokeError> {
     let result = unsafe { (driver.cu_init)(0) };
     if result == CUDA_ERROR_NO_DEVICE {
         return Err(SmokeError::Unavailable(format!(
-            "cuInit reported {}",
+            "cuInit reported {}; no CUDA compute device is accessible to this process. Check /dev/nvidia* visibility and CUDA_VISIBLE_DEVICES.",
             driver.describe_result(result)
         )));
     }
