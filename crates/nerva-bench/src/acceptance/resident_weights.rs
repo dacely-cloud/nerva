@@ -32,6 +32,8 @@ pub(crate) fn resident_weight_execution_acceptance(
         && !plan.steps.is_empty()
         && plan.gpu_resident_steps > 0
         && plan.gpu_staged_steps > 0
+        && plan.measured_candidate_costs() > 0
+        && plan.estimated_candidate_costs() > 0
         && plan.block_version_dependencies == plan.steps.len() as u64
         && plan.ledger.hot_path_allocations == 0
         && run.steps == plan.steps.len()
@@ -43,7 +45,7 @@ pub(crate) fn resident_weight_execution_acceptance(
     Ok((
         passed,
         format!(
-            "hotset_considered={} promoted_blocks={} kept_dram_blocks={} budget_limited_blocks={} capacity_limited_blocks={} hotset_decisions={} plan_steps={} plan_gpu_resident={} plan_gpu_staged={} plan_fallbacks={} plan_block_versions={} run_steps={} run_gpu_resident={} run_gpu_staged={} run_fallbacks={} run_block_versions={} hot_path_allocations={}",
+            "hotset_considered={} promoted_blocks={} kept_dram_blocks={} budget_limited_blocks={} capacity_limited_blocks={} hotset_decisions={} plan_steps={} plan_gpu_resident={} plan_gpu_staged={} plan_fallbacks={} plan_measured_candidate_costs={} plan_estimated_candidate_costs={} plan_block_versions={} run_steps={} run_gpu_resident={} run_gpu_staged={} run_fallbacks={} run_block_versions={} hot_path_allocations={}",
             hotset.considered_blocks,
             hotset.promoted_blocks,
             hotset.kept_dram_blocks,
@@ -54,6 +56,8 @@ pub(crate) fn resident_weight_execution_acceptance(
             plan.gpu_resident_steps,
             plan.gpu_staged_steps,
             plan.fallback_decisions,
+            plan.measured_candidate_costs(),
+            plan.estimated_candidate_costs(),
             plan.block_version_dependencies,
             run.steps,
             run.gpu_resident_steps,

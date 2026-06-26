@@ -8,9 +8,10 @@ use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::engine::resident_weights::execution::selection::{
-    resident_weight_candidate_costs, select_resident_weight_strategy,
+    ResidentWeightCostModel, resident_weight_candidate_costs, select_resident_weight_strategy,
 };
 use crate::engine::runtime::Runtime;
+use crate::measurements::probe::run_measurement_table_probe;
 use crate::weights::block::ResidentWeightTable;
 use crate::weights::execution::plan::ResidentWeightExecutionPlan;
 use crate::weights::execution::step::ResidentWeightExecutionStep;
@@ -30,6 +31,8 @@ impl Runtime {
         }
 
         let registry = bootstrap_registry();
+        let measurements = run_measurement_table_probe()?;
+        let cost_model = ResidentWeightCostModel::from_measurements(&measurements.entries)?;
         let mut ledger = TokenLedger::new(0);
         let mut steps = Vec::new();
         let mut total_weight_bytes = 0usize;
@@ -70,6 +73,7 @@ impl Runtime {
                 entry,
                 self.config.device,
                 compute_capability,
+                cost_model,
             )?;
 
             total_weight_bytes = total_weight_bytes.checked_add(entry.bytes).ok_or_else(|| {
@@ -95,11 +99,11 @@ impl Runtime {
             ledger.record_execution_decision(ExecutionDecision {
                 operation: "resident_weight_dense_matvec",
                 executor_selected: selection.executor,
-                candidate_costs: resident_weight_candidate_costs(entry.bytes),
+                candidate_costs: resident_weight_candidate_costs(entry.bytes, cost_model),
                 reason: selection.reason,
                 predicted_visible_ns: selection.predicted_visible_ns,
                 actual_visible_ns: Some(0),
-                metric_source: MetricSource::EstimatedModel,
+                metric_source: selection.metric_source,
             });
             if selection.fallback {
                 ledger.record_fallback_decision(FallbackDecision {

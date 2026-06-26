@@ -1,3 +1,5 @@
+use nerva_core::types::cost::source::CostSource;
+use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::weights::execution::step::ResidentWeightExecutionStep;
@@ -20,9 +22,33 @@ pub struct ResidentWeightExecutionPlan {
 }
 
 impl ResidentWeightExecutionPlan {
+    pub fn runtime_timestamp_decisions(&self) -> u64 {
+        self.ledger
+            .execution_decisions
+            .iter()
+            .filter(|decision| decision.metric_source == MetricSource::RuntimeTimestamp)
+            .count() as u64
+    }
+
+    pub fn estimated_decisions(&self) -> u64 {
+        self.ledger
+            .execution_decisions
+            .iter()
+            .filter(|decision| decision.metric_source == MetricSource::EstimatedModel)
+            .count() as u64
+    }
+
+    pub fn measured_candidate_costs(&self) -> u64 {
+        self.candidate_costs_with_source(CostSource::Measured)
+    }
+
+    pub fn estimated_candidate_costs(&self) -> u64 {
+        self.candidate_costs_with_source(CostSource::Estimated)
+    }
+
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_predicted_visible_ns\":{},\"cpu_steps\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"fallback_decisions\":{},\"block_version_dependencies\":{},\"first_tensor\":{},\"last_tensor\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
+            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_predicted_visible_ns\":{},\"cpu_steps\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"fallback_decisions\":{},\"block_version_dependencies\":{},\"first_tensor\":{},\"last_tensor\":{},\"execution_decisions\":{},\"runtime_timestamp_decisions\":{},\"estimated_decisions\":{},\"measured_candidate_costs\":{},\"estimated_candidate_costs\":{},\"hot_path_allocations\":{}}}",
             self.steps.len(),
             self.total_weight_bytes,
             self.total_predicted_visible_ns,
@@ -35,7 +61,20 @@ impl ResidentWeightExecutionPlan {
             json_opt_string(self.first_tensor.as_deref()),
             json_opt_string(self.last_tensor.as_deref()),
             self.ledger.execution_decisions.len(),
+            self.runtime_timestamp_decisions(),
+            self.estimated_decisions(),
+            self.measured_candidate_costs(),
+            self.estimated_candidate_costs(),
             self.ledger.hot_path_allocations,
         )
+    }
+
+    fn candidate_costs_with_source(&self, source: CostSource) -> u64 {
+        self.ledger
+            .execution_decisions
+            .iter()
+            .flat_map(|decision| decision.candidate_costs.iter())
+            .filter(|cost| cost.source == source)
+            .count() as u64
     }
 }

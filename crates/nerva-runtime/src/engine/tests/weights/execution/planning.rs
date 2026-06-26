@@ -23,6 +23,10 @@ fn resident_weight_execution_plans_gpu_staged_for_dram_fp16_weights() {
     assert_eq!(plan.fallback_decisions, 0);
     assert_eq!(plan.block_version_dependencies, 3);
     assert_eq!(plan.ledger.execution_decisions.len(), 3);
+    assert_eq!(plan.runtime_timestamp_decisions(), 0);
+    assert_eq!(plan.estimated_decisions(), 3);
+    assert_eq!(plan.measured_candidate_costs(), 6);
+    assert_eq!(plan.estimated_candidate_costs(), 6);
     assert!(plan.ledger.require_satisfied_block_versions().is_ok());
     assert_eq!(
         plan.steps[0].strategy,
@@ -33,6 +37,7 @@ fn resident_weight_execution_plans_gpu_staged_for_dram_fp16_weights() {
         "cuda_decode_dense_matvec_fp16_bf16"
     );
     assert!(plan.to_json().contains("\"gpu_staged_steps\":3"));
+    assert!(plan.to_json().contains("\"measured_candidate_costs\":6"));
 }
 
 #[test]
@@ -54,6 +59,8 @@ fn resident_weight_execution_uses_gpu_resident_hotset_blocks() {
 
     assert_eq!(plan.gpu_resident_steps, 2);
     assert_eq!(plan.gpu_staged_steps, 1);
+    assert!(plan.measured_candidate_costs() > 0);
+    assert!(plan.estimated_candidate_costs() > 0);
     assert_eq!(
         plan.steps[0].strategy,
         ResidentWeightExecutionStrategy::GpuResident
@@ -90,6 +97,8 @@ fn resident_weight_execution_uses_exact_cpu_fallback_for_f32_cuda() {
     assert_eq!(plan.cpu_steps, 2);
     assert_eq!(plan.fallback_steps, 2);
     assert_eq!(plan.fallback_decisions, 2);
+    assert!(plan.measured_candidate_costs() > 0);
+    assert!(plan.estimated_candidate_costs() > 0);
     assert_eq!(plan.ledger.fallback_count_for(FallbackClass::ExactNamed), 2);
     assert!(plan.steps.iter().all(|step| step.fallback));
     assert!(
