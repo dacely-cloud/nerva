@@ -2,6 +2,7 @@ use crate::capabilities::snapshot::CapabilitySnapshot;
 use crate::transport::path::types::TransportPathClass;
 use crate::transport::stage::config::StagePipelineConfig;
 use crate::transport::stage::plan::plan_stage_pipeline;
+use crate::transport::stage::route::probe_stage_route_validation;
 use crate::transport::stage::summary::{StagePipelineStatus, StagePipelineSummary};
 use nerva_core::types::error::Result;
 use nerva_core::types::id::DeviceOrdinal;
@@ -15,6 +16,7 @@ pub fn run_stage_pipeline_probe(
     capabilities: &CapabilitySnapshot,
 ) -> Result<StagePipelineSummary> {
     let plan = plan_stage_pipeline(config, device, capabilities)?;
+    let route_report = probe_stage_route_validation(&plan)?;
     let mut ledger = TokenLedger::new(0);
     for boundary in &plan.boundaries {
         boundary.decision.record_to_ledger(&mut ledger);
@@ -86,6 +88,13 @@ pub fn run_stage_pipeline_probe(
         host_staged_boundaries,
         cpu_produced_boundaries,
         mapped_pinned_boundaries,
+        stage_route_validations: route_report.route_validations,
+        stage_route_identity_checks: route_report.route_identity_checks,
+        wrong_source_stage_rejections: route_report.wrong_source_stage_rejections,
+        wrong_destination_stage_rejections: route_report.wrong_destination_stage_rejections,
+        non_adjacent_route_rejections: route_report.non_adjacent_route_rejections,
+        endpoint_identity_rejections: route_report.endpoint_identity_rejections,
+        activation_size_rejections: route_report.activation_size_rejections,
         fallback_decisions: ledger.fallback_count(),
         transport_events: ledger.event_count(LedgerEventKind::Transport),
         copy_events: ledger.event_count(LedgerEventKind::Copy),
