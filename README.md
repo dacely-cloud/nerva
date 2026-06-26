@@ -2,6 +2,8 @@
 
 <img src="./images/logo.svg" alt="Nerva" width="600" />
 
+---
+
 ### AI inference beyond the VRAM wall.
 
 #### An inference operating system for large models.
