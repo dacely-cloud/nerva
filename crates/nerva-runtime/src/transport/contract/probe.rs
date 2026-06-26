@@ -45,7 +45,7 @@ pub fn run_transport_contract_probe() -> Result<TransportContractSummary> {
                 reason: "transport contract destination block is missing".to_string(),
             })?;
 
-    let mut transport = PinnedHostLoopbackTransport::new(4, 2, 2)?;
+    let mut transport = PinnedHostLoopbackTransport::new(4, 4, 2)?;
     let mut ledger = TokenLedger::new(0);
     let endpoint = TransportEndpoint {
         device: TransportDeviceId(0),
@@ -85,6 +85,18 @@ pub fn run_transport_contract_probe() -> Result<TransportContractSummary> {
         ..receive
     };
     let _spare_posted = transport.post_receive(&endpoint, spare_receive)?;
+    let second_receive = ReceiveDescriptor {
+        request_id: RequestId(4),
+        sequence_id: SequenceId(4),
+        ..receive
+    };
+    let _second_posted = transport.post_receive(&endpoint, second_receive)?;
+    let full_completion_receive = ReceiveDescriptor {
+        request_id: RequestId(5),
+        sequence_id: SequenceId(5),
+        ..receive
+    };
+    let _full_completion_posted = transport.post_receive(&endpoint, full_completion_receive)?;
     let full_receive = ReceiveDescriptor {
         request_id: RequestId(3),
         sequence_id: SequenceId(3),
@@ -93,6 +105,19 @@ pub fn run_transport_contract_probe() -> Result<TransportContractSummary> {
     let receive_queue_full_rejections =
         u64::from(transport.post_receive(&endpoint, full_receive).is_err());
     let _sent = transport.send(&endpoint, transfer)?;
+    let second_transfer = TransferDescriptor {
+        request_id: RequestId(4),
+        sequence_id: SequenceId(4),
+        ..transfer
+    };
+    let _second_sent = transport.send(&endpoint, second_transfer)?;
+    let full_completion_transfer = TransferDescriptor {
+        request_id: RequestId(5),
+        sequence_id: SequenceId(5),
+        ..transfer
+    };
+    let completion_queue_full_rejections =
+        u64::from(transport.send(&endpoint, full_completion_transfer).is_err());
     let mut completions = [empty_completion()];
     let completion_count = transport.poll(&mut completions)?;
     record_completion(&mut ledger, completions[0]);
@@ -137,10 +162,12 @@ pub fn run_transport_contract_probe() -> Result<TransportContractSummary> {
         receive_queue_capacity: transport.receive_queue_capacity() as u64,
         completion_queue_capacity: transport.completion_queue_capacity() as u64,
         preposted_receives: transport.preposted_receives() as u64,
-        sends: 1,
+        pending_completions: transport.pending_completions() as u64,
+        sends: 2,
         completions: completion_count as u64,
         bytes_completed: completions[0].bytes,
         receive_queue_full_rejections,
+        completion_queue_full_rejections,
         unposted_send_rejections,
         stale_version_rejections,
         descriptor_rejections,

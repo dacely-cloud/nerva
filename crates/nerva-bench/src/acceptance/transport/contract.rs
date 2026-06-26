@@ -11,13 +11,15 @@ pub(crate) fn push_transport_contract(report: &mut AcceptanceReport, runtime: &R
                 && summary.passed()
                 && summary.registrations == 2
                 && summary.registered_entries == 2
-                && summary.receive_queue_capacity == 2
+                && summary.receive_queue_capacity == 4
                 && summary.completion_queue_capacity == 2
-                && summary.preposted_receives == 1
-                && summary.sends == 1
+                && summary.preposted_receives == 2
+                && summary.pending_completions == 1
+                && summary.sends == 2
                 && summary.completions == 1
                 && summary.bytes_completed == 32 * 1024
                 && summary.receive_queue_full_rejections == 1
+                && summary.completion_queue_full_rejections == 1
                 && summary.unposted_send_rejections == 1
                 && summary.stale_version_rejections == 1
                 && summary.descriptor_rejections == 1
@@ -29,17 +31,19 @@ pub(crate) fn push_transport_contract(report: &mut AcceptanceReport, runtime: &R
                 && summary.phase_handoff_syncs == 1
                 && summary.hot_path_allocations == 0,
             format!(
-                "backend={} registrations={} registered_entries={} receive_queue_capacity={} completion_queue_capacity={} preposted_receives={} sends={} completions={} bytes_completed={} receive_queue_full_rejections={} unposted_send_rejections={} stale_version_rejections={} descriptor_rejections={} pre_visibility_consume_rejections={} visibility_fences={} visible_consumes={} per_transfer_registrations={} transport_events={} phase_handoff_syncs={} hot_path_allocations={}",
+                "backend={} registrations={} registered_entries={} receive_queue_capacity={} completion_queue_capacity={} preposted_receives={} pending_completions={} sends={} completions={} bytes_completed={} receive_queue_full_rejections={} completion_queue_full_rejections={} unposted_send_rejections={} stale_version_rejections={} descriptor_rejections={} pre_visibility_consume_rejections={} visibility_fences={} visible_consumes={} per_transfer_registrations={} transport_events={} phase_handoff_syncs={} hot_path_allocations={}",
                 summary.backend,
                 summary.registrations,
                 summary.registered_entries,
                 summary.receive_queue_capacity,
                 summary.completion_queue_capacity,
                 summary.preposted_receives,
+                summary.pending_completions,
                 summary.sends,
                 summary.completions,
                 summary.bytes_completed,
                 summary.receive_queue_full_rejections,
+                summary.completion_queue_full_rejections,
                 summary.unposted_send_rejections,
                 summary.stale_version_rejections,
                 summary.descriptor_rejections,

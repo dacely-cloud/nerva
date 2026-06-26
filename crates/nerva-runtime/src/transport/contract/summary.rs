@@ -15,10 +15,12 @@ pub struct TransportContractSummary {
     pub receive_queue_capacity: u64,
     pub completion_queue_capacity: u64,
     pub preposted_receives: u64,
+    pub pending_completions: u64,
     pub sends: u64,
     pub completions: u64,
     pub bytes_completed: usize,
     pub receive_queue_full_rejections: u64,
+    pub completion_queue_full_rejections: u64,
     pub unposted_send_rejections: u64,
     pub stale_version_rejections: u64,
     pub descriptor_rejections: u64,
@@ -37,13 +39,15 @@ impl TransportContractSummary {
         matches!(self.status, TransportContractStatus::Ok)
             && self.registrations == 2
             && self.registered_entries == 2
-            && self.receive_queue_capacity == 2
+            && self.receive_queue_capacity == 4
             && self.completion_queue_capacity == 2
-            && self.preposted_receives == 1
-            && self.sends == 1
+            && self.preposted_receives == 2
+            && self.pending_completions == 1
+            && self.sends == 2
             && self.completions == 1
             && self.bytes_completed > 0
             && self.receive_queue_full_rejections == 1
+            && self.completion_queue_full_rejections == 1
             && self.unposted_send_rejections == 1
             && self.stale_version_rejections == 1
             && self.descriptor_rejections == 1
@@ -62,7 +66,7 @@ impl TransportContractSummary {
             TransportContractStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"backend\":\"{}\",\"registrations\":{},\"registered_entries\":{},\"receive_queue_capacity\":{},\"completion_queue_capacity\":{},\"preposted_receives\":{},\"sends\":{},\"completions\":{},\"bytes_completed\":{},\"receive_queue_full_rejections\":{},\"unposted_send_rejections\":{},\"stale_version_rejections\":{},\"descriptor_rejections\":{},\"pre_visibility_consume_rejections\":{},\"visibility_fences\":{},\"visible_consumes\":{},\"per_transfer_registrations\":{},\"transport_events\":{},\"phase_handoff_syncs\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"backend\":\"{}\",\"registrations\":{},\"registered_entries\":{},\"receive_queue_capacity\":{},\"completion_queue_capacity\":{},\"preposted_receives\":{},\"pending_completions\":{},\"sends\":{},\"completions\":{},\"bytes_completed\":{},\"receive_queue_full_rejections\":{},\"completion_queue_full_rejections\":{},\"unposted_send_rejections\":{},\"stale_version_rejections\":{},\"descriptor_rejections\":{},\"pre_visibility_consume_rejections\":{},\"visibility_fences\":{},\"visible_consumes\":{},\"per_transfer_registrations\":{},\"transport_events\":{},\"phase_handoff_syncs\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             self.backend,
             self.registrations,
@@ -70,10 +74,12 @@ impl TransportContractSummary {
             self.receive_queue_capacity,
             self.completion_queue_capacity,
             self.preposted_receives,
+            self.pending_completions,
             self.sends,
             self.completions,
             self.bytes_completed,
             self.receive_queue_full_rejections,
+            self.completion_queue_full_rejections,
             self.unposted_send_rejections,
             self.stale_version_rejections,
             self.descriptor_rejections,

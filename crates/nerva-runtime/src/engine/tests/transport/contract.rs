@@ -11,13 +11,15 @@ fn transport_contract_probe_requires_registered_preposted_transfer() {
     assert_eq!(summary.backend, "rdma_pinned_host");
     assert_eq!(summary.registrations, 2);
     assert_eq!(summary.registered_entries, 2);
-    assert_eq!(summary.receive_queue_capacity, 2);
+    assert_eq!(summary.receive_queue_capacity, 4);
     assert_eq!(summary.completion_queue_capacity, 2);
-    assert_eq!(summary.preposted_receives, 1);
-    assert_eq!(summary.sends, 1);
+    assert_eq!(summary.preposted_receives, 2);
+    assert_eq!(summary.pending_completions, 1);
+    assert_eq!(summary.sends, 2);
     assert_eq!(summary.completions, 1);
     assert_eq!(summary.bytes_completed, 32 * 1024);
     assert_eq!(summary.receive_queue_full_rejections, 1);
+    assert_eq!(summary.completion_queue_full_rejections, 1);
     assert_eq!(summary.unposted_send_rejections, 1);
     assert_eq!(summary.stale_version_rejections, 1);
     assert_eq!(summary.descriptor_rejections, 1);
@@ -33,11 +35,17 @@ fn transport_contract_probe_requires_registered_preposted_transfer() {
             .to_json()
             .contains("\"per_transfer_registrations\":0")
     );
-    assert!(summary.to_json().contains("\"preposted_receives\":1"));
+    assert!(summary.to_json().contains("\"preposted_receives\":2"));
+    assert!(summary.to_json().contains("\"pending_completions\":1"));
     assert!(
         summary
             .to_json()
             .contains("\"receive_queue_full_rejections\":1")
+    );
+    assert!(
+        summary
+            .to_json()
+            .contains("\"completion_queue_full_rejections\":1")
     );
     assert!(summary.to_json().contains("\"unposted_send_rejections\":1"));
     assert!(
