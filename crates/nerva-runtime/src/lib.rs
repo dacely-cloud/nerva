@@ -131,6 +131,9 @@ pub struct CapabilitySnapshot {
     pub hip: CapabilityState,
     pub hip_visible_devices: Option<String>,
     pub nvidia_driver_version: Option<String>,
+    pub rdma_core_loaded: bool,
+    pub mlx5_core_loaded: bool,
+    pub nvidia_peer_memory_module: Option<String>,
     pub pinned_host_staging: CapabilityState,
     pub gpu_direct_rdma: CapabilityState,
     pub amd_peerdirect: CapabilityState,
@@ -142,7 +145,7 @@ pub struct CapabilitySnapshot {
 impl CapabilitySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_pci_bus_id\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
+            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_pci_bus_id\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"nvidia_peer_memory_module\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
             host_arch_to_str(self.host_arch),
             self.target_os,
             self.target_arch,
@@ -158,6 +161,9 @@ impl CapabilitySnapshot {
             self.hip.as_str(),
             json_opt_string(self.hip_visible_devices.as_deref()),
             json_opt_string(self.nvidia_driver_version.as_deref()),
+            self.rdma_core_loaded,
+            self.mlx5_core_loaded,
+            json_opt_string(self.nvidia_peer_memory_module.as_deref()),
             self.pinned_host_staging.as_str(),
             self.gpu_direct_rdma.as_str(),
             self.amd_peerdirect.as_str(),
@@ -1715,6 +1721,15 @@ impl Runtime {
         let cuda_compute_capability = cuda_compute_capability(&cuda_smoke);
         let cuda_device_total_memory_bytes = cuda_smoke.device_total_memory_bytes;
         let cuda_pci_bus_id = cuda_smoke.pci_bus_id.clone();
+        let topology = discover_topology_snapshot();
+        let rdma_core_loaded = module_loaded("ib_core");
+        let mlx5_core_loaded = module_loaded("mlx5_core");
+        let nvidia_peer_memory_module = detect_nvidia_peer_memory_module();
+        let gpu_direct_rdma = gpu_direct_rdma_capability(
+            cuda,
+            topology.rdma_device_count,
+            nvidia_peer_memory_module.as_deref(),
+        );
 
         CapabilitySnapshot {
             host_arch: host_arch(),
@@ -1732,12 +1747,15 @@ impl Runtime {
             hip: CapabilityState::Unsupported,
             hip_visible_devices: env::var("HIP_VISIBLE_DEVICES").ok(),
             nvidia_driver_version: read_trimmed_first_line("/proc/driver/nvidia/version"),
+            rdma_core_loaded,
+            mlx5_core_loaded,
+            nvidia_peer_memory_module,
             pinned_host_staging: CapabilityState::SupportedUnverified,
-            gpu_direct_rdma: CapabilityState::DegradedToPinnedHost,
+            gpu_direct_rdma,
             amd_peerdirect: CapabilityState::Unsupported,
             dma_buf_export: CapabilityState::Unsupported,
             cxl: CapabilityState::Unsupported,
-            topology: discover_topology_snapshot(),
+            topology,
         }
     }
 
@@ -3185,6 +3203,34 @@ fn cuda_compute_capability(summary: &nerva_cuda::CudaSmokeSummary) -> Option<Str
     ))
 }
 
+fn module_loaded(name: &str) -> bool {
+    fs::metadata(format!("/sys/module/{name}"))
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+}
+
+fn detect_nvidia_peer_memory_module() -> Option<String> {
+    ["nvidia_peermem", "nv_peer_mem"]
+        .into_iter()
+        .find(|name| module_loaded(name))
+        .map(ToOwned::to_owned)
+}
+
+fn gpu_direct_rdma_capability(
+    cuda: CapabilityState,
+    rdma_device_count: usize,
+    nvidia_peer_memory_module: Option<&str>,
+) -> CapabilityState {
+    if cuda == CapabilityState::SupportedAndVerified
+        && rdma_device_count > 0
+        && nvidia_peer_memory_module.is_some()
+    {
+        CapabilityState::SupportedUnverified
+    } else {
+        CapabilityState::DegradedToPinnedHost
+    }
+}
+
 fn transport_matrix_request(
     requested_path: TransportMatrixRequestedPath,
     bytes: usize,
@@ -3816,10 +3862,10 @@ mod tests {
             snapshot.pinned_host_staging,
             CapabilityState::SupportedUnverified
         );
-        assert_eq!(
+        assert!(matches!(
             snapshot.gpu_direct_rdma,
-            CapabilityState::DegradedToPinnedHost
-        );
+            CapabilityState::DegradedToPinnedHost | CapabilityState::SupportedUnverified
+        ));
         assert_eq!(snapshot.amd_peerdirect, CapabilityState::Unsupported);
         assert_eq!(snapshot.dma_buf_export, CapabilityState::Unsupported);
         assert_eq!(snapshot.cxl, CapabilityState::Unsupported);
@@ -3832,7 +3878,10 @@ mod tests {
         assert!(json.contains("\"cuda_compute_capability\""));
         assert!(json.contains("\"cuda_device_total_memory_bytes\""));
         assert!(json.contains("\"cuda_pci_bus_id\""));
-        assert!(json.contains("\"gpu_direct_rdma\":\"DEGRADED_TO_PINNED_HOST\""));
+        assert!(json.contains("\"rdma_core_loaded\""));
+        assert!(json.contains("\"mlx5_core_loaded\""));
+        assert!(json.contains("\"nvidia_peer_memory_module\""));
+        assert!(json.contains("\"gpu_direct_rdma\""));
         assert!(json.contains("\"topology\""));
         assert!(json.contains("\"cpu_count\""));
     }
@@ -3855,8 +3904,11 @@ mod tests {
             hip: CapabilityState::Unsupported,
             hip_visible_devices: Some("2".to_string()),
             nvidia_driver_version: Some("driver\\version".to_string()),
+            rdma_core_loaded: true,
+            mlx5_core_loaded: true,
+            nvidia_peer_memory_module: Some("nvidia_peermem".to_string()),
             pinned_host_staging: CapabilityState::SupportedUnverified,
-            gpu_direct_rdma: CapabilityState::DegradedToPinnedHost,
+            gpu_direct_rdma: CapabilityState::SupportedUnverified,
             amd_peerdirect: CapabilityState::Unsupported,
             dma_buf_export: CapabilityState::Unsupported,
             cxl: CapabilityState::Unsupported,
@@ -3886,6 +3938,10 @@ mod tests {
         assert!(json.contains("\"cuda_compute_capability\":\"8.9\""));
         assert!(json.contains("\"cuda_device_total_memory_bytes\":25769803776"));
         assert!(json.contains("\"cuda_pci_bus_id\":\"0000:65:00.0\""));
+        assert!(json.contains("\"rdma_core_loaded\":true"));
+        assert!(json.contains("\"mlx5_core_loaded\":true"));
+        assert!(json.contains("\"nvidia_peer_memory_module\":\"nvidia_peermem\""));
+        assert!(json.contains("\"gpu_direct_rdma\":\"SUPPORTED_UNVERIFIED\""));
         assert!(json.contains("\"cpu_online\":\"0-1\""));
         assert!(json.contains("\"pci_root_complex_count\":1"));
         assert!(json.contains("\"pci_bus_count\":2"));
@@ -3943,6 +3999,31 @@ mod tests {
             "enabled_requested"
         );
         assert_eq!(discover_iommu_mode(0, None), "not_detected");
+
+        assert_eq!(
+            gpu_direct_rdma_capability(
+                CapabilityState::SupportedAndVerified,
+                2,
+                Some("nvidia_peermem")
+            ),
+            CapabilityState::SupportedUnverified
+        );
+        assert_eq!(
+            gpu_direct_rdma_capability(CapabilityState::Unsupported, 2, Some("nvidia_peermem")),
+            CapabilityState::DegradedToPinnedHost
+        );
+        assert_eq!(
+            gpu_direct_rdma_capability(
+                CapabilityState::SupportedAndVerified,
+                0,
+                Some("nv_peer_mem")
+            ),
+            CapabilityState::DegradedToPinnedHost
+        );
+        assert_eq!(
+            gpu_direct_rdma_capability(CapabilityState::SupportedAndVerified, 2, None),
+            CapabilityState::DegradedToPinnedHost
+        );
     }
 
     #[test]

@@ -487,12 +487,19 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         "capability_provenance",
         capability_passed,
         format!(
-            "target={}-{} kernel_present={} fabric={:?} pinned_host_staging={:?} topology_cpu_count={}",
+            "target={}-{} kernel_present={} fabric={:?} pinned_host_staging={:?} gpu_direct_rdma={:?} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} topology_cpu_count={}",
             capabilities.target_os,
             capabilities.target_arch,
             capabilities.kernel_release.is_some(),
             capabilities.fabric,
             capabilities.pinned_host_staging,
+            capabilities.gpu_direct_rdma,
+            capabilities.rdma_core_loaded,
+            capabilities.mlx5_core_loaded,
+            capabilities
+                .nvidia_peer_memory_module
+                .as_deref()
+                .unwrap_or("none"),
             capabilities.topology.cpu_count,
         ),
     );
@@ -1452,6 +1459,9 @@ mod tests {
         assert!(json.contains("\"cuda_compute_capability\""));
         assert!(json.contains("\"cuda_device_total_memory_bytes\""));
         assert!(json.contains("\"cuda_pci_bus_id\""));
+        assert!(json.contains("\"rdma_core_loaded\""));
+        assert!(json.contains("\"mlx5_core_loaded\""));
+        assert!(json.contains("\"nvidia_peer_memory_module\""));
         assert!(json.contains("\"topology\""));
         assert!(json.contains("\"summary\""));
         assert!(json.contains("\"observed_token_hash\""));
