@@ -9,6 +9,7 @@ members = [
     "crates/nerva-model",
     "crates/nerva-kernel-contracts",
     "crates/nerva-bench",
+    "tools/compare_ledgers",
 ]
 
 [workspace.package]

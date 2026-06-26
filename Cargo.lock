@@ -13,6 +13,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nerva-compare-ledgers"
+version = "0.1.0"
+
+[[package]]
 name = "nerva-core"
 version = "0.1.0"
 
