@@ -156,3 +156,35 @@ pub(crate) fn push_synthetic_decode(report: &mut AcceptanceReport, runtime: &Run
         }
     }
 }
+
+pub(crate) fn push_critical_path(report: &mut AcceptanceReport, runtime: &Runtime) {
+    match runtime.run_critical_path_probe() {
+        Ok(summary) => report.push(
+            "critical_path_observability",
+            summary.proves_host_wait_not_gpu_idle()
+                && summary.host_event_wait_ns == 1
+                && summary.gpu_idle_ns == 0
+                && summary.device_timeline_active_ns == 3
+                && summary.host_wait_events == 1
+                && summary.device_timeline_spans == 1
+                && summary.host_wait_gpu_idle_sources_separate
+                && !summary.estimated_presented_as_measured,
+            format!(
+                "token_index={} wall_ns={} host_event_wait_ns={} gpu_idle_ns={} device_active_ns={} host_wait_events={} device_timeline_spans={} estimated_events={} runtime_timestamp_events={} gpu_event_events={} estimated_presented_as_measured={} proves_host_wait_not_gpu_idle={}",
+                summary.token_index,
+                summary.wall_latency_ns,
+                summary.host_event_wait_ns,
+                summary.gpu_idle_ns,
+                summary.device_timeline_active_ns,
+                summary.host_wait_events,
+                summary.device_timeline_spans,
+                summary.estimated_event_count,
+                summary.runtime_timestamp_event_count,
+                summary.gpu_event_count,
+                summary.estimated_presented_as_measured,
+                summary.proves_host_wait_not_gpu_idle(),
+            ),
+        ),
+        Err(err) => report.push("critical_path_observability", false, format!("{err:?}")),
+    }
+}

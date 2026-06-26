@@ -24,3 +24,12 @@ pub(crate) fn run_synthetic_ledger_probe() -> Result<String, String> {
         .map_err(|err| format!("synthetic ledger collect failed: {err:?}"))?;
     Ok(output.ledger.to_json())
 }
+
+pub(crate) fn run_critical_path_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    runtime
+        .run_critical_path_probe()
+        .map(|report| report.to_json())
+        .map_err(|err| format!("critical path probe failed: {err:?}"))
+}

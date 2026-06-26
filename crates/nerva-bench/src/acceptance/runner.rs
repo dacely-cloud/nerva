@@ -24,6 +24,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     runtime_checks::push_hot_path_guard(&mut report, &runtime);
     environment::push_topology_snapshot(&mut report, &runtime);
     runtime_checks::push_synthetic_decode(&mut report, &runtime);
+    runtime_checks::push_critical_path(&mut report, &runtime);
     token::push_token_policy(&mut report, &runtime);
     phase::push_phase_handoff(&mut report, &runtime);
     queue::push_shared_queue(&mut report, &runtime);

@@ -1,3 +1,4 @@
+pub mod critical_path;
 pub mod cuda;
 pub mod hot_path;
 pub mod kv_probe;

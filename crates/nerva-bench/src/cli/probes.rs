@@ -23,6 +23,9 @@ pub(crate) fn dispatch(
         Some("ledger") => Some(exit::print_json_result(
             synthetic::run_synthetic_ledger_probe(),
         )),
+        Some("critical-path") => {
+            Some(exit::print_json_result(synthetic::run_critical_path_probe()))
+        }
         Some("token-policy") => Some(exit::print_json_result(token::run_token_policy_probe())),
         Some("phase-handoff") => Some(exit::print_json_result(phase::run_phase_handoff_probe())),
         Some("shared-queue") => Some(exit::print_json_result(queue::run_shared_queue_probe())),

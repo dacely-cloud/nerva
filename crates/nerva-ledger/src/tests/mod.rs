@@ -1,3 +1,4 @@
+mod critical;
 mod decisions;
 mod events;
 mod json;

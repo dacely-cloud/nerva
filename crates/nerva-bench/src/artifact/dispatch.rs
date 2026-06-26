@@ -71,6 +71,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
             synthetic::run_synthetic(steps, ring_capacity)
         }
         "ledger" => synthetic::run_synthetic_ledger_probe(),
+        "critical-path" => synthetic::run_critical_path_probe(),
         "token-policy" => token::run_token_policy_probe(),
         "phase-handoff" => phase::run_phase_handoff_probe(),
         "shared-queue" => queue::run_shared_queue_probe(),

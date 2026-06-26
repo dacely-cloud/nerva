@@ -18,6 +18,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"topology_snapshot\""));
     assert!(json.contains("\"synthetic_transaction\""));
     assert!(json.contains("\"synthetic_device_token\""));
+    assert!(json.contains("\"critical_path_observability\""));
     assert!(json.contains("\"token_policy_paths\""));
     assert!(json.contains("\"phase_handoff_ownership\""));
     assert!(json.contains("\"shared_work_queue\""));

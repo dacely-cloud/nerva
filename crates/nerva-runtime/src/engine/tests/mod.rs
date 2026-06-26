@@ -1,6 +1,7 @@
 mod arenas;
 mod basic;
 mod capabilities;
+mod critical_path;
 mod graph;
 mod hot_path;
 mod kv;
