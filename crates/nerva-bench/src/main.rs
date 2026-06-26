@@ -542,6 +542,9 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
                 && summary.graph_replays == 1024
                 && summary.observed_tokens == 1024
                 && summary.observed_token_hash != 0
+                && summary.token_ring_slots_touched == 64
+                && summary.token_ring_reuses == 960
+                && summary.token_ring_max_slot_version == 16
                 && summary.soft_visibility_syncs == 1024
                 && summary.device_timeline_active_ns > 0
                 && summary.device_timeline_idle_ns == 0
@@ -555,10 +558,13 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
                 "synthetic_device_token",
                 passed,
                 format!(
-                    "steps={} observed={} observed_token_hash={} soft_visibility_syncs={} hot_path_allocations={} stale={} missing={} extra={} mismatched={} host_causality_edges={} gpu_idle_ns={}",
+                    "steps={} observed={} observed_token_hash={} ring_slots={} ring_reuses={} ring_max_version={} soft_visibility_syncs={} hot_path_allocations={} stale={} missing={} extra={} mismatched={} host_causality_edges={} gpu_idle_ns={}",
                     summary.steps,
                     summary.observed_tokens,
                     summary.observed_token_hash,
+                    summary.token_ring_slots_touched,
+                    summary.token_ring_reuses,
+                    summary.token_ring_max_slot_version,
                     summary.soft_visibility_syncs,
                     summary.hot_path_allocations,
                     summary.stale_tokens,
@@ -1477,6 +1483,7 @@ mod tests {
         assert!(json.contains("\"topology\""));
         assert!(json.contains("\"summary\""));
         assert!(json.contains("\"observed_token_hash\""));
+        assert!(json.contains("\"token_ring_reuses\""));
         assert!(json.contains("\"device_timeline_idle_ns\":0"));
     }
 

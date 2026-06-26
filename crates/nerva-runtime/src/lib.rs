@@ -1183,6 +1183,9 @@ pub struct SyntheticDecodeSummary {
     pub status: SyntheticDecodeStatus,
     pub steps: u64,
     pub token_ring_capacity: usize,
+    pub token_ring_slots_touched: u64,
+    pub token_ring_reuses: u64,
+    pub token_ring_max_slot_version: u64,
     pub seed_token: TokenId,
     pub last_token: Option<TokenId>,
     pub graph_replays: u64,
@@ -1660,10 +1663,13 @@ impl SyntheticDecodeSummary {
             SyntheticDecodeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"soft_visibility_syncs\":{},\"device_timeline_active_ns\":{},\"device_timeline_idle_ns\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"soft_visibility_sync_latency_ns\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"token_ring_slots_touched\":{},\"token_ring_reuses\":{},\"token_ring_max_slot_version\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"soft_visibility_syncs\":{},\"device_timeline_active_ns\":{},\"device_timeline_idle_ns\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"soft_visibility_sync_latency_ns\":{},\"estimated_events\":{},\"estimated_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
             status,
             self.steps,
             self.token_ring_capacity,
+            self.token_ring_slots_touched,
+            self.token_ring_reuses,
+            self.token_ring_max_slot_version,
             self.seed_token.0,
             json_opt_token(self.last_token),
             self.graph_replays,
@@ -2972,6 +2978,10 @@ impl Runtime {
         let mut extra_tokens: u64 = 0;
         let mut mismatched_tokens: u64 = 0;
         let mut host_causality_edges: u64 = 0;
+        let mut token_ring_slots_seen = vec![false; config.token_ring_capacity];
+        let mut token_ring_slots_touched: u64 = 0;
+        let mut token_ring_reuses: u64 = 0;
+        let mut token_ring_max_slot_version: u64 = 0;
 
         for token_index in 0..config.steps {
             let output = engine
@@ -3031,6 +3041,17 @@ impl Runtime {
             observed_tokens = observed_tokens.saturating_add(1);
             observed_token_hash =
                 hash_observed_token(observed_token_hash, output.token_index, output.token);
+            if let Some(seen) = token_ring_slots_seen.get_mut(output.device_token_ref.slot_index) {
+                if !*seen {
+                    *seen = true;
+                    token_ring_slots_touched = token_ring_slots_touched.saturating_add(1);
+                }
+            }
+            if output.device_token_ref.version > 1 {
+                token_ring_reuses = token_ring_reuses.saturating_add(1);
+            }
+            token_ring_max_slot_version =
+                token_ring_max_slot_version.max(output.device_token_ref.version);
             if output.token_index < token_index {
                 stale_tokens = stale_tokens.saturating_add(1);
             } else if output.token_index > token_index {
@@ -3067,6 +3088,9 @@ impl Runtime {
             status: SyntheticDecodeStatus::Ok,
             steps: config.steps,
             token_ring_capacity: config.token_ring_capacity,
+            token_ring_slots_touched,
+            token_ring_reuses,
+            token_ring_max_slot_version,
             seed_token: config.seed_token,
             last_token,
             graph_replays: engine
@@ -5050,6 +5074,9 @@ mod tests {
         assert_eq!(summary.hot_path_allocations, 0);
         assert_eq!(summary.observed_tokens, 1024);
         assert_ne!(summary.observed_token_hash, 0);
+        assert_eq!(summary.token_ring_slots_touched, 64);
+        assert_eq!(summary.token_ring_reuses, 960);
+        assert_eq!(summary.token_ring_max_slot_version, 16);
         assert_eq!(summary.stale_tokens, 0);
         assert_eq!(summary.missing_tokens, 0);
         assert_eq!(summary.extra_tokens, 0);
@@ -5057,6 +5084,7 @@ mod tests {
         assert_eq!(summary.host_causality_edges, 0);
         assert!(summary.to_json().contains("\"steps\":1024"));
         assert!(summary.to_json().contains("\"observed_token_hash\""));
+        assert!(summary.to_json().contains("\"token_ring_reuses\":960"));
         assert!(summary.to_json().contains("\"host_causality_edges\":0"));
     }
 
