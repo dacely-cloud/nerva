@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./images/logo.svg" alt="Nerva" width="600" />
+<img src="./images/logo.svg" alt="Nerva" width="300" />
 
 ---
 
