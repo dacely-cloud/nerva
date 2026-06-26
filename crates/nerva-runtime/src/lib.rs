@@ -348,6 +348,34 @@ impl ResidentWeightPrefetchExecutionSummary {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightHotsetSummary {
+    pub promoted_blocks: usize,
+    pub promoted_bytes: usize,
+    pub dram_used_bytes: usize,
+    pub vram_used_bytes: usize,
+    pub residency_decisions: u64,
+    pub first_promoted_tensor: Option<String>,
+    pub last_promoted_tensor: Option<String>,
+    pub hot_path_allocations: u64,
+}
+
+impl ResidentWeightHotsetSummary {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"promoted_blocks\":{},\"promoted_bytes\":{},\"dram_used_bytes\":{},\"vram_used_bytes\":{},\"residency_decisions\":{},\"first_promoted_tensor\":{},\"last_promoted_tensor\":{},\"hot_path_allocations\":{}}}",
+            self.promoted_blocks,
+            self.promoted_bytes,
+            self.dram_used_bytes,
+            self.vram_used_bytes,
+            self.residency_decisions,
+            json_opt_string(self.first_promoted_tensor.as_deref()),
+            json_opt_string(self.last_promoted_tensor.as_deref()),
+            self.hot_path_allocations,
+        )
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ResidentWeightProbeStatus {
     Ok,
@@ -1867,6 +1895,97 @@ impl Runtime {
         })
     }
 
+    pub fn promote_resident_weight_hotset(
+        &self,
+        table: &mut ResidentWeightTable,
+        max_promote_bytes: usize,
+    ) -> Result<ResidentWeightHotsetSummary> {
+        if max_promote_bytes == 0 {
+            return Ok(ResidentWeightHotsetSummary {
+                promoted_blocks: 0,
+                promoted_bytes: 0,
+                dram_used_bytes: table.registry.used_bytes(MemoryTier::Dram),
+                vram_used_bytes: table.registry.used_bytes(MemoryTier::Vram),
+                residency_decisions: 0,
+                first_promoted_tensor: None,
+                last_promoted_tensor: None,
+                hot_path_allocations: table.ledger.hot_path_allocations,
+            });
+        }
+
+        let mut promoted_blocks = 0usize;
+        let mut promoted_bytes = 0usize;
+        let mut first_promoted_tensor = None;
+        let mut last_promoted_tensor = None;
+        let decision_start = table.ledger.residency_decisions.len();
+
+        for (index, entry) in table.entries.iter_mut().enumerate() {
+            if entry.tier == MemoryTier::Vram {
+                continue;
+            }
+            let next_promoted_bytes = promoted_bytes.checked_add(entry.bytes).ok_or_else(|| {
+                NervaError::AllocationFailed {
+                    bytes: entry.bytes,
+                    reason: "resident weight hotset byte count overflow".to_string(),
+                }
+            })?;
+            if next_promoted_bytes > max_promote_bytes {
+                break;
+            }
+            if table
+                .registry
+                .remaining_bytes(MemoryTier::Vram)
+                .unwrap_or(0)
+                < entry.bytes
+            {
+                break;
+            }
+
+            let allocation = AllocationId(10_000 + index as u64);
+            table.registry.move_block(
+                entry.block_id,
+                MemoryTier::Vram,
+                allocation,
+                promoted_bytes as u64,
+            )?;
+            table.registry.mark_ready(entry.block_id)?;
+            table.ledger.record_residency_decision(ResidencyDecision {
+                block_id: entry.block_id,
+                old_tier: entry.tier,
+                new_tier: MemoryTier::Vram,
+                executor_selected: ExecutionOwner::Gpu(self.config.device),
+                candidate_costs: vec![
+                    CandidateCost::estimated("keep-dram", entry.bytes as u64),
+                    CandidateCost::estimated("promote-vram-hotset", 0),
+                ],
+                reason: "promote bounded exact weight hotset to VRAM",
+                predicted_overlap_ns: 0,
+                actual_visible_ns: Some(0),
+                metric_source: MetricSource::EstimatedModel,
+            });
+            entry.tier = MemoryTier::Vram;
+            promoted_blocks += 1;
+            promoted_bytes = next_promoted_bytes;
+            if first_promoted_tensor.is_none() {
+                first_promoted_tensor = Some(entry.name.clone());
+            }
+            last_promoted_tensor = Some(entry.name.clone());
+        }
+
+        table.ledger.require_zero_hot_path_allocations()?;
+
+        Ok(ResidentWeightHotsetSummary {
+            promoted_blocks,
+            promoted_bytes,
+            dram_used_bytes: table.registry.used_bytes(MemoryTier::Dram),
+            vram_used_bytes: table.registry.used_bytes(MemoryTier::Vram),
+            residency_decisions: (table.ledger.residency_decisions.len() - decision_start) as u64,
+            first_promoted_tensor,
+            last_promoted_tensor,
+            hot_path_allocations: table.ledger.hot_path_allocations,
+        })
+    }
+
     pub fn run_synthetic_decode(
         &self,
         config: SyntheticDecodeConfig,
@@ -2657,6 +2776,71 @@ mod tests {
                 .execute_resident_weight_prefetch_plan(&mut table, &prefetch)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn resident_weight_hotset_promotion_moves_bounded_prefix_to_vram() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = tiny_llama_manifest();
+        let mut table = runtime
+            .materialize_hf_weight_manifest_with_budget(
+                &manifest,
+                ResidencyBudget::new(256, 0, manifest.total_weight_bytes),
+            )
+            .unwrap();
+        let summary = runtime
+            .promote_resident_weight_hotset(&mut table, 200)
+            .unwrap();
+
+        assert_eq!(summary.promoted_blocks, 7);
+        assert_eq!(summary.promoted_bytes, 192);
+        assert_eq!(summary.vram_used_bytes, 192);
+        assert_eq!(summary.dram_used_bytes, 272);
+        assert_eq!(summary.residency_decisions, 7);
+        assert_eq!(
+            summary.first_promoted_tensor.as_deref(),
+            Some("model.embed_tokens.weight")
+        );
+        assert_eq!(
+            summary.last_promoted_tensor.as_deref(),
+            Some("model.layers.0.post_attention_layernorm.weight")
+        );
+        assert_eq!(summary.hot_path_allocations, 0);
+        assert_eq!(table.entries[0].tier, MemoryTier::Vram);
+        assert_eq!(table.entries[6].tier, MemoryTier::Vram);
+        assert_eq!(table.entries[7].tier, MemoryTier::Dram);
+        assert!(table.entries[..7].iter().all(|entry| {
+            table
+                .registry
+                .block(entry.block_id)
+                .is_some_and(|block| block.state == ResidencyState::Ready)
+        }));
+        assert!(summary.to_json().contains("\"promoted_blocks\":7"));
+    }
+
+    #[test]
+    fn resident_weight_hotset_promotion_respects_vram_capacity_and_zero_limit() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = tiny_llama_manifest();
+        let mut table = runtime
+            .materialize_hf_weight_manifest_with_budget(
+                &manifest,
+                ResidencyBudget::new(100, 0, manifest.total_weight_bytes),
+            )
+            .unwrap();
+        let zero = runtime
+            .promote_resident_weight_hotset(&mut table, 0)
+            .unwrap();
+        assert_eq!(zero.promoted_blocks, 0);
+        assert_eq!(zero.vram_used_bytes, 0);
+
+        let summary = runtime
+            .promote_resident_weight_hotset(&mut table, usize::MAX)
+            .unwrap();
+        assert_eq!(summary.promoted_blocks, 2);
+        assert_eq!(summary.promoted_bytes, 88);
+        assert_eq!(summary.vram_used_bytes, 88);
+        assert_eq!(summary.dram_used_bytes, 376);
     }
 
     #[test]
