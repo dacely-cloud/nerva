@@ -4,7 +4,7 @@ compile_error!("NERVA currently supports Linux only.");
 use std::process::ExitCode;
 
 use nerva_core::TokenId;
-use nerva_runtime::{Runtime, RuntimeConfig, SyntheticDecodeConfig};
+use nerva_runtime::{KvResidencyProbeConfig, Runtime, RuntimeConfig, SyntheticDecodeConfig};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -50,9 +50,19 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("kv") => match run_kv_probe() {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("{reason}");
+                ExitCode::from(1)
+            }
+        },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- kv"
             );
             ExitCode::from(2)
         }
@@ -65,6 +75,15 @@ fn run_synthetic(steps: u64, ring_capacity: usize) -> Result<String, String> {
     let summary = runtime
         .run_synthetic_decode(SyntheticDecodeConfig::new(steps, ring_capacity, TokenId(1)))
         .map_err(|err| format!("synthetic decode failed: {err:?}"))?;
+    Ok(summary.to_json())
+}
+
+fn run_kv_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let summary = runtime
+        .run_kv_residency_probe(KvResidencyProbeConfig::default())
+        .map_err(|err| format!("KV residency probe failed: {err:?}"))?;
     Ok(summary.to_json())
 }
 

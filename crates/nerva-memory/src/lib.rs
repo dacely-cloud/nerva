@@ -10,7 +10,9 @@ use nerva_core::{
     MemoryTier, NervaError, ResidencyState, ResidentBlock, ResidentBlockId, ResidentBlockKind,
     Result,
 };
-use nerva_ledger::{CandidateCost, MetricSource, ResidencyDecision, TokenLedger};
+use nerva_ledger::{
+    CandidateCost, LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, TokenLedger,
+};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ArenaKind {
@@ -737,6 +739,7 @@ pub enum KvResidencyAction {
 pub struct KvResidencyPlanEntry {
     pub page_index: u32,
     pub block_id: ResidentBlockId,
+    pub bytes: usize,
     pub old_tier: MemoryTier,
     pub new_tier: MemoryTier,
     pub action: KvResidencyAction,
@@ -756,7 +759,7 @@ pub struct KvResidencyPlan {
 }
 
 impl KvResidencyPlan {
-    pub fn record_to_ledger(&self, ledger: &mut TokenLedger) {
+    pub fn record_decisions_to_ledger(&self, ledger: &mut TokenLedger) {
         for entry in &self.entries {
             ledger.record_residency_decision(ResidencyDecision {
                 block_id: entry.block_id,
@@ -773,6 +776,84 @@ impl KvResidencyPlan {
                 metric_source: MetricSource::EstimatedModel,
             });
         }
+    }
+
+    pub fn record_events_to_ledger(&self, ledger: &mut TokenLedger) {
+        for entry in &self.entries {
+            match entry.action {
+                KvResidencyAction::PrefetchToHot => {
+                    ledger.record(LedgerEvent {
+                        kind: LedgerEventKind::Prefetch,
+                        block_id: Some(entry.block_id),
+                        from_tier: Some(entry.old_tier),
+                        to_tier: Some(entry.new_tier),
+                        bytes: entry.bytes,
+                        latency_ns: 0,
+                        label: "kv_prefetch_scheduled",
+                    });
+                    ledger.record(LedgerEvent {
+                        kind: LedgerEventKind::Copy,
+                        block_id: Some(entry.block_id),
+                        from_tier: Some(entry.old_tier),
+                        to_tier: Some(entry.new_tier),
+                        bytes: entry.bytes,
+                        latency_ns: 0,
+                        label: "kv_prefetch_copy",
+                    });
+                    record_visible_transfer_stall(ledger, entry);
+                }
+                KvResidencyAction::DemoteToWarm => {
+                    ledger.record(LedgerEvent {
+                        kind: LedgerEventKind::Eviction,
+                        block_id: Some(entry.block_id),
+                        from_tier: Some(entry.old_tier),
+                        to_tier: Some(entry.new_tier),
+                        bytes: entry.bytes,
+                        latency_ns: 0,
+                        label: "kv_demote_scheduled",
+                    });
+                    ledger.record(LedgerEvent {
+                        kind: LedgerEventKind::Copy,
+                        block_id: Some(entry.block_id),
+                        from_tier: Some(entry.old_tier),
+                        to_tier: Some(entry.new_tier),
+                        bytes: entry.bytes,
+                        latency_ns: 0,
+                        label: "kv_demote_copy",
+                    });
+                    record_visible_transfer_stall(ledger, entry);
+                }
+                KvResidencyAction::EvictCold => {
+                    ledger.record(LedgerEvent {
+                        kind: LedgerEventKind::Eviction,
+                        block_id: Some(entry.block_id),
+                        from_tier: Some(entry.old_tier),
+                        to_tier: Some(entry.new_tier),
+                        bytes: entry.bytes,
+                        latency_ns: 0,
+                        label: "kv_cold_eviction",
+                    });
+                    if entry.changes_tier() {
+                        ledger.record(LedgerEvent {
+                            kind: LedgerEventKind::Copy,
+                            block_id: Some(entry.block_id),
+                            from_tier: Some(entry.old_tier),
+                            to_tier: Some(entry.new_tier),
+                            bytes: entry.bytes,
+                            latency_ns: 0,
+                            label: "kv_eviction_copy",
+                        });
+                    }
+                    record_visible_transfer_stall(ledger, entry);
+                }
+                KvResidencyAction::KeepHot | KvResidencyAction::KeepWarm => {}
+            }
+        }
+    }
+
+    pub fn record_to_ledger(&self, ledger: &mut TokenLedger) {
+        self.record_decisions_to_ledger(ledger);
+        self.record_events_to_ledger(ledger);
     }
 
     pub fn apply(&self, registry: &mut BlockRegistry) -> Result<()> {
@@ -798,6 +879,21 @@ impl KvResidencyPlan {
             }
         }
         Ok(())
+    }
+
+    pub fn action_count(&self, action: KvResidencyAction) -> u64 {
+        self.entries
+            .iter()
+            .filter(|entry| entry.action == action)
+            .count() as u64
+    }
+
+    pub fn changed_bytes(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.changes_tier())
+            .map(|entry| entry.bytes)
+            .sum()
     }
 }
 
@@ -882,6 +978,7 @@ impl KvResidencyPlanner {
                 KvResidencyPlanEntry {
                     page_index: page.page_index,
                     block_id: page.block_id,
+                    bytes: page_token_bytes(page),
                     old_tier,
                     new_tier: MemoryTier::Vram,
                     action: KvResidencyAction::KeepHot,
@@ -892,6 +989,7 @@ impl KvResidencyPlanner {
                 KvResidencyPlanEntry {
                     page_index: page.page_index,
                     block_id: page.block_id,
+                    bytes: page_token_bytes(page),
                     old_tier,
                     new_tier: MemoryTier::Vram,
                     action: KvResidencyAction::PrefetchToHot,
@@ -906,6 +1004,7 @@ impl KvResidencyPlanner {
                 KvResidencyPlanEntry {
                     page_index: page.page_index,
                     block_id: page.block_id,
+                    bytes: page_token_bytes(page),
                     old_tier,
                     new_tier: MemoryTier::Dram,
                     action: KvResidencyAction::EvictCold,
@@ -920,6 +1019,7 @@ impl KvResidencyPlanner {
                 KvResidencyPlanEntry {
                     page_index: page.page_index,
                     block_id: page.block_id,
+                    bytes: page_token_bytes(page),
                     old_tier,
                     new_tier: MemoryTier::Dram,
                     action: KvResidencyAction::DemoteToWarm,
@@ -934,6 +1034,7 @@ impl KvResidencyPlanner {
                 KvResidencyPlanEntry {
                     page_index: page.page_index,
                     block_id: page.block_id,
+                    bytes: page_token_bytes(page),
                     old_tier,
                     new_tier: old_tier,
                     action: KvResidencyAction::KeepWarm,
@@ -949,6 +1050,21 @@ impl KvResidencyPlanner {
 
 fn page_token_bytes(page: &KvPageDescriptor) -> usize {
     page.page_bytes
+}
+
+fn record_visible_transfer_stall(ledger: &mut TokenLedger, entry: &KvResidencyPlanEntry) {
+    if entry.predicted_visible_ns == 0 {
+        return;
+    }
+    ledger.record(LedgerEvent {
+        kind: LedgerEventKind::Stall,
+        block_id: Some(entry.block_id),
+        from_tier: Some(entry.old_tier),
+        to_tier: Some(entry.new_tier),
+        bytes: entry.bytes,
+        latency_ns: entry.predicted_visible_ns,
+        label: "kv_visible_transfer_stall",
+    });
 }
 
 fn transfer_cost_ns(bytes: usize, old_tier: MemoryTier, new_tier: MemoryTier) -> u64 {
@@ -1625,6 +1741,16 @@ mod tests {
         assert_eq!(
             decision.reason,
             "KV page next use is within prefetch window"
+        );
+        assert_eq!(
+            ledger.event_count(nerva_ledger::LedgerEventKind::Prefetch),
+            1
+        );
+        assert_eq!(ledger.event_count(nerva_ledger::LedgerEventKind::Copy), 1);
+        assert_eq!(ledger.event_count(nerva_ledger::LedgerEventKind::Stall), 1);
+        assert_eq!(
+            ledger.latency_ns_for(nerva_ledger::LedgerEventKind::Stall),
+            228
         );
     }
 }
