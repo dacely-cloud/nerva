@@ -142,6 +142,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "kv" => kv::run_kv_probe(),
         "fabric-topology" => transport::run_fabric_topology_probe(),
         "fabric-backends" => transport::run_fabric_backend_probe(),
+        "dpdk-udp" => transport::run_dpdk_udp_probe(),
         "transport" => transport::run_transport_probe(),
         "transport-matrix" => transport::run_transport_matrix_probe(),
         "transport-registration" => transport::run_transport_registration_probe(),

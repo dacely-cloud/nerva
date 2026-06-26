@@ -1,6 +1,9 @@
 use nerva_core::types::error::Result;
 
 use crate::engine::runtime::Runtime;
+use crate::transport::dpdk_udp::config::DpdkUdpProbeConfig;
+use crate::transport::dpdk_udp::run::run_dpdk_udp_protocol_probe;
+use crate::transport::dpdk_udp::summary::DpdkUdpProtocolSummary;
 use crate::transport::fabric::backend::probe::run_fabric_backend_probe;
 use crate::transport::fabric::backend::types::FabricBackendSummary;
 use crate::transport::fabric::probe::run_fabric_topology_probe;
@@ -38,6 +41,14 @@ impl Runtime {
         let capabilities = self.discover_capabilities();
         let topology = run_fabric_topology_probe(&capabilities);
         run_fabric_backend_probe(&capabilities, &topology)
+    }
+
+    pub fn run_dpdk_udp_protocol_probe(
+        &self,
+        config: DpdkUdpProbeConfig,
+    ) -> Result<DpdkUdpProtocolSummary> {
+        let fabric = self.run_fabric_backend_probe();
+        run_dpdk_udp_protocol_probe(config, fabric.dpdk_udp_gpu, fabric.dpdk_udp_pinned_host)
     }
 
     pub fn run_transport_capability_matrix_probe(

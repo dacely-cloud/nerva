@@ -1,3 +1,4 @@
+pub mod dpdk_udp;
 pub mod estimate;
 pub mod fabric;
 pub mod json;
