@@ -5,6 +5,7 @@ mod environment;
 mod execution;
 mod files;
 mod manifest;
+mod measurements;
 mod memory_loop;
 mod mgpu;
 mod model;

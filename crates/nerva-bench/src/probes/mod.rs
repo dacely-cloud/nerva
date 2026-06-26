@@ -1,6 +1,7 @@
 pub(crate) mod backend;
 pub(crate) mod compute;
 pub(crate) mod kv;
+pub(crate) mod measurements;
 pub(crate) mod memory_loop;
 pub(crate) mod mgpu;
 pub(crate) mod phase;

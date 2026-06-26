@@ -3,8 +3,8 @@ use std::process::ExitCode;
 use crate::cli::exit;
 use crate::parse::{parse_optional_u64, parse_optional_usize};
 use crate::probes::{
-    backend, compute, kv, memory_loop, mgpu, phase, queue, runtime, synthetic, token, transaction,
-    transport,
+    backend, compute, kv, measurements, memory_loop, mgpu, phase, queue, runtime, synthetic, token,
+    transaction, transport,
 };
 
 pub(crate) fn dispatch(
@@ -33,6 +33,9 @@ pub(crate) fn dispatch(
         Some("transaction") => Some(exit::print_json_result(transaction::run_transaction_probe())),
         Some("compute-near-data") => Some(exit::print_json_result(
             compute::run_compute_near_data_probe(),
+        )),
+        Some("measurements") => Some(exit::print_json_result(
+            measurements::run_measurement_table_probe(),
         )),
         Some("memory-loop") => Some(exit::print_json_result(memory_loop::run_memory_loop_probe())),
         Some("kv") => Some(exit::print_json_result(kv::run_kv_probe())),

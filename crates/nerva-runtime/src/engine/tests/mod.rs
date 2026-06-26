@@ -7,6 +7,7 @@ mod graph;
 mod hot_path;
 mod kv;
 mod kv_attention;
+mod measurements;
 mod memory_loop;
 mod multi_gpu;
 mod support;

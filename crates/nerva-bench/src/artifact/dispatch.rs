@@ -12,8 +12,8 @@ use crate::{
     parity::run::run_vllm_token_identity_parity,
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
     probes::{
-        backend, compute, kv, memory_loop, mgpu, phase, queue, runtime, synthetic, token,
-        transaction, transport,
+        backend, compute, kv, measurements, memory_loop, mgpu, phase, queue, runtime, synthetic,
+        token, transaction, transport,
     },
 };
 
@@ -77,6 +77,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "shared-queue" => queue::run_shared_queue_probe(),
         "transaction" => transaction::run_transaction_probe(),
         "compute-near-data" => compute::run_compute_near_data_probe(),
+        "measurements" => measurements::run_measurement_table_probe(),
         "memory-loop" => memory_loop::run_memory_loop_probe(),
         "block" => nerva_model::reference::smoke::reference_block_smoke()
             .map(|summary| summary.to_json())
