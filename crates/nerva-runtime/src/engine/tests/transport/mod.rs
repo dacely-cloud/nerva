@@ -1,6 +1,7 @@
 mod contract;
 mod dpdk_udp;
 mod fabric;
+mod kernel_udp;
 mod matrix;
 mod path_probe;
 mod planner;

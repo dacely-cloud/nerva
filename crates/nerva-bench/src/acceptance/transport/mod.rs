@@ -1,6 +1,7 @@
 pub(crate) mod contract;
 pub(crate) mod dpdk_udp;
 pub(crate) mod fabric;
+pub(crate) mod kernel_udp;
 pub(crate) mod kv;
 pub(crate) mod matrix;
 pub(crate) mod path;

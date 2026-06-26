@@ -50,6 +50,7 @@ pub(crate) fn dispatch(
             transport::run_fabric_backend_probe(),
         )),
         Some("dpdk-udp") => Some(exit::print_json_result(transport::run_dpdk_udp_probe())),
+        Some("kernel-udp") => Some(exit::print_json_result(transport::run_kernel_udp_probe())),
         Some("transport") => Some(exit::print_json_result(transport::run_transport_probe())),
         Some("transport-contract") => Some(exit::print_json_result(
             transport::run_transport_contract_probe(),

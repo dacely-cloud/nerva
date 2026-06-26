@@ -44,6 +44,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"fabric_topology_affinity\""));
     assert!(json.contains("\"fabric_backend_capabilities\""));
     assert!(json.contains("\"dpdk_udp_activation_protocol\""));
+    assert!(json.contains("\"kernel_udp_loopback_baseline\""));
     assert!(json.contains("\"transport_pinned_fallback\""));
     assert!(json.contains("\"transport_backend_contract\""));
     assert!(json.contains("\"transport_capability_matrix\""));
