@@ -45,6 +45,172 @@ impl TransformerBlockShape {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum HfArchitectureKind {
+    Llama,
+    Mistral,
+    Gemma,
+    Qwen2,
+    Unknown,
+}
+
+impl HfArchitectureKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Llama => "llama",
+            Self::Mistral => "mistral",
+            Self::Gemma => "gemma",
+            Self::Qwen2 => "qwen2",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HfModelMetadata {
+    pub architecture: HfArchitectureKind,
+    pub hidden_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub intermediate_size: usize,
+    pub vocab_size: usize,
+    pub max_position_embeddings: Option<usize>,
+    pub rope_theta: Option<f32>,
+    pub rms_norm_eps: Option<f32>,
+    pub torch_dtype: Option<DType>,
+}
+
+impl HfModelMetadata {
+    pub fn block_shape(&self) -> TransformerBlockShape {
+        TransformerBlockShape::new(
+            self.hidden_size,
+            self.num_attention_heads,
+            self.intermediate_size,
+        )
+    }
+
+    pub const fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
+
+    pub const fn kv_groups(&self) -> usize {
+        self.num_attention_heads / self.num_key_value_heads
+    }
+
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"architecture\":\"{}\",\"hidden_size\":{},\"num_hidden_layers\":{},\"num_attention_heads\":{},\"num_key_value_heads\":{},\"head_dim\":{},\"kv_groups\":{},\"intermediate_size\":{},\"vocab_size\":{},\"max_position_embeddings\":{},\"rope_theta\":{},\"rms_norm_eps\":{},\"torch_dtype\":{}}}",
+            self.architecture.as_str(),
+            self.hidden_size,
+            self.num_hidden_layers,
+            self.num_attention_heads,
+            self.num_key_value_heads,
+            self.head_dim(),
+            self.kv_groups(),
+            self.intermediate_size,
+            self.vocab_size,
+            json_opt_usize(self.max_position_embeddings),
+            json_opt_f32(self.rope_theta),
+            json_opt_f32(self.rms_norm_eps),
+            json_opt_dtype(self.torch_dtype),
+        )
+    }
+}
+
+pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
+    let architecture = architecture_from_config(config_json)?;
+    let hidden_size = required_usize(config_json, "hidden_size")?;
+    let num_hidden_layers = required_usize(config_json, "num_hidden_layers")?;
+    let num_attention_heads = required_usize(config_json, "num_attention_heads")?;
+    let num_key_value_heads =
+        optional_usize(config_json, "num_key_value_heads")?.unwrap_or(num_attention_heads);
+    let intermediate_size = required_usize(config_json, "intermediate_size")?;
+    let vocab_size = required_usize(config_json, "vocab_size")?;
+    let max_position_embeddings = optional_usize(config_json, "max_position_embeddings")?;
+    let rope_theta = optional_f32(config_json, "rope_theta")?;
+    let rms_norm_eps = match optional_f32(config_json, "rms_norm_eps")? {
+        Some(value) => Some(value),
+        None => optional_f32(config_json, "layer_norm_eps")?,
+    };
+    let torch_dtype = optional_string(config_json, "torch_dtype")?
+        .as_deref()
+        .map(dtype_from_hf_string)
+        .transpose()?;
+
+    validate_hf_metadata(
+        hidden_size,
+        num_hidden_layers,
+        num_attention_heads,
+        num_key_value_heads,
+        intermediate_size,
+        vocab_size,
+    )?;
+
+    Ok(HfModelMetadata {
+        architecture,
+        hidden_size,
+        num_hidden_layers,
+        num_attention_heads,
+        num_key_value_heads,
+        intermediate_size,
+        vocab_size,
+        max_position_embeddings,
+        rope_theta,
+        rms_norm_eps,
+        torch_dtype,
+    })
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum HfMetadataProbeStatus {
+    Ok,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HfMetadataProbeSummary {
+    pub status: HfMetadataProbeStatus,
+    pub metadata: HfModelMetadata,
+    pub metadata_hash: u64,
+}
+
+impl HfMetadataProbeSummary {
+    pub fn to_json(&self) -> String {
+        let status = match self.status {
+            HfMetadataProbeStatus::Ok => "ok",
+        };
+        format!(
+            "{{\"status\":\"{}\",\"metadata\":{},\"metadata_hash\":{}}}",
+            status,
+            self.metadata.to_json(),
+            self.metadata_hash,
+        )
+    }
+}
+
+pub fn hf_metadata_probe() -> Result<HfMetadataProbeSummary> {
+    let config = r#"{
+        "architectures": ["LlamaForCausalLM"],
+        "model_type": "llama",
+        "hidden_size": 4096,
+        "intermediate_size": 11008,
+        "num_hidden_layers": 32,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
+        "vocab_size": 32000,
+        "max_position_embeddings": 4096,
+        "rms_norm_eps": 0.000001,
+        "rope_theta": 10000.0,
+        "torch_dtype": "bfloat16"
+    }"#;
+    let metadata = parse_hf_config_metadata(config)?;
+    Ok(HfMetadataProbeSummary {
+        metadata_hash: hash_metadata(&metadata),
+        status: HfMetadataProbeStatus::Ok,
+        metadata,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct ReferenceTransformerBlock {
     shape: TransformerBlockShape,
@@ -993,6 +1159,342 @@ fn tiny_cycle_model() -> Result<TinyGreedyModel> {
     )
 }
 
+fn architecture_from_config(config_json: &str) -> Result<HfArchitectureKind> {
+    if let Some(architecture) = optional_first_string(config_json, "architectures")? {
+        return Ok(architecture_kind_from_str(&architecture));
+    }
+    if let Some(model_type) = optional_string(config_json, "model_type")? {
+        return Ok(architecture_kind_from_str(&model_type));
+    }
+    Ok(HfArchitectureKind::Unknown)
+}
+
+fn architecture_kind_from_str(value: &str) -> HfArchitectureKind {
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("llama") {
+        HfArchitectureKind::Llama
+    } else if lower.contains("mistral") {
+        HfArchitectureKind::Mistral
+    } else if lower.contains("gemma") {
+        HfArchitectureKind::Gemma
+    } else if lower.contains("qwen2") {
+        HfArchitectureKind::Qwen2
+    } else {
+        HfArchitectureKind::Unknown
+    }
+}
+
+fn validate_hf_metadata(
+    hidden_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    intermediate_size: usize,
+    vocab_size: usize,
+) -> Result<()> {
+    if hidden_size == 0
+        || num_hidden_layers == 0
+        || num_attention_heads == 0
+        || num_key_value_heads == 0
+        || intermediate_size == 0
+        || vocab_size == 0
+    {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF model metadata dimensions must be non-zero".to_string(),
+        });
+    }
+    if !hidden_size.is_multiple_of(num_attention_heads) {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF hidden size must be divisible by attention head count".to_string(),
+        });
+    }
+    if num_key_value_heads > num_attention_heads {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF KV head count cannot exceed attention head count".to_string(),
+        });
+    }
+    if !num_attention_heads.is_multiple_of(num_key_value_heads) {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF attention head count must be divisible by KV head count".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn required_usize(config_json: &str, key: &'static str) -> Result<usize> {
+    optional_usize(config_json, key)?.ok_or_else(|| NervaError::InvalidArgument {
+        reason: format!("HF config is missing required field {key}"),
+    })
+}
+
+fn optional_usize(config_json: &str, key: &'static str) -> Result<Option<usize>> {
+    let Some(value) = find_top_level_json_value(config_json, key)? else {
+        return Ok(None);
+    };
+    if value.starts_with('-') {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be unsigned"),
+        });
+    }
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be an integer"),
+        })?;
+    usize::try_from(parsed)
+        .map(Some)
+        .map_err(|_| NervaError::InvalidArgument {
+            reason: format!("HF config field {key} does not fit usize"),
+        })
+}
+
+fn optional_f32(config_json: &str, key: &'static str) -> Result<Option<f32>> {
+    let Some(value) = find_top_level_json_value(config_json, key)? else {
+        return Ok(None);
+    };
+    let parsed = value
+        .parse::<f32>()
+        .map_err(|_| NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be a number"),
+        })?;
+    if !parsed.is_finite() || parsed <= 0.0 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be positive and finite"),
+        });
+    }
+    Ok(Some(parsed))
+}
+
+fn optional_string(config_json: &str, key: &'static str) -> Result<Option<String>> {
+    let Some(value) = find_top_level_json_value(config_json, key)? else {
+        return Ok(None);
+    };
+    parse_json_string_value(value).map(Some)
+}
+
+fn optional_first_string(config_json: &str, key: &'static str) -> Result<Option<String>> {
+    let Some(value) = find_top_level_json_value(config_json, key)? else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.starts_with('"') {
+        return parse_json_string_value(value).map(Some);
+    }
+    if !value.starts_with('[') {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be a string array"),
+        });
+    }
+    let mut index = skip_json_ws(value.as_bytes(), 1);
+    if index < value.len() && value.as_bytes()[index] == b']' {
+        return Ok(None);
+    }
+    if index >= value.len() || value.as_bytes()[index] != b'"' {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must contain string values"),
+        });
+    }
+    let (parsed, after) = parse_json_string_at(value, index)?;
+    index = skip_json_ws(value.as_bytes(), after);
+    if index >= value.len() || !matches!(value.as_bytes()[index], b',' | b']') {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} has malformed string array"),
+        });
+    }
+    Ok(Some(parsed))
+}
+
+fn dtype_from_hf_string(value: &str) -> Result<DType> {
+    match value.to_ascii_lowercase().as_str() {
+        "float16" | "fp16" | "f16" => Ok(DType::F16),
+        "bfloat16" | "bf16" => Ok(DType::BF16),
+        "float32" | "fp32" | "f32" => Ok(DType::F32),
+        other => Err(NervaError::InvalidArgument {
+            reason: format!("unsupported HF torch_dtype {other}"),
+        }),
+    }
+}
+
+fn find_top_level_json_value<'a>(source: &'a str, key: &str) -> Result<Option<&'a str>> {
+    let bytes = source.as_bytes();
+    let mut index = skip_json_ws(bytes, 0);
+    if index >= bytes.len() || bytes[index] != b'{' {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF config must be a JSON object".to_string(),
+        });
+    }
+    index += 1;
+
+    loop {
+        index = skip_json_ws(bytes, index);
+        if index >= bytes.len() {
+            return Err(NervaError::InvalidArgument {
+                reason: "HF config object is not closed".to_string(),
+            });
+        }
+        if bytes[index] == b'}' {
+            return Ok(None);
+        }
+        if bytes[index] == b',' {
+            index += 1;
+            continue;
+        }
+        if bytes[index] != b'"' {
+            return Err(NervaError::InvalidArgument {
+                reason: "HF config object key must be a JSON string".to_string(),
+            });
+        }
+
+        let (field, after_key) = parse_json_string_at(source, index)?;
+        index = skip_json_ws(bytes, after_key);
+        if index >= bytes.len() || bytes[index] != b':' {
+            return Err(NervaError::InvalidArgument {
+                reason: "HF config object key is missing ':'".to_string(),
+            });
+        }
+        index = skip_json_ws(bytes, index + 1);
+        let value_start = index;
+        let value_end = find_json_value_end(source, value_start)?;
+        if field == key {
+            return Ok(Some(source[value_start..value_end].trim()));
+        }
+        index = value_end;
+    }
+}
+
+fn find_json_value_end(source: &str, start: usize) -> Result<usize> {
+    let mut depth = 0u32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, ch) in source[start..].char_indices() {
+        let index = start + offset;
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '[' | '{' => depth = depth.saturating_add(1),
+            ']' => {
+                if depth == 0 {
+                    return Err(NervaError::InvalidArgument {
+                        reason: "HF config has unmatched ']'".to_string(),
+                    });
+                }
+                depth -= 1;
+            }
+            '}' => {
+                if depth == 0 {
+                    return Ok(index);
+                }
+                depth -= 1;
+            }
+            ',' if depth == 0 => return Ok(index),
+            _ => {}
+        }
+    }
+    if depth == 0 && !in_string {
+        Ok(source.len())
+    } else {
+        Err(NervaError::InvalidArgument {
+            reason: "HF config value is not closed".to_string(),
+        })
+    }
+}
+
+fn parse_json_string_value(value: &str) -> Result<String> {
+    let value = value.trim();
+    if !value.starts_with('"') {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF config field must be a JSON string".to_string(),
+        });
+    }
+    let (parsed, after) = parse_json_string_at(value, 0)?;
+    if !value[after..].trim().is_empty() {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF config string field has trailing data".to_string(),
+        });
+    }
+    Ok(parsed)
+}
+
+fn parse_json_string_at(source: &str, start: usize) -> Result<(String, usize)> {
+    if source.as_bytes().get(start) != Some(&b'"') {
+        return Err(NervaError::InvalidArgument {
+            reason: "expected JSON string".to_string(),
+        });
+    }
+    let mut out = String::new();
+    let mut chars = source[start + 1..].char_indices();
+    while let Some((offset, ch)) = chars.next() {
+        let index = start + 1 + offset;
+        match ch {
+            '"' => return Ok((out, index + 1)),
+            '\\' => {
+                let Some((_, escaped)) = chars.next() else {
+                    return Err(NervaError::InvalidArgument {
+                        reason: "JSON string escape is incomplete".to_string(),
+                    });
+                };
+                match escaped {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    '/' => out.push('/'),
+                    'b' => out.push('\u{0008}'),
+                    'f' => out.push('\u{000c}'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    'u' => {
+                        let mut codepoint = 0u32;
+                        for _ in 0..4 {
+                            let Some((_, hex)) = chars.next() else {
+                                return Err(NervaError::InvalidArgument {
+                                    reason: "JSON unicode escape is incomplete".to_string(),
+                                });
+                            };
+                            let Some(value) = hex.to_digit(16) else {
+                                return Err(NervaError::InvalidArgument {
+                                    reason: "JSON unicode escape has non-hex digit".to_string(),
+                                });
+                            };
+                            codepoint = (codepoint << 4) | value;
+                        }
+                        let Some(decoded) = char::from_u32(codepoint) else {
+                            return Err(NervaError::InvalidArgument {
+                                reason: "JSON unicode escape is invalid".to_string(),
+                            });
+                        };
+                        out.push(decoded);
+                    }
+                    _ => {
+                        return Err(NervaError::InvalidArgument {
+                            reason: "unsupported JSON string escape".to_string(),
+                        });
+                    }
+                }
+            }
+            ch => out.push(ch),
+        }
+    }
+    Err(NervaError::InvalidArgument {
+        reason: "JSON string is not closed".to_string(),
+    })
+}
+
+fn skip_json_ws(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
 fn require_len(label: &'static str, got: usize, expected: usize) -> Result<()> {
     if got == expected {
         Ok(())
@@ -1341,6 +1843,37 @@ fn hash_tokens(values: &[TokenId]) -> u64 {
     hash
 }
 
+fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for value in [
+        metadata.hidden_size as u64,
+        metadata.num_hidden_layers as u64,
+        metadata.num_attention_heads as u64,
+        metadata.num_key_value_heads as u64,
+        metadata.intermediate_size as u64,
+        metadata.vocab_size as u64,
+        metadata.max_position_embeddings.unwrap_or_default() as u64,
+        metadata.head_dim() as u64,
+        metadata.kv_groups() as u64,
+    ] {
+        for byte in value.to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    for byte in metadata.architecture.as_str().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    if let Some(dtype) = metadata.torch_dtype {
+        for byte in dtype_to_str(dtype).as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
 fn token_ids_to_json(tokens: &[TokenId]) -> String {
     let mut out = String::from("[");
     for (index, token) in tokens.iter().enumerate() {
@@ -1353,9 +1886,132 @@ fn token_ids_to_json(tokens: &[TokenId]) -> String {
     out
 }
 
+fn json_opt_usize(value: Option<usize>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
+fn json_opt_f32(value: Option<f32>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
+fn json_opt_dtype(value: Option<DType>) -> String {
+    value.map_or_else(
+        || "null".to_string(),
+        |value| format!("\"{}\"", dtype_to_str(value)),
+    )
+}
+
+fn dtype_to_str(value: DType) -> &'static str {
+    match value {
+        DType::U8 => "u8",
+        DType::U16 => "u16",
+        DType::U32 => "u32",
+        DType::I32 => "i32",
+        DType::F16 => "float16",
+        DType::BF16 => "bfloat16",
+        DType::F32 => "float32",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_llama_hf_config_metadata() {
+        let metadata = parse_hf_config_metadata(
+            r#"{
+                "architectures": ["LlamaForCausalLM"],
+                "hidden_size": 4096,
+                "intermediate_size": 11008,
+                "num_hidden_layers": 32,
+                "num_attention_heads": 32,
+                "num_key_value_heads": 8,
+                "vocab_size": 32000,
+                "max_position_embeddings": 4096,
+                "rms_norm_eps": 0.000001,
+                "rope_theta": 10000.0,
+                "torch_dtype": "bfloat16"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(metadata.architecture, HfArchitectureKind::Llama);
+        assert_eq!(
+            metadata.block_shape(),
+            TransformerBlockShape::new(4096, 32, 11008)
+        );
+        assert_eq!(metadata.head_dim(), 128);
+        assert_eq!(metadata.kv_groups(), 4);
+        assert_eq!(metadata.torch_dtype, Some(DType::BF16));
+        assert!(metadata.to_json().contains("\"architecture\":\"llama\""));
+    }
+
+    #[test]
+    fn parses_model_type_and_defaults_kv_heads_to_attention_heads() {
+        let metadata = parse_hf_config_metadata(
+            r#"{
+                "model_type": "mistral",
+                "hidden_size": 4096,
+                "intermediate_size": 14336,
+                "num_hidden_layers": 32,
+                "num_attention_heads": 32,
+                "vocab_size": 32000,
+                "torch_dtype": "float16"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(metadata.architecture, HfArchitectureKind::Mistral);
+        assert_eq!(metadata.num_key_value_heads, 32);
+        assert_eq!(metadata.kv_groups(), 1);
+        assert_eq!(metadata.torch_dtype, Some(DType::F16));
+    }
+
+    #[test]
+    fn rejects_invalid_hf_metadata_shapes_and_dtypes() {
+        let bad_heads = parse_hf_config_metadata(
+            r#"{
+                "model_type": "llama",
+                "hidden_size": 4097,
+                "intermediate_size": 11008,
+                "num_hidden_layers": 32,
+                "num_attention_heads": 32,
+                "num_key_value_heads": 8,
+                "vocab_size": 32000
+            }"#,
+        );
+        let bad_dtype = parse_hf_config_metadata(
+            r#"{
+                "model_type": "llama",
+                "hidden_size": 4096,
+                "intermediate_size": 11008,
+                "num_hidden_layers": 32,
+                "num_attention_heads": 32,
+                "num_key_value_heads": 8,
+                "vocab_size": 32000,
+                "torch_dtype": "int4"
+            }"#,
+        );
+
+        assert!(bad_heads.is_err());
+        assert!(bad_dtype.is_err());
+    }
+
+    #[test]
+    fn hf_metadata_probe_reports_valid_shape() {
+        let summary = hf_metadata_probe().unwrap();
+
+        assert_eq!(summary.status, HfMetadataProbeStatus::Ok);
+        assert_eq!(summary.metadata.architecture, HfArchitectureKind::Llama);
+        assert_eq!(summary.metadata.hidden_size, 4096);
+        assert_eq!(summary.metadata.num_attention_heads, 32);
+        assert_eq!(summary.metadata.num_key_value_heads, 8);
+        assert_eq!(summary.metadata.head_dim(), 128);
+        assert_eq!(summary.metadata.kv_groups(), 4);
+        assert_ne!(summary.metadata_hash, 0);
+        assert!(summary.to_json().contains("\"metadata\""));
+    }
 
     #[test]
     fn zero_block_preserves_residual() {
