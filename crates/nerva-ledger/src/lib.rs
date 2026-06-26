@@ -9,6 +9,7 @@ use nerva_core::{CostSource, ExecutionOwner, MemoryTier, NervaError, ResidentBlo
 pub enum LedgerEventKind {
     GraphReplay,
     KernelLaunch,
+    CpuActivity,
     DeviceActivity,
     Copy,
     Sync,
