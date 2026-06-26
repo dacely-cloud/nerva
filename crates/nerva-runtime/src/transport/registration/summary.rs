@@ -1,3 +1,4 @@
+use crate::capabilities::snapshot::CapabilityState;
 use crate::transport::json::json_opt_static_str;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -21,6 +22,9 @@ pub struct TransportRegistrationSummary {
     pub per_token_registrations: u64,
     pub pinned_host_registrations: u64,
     pub gpu_direct_registrations: u64,
+    pub gpu_direct_rdma_capability: CapabilityState,
+    pub gpu_direct_registration_skips: u64,
+    pub false_gpu_direct_registrations: u64,
     pub transport_events: u64,
     pub sync_events: u64,
     pub phase_handoff_syncs: u64,
@@ -31,6 +35,14 @@ pub struct TransportRegistrationSummary {
 
 impl TransportRegistrationSummary {
     pub fn passed(self) -> bool {
+        let direct_verified =
+            self.gpu_direct_rdma_capability == CapabilityState::SupportedAndVerified;
+        let direct_policy_ok = if direct_verified {
+            self.gpu_direct_registrations > 0 && self.gpu_direct_registration_skips == 0
+        } else {
+            self.gpu_direct_registrations == 0 && self.gpu_direct_registration_skips > 0
+        };
+
         matches!(self.status, TransportRegistrationStatus::Ok)
             && self.bootstrap_registrations > 0
             && self.registered_entries == self.bootstrap_registrations
@@ -39,6 +51,8 @@ impl TransportRegistrationSummary {
             && self.stale_address_rejections > 0
             && self.hot_path_registration_attempts == self.hot_path_registration_rejections
             && self.per_token_registrations == 0
+            && self.false_gpu_direct_registrations == 0
+            && direct_policy_ok
             && self.hot_path_allocations == 0
             && self.registration_cache_hit_rate_per_mille > 0
     }
@@ -49,7 +63,7 @@ impl TransportRegistrationSummary {
             TransportRegistrationStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"cache_capacity\":{},\"registered_entries\":{},\"bootstrap_registrations\":{},\"cache_hits\":{},\"cache_misses\":{},\"stale_address_rejections\":{},\"stale_version_rejections\":{},\"hot_path_registration_attempts\":{},\"hot_path_registration_rejections\":{},\"per_token_registrations\":{},\"pinned_host_registrations\":{},\"gpu_direct_registrations\":{},\"transport_events\":{},\"sync_events\":{},\"phase_handoff_syncs\":{},\"registration_cache_hit_rate_per_mille\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"cache_capacity\":{},\"registered_entries\":{},\"bootstrap_registrations\":{},\"cache_hits\":{},\"cache_misses\":{},\"stale_address_rejections\":{},\"stale_version_rejections\":{},\"hot_path_registration_attempts\":{},\"hot_path_registration_rejections\":{},\"per_token_registrations\":{},\"pinned_host_registrations\":{},\"gpu_direct_registrations\":{},\"gpu_direct_rdma_capability\":\"{}\",\"gpu_direct_registration_skips\":{},\"false_gpu_direct_registrations\":{},\"transport_events\":{},\"sync_events\":{},\"phase_handoff_syncs\":{},\"registration_cache_hit_rate_per_mille\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             self.cache_capacity,
             self.registered_entries,
@@ -63,6 +77,9 @@ impl TransportRegistrationSummary {
             self.per_token_registrations,
             self.pinned_host_registrations,
             self.gpu_direct_registrations,
+            self.gpu_direct_rdma_capability.as_str(),
+            self.gpu_direct_registration_skips,
+            self.false_gpu_direct_registrations,
             self.transport_events,
             self.sync_events,
             self.phase_handoff_syncs,

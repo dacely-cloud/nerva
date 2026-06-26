@@ -12,6 +12,8 @@ pub(crate) struct RegistrationProbeCounters {
     pub(crate) per_token_registrations: u64,
     pub(crate) pinned_host_registrations: u64,
     pub(crate) gpu_direct_registrations: u64,
+    pub(crate) gpu_direct_registration_skips: u64,
+    pub(crate) false_gpu_direct_registrations: u64,
 }
 
 impl RegistrationProbeCounters {
@@ -27,18 +29,31 @@ impl RegistrationProbeCounters {
             per_token_registrations: 0,
             pinned_host_registrations: 0,
             gpu_direct_registrations: 0,
+            gpu_direct_registration_skips: 0,
+            false_gpu_direct_registrations: 0,
         }
     }
 
-    pub(crate) fn record_bootstrap_registration(&mut self, backend: TransportRegistrationBackend) {
+    pub(crate) fn record_bootstrap_registration(
+        &mut self,
+        backend: TransportRegistrationBackend,
+        direct_verified: bool,
+    ) {
         self.bootstrap_registrations += 1;
         match backend {
             TransportRegistrationBackend::RdmaPinnedHost
             | TransportRegistrationBackend::DpdkPinnedHost => self.pinned_host_registrations += 1,
             TransportRegistrationBackend::RdmaGpuDirect | TransportRegistrationBackend::DpdkGpu => {
-                self.gpu_direct_registrations += 1
+                self.gpu_direct_registrations += 1;
+                if !direct_verified {
+                    self.false_gpu_direct_registrations += 1;
+                }
             }
         }
+    }
+
+    pub(crate) fn record_gpu_direct_registration_skip(&mut self) {
+        self.gpu_direct_registration_skips += 1;
     }
 
     pub(crate) fn record_hot_path_registration_rejection(&mut self) {

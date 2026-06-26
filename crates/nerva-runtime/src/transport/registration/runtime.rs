@@ -8,8 +8,8 @@ use crate::transport::registration::summary::TransportRegistrationSummary;
 
 impl Runtime {
     pub fn run_transport_registration_probe(&self) -> Result<TransportRegistrationSummary> {
-        let _ = self.config;
-        run_transport_registration_probe()
+        let capabilities = self.discover_capabilities();
+        run_transport_registration_probe(&capabilities)
     }
 
     pub fn run_transport_registration_lifecycle_probe(

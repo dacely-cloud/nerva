@@ -1,4 +1,4 @@
-use nerva_core::types::dtype::DType;
+use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState};
 use nerva_core::types::error::Result;
 use nerva_core::types::id::allocation::AllocationId;
 use nerva_core::types::memory::tier::MemoryTier;
@@ -9,121 +9,70 @@ use nerva_ledger::types::token::ledger::TokenLedger;
 use nerva_memory::registry::table::registry::BlockRegistry;
 
 use crate::transport::registration::cache::TransportRegistrationCache;
-use crate::transport::registration::probe::blocks::allocate_ready_transport_block;
+use crate::transport::registration::probe::bootstrap::{
+    bootstrap_registration_cache, record_registered_lookup_hits,
+};
 use crate::transport::registration::probe::counters::RegistrationProbeCounters;
+use crate::transport::registration::probe::fixture::allocate_registration_probe_blocks;
 use crate::transport::registration::probe::lookup::record_lookup;
 use crate::transport::registration::summary::{
     TransportRegistrationStatus, TransportRegistrationSummary,
 };
 use crate::transport::registration::types::TransportRegistrationBackend;
 
-pub fn run_transport_registration_probe() -> Result<TransportRegistrationSummary> {
+pub fn run_transport_registration_probe(
+    capabilities: &CapabilitySnapshot,
+) -> Result<TransportRegistrationSummary> {
     let mut registry = BlockRegistry::new([
         (MemoryTier::PinnedDram, 8 * 1024 * 1024),
         (MemoryTier::Vram, 8 * 1024 * 1024),
         (MemoryTier::Dram, 8 * 1024 * 1024),
     ]);
-    let pinned_send = allocate_ready_transport_block(
-        &mut registry,
-        MemoryTier::PinnedDram,
-        DType::U8,
-        64 * 1024,
-        AllocationId(10),
-        0,
-    )?;
-    let pinned_recv = allocate_ready_transport_block(
-        &mut registry,
-        MemoryTier::PinnedDram,
-        DType::U8,
-        64 * 1024,
-        AllocationId(11),
-        0,
-    )?;
-    let gpu_direct = allocate_ready_transport_block(
-        &mut registry,
-        MemoryTier::Vram,
-        DType::U8,
-        64 * 1024,
-        AllocationId(12),
-        0,
-    )?;
-    let unregistered = allocate_ready_transport_block(
-        &mut registry,
-        MemoryTier::PinnedDram,
-        DType::U8,
-        32 * 1024,
-        AllocationId(13),
-        0,
-    )?;
-
+    let blocks = allocate_registration_probe_blocks(&mut registry)?;
     let mut cache = TransportRegistrationCache::new(8)?;
     let mut ledger = TokenLedger::new(0);
     let mut counters = RegistrationProbeCounters::new();
-
-    for (id, backend) in [
-        (pinned_send, TransportRegistrationBackend::RdmaPinnedHost),
-        (pinned_recv, TransportRegistrationBackend::RdmaPinnedHost),
-        (pinned_send, TransportRegistrationBackend::DpdkPinnedHost),
-        (gpu_direct, TransportRegistrationBackend::RdmaGpuDirect),
-    ] {
-        let block = registry.block(id).expect("probe block exists");
-        cache.register(block, block.authoritative_copy, backend)?;
-        counters.record_bootstrap_registration(backend);
-    }
-
-    for (id, backend, label) in [
-        (
-            pinned_send,
-            TransportRegistrationBackend::RdmaPinnedHost,
-            "registration_cache_rdma_send_hit",
-        ),
-        (
-            pinned_recv,
-            TransportRegistrationBackend::RdmaPinnedHost,
-            "registration_cache_rdma_recv_hit",
-        ),
-        (
-            pinned_send,
-            TransportRegistrationBackend::DpdkPinnedHost,
-            "registration_cache_dpdk_send_hit",
-        ),
-        (
-            gpu_direct,
-            TransportRegistrationBackend::RdmaGpuDirect,
-            "registration_cache_gpu_direct_hit",
-        ),
-    ] {
-        record_lookup(
-            &registry,
-            &cache,
-            &mut ledger,
-            &mut counters,
-            id,
-            backend,
-            0,
-            label,
-        );
-    }
+    let direct_verified = capabilities.gpu_direct_rdma == CapabilityState::SupportedAndVerified;
+    bootstrap_registration_cache(
+        &registry,
+        &mut cache,
+        &mut counters,
+        blocks,
+        direct_verified,
+    )?;
+    record_registered_lookup_hits(
+        &registry,
+        &cache,
+        &mut ledger,
+        &mut counters,
+        blocks,
+        direct_verified,
+    );
 
     record_lookup(
         &registry,
         &cache,
         &mut ledger,
         &mut counters,
-        unregistered,
+        blocks.unregistered,
         TransportRegistrationBackend::RdmaPinnedHost,
         0,
         "registration_cache_unregistered_miss",
     );
 
-    registry.move_block(pinned_recv, MemoryTier::PinnedDram, AllocationId(99), 4096)?;
-    registry.mark_ready(pinned_recv)?;
+    registry.move_block(
+        blocks.pinned_recv,
+        MemoryTier::PinnedDram,
+        AllocationId(99),
+        4096,
+    )?;
+    registry.mark_ready(blocks.pinned_recv)?;
     record_lookup(
         &registry,
         &cache,
         &mut ledger,
         &mut counters,
-        pinned_recv,
+        blocks.pinned_recv,
         TransportRegistrationBackend::RdmaPinnedHost,
         0,
         "registration_cache_moved_block_rejected",
@@ -134,7 +83,7 @@ pub fn run_transport_registration_probe() -> Result<TransportRegistrationSummary
         &cache,
         &mut ledger,
         &mut counters,
-        pinned_send,
+        blocks.pinned_send,
         TransportRegistrationBackend::RdmaPinnedHost,
         99,
         "registration_cache_stale_version_rejected",
@@ -145,7 +94,7 @@ pub fn run_transport_registration_probe() -> Result<TransportRegistrationSummary
         kind: LedgerEventKind::Stall,
         sync_class: None,
         metric_source: MetricSource::RuntimeTimestamp,
-        block_id: Some(unregistered),
+        block_id: Some(blocks.unregistered),
         from_tier: Some(MemoryTier::PinnedDram),
         to_tier: Some(MemoryTier::PinnedDram),
         bytes: 32 * 1024,
@@ -177,6 +126,9 @@ pub fn run_transport_registration_probe() -> Result<TransportRegistrationSummary
         per_token_registrations: counters.per_token_registrations,
         pinned_host_registrations: counters.pinned_host_registrations,
         gpu_direct_registrations: counters.gpu_direct_registrations,
+        gpu_direct_rdma_capability: capabilities.gpu_direct_rdma,
+        gpu_direct_registration_skips: counters.gpu_direct_registration_skips,
+        false_gpu_direct_registrations: counters.false_gpu_direct_registrations,
         transport_events: ledger.event_count(LedgerEventKind::Transport),
         sync_events: ledger.event_count(LedgerEventKind::Sync),
         phase_handoff_syncs: ledger.sync_count_for(SyncClass::PhaseHandoff),

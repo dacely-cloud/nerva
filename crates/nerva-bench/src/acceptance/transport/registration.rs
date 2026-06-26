@@ -17,9 +17,10 @@ pub(crate) fn push_transport_registration(report: &mut AcceptanceReport, runtime
                 && summary.hot_path_registration_attempts
                     == summary.hot_path_registration_rejections
                 && summary.per_token_registrations == 0
+                && summary.false_gpu_direct_registrations == 0
                 && summary.hot_path_allocations == 0,
             format!(
-                "capacity={} registered_entries={} bootstrap_registrations={} cache_hits={} cache_misses={} stale_address_rejections={} stale_version_rejections={} hot_path_registration_attempts={} hot_path_registration_rejections={} per_token_registrations={} pinned_host_registrations={} gpu_direct_registrations={} transport_events={} phase_handoff_syncs={} registration_cache_hit_rate_per_mille={} hot_path_allocations={}",
+                "capacity={} registered_entries={} bootstrap_registrations={} cache_hits={} cache_misses={} stale_address_rejections={} stale_version_rejections={} hot_path_registration_attempts={} hot_path_registration_rejections={} per_token_registrations={} pinned_host_registrations={} gpu_direct_registrations={} gpu_direct_rdma_capability={} gpu_direct_registration_skips={} false_gpu_direct_registrations={} transport_events={} phase_handoff_syncs={} registration_cache_hit_rate_per_mille={} hot_path_allocations={}",
                 summary.cache_capacity,
                 summary.registered_entries,
                 summary.bootstrap_registrations,
@@ -32,6 +33,9 @@ pub(crate) fn push_transport_registration(report: &mut AcceptanceReport, runtime
                 summary.per_token_registrations,
                 summary.pinned_host_registrations,
                 summary.gpu_direct_registrations,
+                summary.gpu_direct_rdma_capability.as_str(),
+                summary.gpu_direct_registration_skips,
+                summary.false_gpu_direct_registrations,
                 summary.transport_events,
                 summary.phase_handoff_syncs,
                 summary.registration_cache_hit_rate_per_mille,
