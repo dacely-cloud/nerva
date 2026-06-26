@@ -4,7 +4,9 @@ compile_error!("NERVA currently supports Linux only.");
 use std::{io::Read, path::Path, path::PathBuf, process::ExitCode};
 
 use nerva_core::TokenId;
-use nerva_runtime::{KvResidencyProbeConfig, Runtime, RuntimeConfig, SyntheticDecodeConfig};
+use nerva_runtime::{
+    KvResidencyProbeConfig, ResidencyBudget, Runtime, RuntimeConfig, SyntheticDecodeConfig,
+};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -165,6 +167,35 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("hotset") => {
+            let config_path = args.next();
+            let vram_bytes =
+                match parse_optional_usize(args.next(), 512 * 1024 * 1024, "vram_bytes") {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        eprintln!("{reason}");
+                        return ExitCode::from(2);
+                    }
+                };
+            let max_promote_bytes =
+                match parse_optional_usize(args.next(), vram_bytes, "max_promote_bytes") {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        eprintln!("{reason}");
+                        return ExitCode::from(2);
+                    }
+                };
+            match run_hotset_probe(config_path, vram_bytes, max_promote_bytes) {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(reason) => {
+                    eprintln!("{reason}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         Some("attention") => match nerva_model::blockwise_attention_smoke() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
@@ -217,7 +248,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
             );
             ExitCode::from(2)
         }
@@ -487,6 +518,48 @@ fn run_resident_weight_probe(config_path: Option<String>) -> Result<String, Stri
     }
 }
 
+fn run_hotset_probe(
+    config_path: Option<String>,
+    vram_bytes: usize,
+    max_promote_bytes: usize,
+) -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let manifest = match config_path {
+        Some(path) => {
+            let config = std::fs::read_to_string(&path)
+                .map_err(|err| format!("failed to read {path}: {err}"))?;
+            let metadata = nerva_model::parse_hf_config_metadata(&config)
+                .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+            let plan = nerva_model::plan_hf_weight_layout(&metadata)
+                .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
+            nerva_model::build_hf_tensor_manifest(&plan)
+                .map_err(|err| format!("HF tensor manifest failed: {err:?}"))?
+        }
+        None => {
+            nerva_model::hf_tensor_manifest_probe()
+                .map_err(|err| format!("HF tensor manifest probe failed: {err:?}"))?
+                .manifest
+        }
+    };
+    let mut table = runtime
+        .materialize_hf_weight_manifest_with_budget(
+            &manifest,
+            ResidencyBudget::new(vram_bytes, 0, manifest.total_weight_bytes),
+        )
+        .map_err(|err| format!("resident weight materialization failed: {err:?}"))?;
+    let hotset = runtime
+        .promote_resident_weight_hotset(&mut table, max_promote_bytes)
+        .map_err(|err| format!("resident weight hotset promotion failed: {err:?}"))?;
+    Ok(format!(
+        "{{\"status\":\"ok\",\"blocks\":{},\"total_weight_bytes\":{},\"manifest_hash\":{},\"hotset\":{}}}",
+        table.entries.len(),
+        table.total_weight_bytes,
+        table.manifest_hash,
+        hotset.to_json(),
+    ))
+}
+
 fn parse_optional_u64(
     value: Option<String>,
     default: u64,
@@ -595,6 +668,12 @@ mod tests {
         assert!(resident_json.contains("\"prefetch\""));
         assert!(resident_json.contains("\"execution\""));
         assert!(resident_json.contains("\"tasks\":20"));
+
+        let hotset_json =
+            run_hotset_probe(Some(config_path.to_string_lossy().into_owned()), 256, 200).unwrap();
+        assert!(hotset_json.contains("\"status\":\"ok\""));
+        assert!(hotset_json.contains("\"hotset\""));
+        assert!(hotset_json.contains("\"promoted_blocks\":7"));
 
         let _ = std::fs::remove_file(dir.join(SHARD_ONE));
         let _ = std::fs::remove_file(dir.join(SHARD_TWO));
