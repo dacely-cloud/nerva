@@ -1,6 +1,8 @@
 use crate::capabilities::discovery::{
-    cxl_capability, detected_memory_fabric, gpu_direct_rdma_capability,
+    amd_peerdirect_capability, cxl_capability, detected_memory_fabric, gpu_direct_rdma_capability,
+    hip_capability,
 };
+use crate::capabilities::hip::HipCapabilityEvidence;
 use crate::capabilities::json::json_string_array;
 use crate::capabilities::linux::{
     count_linux_id_list, discover_iommu_mode, extract_iommu_kernel_args, parse_pci_class,
@@ -108,5 +110,25 @@ fn topology_helpers_parse_linux_id_and_pci_class_values() {
     assert_eq!(
         detected_memory_fabric(CapabilityState::SupportedUnverified),
         MemoryFabricKind::CxlCoherentFabric
+    );
+
+    let hip_ready = HipCapabilityEvidence {
+        runtime_present: true,
+        runtime_version: Some("6.0".to_string()),
+        amd_gpu_count: 1,
+        kfd_present: true,
+        amdgpu_loaded: true,
+    };
+    assert_eq!(
+        hip_capability(&hip_ready),
+        CapabilityState::SupportedUnverified
+    );
+    assert_eq!(
+        amd_peerdirect_capability(CapabilityState::SupportedUnverified, 1),
+        CapabilityState::SupportedUnverified
+    );
+    assert_eq!(
+        amd_peerdirect_capability(CapabilityState::SupportedUnverified, 0),
+        CapabilityState::Unsupported
     );
 }

@@ -1,5 +1,6 @@
 use std::{env, fs};
 
+use crate::capabilities::hip::{discover_hip_evidence, hip_runtime_usable};
 use crate::capabilities::linux::read_trimmed_first_line;
 use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState};
 use crate::capabilities::topology::discover_topology_snapshot;
@@ -38,6 +39,9 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
     );
     let cxl = cxl_capability(topology.cxl_device_count, topology.cxl_memory_device_count);
     let fabric = detected_memory_fabric(cxl);
+    let hip_evidence = discover_hip_evidence();
+    let hip = hip_capability(&hip_evidence);
+    let amd_peerdirect = amd_peerdirect_capability(hip, topology.rdma_device_count);
 
     CapabilitySnapshot {
         host_arch: host_arch(),
@@ -52,18 +56,44 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
         cuda_compute_capability,
         cuda_device_total_memory_bytes,
         cuda_pci_bus_id,
-        hip: CapabilityState::Unsupported,
+        hip,
         hip_visible_devices: env::var("HIP_VISIBLE_DEVICES").ok(),
+        hip_runtime_present: hip_evidence.runtime_present,
+        hip_runtime_version: hip_evidence.runtime_version,
+        hip_amd_gpu_count: hip_evidence.amd_gpu_count,
+        hip_kfd_present: hip_evidence.kfd_present,
+        hip_amdgpu_loaded: hip_evidence.amdgpu_loaded,
         nvidia_driver_version: read_trimmed_first_line("/proc/driver/nvidia/version"),
         rdma_core_loaded,
         mlx5_core_loaded,
         nvidia_peer_memory_module,
         pinned_host_staging: CapabilityState::SupportedUnverified,
         gpu_direct_rdma,
-        amd_peerdirect: CapabilityState::Unsupported,
+        amd_peerdirect,
         dma_buf_export: CapabilityState::Unsupported,
         cxl,
         topology,
+    }
+}
+
+pub(crate) fn hip_capability(
+    evidence: &crate::capabilities::hip::HipCapabilityEvidence,
+) -> CapabilityState {
+    if hip_runtime_usable(evidence) {
+        CapabilityState::SupportedUnverified
+    } else {
+        CapabilityState::Unsupported
+    }
+}
+
+pub(crate) fn amd_peerdirect_capability(
+    hip: CapabilityState,
+    rdma_device_count: usize,
+) -> CapabilityState {
+    if hip != CapabilityState::Unsupported && rdma_device_count > 0 {
+        CapabilityState::SupportedUnverified
+    } else {
+        CapabilityState::Unsupported
     }
 }
 

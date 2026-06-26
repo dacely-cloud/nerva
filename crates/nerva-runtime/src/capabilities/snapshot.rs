@@ -91,6 +91,11 @@ pub struct CapabilitySnapshot {
     pub cuda_pci_bus_id: Option<String>,
     pub hip: CapabilityState,
     pub hip_visible_devices: Option<String>,
+    pub hip_runtime_present: bool,
+    pub hip_runtime_version: Option<String>,
+    pub hip_amd_gpu_count: usize,
+    pub hip_kfd_present: bool,
+    pub hip_amdgpu_loaded: bool,
     pub nvidia_driver_version: Option<String>,
     pub rdma_core_loaded: bool,
     pub mlx5_core_loaded: bool,
@@ -106,7 +111,7 @@ pub struct CapabilitySnapshot {
 impl CapabilitySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_pci_bus_id\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"nvidia_peer_memory_module\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
+            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"cuda_compute_capability\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_pci_bus_id\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"hip_runtime_present\":{},\"hip_runtime_version\":{},\"hip_amd_gpu_count\":{},\"hip_kfd_present\":{},\"hip_amdgpu_loaded\":{},\"nvidia_driver_version\":{},\"rdma_core_loaded\":{},\"mlx5_core_loaded\":{},\"nvidia_peer_memory_module\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\",\"topology\":{}}}",
             host_arch_to_str(self.host_arch),
             self.target_os,
             self.target_arch,
@@ -121,6 +126,11 @@ impl CapabilitySnapshot {
             json_opt_string(self.cuda_pci_bus_id.as_deref()),
             self.hip.as_str(),
             json_opt_string(self.hip_visible_devices.as_deref()),
+            self.hip_runtime_present,
+            json_opt_string(self.hip_runtime_version.as_deref()),
+            self.hip_amd_gpu_count,
+            self.hip_kfd_present,
+            self.hip_amdgpu_loaded,
             json_opt_string(self.nvidia_driver_version.as_deref()),
             self.rdma_core_loaded,
             self.mlx5_core_loaded,

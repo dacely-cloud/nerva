@@ -32,6 +32,10 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("cxl_devices="));
     assert!(json.contains("cxl_memory_devices="));
     assert!(json.contains("cxl_regions="));
+    assert!(json.contains("hip_runtime_present="));
+    assert!(json.contains("hip_amd_gpu_count="));
+    assert!(json.contains("hip_kfd_present="));
+    assert!(json.contains("hip_amdgpu_loaded="));
     assert!(json.contains("\"synthetic_transaction\""));
     assert!(json.contains("\"synthetic_device_token\""));
     assert!(json.contains("\"critical_path_observability\""));

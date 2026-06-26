@@ -3,6 +3,7 @@ use std::env;
 use nerva_core::types::arch::{HostArch, host_arch};
 use nerva_core::types::memory::fabric::MemoryFabricKind;
 
+use crate::capabilities::hip::HipCapabilityEvidence;
 use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState, TopologySnapshot};
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 
@@ -32,7 +33,16 @@ fn capability_snapshot_reports_conservative_discrete_profile() {
         snapshot.cuda,
         CapabilityState::SupportedAndVerified | CapabilityState::Unsupported
     ));
-    assert_eq!(snapshot.hip, CapabilityState::Unsupported);
+    assert_eq!(
+        snapshot.hip,
+        crate::capabilities::discovery::hip_capability(&HipCapabilityEvidence {
+            runtime_present: snapshot.hip_runtime_present,
+            runtime_version: snapshot.hip_runtime_version.clone(),
+            amd_gpu_count: snapshot.hip_amd_gpu_count,
+            kfd_present: snapshot.hip_kfd_present,
+            amdgpu_loaded: snapshot.hip_amdgpu_loaded,
+        })
+    );
     assert_eq!(
         snapshot.pinned_host_staging,
         CapabilityState::SupportedUnverified
@@ -41,7 +51,13 @@ fn capability_snapshot_reports_conservative_discrete_profile() {
         snapshot.gpu_direct_rdma,
         CapabilityState::DegradedToPinnedHost | CapabilityState::SupportedUnverified
     ));
-    assert_eq!(snapshot.amd_peerdirect, CapabilityState::Unsupported);
+    assert_eq!(
+        snapshot.amd_peerdirect,
+        crate::capabilities::discovery::amd_peerdirect_capability(
+            snapshot.hip,
+            snapshot.topology.rdma_device_count,
+        )
+    );
     assert_eq!(snapshot.dma_buf_export, CapabilityState::Unsupported);
     assert_eq!(
         snapshot.cxl,
@@ -59,6 +75,10 @@ fn capability_snapshot_reports_conservative_discrete_profile() {
     assert!(json.contains("\"cuda_compute_capability\""));
     assert!(json.contains("\"cuda_device_total_memory_bytes\""));
     assert!(json.contains("\"cuda_pci_bus_id\""));
+    assert!(json.contains("\"hip_runtime_present\""));
+    assert!(json.contains("\"hip_amd_gpu_count\""));
+    assert!(json.contains("\"hip_kfd_present\""));
+    assert!(json.contains("\"hip_amdgpu_loaded\""));
     assert!(json.contains("\"rdma_core_loaded\""));
     assert!(json.contains("\"mlx5_core_loaded\""));
     assert!(json.contains("\"nvidia_peer_memory_module\""));
@@ -101,15 +121,20 @@ fn capability_snapshot_json_escapes_cuda_error() {
         cuda_compute_capability: Some("8.9".to_string()),
         cuda_device_total_memory_bytes: Some(24 * 1024 * 1024 * 1024),
         cuda_pci_bus_id: Some("0000:65:00.0".to_string()),
-        hip: CapabilityState::Unsupported,
+        hip: CapabilityState::SupportedUnverified,
         hip_visible_devices: Some("2".to_string()),
+        hip_runtime_present: true,
+        hip_runtime_version: Some("rocm\"6\\test".to_string()),
+        hip_amd_gpu_count: 1,
+        hip_kfd_present: true,
+        hip_amdgpu_loaded: true,
         nvidia_driver_version: Some("driver\\version".to_string()),
         rdma_core_loaded: true,
         mlx5_core_loaded: true,
         nvidia_peer_memory_module: Some("nvidia_peermem".to_string()),
         pinned_host_staging: CapabilityState::SupportedUnverified,
         gpu_direct_rdma: CapabilityState::SupportedUnverified,
-        amd_peerdirect: CapabilityState::Unsupported,
+        amd_peerdirect: CapabilityState::SupportedUnverified,
         dma_buf_export: CapabilityState::Unsupported,
         cxl: CapabilityState::Unsupported,
         topology: TopologySnapshot {
@@ -143,6 +168,12 @@ fn capability_snapshot_json_escapes_cuda_error() {
     assert!(json.contains("\"cuda_compute_capability\":\"8.9\""));
     assert!(json.contains("\"cuda_device_total_memory_bytes\":25769803776"));
     assert!(json.contains("\"cuda_pci_bus_id\":\"0000:65:00.0\""));
+    assert!(json.contains("\"hip\":\"SUPPORTED_UNVERIFIED\""));
+    assert!(json.contains("\"hip_runtime_present\":true"));
+    assert!(json.contains("\"hip_runtime_version\":\"rocm\\\"6\\\\test\""));
+    assert!(json.contains("\"hip_amd_gpu_count\":1"));
+    assert!(json.contains("\"hip_kfd_present\":true"));
+    assert!(json.contains("\"hip_amdgpu_loaded\":true"));
     assert!(json.contains("\"rdma_core_loaded\":true"));
     assert!(json.contains("\"mlx5_core_loaded\":true"));
     assert!(json.contains("\"nvidia_peer_memory_module\":\"nvidia_peermem\""));

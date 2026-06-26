@@ -15,6 +15,11 @@ pub(crate) fn push_capability_provenance(report: &mut AcceptanceReport, runtime:
         )
         && (capabilities.cxl != CapabilityState::Unsupported
             || matches!(capabilities.fabric, MemoryFabricKind::DiscreteExplicit))
+        && (capabilities.hip == CapabilityState::Unsupported
+            || (capabilities.hip_runtime_present
+                && capabilities.hip_amd_gpu_count > 0
+                && capabilities.hip_kfd_present
+                && capabilities.hip_amdgpu_loaded))
         && !matches!(
             capabilities.pinned_host_staging,
             CapabilityState::Unsupported
@@ -23,7 +28,7 @@ pub(crate) fn push_capability_provenance(report: &mut AcceptanceReport, runtime:
         "capability_provenance",
         capability_passed,
         format!(
-            "target={}-{} kernel_present={} fabric={:?} cxl={:?} cxl_devices={} cxl_memory_devices={} cxl_regions={} pinned_host_staging={:?} gpu_direct_rdma={:?} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} topology_cpu_count={}",
+            "target={}-{} kernel_present={} fabric={:?} cxl={:?} cxl_devices={} cxl_memory_devices={} cxl_regions={} hip={:?} hip_runtime_present={} hip_runtime_version={} hip_amd_gpu_count={} hip_kfd_present={} hip_amdgpu_loaded={} amd_peerdirect={:?} pinned_host_staging={:?} gpu_direct_rdma={:?} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} topology_cpu_count={}",
             capabilities.target_os,
             capabilities.target_arch,
             capabilities.kernel_release.is_some(),
@@ -32,6 +37,16 @@ pub(crate) fn push_capability_provenance(report: &mut AcceptanceReport, runtime:
             capabilities.topology.cxl_device_count,
             capabilities.topology.cxl_memory_device_count,
             capabilities.topology.cxl_region_count,
+            capabilities.hip,
+            capabilities.hip_runtime_present,
+            capabilities
+                .hip_runtime_version
+                .as_deref()
+                .unwrap_or("none"),
+            capabilities.hip_amd_gpu_count,
+            capabilities.hip_kfd_present,
+            capabilities.hip_amdgpu_loaded,
+            capabilities.amd_peerdirect,
             capabilities.pinned_host_staging,
             capabilities.gpu_direct_rdma,
             capabilities.rdma_core_loaded,
