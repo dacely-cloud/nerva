@@ -101,6 +101,14 @@ pub struct FallbackDecision {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlockVersionDependency {
+    pub block_id: ResidentBlockId,
+    pub required_version: u64,
+    pub observed_version: u64,
+    pub label: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CandidateCost {
     pub label: &'static str,
     pub visible_ns: Option<u64>,
@@ -155,6 +163,7 @@ pub struct TokenLedger {
     pub events: Vec<LedgerEvent>,
     pub device_timeline: Vec<DeviceTimelineSpan>,
     pub fallback_decisions: Vec<FallbackDecision>,
+    pub block_version_dependencies: Vec<BlockVersionDependency>,
     pub residency_decisions: Vec<ResidencyDecision>,
     pub execution_decisions: Vec<ExecutionDecision>,
     pub hot_path_allocations: u64,
@@ -167,6 +176,7 @@ impl TokenLedger {
             events: Vec::new(),
             device_timeline: Vec::new(),
             fallback_decisions: Vec::new(),
+            block_version_dependencies: Vec::new(),
             residency_decisions: Vec::new(),
             execution_decisions: Vec::new(),
             hot_path_allocations: 0,
@@ -214,6 +224,10 @@ impl TokenLedger {
 
     pub fn record_fallback_decision(&mut self, decision: FallbackDecision) {
         self.fallback_decisions.push(decision);
+    }
+
+    pub fn record_block_version_dependency(&mut self, dependency: BlockVersionDependency) {
+        self.block_version_dependencies.push(dependency);
     }
 
     pub fn record_device_span(&mut self, span: DeviceTimelineSpan) -> Result<()> {
@@ -303,6 +317,21 @@ impl TokenLedger {
             .iter()
             .filter(|decision| decision.class == class)
             .count() as u64
+    }
+
+    pub fn require_satisfied_block_versions(&self) -> Result<()> {
+        for dependency in &self.block_version_dependencies {
+            if dependency.observed_version < dependency.required_version {
+                return Err(NervaError::ResidencyViolation {
+                    block_id: dependency.block_id,
+                    reason: format!(
+                        "block version dependency '{}' requires {}, observed {}",
+                        dependency.label, dependency.required_version, dependency.observed_version
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 
     pub fn device_active_ns(&self, device: DeviceOrdinal) -> Result<u64> {
@@ -563,6 +592,39 @@ mod tests {
             ledger.fallback_count_for(FallbackClass::CapabilityDegraded),
             1
         );
+    }
+
+    #[test]
+    fn block_version_dependencies_validate_observed_versions() {
+        let mut ledger = TokenLedger::new(0);
+        ledger.record_block_version_dependency(BlockVersionDependency {
+            block_id: ResidentBlockId(7),
+            required_version: 2,
+            observed_version: 2,
+            label: "weight_step",
+        });
+        ledger.record_block_version_dependency(BlockVersionDependency {
+            block_id: ResidentBlockId(8),
+            required_version: 2,
+            observed_version: 3,
+            label: "newer_replica",
+        });
+
+        assert_eq!(ledger.block_version_dependencies.len(), 2);
+        assert!(ledger.require_satisfied_block_versions().is_ok());
+    }
+
+    #[test]
+    fn block_version_dependencies_reject_stale_observations() {
+        let mut ledger = TokenLedger::new(0);
+        ledger.record_block_version_dependency(BlockVersionDependency {
+            block_id: ResidentBlockId(7),
+            required_version: 4,
+            observed_version: 3,
+            label: "stale_weight_step",
+        });
+
+        assert!(ledger.require_satisfied_block_versions().is_err());
     }
 
     #[test]

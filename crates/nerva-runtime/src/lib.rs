@@ -14,8 +14,9 @@ use nerva_kernel_contracts::{
     KernelBackend, KernelOperation, KernelPlan, KernelQuery, bootstrap_registry,
 };
 use nerva_ledger::{
-    CandidateCost, DeviceTimelineSpan, ExecutionDecision, FallbackClass, FallbackDecision,
-    LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, SyncClass, TokenLedger,
+    BlockVersionDependency, CandidateCost, DeviceTimelineSpan, ExecutionDecision, FallbackClass,
+    FallbackDecision, LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, SyncClass,
+    TokenLedger,
 };
 use nerva_memory::{
     ArenaKind, BlockAllocationRequest, BlockRegistry, KvPageSpec, KvPrefixKey, KvResidencyAction,
@@ -423,6 +424,7 @@ pub struct ResidentWeightExecutionStep {
     pub strategy: ResidentWeightExecutionStrategy,
     pub executor: ExecutionOwner,
     pub bytes: usize,
+    pub block_version: u64,
     pub predicted_visible_ns: u64,
     pub kernel_name: &'static str,
     pub fallback: bool,
@@ -438,6 +440,7 @@ pub struct ResidentWeightExecutionPlan {
     pub gpu_staged_steps: u64,
     pub fallback_steps: u64,
     pub fallback_decisions: u64,
+    pub block_version_dependencies: u64,
     pub first_tensor: Option<String>,
     pub last_tensor: Option<String>,
     pub ledger: TokenLedger,
@@ -446,7 +449,7 @@ pub struct ResidentWeightExecutionPlan {
 impl ResidentWeightExecutionPlan {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_predicted_visible_ns\":{},\"cpu_steps\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"fallback_decisions\":{},\"first_tensor\":{},\"last_tensor\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
+            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_predicted_visible_ns\":{},\"cpu_steps\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"fallback_decisions\":{},\"block_version_dependencies\":{},\"first_tensor\":{},\"last_tensor\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
             self.steps.len(),
             self.total_weight_bytes,
             self.total_predicted_visible_ns,
@@ -455,6 +458,7 @@ impl ResidentWeightExecutionPlan {
             self.gpu_staged_steps,
             self.fallback_steps,
             self.fallback_decisions,
+            self.block_version_dependencies,
             json_opt_string(self.first_tensor.as_deref()),
             json_opt_string(self.last_tensor.as_deref()),
             self.ledger.execution_decisions.len(),
@@ -475,6 +479,7 @@ pub struct ResidentWeightExecutionRunSummary {
     pub gpu_staged_steps: u64,
     pub fallback_steps: u64,
     pub fallback_decisions: u64,
+    pub block_version_dependencies: u64,
     pub hot_path_allocations: u64,
     pub ledger: TokenLedger,
 }
@@ -482,7 +487,7 @@ pub struct ResidentWeightExecutionRunSummary {
 impl ResidentWeightExecutionRunSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_latency_ns\":{},\"cpu_events\":{},\"device_events\":{},\"copy_events\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"fallback_decisions\":{},\"hot_path_allocations\":{}}}",
+            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_latency_ns\":{},\"cpu_events\":{},\"device_events\":{},\"copy_events\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"fallback_decisions\":{},\"block_version_dependencies\":{},\"hot_path_allocations\":{}}}",
             self.steps,
             self.total_weight_bytes,
             self.total_latency_ns,
@@ -493,6 +498,7 @@ impl ResidentWeightExecutionRunSummary {
             self.gpu_staged_steps,
             self.fallback_steps,
             self.fallback_decisions,
+            self.block_version_dependencies,
             self.hot_path_allocations,
         )
     }
@@ -2201,6 +2207,12 @@ impl Runtime {
                     reason: format!("resident weight {} is not Ready", entry.name),
                 });
             }
+            ledger.record_block_version_dependency(BlockVersionDependency {
+                block_id: entry.block_id,
+                required_version: block.version,
+                observed_version: block.version,
+                label: "resident_weight_execution_plan",
+            });
 
             let cuda_plan = registry.resolve(KernelQuery::new(
                 KernelOperation::DenseMatVec,
@@ -2336,6 +2348,7 @@ impl Runtime {
                 strategy,
                 executor,
                 bytes: entry.bytes,
+                block_version: block.version,
                 predicted_visible_ns,
                 kernel_name,
                 fallback,
@@ -2348,6 +2361,7 @@ impl Runtime {
             });
         }
         ledger.require_zero_hot_path_allocations()?;
+        ledger.require_satisfied_block_versions()?;
 
         let first_tensor = steps.first().map(|step| step.name.clone());
         let last_tensor = steps.last().map(|step| step.name.clone());
@@ -2360,6 +2374,7 @@ impl Runtime {
             gpu_staged_steps,
             fallback_steps,
             fallback_decisions: ledger.fallback_count(),
+            block_version_dependencies: ledger.block_version_dependencies.len() as u64,
             first_tensor,
             last_tensor,
             ledger,
@@ -2404,6 +2419,13 @@ impl Runtime {
                     reason: format!("execution step {} block is not Ready", step.step_index),
                 });
             }
+            ledger.record_block_version_dependency(BlockVersionDependency {
+                block_id: step.block_id,
+                required_version: step.block_version,
+                observed_version: block.version,
+                label: "resident_weight_execution_run",
+            });
+            ledger.require_satisfied_block_versions()?;
             let entry = table
                 .entries
                 .iter()
@@ -2562,6 +2584,7 @@ impl Runtime {
             gpu_staged_steps,
             fallback_steps,
             fallback_decisions: ledger.fallback_count(),
+            block_version_dependencies: ledger.block_version_dependencies.len() as u64,
             hot_path_allocations: ledger.hot_path_allocations,
             ledger,
         })
@@ -3498,7 +3521,9 @@ mod tests {
         assert_eq!(plan.gpu_staged_steps, 3);
         assert_eq!(plan.fallback_steps, 0);
         assert_eq!(plan.fallback_decisions, 0);
+        assert_eq!(plan.block_version_dependencies, 3);
         assert_eq!(plan.ledger.execution_decisions.len(), 3);
+        assert!(plan.ledger.require_satisfied_block_versions().is_ok());
         assert_eq!(
             plan.steps[0].strategy,
             ResidentWeightExecutionStrategy::GpuStaged
@@ -3617,6 +3642,7 @@ mod tests {
         assert_eq!(summary.gpu_staged_steps, 1);
         assert_eq!(summary.fallback_steps, 0);
         assert_eq!(summary.fallback_decisions, 0);
+        assert_eq!(summary.block_version_dependencies, 3);
         assert_eq!(summary.cpu_events, 0);
         assert_eq!(summary.device_events, 3);
         assert_eq!(summary.copy_events, 1);
@@ -3662,6 +3688,23 @@ mod tests {
             2
         );
         assert_eq!(summary.hot_path_allocations, 0);
+    }
+
+    #[test]
+    fn resident_weight_execution_run_rejects_unsatisfied_block_version() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = tiny_llama_manifest();
+        let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
+        let mut plan = runtime
+            .plan_resident_weight_execution(&table, 2, Some(89))
+            .unwrap();
+        plan.steps[0].block_version = plan.steps[0].block_version.saturating_add(1);
+
+        assert!(
+            runtime
+                .execute_resident_weight_execution_plan(&table, &plan)
+                .is_err()
+        );
     }
 
     #[test]
