@@ -974,6 +974,7 @@ mod tests {
         assert!(json.contains("\"git_commit\""));
         assert!(json.contains("\"package_version\""));
         assert!(json.contains("\"capabilities\""));
+        assert!(json.contains("\"target_os\":\"linux\""));
         assert!(json.contains("\"summary\""));
         assert!(json.contains("\"device_timeline_idle_ns\":0"));
     }

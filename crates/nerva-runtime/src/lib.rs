@@ -3,7 +3,7 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("NERVA currently supports Linux only.");
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, env, fs};
 
 use nerva_core::{
     AllocationId, BlockKind, DeviceOrdinal, ExecutionOwner, HostArch, LayoutId, MemoryFabricKind,
@@ -75,11 +75,17 @@ impl CapabilityState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapabilitySnapshot {
     pub host_arch: HostArch,
+    pub target_os: &'static str,
+    pub target_arch: &'static str,
+    pub kernel_release: Option<String>,
     pub fabric: MemoryFabricKind,
     pub cuda: CapabilityState,
     pub cuda_status: &'static str,
     pub cuda_error: Option<String>,
+    pub cuda_visible_devices: Option<String>,
     pub hip: CapabilityState,
+    pub hip_visible_devices: Option<String>,
+    pub nvidia_driver_version: Option<String>,
     pub pinned_host_staging: CapabilityState,
     pub gpu_direct_rdma: CapabilityState,
     pub amd_peerdirect: CapabilityState,
@@ -90,13 +96,19 @@ pub struct CapabilitySnapshot {
 impl CapabilitySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"host_arch\":\"{}\",\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"hip\":\"{}\",\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\"}}",
+            "{{\"host_arch\":\"{}\",\"target_os\":\"{}\",\"target_arch\":\"{}\",\"kernel_release\":{},\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"cuda_visible_devices\":{},\"hip\":\"{}\",\"hip_visible_devices\":{},\"nvidia_driver_version\":{},\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\"}}",
             host_arch_to_str(self.host_arch),
+            self.target_os,
+            self.target_arch,
+            json_opt_string(self.kernel_release.as_deref()),
             memory_fabric_to_str(self.fabric),
             self.cuda.as_str(),
             self.cuda_status,
             json_opt_string(self.cuda_error.as_deref()),
+            json_opt_string(self.cuda_visible_devices.as_deref()),
             self.hip.as_str(),
+            json_opt_string(self.hip_visible_devices.as_deref()),
+            json_opt_string(self.nvidia_driver_version.as_deref()),
             self.pinned_host_staging.as_str(),
             self.gpu_direct_rdma.as_str(),
             self.amd_peerdirect.as_str(),
@@ -1506,11 +1518,17 @@ impl Runtime {
 
         CapabilitySnapshot {
             host_arch: host_arch(),
+            target_os: env::consts::OS,
+            target_arch: env::consts::ARCH,
+            kernel_release: read_trimmed_first_line("/proc/sys/kernel/osrelease"),
             fabric: MemoryFabricKind::DiscreteExplicit,
             cuda,
             cuda_status,
             cuda_error: cuda_smoke.error,
+            cuda_visible_devices: env::var("CUDA_VISIBLE_DEVICES").ok(),
             hip: CapabilityState::Unsupported,
+            hip_visible_devices: env::var("HIP_VISIBLE_DEVICES").ok(),
+            nvidia_driver_version: read_trimmed_first_line("/proc/driver/nvidia/version"),
             pinned_host_staging: CapabilityState::SupportedUnverified,
             gpu_direct_rdma: CapabilityState::DegradedToPinnedHost,
             amd_peerdirect: CapabilityState::Unsupported,
@@ -2953,6 +2971,15 @@ fn estimate_cpu_fallback_weight_ns(bytes: usize, tier: MemoryTier) -> u64 {
     copy_ns + estimate_cpu_dram_weight_ns(bytes)
 }
 
+fn read_trimmed_first_line(path: &str) -> Option<String> {
+    let contents = fs::read_to_string(path).ok()?;
+    contents
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn weight_role_layout_id(role: nerva_model::WeightBlockRole) -> u32 {
     match role {
         nerva_model::WeightBlockRole::TokenEmbedding => 1,
@@ -3101,6 +3128,14 @@ mod tests {
         let snapshot = runtime.discover_capabilities();
 
         assert_eq!(snapshot.host_arch, host_arch());
+        assert_eq!(snapshot.target_os, env::consts::OS);
+        assert_eq!(snapshot.target_arch, env::consts::ARCH);
+        assert!(
+            snapshot
+                .kernel_release
+                .as_deref()
+                .is_none_or(|value| !value.is_empty())
+        );
         assert_eq!(snapshot.fabric, MemoryFabricKind::DiscreteExplicit);
         assert!(matches!(
             snapshot.cuda,
@@ -3120,6 +3155,8 @@ mod tests {
         assert_eq!(snapshot.cxl, CapabilityState::Unsupported);
 
         let json = snapshot.to_json();
+        assert!(json.contains("\"target_os\":\"linux\""));
+        assert!(json.contains("\"kernel_release\""));
         assert!(json.contains("\"fabric\":\"DiscreteExplicit\""));
         assert!(json.contains("\"gpu_direct_rdma\":\"DEGRADED_TO_PINNED_HOST\""));
     }
@@ -3128,11 +3165,17 @@ mod tests {
     fn capability_snapshot_json_escapes_cuda_error() {
         let snapshot = CapabilitySnapshot {
             host_arch: HostArch::X86_64,
+            target_os: "linux",
+            target_arch: "x86_64",
+            kernel_release: Some("kernel\" release".to_string()),
             fabric: MemoryFabricKind::DiscreteExplicit,
             cuda: CapabilityState::Unsupported,
             cuda_status: "failed",
             cuda_error: Some("quote\" slash\\ newline\n".to_string()),
+            cuda_visible_devices: Some("0,1".to_string()),
             hip: CapabilityState::Unsupported,
+            hip_visible_devices: Some("2".to_string()),
+            nvidia_driver_version: Some("driver\\version".to_string()),
             pinned_host_staging: CapabilityState::SupportedUnverified,
             gpu_direct_rdma: CapabilityState::DegradedToPinnedHost,
             amd_peerdirect: CapabilityState::Unsupported,
@@ -3142,6 +3185,8 @@ mod tests {
 
         let json = snapshot.to_json();
         assert!(json.contains("quote\\\" slash\\\\ newline\\n"));
+        assert!(json.contains("kernel\\\" release"));
+        assert!(json.contains("driver\\\\version"));
     }
 
     #[test]
