@@ -6,6 +6,7 @@ members = [
     "crates/nerva-memory",
     "crates/nerva-cuda",
     "crates/nerva-runtime",
+    "crates/nerva-model",
     "crates/nerva-bench",
 ]
 
@@ -23,6 +24,7 @@ nerva-ledger = { path = "crates/nerva-ledger" }
 nerva-memory = { path = "crates/nerva-memory" }
 nerva-cuda = { path = "crates/nerva-cuda" }
 nerva-runtime = { path = "crates/nerva-runtime" }
+nerva-model = { path = "crates/nerva-model" }
 
 [profile.release]
 strip = "symbols"

@@ -1,5 +1,5 @@
 [package]
-name = "nerva-bench"
+name = "nerva-model"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,5 +9,4 @@ publish.workspace = true
 
 [dependencies]
 nerva-core.workspace = true
-nerva-model.workspace = true
-nerva-runtime.workspace = true
+nerva-ledger.workspace = true

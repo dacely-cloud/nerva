@@ -6,6 +6,8 @@ version = 4
 name = "nerva-bench"
 version = "0.1.0"
 dependencies = [
+ "nerva-core",
+ "nerva-model",
  "nerva-runtime",
 ]
 
@@ -29,6 +31,14 @@ name = "nerva-memory"
 version = "0.1.0"
 dependencies = [
  "nerva-core",
+]
+
+[[package]]
+name = "nerva-model"
+version = "0.1.0"
+dependencies = [
+ "nerva-core",
+ "nerva-ledger",
 ]
 
 [[package]]

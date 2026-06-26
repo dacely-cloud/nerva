@@ -51,6 +51,18 @@ pub struct TransportDeviceId(pub u32);
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
 pub struct UseDistance(pub u64);
 
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct RequestId(pub u64);
+
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct SequenceId(pub u64);
+
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct TokenId(pub u32);
+
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct TransactionId(pub u64);
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum MemoryFabricKind {
     DiscreteExplicit,

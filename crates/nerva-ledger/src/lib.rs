@@ -113,6 +113,23 @@ impl TokenLedger {
         self.residency_decisions.push(decision);
     }
 
+    pub fn record_hot_path_allocation_attempt(
+        &mut self,
+        label: &'static str,
+        bytes: usize,
+        to_tier: MemoryTier,
+    ) {
+        self.record(LedgerEvent {
+            kind: LedgerEventKind::Allocation,
+            block_id: None,
+            from_tier: None,
+            to_tier: Some(to_tier),
+            bytes,
+            latency_ns: 0,
+            label,
+        });
+    }
+
     pub fn total_latency_ns(&self) -> u64 {
         self.events.iter().map(|event| event.latency_ns).sum()
     }
@@ -138,17 +155,9 @@ mod tests {
     #[test]
     fn allocation_events_increment_hot_path_count() {
         let mut ledger = TokenLedger::new(0);
-        ledger.record(LedgerEvent {
-            kind: LedgerEventKind::Allocation,
-            block_id: None,
-            from_tier: None,
-            to_tier: Some(MemoryTier::Vram),
-            bytes: 64,
-            latency_ns: 10,
-            label: "test",
-        });
+        ledger.record_hot_path_allocation_attempt("test", 64, MemoryTier::Vram);
         assert_eq!(ledger.hot_path_allocations, 1);
-        assert_eq!(ledger.total_latency_ns(), 10);
+        assert_eq!(ledger.total_latency_ns(), 0);
         assert!(ledger.require_zero_hot_path_allocations().is_err());
     }
 
