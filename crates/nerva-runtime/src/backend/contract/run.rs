@@ -6,7 +6,8 @@ use nerva_core::types::backend::validation::{
 use nerva_core::types::id::transaction::TransactionId;
 use nerva_cuda::smoke::status::SmokeStatus;
 
-use crate::backend::contract::adapter::{CudaBackendContractAdapter, cuda_capabilities_from_probe};
+use crate::backend::contract::adapter::CudaBackendContractAdapter;
+use crate::backend::contract::capabilities::cuda_capabilities_from_probe;
 use crate::backend::contract::status::BackendContractProbeStatus;
 use crate::backend::contract::summary::RuntimeBackendContractSummary;
 use crate::engine::runtime::Runtime;

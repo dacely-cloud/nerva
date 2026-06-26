@@ -1,9 +1,12 @@
 use nerva_core::types::dtype::DType;
 
-use crate::registry::types::{
-    ArchitectureRange, KernelBackend, KernelContractRegistry, KernelExactness, KernelFallback,
-    KernelFallbackClass, KernelImplementation, KernelOperation,
-};
+use crate::registry::types::architecture::ArchitectureRange;
+use crate::registry::types::backend::KernelBackend;
+use crate::registry::types::exactness::KernelExactness;
+use crate::registry::types::fallback::{KernelFallback, KernelFallbackClass};
+use crate::registry::types::implementation::KernelImplementation;
+use crate::registry::types::operation::KernelOperation;
+use crate::registry::types::registry::KernelContractRegistry;
 
 static DTYPE_F32: &[DType] = &[DType::F32];
 static DTYPE_FP16_BF16: &[DType] = &[DType::F16, DType::BF16];

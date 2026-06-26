@@ -3,7 +3,7 @@ use nerva_core::types::id::device::DeviceOrdinal;
 
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::execution::plan::planner::plan_execution_transaction;
-use crate::execution::probe::reference_transaction_fixture;
+use crate::execution::probe::fixture::reference_transaction_fixture;
 use crate::execution::summary::ExecutionTransactionStatus;
 
 #[test]

@@ -1,32 +1,27 @@
-use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::allocation::AllocationId;
 use nerva_core::types::memory::tier::MemoryTier;
-use nerva_ledger::types::decision::BlockVersionDependency;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::token::ledger::TokenLedger;
 use nerva_memory::arena::kind::ArenaKind;
 use nerva_memory::arena::set::static_set::StaticArenaSet;
 use nerva_memory::kv::page::KvPageSpec;
 use nerva_memory::kv::pool::table::KvPagePool;
-use nerva_memory::registry::table::registry::BlockRegistry;
-use nerva_model::attention::block::KvAttentionBlock;
 use nerva_model::attention::exact::run::exact_blockwise_attention_into;
 use nerva_model::attention::scratch::BlockwiseAttentionScratch;
 use nerva_model::common::shape::TransformerBlockShape;
 
+use crate::engine::kv_attention::blocks::resident_attention_blocks;
+use crate::engine::kv_attention::compare::{hash_f32s, max_abs_error};
 use crate::engine::kv_attention::config::TieredKvAttentionProbeConfig;
+use crate::engine::kv_attention::payload::ResidentKvAttentionPayload;
+use crate::engine::kv_attention::reference::reference_attention;
 use crate::engine::kv_attention::summary::{
     TieredKvAttentionProbeStatus, TieredKvAttentionProbeSummary,
 };
+use crate::engine::kv_attention::validate::validate_config;
 use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;
-
-struct ResidentKvAttentionPayload<'a> {
-    page_index: u32,
-    keys: &'a [f32],
-    values: &'a [f32],
-}
 
 impl Runtime {
     pub fn run_tiered_kv_attention_probe(
@@ -146,123 +141,4 @@ impl Runtime {
             hot_path_allocations: ledger.hot_path_allocations,
         })
     }
-}
-
-fn validate_config(config: TieredKvAttentionProbeConfig) -> Result<()> {
-    if config.tokens_per_page != 2 {
-        return Err(NervaError::InvalidArgument {
-            reason: "tiered KV attention probe currently requires two tokens per page".to_string(),
-        });
-    }
-    let required_page_bytes = config.tokens_per_page as usize * 2 * core::mem::size_of::<f32>() * 2;
-    if config.page_bytes < required_page_bytes {
-        return Err(NervaError::InvalidArgument {
-            reason: "tiered KV attention probe page bytes cannot hold keys and values".to_string(),
-        });
-    }
-    Ok(())
-}
-
-fn resident_attention_blocks<'a>(
-    pool: &KvPagePool,
-    registry: &BlockRegistry,
-    payloads: &'a [ResidentKvAttentionPayload<'a>],
-    ledger: &mut TokenLedger,
-) -> Result<Vec<KvAttentionBlock<'a>>> {
-    let mut blocks = Vec::with_capacity(payloads.len());
-    for payload in payloads {
-        let page = pool
-            .page(payload.page_index)
-            .ok_or_else(|| NervaError::InvalidArgument {
-                reason: format!(
-                    "tiered KV attention references missing page {}",
-                    payload.page_index
-                ),
-            })?;
-        if page.token_count == 0 {
-            return Err(NervaError::InvalidArgument {
-                reason: format!("tiered KV attention page {} is empty", page.page_index),
-            });
-        }
-        let block = registry
-            .block(page.block_id)
-            .ok_or_else(|| NervaError::InvalidArgument {
-                reason: format!(
-                    "tiered KV attention page {} references missing block",
-                    page.page_index
-                ),
-            })?;
-        if block.state != ResidencyState::Ready {
-            return Err(NervaError::InvalidArgument {
-                reason: format!(
-                    "tiered KV attention page {} block is not Ready",
-                    page.page_index
-                ),
-            });
-        }
-        ledger.record_block_version_dependency(BlockVersionDependency {
-            block_id: page.block_id,
-            required_version: block.version,
-            observed_version: block.version,
-            label: "tiered_kv_attention",
-        });
-        blocks.push(KvAttentionBlock::new(
-            payload.keys,
-            payload.values,
-            page.token_count as usize,
-            block.tier,
-        ));
-    }
-    ledger.require_satisfied_block_versions()?;
-    Ok(blocks)
-}
-
-fn reference_attention(
-    shape: TransformerBlockShape,
-    query: &[f32],
-    dram_keys: &[f32],
-    dram_values: &[f32],
-    vram_keys: &[f32],
-    vram_values: &[f32],
-) -> Result<([f32; 2], u64)> {
-    let mut reference_keys = Vec::with_capacity(dram_keys.len() + vram_keys.len());
-    reference_keys.extend_from_slice(dram_keys);
-    reference_keys.extend_from_slice(vram_keys);
-    let mut reference_values = Vec::with_capacity(dram_values.len() + vram_values.len());
-    reference_values.extend_from_slice(dram_values);
-    reference_values.extend_from_slice(vram_values);
-
-    let reference_block =
-        KvAttentionBlock::new(&reference_keys, &reference_values, 4, MemoryTier::Dram);
-    let mut scratch = BlockwiseAttentionScratch::new(shape)?;
-    let mut reference = [0.0; 2];
-    let mut ledger = TokenLedger::new(0);
-    exact_blockwise_attention_into(
-        shape,
-        query,
-        &[reference_block],
-        &mut scratch,
-        &mut reference,
-        &mut ledger,
-    )?;
-    let hash = hash_f32s(&reference);
-    Ok((reference, hash))
-}
-
-fn max_abs_error(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(left, right)| (left - right).abs())
-        .fold(0.0, f32::max)
-}
-
-fn hash_f32s(values: &[f32]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for value in values {
-        for byte in value.to_bits().to_le_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-    hash
 }

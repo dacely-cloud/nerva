@@ -1,19 +1,19 @@
-use std::{
-    collections::BTreeMap,
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    path::Path,
-};
+mod events;
+mod shard;
+
+use std::{collections::BTreeMap, path::Path};
 
 use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::memory::tier::MemoryTier;
-use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
-use nerva_ledger::types::metric::MetricSource;
+use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::engine::resident_weights::helpers::update_prefetch_data_hash;
+use crate::engine::resident_weights::prefetch::files::events::{
+    record_file_commit, record_file_read,
+};
+use crate::engine::resident_weights::prefetch::files::shard::read_prefetch_task_span;
 use crate::engine::runtime::Runtime;
 use crate::weights::block::ResidentWeightTable;
 use crate::weights::prefetch::{ResidentWeightPrefetchIoSummary, ResidentWeightPrefetchPlan};
@@ -78,41 +78,8 @@ impl Runtime {
             if task.bytes > read_buffer.len() {
                 read_buffer.resize(task.bytes, 0);
             }
-            let shard_path = checkpoint_dir.join(&task.source_shard);
-            let mut shard = File::open(&shard_path).map_err(|err| NervaError::InvalidArgument {
-                reason: format!(
-                    "failed to open safetensors shard {}: {err}",
-                    shard_path.display()
-                ),
-            })?;
-            shard
-                .seek(SeekFrom::Start(
-                    u64::try_from(task.file_offset_begin).map_err(|_| {
-                        NervaError::InvalidArgument {
-                            reason: format!(
-                                "file prefetch task {} offset does not fit u64",
-                                task.task_index
-                            ),
-                        }
-                    })?,
-                ))
-                .map_err(|err| NervaError::InvalidArgument {
-                    reason: format!(
-                        "failed to seek safetensors shard {}: {err}",
-                        shard_path.display()
-                    ),
-                })?;
-            shard
-                .read_exact(&mut read_buffer[..task.bytes])
-                .map_err(|err| NervaError::InvalidArgument {
-                    reason: format!(
-                        "failed to read safetensors shard {} span {}..{}: {err}",
-                        shard_path.display(),
-                        task.file_offset_begin,
-                        task.file_offset_end,
-                    ),
-                })?;
-            data_hash = update_prefetch_data_hash(data_hash, &read_buffer[..task.bytes]);
+            let task_bytes = read_prefetch_task_span(checkpoint_dir, task, &mut read_buffer)?;
+            data_hash = update_prefetch_data_hash(data_hash, task_bytes);
 
             let block_bytes = bytes_by_block.entry(task.block_id).or_insert(0usize);
             *block_bytes = block_bytes.checked_add(task.bytes).ok_or_else(|| {
@@ -127,28 +94,8 @@ impl Runtime {
                     reason: "file prefetch execution byte accounting overflow".to_string(),
                 }
             })?;
-            ledger.record(LedgerEvent {
-                kind: LedgerEventKind::Prefetch,
-                sync_class: None,
-                metric_source: MetricSource::RuntimeTimestamp,
-                block_id: Some(task.block_id),
-                from_tier: Some(MemoryTier::Disk),
-                to_tier: Some(MemoryTier::PinnedDram),
-                bytes: task.bytes,
-                latency_ns: 0,
-                label: "weight_prefetch_file_read",
-            });
-            ledger.record(LedgerEvent {
-                kind: LedgerEventKind::Copy,
-                sync_class: None,
-                metric_source: MetricSource::RuntimeTimestamp,
-                block_id: Some(task.block_id),
-                from_tier: Some(MemoryTier::PinnedDram),
-                to_tier: Some(task.target_tier),
-                bytes: task.bytes,
-                latency_ns: 0,
-                label: "weight_prefetch_file_commit",
-            });
+            record_file_read(&mut ledger, task);
+            record_file_commit(&mut ledger, task);
         }
 
         for (block_id, bytes) in &bytes_by_block {

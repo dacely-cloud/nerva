@@ -3,13 +3,12 @@ use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::decision::BlockVersionDependency;
-use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
-use nerva_ledger::types::fallback::{FallbackClass, FallbackDecision};
-use nerva_ledger::types::metric::MetricSource;
+use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
-use crate::engine::resident_weights::helpers::{
-    div_ceil_u64, estimate_cpu_dram_weight_ns, estimate_gpu_resident_weight_ns,
+use crate::engine::resident_weights::execution::events::{
+    record_cpu_dram_step, record_cpu_exact_fallback_step, record_gpu_resident_step,
+    record_gpu_staged_step,
 };
 use crate::engine::runtime::Runtime;
 use crate::weights::block::ResidentWeightTable;
@@ -93,17 +92,7 @@ impl Runtime {
                             ),
                         });
                     }
-                    ledger.record(LedgerEvent {
-                        kind: LedgerEventKind::CpuActivity,
-                        sync_class: None,
-                        metric_source: MetricSource::EstimatedModel,
-                        block_id: Some(step.block_id),
-                        from_tier: Some(MemoryTier::Dram),
-                        to_tier: Some(MemoryTier::Dram),
-                        bytes: step.bytes,
-                        latency_ns: step.predicted_visible_ns,
-                        label: "resident_weight_cpu_dram_matvec",
-                    });
+                    record_cpu_dram_step(&mut ledger, step);
                 }
                 ResidentWeightExecutionStrategy::GpuResident => {
                     if block.tier != MemoryTier::Vram {
@@ -115,17 +104,7 @@ impl Runtime {
                         });
                     }
                     gpu_resident_steps += 1;
-                    ledger.record(LedgerEvent {
-                        kind: LedgerEventKind::DeviceActivity,
-                        sync_class: None,
-                        metric_source: MetricSource::EstimatedModel,
-                        block_id: Some(step.block_id),
-                        from_tier: Some(MemoryTier::Vram),
-                        to_tier: Some(MemoryTier::Vram),
-                        bytes: step.bytes,
-                        latency_ns: step.predicted_visible_ns,
-                        label: "resident_weight_gpu_matvec",
-                    });
+                    record_gpu_resident_step(&mut ledger, step);
                 }
                 ResidentWeightExecutionStrategy::GpuStaged => {
                     if block.tier == MemoryTier::Vram {
@@ -137,68 +116,11 @@ impl Runtime {
                         });
                     }
                     gpu_staged_steps += 1;
-                    let copy_ns = div_ceil_u64(step.bytes as u64, 24);
-                    let compute_ns = estimate_gpu_resident_weight_ns(step.bytes);
-                    ledger.record(LedgerEvent {
-                        kind: LedgerEventKind::Copy,
-                        sync_class: None,
-                        metric_source: MetricSource::EstimatedModel,
-                        block_id: Some(step.block_id),
-                        from_tier: Some(block.tier),
-                        to_tier: Some(MemoryTier::Vram),
-                        bytes: step.bytes,
-                        latency_ns: copy_ns,
-                        label: "resident_weight_stage_to_gpu",
-                    });
-                    ledger.record(LedgerEvent {
-                        kind: LedgerEventKind::DeviceActivity,
-                        sync_class: None,
-                        metric_source: MetricSource::EstimatedModel,
-                        block_id: Some(step.block_id),
-                        from_tier: Some(MemoryTier::Vram),
-                        to_tier: Some(MemoryTier::Vram),
-                        bytes: step.bytes,
-                        latency_ns: compute_ns,
-                        label: "resident_weight_gpu_staged_matvec",
-                    });
+                    record_gpu_staged_step(&mut ledger, step, block.tier);
                 }
                 ResidentWeightExecutionStrategy::CpuExactFallback => {
                     fallback_steps += 1;
-                    ledger.record_fallback_decision(FallbackDecision {
-                        label: "resident_weight_exact_cpu_fallback_run",
-                        class: FallbackClass::ExactNamed,
-                        requested: "cuda_dense_matvec",
-                        selected: step.kernel_name,
-                        reason: "executing declared exact CPU fallback step",
-                        visible_ns: Some(step.predicted_visible_ns),
-                        metric_source: MetricSource::EstimatedModel,
-                    });
-                    if block.tier == MemoryTier::Vram || block.tier == MemoryTier::SharedHbmOrLpddr
-                    {
-                        let copy_ns = div_ceil_u64(step.bytes as u64, 24);
-                        ledger.record(LedgerEvent {
-                            kind: LedgerEventKind::Copy,
-                            sync_class: None,
-                            metric_source: MetricSource::EstimatedModel,
-                            block_id: Some(step.block_id),
-                            from_tier: Some(block.tier),
-                            to_tier: Some(MemoryTier::Dram),
-                            bytes: step.bytes,
-                            latency_ns: copy_ns,
-                            label: "resident_weight_fallback_to_cpu",
-                        });
-                    }
-                    ledger.record(LedgerEvent {
-                        kind: LedgerEventKind::CpuActivity,
-                        sync_class: None,
-                        metric_source: MetricSource::EstimatedModel,
-                        block_id: Some(step.block_id),
-                        from_tier: Some(MemoryTier::Dram),
-                        to_tier: Some(MemoryTier::Dram),
-                        bytes: step.bytes,
-                        latency_ns: estimate_cpu_dram_weight_ns(step.bytes),
-                        label: "resident_weight_cpu_exact_fallback",
-                    });
+                    record_cpu_exact_fallback_step(&mut ledger, step, block.tier);
                 }
             }
         }

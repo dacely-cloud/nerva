@@ -2,10 +2,14 @@ use nerva_core::types::dtype::DType;
 
 use crate::registry::bootstrap::bootstrap_registry;
 use crate::registry::probe::{KernelRegistryProbeStatus, kernel_registry_probe};
-use crate::registry::types::{
-    KernelBackend, KernelContractRegistry, KernelExactness, KernelFallback, KernelFallbackClass,
-    KernelImplementation, KernelOperation, KernelPlan, KernelQuery,
-};
+use crate::registry::types::backend::KernelBackend;
+use crate::registry::types::exactness::KernelExactness;
+use crate::registry::types::fallback::{KernelFallback, KernelFallbackClass};
+use crate::registry::types::implementation::KernelImplementation;
+use crate::registry::types::operation::KernelOperation;
+use crate::registry::types::plan::KernelPlan;
+use crate::registry::types::query::KernelQuery;
+use crate::registry::types::registry::KernelContractRegistry;
 
 #[test]
 fn registry_resolves_direct_cuda_contract_by_dtype_and_architecture() {

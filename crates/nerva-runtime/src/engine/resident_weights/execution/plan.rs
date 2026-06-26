@@ -1,20 +1,14 @@
 use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::memory::tier::MemoryTier;
-use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_kernel_contracts::registry::bootstrap::bootstrap_registry;
-use nerva_kernel_contracts::registry::types::{
-    KernelBackend, KernelOperation, KernelPlan, KernelQuery,
-};
-use nerva_ledger::types::decision::{BlockVersionDependency, CandidateCost, ExecutionDecision};
+use nerva_ledger::types::decision::{BlockVersionDependency, ExecutionDecision};
 use nerva_ledger::types::fallback::{FallbackClass, FallbackDecision};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
-use crate::engine::resident_weights::helpers::{
-    estimate_cpu_dram_weight_ns, estimate_cpu_fallback_weight_ns, estimate_gpu_resident_weight_ns,
-    estimate_gpu_staged_weight_ns,
+use crate::engine::resident_weights::execution::selection::{
+    resident_weight_candidate_costs, select_resident_weight_strategy,
 };
 use crate::engine::runtime::Runtime;
 use crate::weights::block::ResidentWeightTable;
@@ -71,82 +65,12 @@ impl Runtime {
                 label: "resident_weight_execution_plan",
             });
 
-            let cuda_plan = registry.resolve(KernelQuery::new(
-                KernelOperation::DenseMatVec,
-                KernelBackend::Cuda,
-                entry.dtype,
+            let selection = select_resident_weight_strategy(
+                &registry,
+                entry,
+                self.config.device,
                 compute_capability,
-            ))?;
-            let cpu_direct = registry
-                .resolve(KernelQuery::new(
-                    KernelOperation::DenseMatVec,
-                    KernelBackend::CpuReference,
-                    entry.dtype,
-                    None,
-                ))
-                .ok()
-                .and_then(|plan| match plan {
-                    KernelPlan::Direct { implementation } => Some(implementation),
-                    KernelPlan::Fallback { .. } => None,
-                });
-
-            let (strategy, executor, predicted_visible_ns, kernel_name, fallback, reason) =
-                match cuda_plan {
-                    KernelPlan::Direct { implementation } => {
-                        if entry.tier == MemoryTier::Vram {
-                            (
-                                ResidentWeightExecutionStrategy::GpuResident,
-                                ExecutionOwner::Gpu(self.config.device),
-                                estimate_gpu_resident_weight_ns(entry.bytes),
-                                implementation.name,
-                                false,
-                                "weight is already resident in VRAM",
-                            )
-                        } else if let Some(cpu_implementation) = cpu_direct {
-                            let cpu_ns = estimate_cpu_dram_weight_ns(entry.bytes);
-                            let staged_ns = estimate_gpu_staged_weight_ns(entry.bytes);
-                            if cpu_ns <= staged_ns {
-                                (
-                                    ResidentWeightExecutionStrategy::CpuDram,
-                                    ExecutionOwner::Cpu,
-                                    cpu_ns,
-                                    cpu_implementation.name,
-                                    false,
-                                    "CPU compute wins for DRAM-resident weight",
-                                )
-                            } else {
-                                (
-                                    ResidentWeightExecutionStrategy::GpuStaged,
-                                    ExecutionOwner::Gpu(self.config.device),
-                                    staged_ns,
-                                    implementation.name,
-                                    false,
-                                    "GPU staged compute wins despite transfer",
-                                )
-                            }
-                        } else {
-                            (
-                                ResidentWeightExecutionStrategy::GpuStaged,
-                                ExecutionOwner::Gpu(self.config.device),
-                                estimate_gpu_staged_weight_ns(entry.bytes),
-                                implementation.name,
-                                false,
-                                "no exact CPU contract; use declared GPU staged kernel",
-                            )
-                        }
-                    }
-                    KernelPlan::Fallback {
-                        fallback: implementation,
-                        ..
-                    } => (
-                        ResidentWeightExecutionStrategy::CpuExactFallback,
-                        ExecutionOwner::Cpu,
-                        estimate_cpu_fallback_weight_ns(entry.bytes, entry.tier),
-                        implementation.name,
-                        true,
-                        "CUDA request selected exact named CPU fallback",
-                    ),
-                };
+            )?;
 
             total_weight_bytes = total_weight_bytes.checked_add(entry.bytes).ok_or_else(|| {
                 NervaError::AllocationFailed {
@@ -155,46 +79,36 @@ impl Runtime {
                 }
             })?;
             total_predicted_visible_ns = total_predicted_visible_ns
-                .checked_add(predicted_visible_ns)
+                .checked_add(selection.predicted_visible_ns)
                 .ok_or_else(|| NervaError::AllocationFailed {
-                    bytes: predicted_visible_ns as usize,
+                    bytes: selection.predicted_visible_ns as usize,
                     reason: "resident weight execution visible cost overflow".to_string(),
                 })?;
-            match strategy {
+            match selection.strategy {
                 ResidentWeightExecutionStrategy::CpuDram
                 | ResidentWeightExecutionStrategy::CpuExactFallback => cpu_steps += 1,
                 ResidentWeightExecutionStrategy::GpuResident => gpu_resident_steps += 1,
                 ResidentWeightExecutionStrategy::GpuStaged => gpu_staged_steps += 1,
             }
-            fallback_steps += u64::from(fallback);
+            fallback_steps += u64::from(selection.fallback);
 
             ledger.record_execution_decision(ExecutionDecision {
                 operation: "resident_weight_dense_matvec",
-                executor_selected: executor,
-                candidate_costs: vec![
-                    CandidateCost::estimated("cpu-dram", estimate_cpu_dram_weight_ns(entry.bytes)),
-                    CandidateCost::estimated(
-                        "gpu-resident",
-                        estimate_gpu_resident_weight_ns(entry.bytes),
-                    ),
-                    CandidateCost::estimated(
-                        "gpu-staged",
-                        estimate_gpu_staged_weight_ns(entry.bytes),
-                    ),
-                ],
-                reason,
-                predicted_visible_ns,
+                executor_selected: selection.executor,
+                candidate_costs: resident_weight_candidate_costs(entry.bytes),
+                reason: selection.reason,
+                predicted_visible_ns: selection.predicted_visible_ns,
                 actual_visible_ns: Some(0),
                 metric_source: MetricSource::EstimatedModel,
             });
-            if fallback {
+            if selection.fallback {
                 ledger.record_fallback_decision(FallbackDecision {
                     label: "resident_weight_exact_cpu_fallback",
                     class: FallbackClass::ExactNamed,
                     requested: "cuda_dense_matvec",
-                    selected: kernel_name,
-                    reason,
-                    visible_ns: Some(predicted_visible_ns),
+                    selected: selection.kernel_name,
+                    reason: selection.reason,
+                    visible_ns: Some(selection.predicted_visible_ns),
                     metric_source: MetricSource::EstimatedModel,
                 });
             }
@@ -202,13 +116,13 @@ impl Runtime {
                 step_index: index as u64,
                 block_id: entry.block_id,
                 name: entry.name.clone(),
-                strategy,
-                executor,
+                strategy: selection.strategy,
+                executor: selection.executor,
                 bytes: entry.bytes,
                 block_version: block.version,
-                predicted_visible_ns,
-                kernel_name,
-                fallback,
+                predicted_visible_ns: selection.predicted_visible_ns,
+                kernel_name: selection.kernel_name,
+                fallback: selection.fallback,
             });
         }
 

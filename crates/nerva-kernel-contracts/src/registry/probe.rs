@@ -2,9 +2,11 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::Result;
 
 use crate::registry::bootstrap::bootstrap_registry;
-use crate::registry::types::{
-    KernelBackend, KernelFallback, KernelFallbackClass, KernelOperation, KernelPlan, KernelQuery,
-};
+use crate::registry::types::backend::KernelBackend;
+use crate::registry::types::fallback::{KernelFallback, KernelFallbackClass};
+use crate::registry::types::operation::KernelOperation;
+use crate::registry::types::plan::KernelPlan;
+use crate::registry::types::query::KernelQuery;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum KernelRegistryProbeStatus {

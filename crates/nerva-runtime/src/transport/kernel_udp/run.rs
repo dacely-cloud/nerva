@@ -1,4 +1,3 @@
-use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 
 use nerva_core::types::error::{NervaError, Result};
@@ -9,9 +8,12 @@ use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::engine::runtime::Runtime;
 use crate::transport::kernel_udp::config::KernelUdpProbeConfig;
+use crate::transport::kernel_udp::io::{bind_loopback_socket, elapsed_ns, io_error};
 use crate::transport::kernel_udp::packet::{HEADER_BYTES, decode_packet, encode_packet, payload};
+use crate::transport::kernel_udp::payload_data::deterministic_payload;
 use crate::transport::kernel_udp::stats::{bandwidth_bps, latency_stats};
 use crate::transport::kernel_udp::summary::{KernelUdpBaselineStatus, KernelUdpBaselineSummary};
+use crate::transport::kernel_udp::validate::{validate_config, validate_header};
 
 impl Runtime {
     pub fn run_kernel_udp_baseline_probe(
@@ -159,83 +161,4 @@ pub fn run_kernel_udp_baseline_probe(
         per_token_registrations: 0,
         hot_path_allocations: ledger.hot_path_allocations,
     })
-}
-
-fn validate_config(config: KernelUdpProbeConfig) -> Result<()> {
-    if config.protocol_version == 0 {
-        return Err(NervaError::InvalidArgument {
-            reason: "kernel UDP protocol version must be nonzero".to_string(),
-        });
-    }
-    if config.payload_bytes == 0 || config.chunk_payload_bytes == 0 {
-        return Err(NervaError::InvalidArgument {
-            reason: "kernel UDP payload and chunk sizes must be nonzero".to_string(),
-        });
-    }
-    if HEADER_BYTES.saturating_add(config.chunk_payload_bytes) > 60 * 1024 {
-        return Err(NervaError::InvalidArgument {
-            reason: "kernel UDP chunk size exceeds safe loopback datagram size".to_string(),
-        });
-    }
-    Ok(())
-}
-
-fn bind_loopback_socket() -> Result<UdpSocket> {
-    UdpSocket::bind("127.0.0.1:0").map_err(io_error)
-}
-
-fn validate_header(
-    config: KernelUdpProbeConfig,
-    chunk_id: usize,
-    chunk_count: usize,
-    offset: usize,
-    length: usize,
-    header: crate::transport::kernel_udp::packet::KernelUdpPacketHeader,
-) -> Result<()> {
-    let expected = (
-        config.protocol_version,
-        config.request_id,
-        config.sequence_id,
-        config.block_id,
-        config.block_version,
-        chunk_id as u32,
-        chunk_count as u32,
-        offset as u32,
-        length as u32,
-    );
-    let observed = (
-        header.protocol_version,
-        header.request_id,
-        header.sequence_id,
-        header.block_id,
-        header.block_version,
-        header.chunk_id,
-        header.chunk_count,
-        header.offset,
-        header.length,
-    );
-    if observed == expected {
-        Ok(())
-    } else {
-        Err(NervaError::InvalidArgument {
-            reason: "kernel UDP packet identity mismatch".to_string(),
-        })
-    }
-}
-
-fn deterministic_payload(bytes: usize) -> Vec<u8> {
-    (0..bytes)
-        .map(|index| ((index.saturating_mul(31).saturating_add(7)) % 251) as u8)
-        .collect()
-}
-
-fn elapsed_ns(start: Instant) -> u64 {
-    start.elapsed().as_nanos().min(u64::MAX as u128) as u64
-}
-
-fn io_error(err: std::io::Error) -> NervaError {
-    NervaError::BackendUnavailable {
-        backend: "kernel_udp_test",
-        reason: err.to_string(),
-    }
 }
