@@ -9,7 +9,7 @@ use std::{
     process::{Command, ExitCode},
 };
 
-use nerva_core::{MemoryFabricKind, TokenId};
+use nerva_core::{DType, MemoryFabricKind, TokenId};
 use nerva_runtime::{
     CapabilityState, KvResidencyProbeConfig, KvResidencyProbeStatus, ResidencyBudget, Runtime,
     RuntimeConfig, SyntheticDecodeConfig, SyntheticDecodeStatus, TransportCapabilityMatrixStatus,
@@ -544,6 +544,71 @@ fn audit_has_table_row(contents: &str, row: &str) -> bool {
         .any(|line| line.trim_start().starts_with(&format!("| {row} |")))
 }
 
+fn model_manifest_acceptance() -> Result<(bool, String), String> {
+    let metadata = nerva_model::hf_metadata_probe()
+        .map_err(|err| format!("HF metadata probe failed: {err:?}"))?;
+    let layout = nerva_model::hf_weight_layout_probe()
+        .map_err(|err| format!("HF layout probe failed: {err:?}"))?;
+    let manifest = nerva_model::hf_tensor_manifest_probe()
+        .map_err(|err| format!("HF manifest probe failed: {err:?}"))?;
+    let safetensors = nerva_model::safetensors_header_probe()
+        .map_err(|err| format!("safetensors header probe failed: {err:?}"))?;
+
+    let metadata_body = &metadata.metadata;
+    let expected_static_blocks = if metadata_body.tie_word_embeddings {
+        1
+    } else {
+        2
+    };
+    let expected_blocks = metadata_body
+        .num_hidden_layers
+        .checked_mul(9)
+        .and_then(|layer_blocks| layer_blocks.checked_add(expected_static_blocks))
+        .ok_or_else(|| "expected HF block count overflowed".to_string())?;
+    let metadata_passed = metadata_body.architecture.as_str() == "llama"
+        && metadata_body.hidden_size == 4096
+        && metadata_body.num_hidden_layers == 32
+        && metadata_body.num_attention_heads == 32
+        && metadata_body.num_key_value_heads == 8
+        && metadata_body.torch_dtype == Some(DType::BF16)
+        && metadata.metadata_hash != 0;
+    let layout_passed = layout.plan.metadata == *metadata_body
+        && layout.plan.blocks.len() == expected_blocks
+        && layout.plan.total_weight_bytes > 0
+        && layout.layout_hash != 0;
+    let manifest_passed = manifest.manifest.entries.len() == layout.plan.blocks.len()
+        && manifest.manifest.total_weight_bytes == layout.plan.total_weight_bytes
+        && manifest.manifest.manifest_hash != 0;
+    let validation = &safetensors.validation;
+    let safetensors_passed = validation.manifest_entries == manifest.manifest.entries.len()
+        && validation.validated_tensors == manifest.manifest.entries.len()
+        && validation.total_data_bytes == manifest.manifest.total_weight_bytes
+        && validation.manifest_hash == manifest.manifest.manifest_hash
+        && validation.header_bytes > 0
+        && validation.header_hash != 0;
+
+    Ok((
+        metadata_passed && layout_passed && manifest_passed && safetensors_passed,
+        format!(
+            "architecture={} layers={} hidden={} kv_heads={} dtype={:?} expected_blocks={} layout_blocks={} manifest_entries={} safetensors_validated={} total_weight_bytes={} metadata_hash={} layout_hash={} manifest_hash={} header_hash={}",
+            metadata_body.architecture.as_str(),
+            metadata_body.num_hidden_layers,
+            metadata_body.hidden_size,
+            metadata_body.num_key_value_heads,
+            metadata_body.torch_dtype,
+            expected_blocks,
+            layout.plan.blocks.len(),
+            manifest.manifest.entries.len(),
+            validation.validated_tensors,
+            manifest.manifest.total_weight_bytes,
+            metadata.metadata_hash,
+            layout.layout_hash,
+            manifest.manifest.manifest_hash,
+            validation.header_hash,
+        ),
+    ))
+}
+
 fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
@@ -686,6 +751,11 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
             ),
         ),
         Err(err) => report.push("tiny_model_greedy_parity", false, format!("{err:?}")),
+    }
+
+    match model_manifest_acceptance() {
+        Ok((passed, details)) => report.push("hf_model_manifest", passed, details),
+        Err(err) => report.push("hf_model_manifest", false, err),
     }
 
     match nerva_model::blockwise_attention_smoke() {
@@ -1575,6 +1645,7 @@ mod tests {
         assert!(json.contains("\"vllm_rvllm_audit\""));
         assert!(json.contains("\"topology_snapshot\""));
         assert!(json.contains("\"synthetic_device_token\""));
+        assert!(json.contains("\"hf_model_manifest\""));
         assert!(json.contains("\"kv_residency_tiering\""));
         assert!(json.contains("\"transport_pinned_fallback\""));
         assert!(json.contains("\"transport_capability_matrix\""));
