@@ -32,6 +32,12 @@ required before implementation is in
 M0 is Linux only. Ubuntu x86_64 and aarch64 are the supported host targets.
 Other operating systems are future work.
 
+## CUDA Support Warning
+
+> WARNING: the NERVA CUDA path currently supports CUDA 12.x and CUDA 13.x only.
+> CUDA 11.x and older runtime/driver stacks are not supported and should fail
+> closed instead of silently falling back.
+
 ## Workspace
 
 ```bash

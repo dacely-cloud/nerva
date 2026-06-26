@@ -16,9 +16,6 @@ version = "0.1.0"
 [[package]]
 name = "nerva-cuda"
 version = "0.1.0"
-dependencies = [
- "nerva-core",
-]
 
 [[package]]
 name = "nerva-ledger"

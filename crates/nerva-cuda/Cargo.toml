@@ -8,4 +8,3 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-nerva-core.workspace = true
