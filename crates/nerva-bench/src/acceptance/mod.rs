@@ -3,6 +3,7 @@ use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 mod audit;
 mod cuda;
 mod environment;
+mod execution;
 mod files;
 mod manifest;
 mod model;
@@ -29,6 +30,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     runtime_checks::push_static_arenas(&mut report, &runtime);
     environment::push_topology_snapshot(&mut report, &runtime);
     runtime_checks::push_synthetic_decode(&mut report, &runtime);
+    execution::push_transaction_planner(&mut report, &runtime);
 
     model::push_reference_block(&mut report);
     model::push_precision_and_cuda_blocks(&mut report);

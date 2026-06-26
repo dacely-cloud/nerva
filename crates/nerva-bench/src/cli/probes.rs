@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use crate::cli::exit;
 use crate::parse::{parse_optional_u64, parse_optional_usize};
-use crate::probes::{kv, runtime, synthetic, transport};
+use crate::probes::{kv, runtime, synthetic, transaction, transport};
 
 pub(crate) fn dispatch(
     command: Option<&str>,
@@ -15,6 +15,7 @@ pub(crate) fn dispatch(
         Some("ledger") => Some(exit::print_json_result(
             synthetic::run_synthetic_ledger_probe(),
         )),
+        Some("transaction") => Some(exit::print_json_result(transaction::run_transaction_probe())),
         Some("kv") => Some(exit::print_json_result(kv::run_kv_probe())),
         Some("transport") => Some(exit::print_json_result(transport::run_transport_probe())),
         Some("transport-matrix") => Some(exit::print_json_result(

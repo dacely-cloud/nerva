@@ -5,5 +5,6 @@ mod graph;
 mod kv;
 mod support;
 mod synthetic;
+mod transaction;
 mod transport;
 mod weights;

@@ -5,6 +5,7 @@ pub mod resident_weights;
 pub mod runtime;
 pub mod static_arena;
 pub mod synthetic;
+pub mod transaction;
 pub mod transport;
 
 #[cfg(test)]
