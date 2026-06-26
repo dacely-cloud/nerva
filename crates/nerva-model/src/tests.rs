@@ -21,6 +21,7 @@ use crate::tiny::{
     TinyGreedyDecodeScratch, TinyGreedyDecodeStatus, tiny_cycle_model, tiny_greedy_decode_smoke,
 };
 use crate::warm_compute::{WarmComputeProbeStatus, WarmComputeStrategy, warm_compute_probe};
+use crate::weights::file::{read_safetensors_header_file, read_safetensors_header_file_with_limit};
 use crate::weights::layout::{
     HfWeightLayoutProbeStatus, WeightBlockRole, hf_weight_layout_probe, plan_hf_weight_layout,
 };
@@ -446,6 +447,62 @@ fn extracts_safetensors_header_from_file_bytes() {
 
     assert_eq!(safetensors_header_from_bytes(&bytes).unwrap(), header);
     assert!(safetensors_header_from_bytes(&bytes[..4]).is_err());
+}
+
+#[test]
+fn reads_safetensors_file_header_without_payload_scan() {
+    let dir = std::env::temp_dir().join(format!("nerva-model-header-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("model.safetensors");
+    let header = "{\"x\":{\"dtype\":\"F16\",\"shape\":[1],\"data_offsets\":[0,2]}}";
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(header.as_bytes());
+    bytes.extend_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd]);
+    std::fs::write(&path, bytes).unwrap();
+
+    let file_header = read_safetensors_header_file(&path).unwrap();
+
+    assert_eq!(file_header.header_json, header);
+    assert_eq!(file_header.header_bytes, header.len());
+    assert_eq!(file_header.data_start, 8 + header.len());
+    assert_eq!(file_header.payload_bytes, 4);
+    assert!(file_header.require_payload_bytes(4).is_ok());
+    assert!(file_header.require_payload_bytes(5).is_err());
+    assert!(
+        file_header
+            .require_file_offset_end(8 + header.len() + 4)
+            .is_ok()
+    );
+    assert!(
+        file_header
+            .require_file_offset_end(8 + header.len() + 5)
+            .is_err()
+    );
+    assert!(file_header.to_json().contains("\"payload_bytes\":4"));
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn safetensors_file_header_rejects_oversized_header_limit() {
+    let dir = std::env::temp_dir().join(format!(
+        "nerva-model-header-limit-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("model.safetensors");
+    let header = "{\"x\":{\"dtype\":\"F16\",\"shape\":[1],\"data_offsets\":[0,2]}}";
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(header.as_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    assert!(read_safetensors_header_file_with_limit(&path, header.len() - 1).is_err());
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
 }
 
 #[test]

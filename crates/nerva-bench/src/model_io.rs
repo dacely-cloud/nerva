@@ -1,7 +1,4 @@
-use std::{
-    io::Read,
-    path::{Path, PathBuf},
-};
+use std::path::PathBuf;
 
 use nerva_runtime::engine::{ResidencyBudget, Runtime, RuntimeConfig};
 
@@ -73,16 +70,24 @@ pub(crate) fn run_safetensors_probe(
                 .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
             let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&plan)
                 .map_err(|err| format!("HF tensor manifest failed: {err:?}"))?;
-            let bytes = std::fs::read(&safetensors_path)
-                .map_err(|err| format!("failed to read {safetensors_path}: {err}"))?;
-            let header = nerva_model::weights::safetensors::safetensors_header_from_bytes(&bytes)
-                .map_err(|err| format!("safetensors header read failed: {err:?}"))?;
+            let header = nerva_model::weights::file::read_safetensors_header_file(PathBuf::from(
+                &safetensors_path,
+            ))
+            .map_err(|err| format!("safetensors header read failed: {err:?}"))?;
             let validation =
                 nerva_model::weights::safetensors::validate_safetensors_header_for_manifest(
-                    header, &manifest,
+                    &header.header_json,
+                    &manifest,
                 )
                 .map_err(|err| format!("safetensors manifest validation failed: {err:?}"))?;
-            Ok(validation.to_json())
+            header
+                .require_payload_bytes(validation.total_data_bytes)
+                .map_err(|err| format!("safetensors payload validation failed: {err:?}"))?;
+            Ok(format!(
+                "{{\"status\":\"ok\",\"file_header\":{},\"validation\":{}}}",
+                header.to_json(),
+                validation.to_json(),
+            ))
         }
         _ => Err(
             "safetensors requires either no args or both config.json and model.safetensors"
@@ -166,52 +171,37 @@ fn load_safetensors_shard_plan(
     let checkpoint_dir = PathBuf::from(checkpoint_dir);
     let mut shard_headers = Vec::with_capacity(shard_files.len());
     for shard_file in shard_files {
-        let header = read_safetensors_header_only(&checkpoint_dir.join(&shard_file))?;
+        let header = nerva_model::weights::file::read_safetensors_header_file(
+            checkpoint_dir.join(&shard_file),
+        )
+        .map_err(|err| format!("safetensors header read failed: {err:?}"))?;
         shard_headers.push((shard_file, header));
     }
     let shard_header_refs = shard_headers
         .iter()
-        .map(|(file_name, header_json)| {
-            nerva_model::weights::safetensors::SafetensorsShardHeader::new(file_name, header_json)
+        .map(|(file_name, header)| {
+            nerva_model::weights::safetensors::SafetensorsShardHeader::new(
+                file_name,
+                &header.header_json,
+            )
         })
         .collect::<Vec<_>>();
-    nerva_model::weights::safetensors::plan_safetensors_shards_for_manifest(
+    let shard_plan = nerva_model::weights::safetensors::plan_safetensors_shards_for_manifest(
         &index_json,
         &shard_header_refs,
         &manifest,
     )
-    .map_err(|err| format!("safetensors shard plan failed: {err:?}"))
-}
-
-pub(crate) fn read_safetensors_header_only(path: &Path) -> Result<String, String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|err| format!("failed to open {}: {err}", path.display()))?;
-    let mut header_len_bytes = [0u8; 8];
-    file.read_exact(&mut header_len_bytes).map_err(|err| {
-        format!(
-            "failed to read safetensors header length from {}: {err}",
-            path.display()
-        )
-    })?;
-    let header_len = usize::try_from(u64::from_le_bytes(header_len_bytes)).map_err(|_| {
-        format!(
-            "safetensors header length in {} does not fit usize",
-            path.display()
-        )
-    })?;
-    let mut header = vec![0u8; header_len];
-    file.read_exact(&mut header).map_err(|err| {
-        format!(
-            "failed to read safetensors header from {}: {err}",
-            path.display()
-        )
-    })?;
-    String::from_utf8(header).map_err(|err| {
-        format!(
-            "safetensors header in {} is not UTF-8: {err}",
-            path.display()
-        )
-    })
+    .map_err(|err| format!("safetensors shard plan failed: {err:?}"))?;
+    for entry in &shard_plan.entries {
+        let (_, header) = shard_headers
+            .iter()
+            .find(|(file_name, _)| file_name == &entry.shard_file)
+            .ok_or_else(|| format!("missing loaded header for shard {}", entry.shard_file))?;
+        header
+            .require_file_offset_end(entry.file_offset_end)
+            .map_err(|err| format!("safetensors shard payload validation failed: {err:?}"))?;
+    }
+    Ok(shard_plan)
 }
 
 pub(crate) fn run_resident_weight_probe(config_path: Option<String>) -> Result<String, String> {

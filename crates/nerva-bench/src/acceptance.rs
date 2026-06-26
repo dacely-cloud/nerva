@@ -213,6 +213,70 @@ fn model_manifest_acceptance() -> Result<(bool, String), String> {
     ))
 }
 
+fn safetensors_file_header_acceptance() -> Result<(bool, String), String> {
+    let config = r#"{
+            "model_type": "llama",
+            "hidden_size": 2,
+            "intermediate_size": 4,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "vocab_size": 4,
+            "torch_dtype": "float16"
+        }"#;
+    let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config)
+        .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata)
+        .map_err(|err| format!("HF layout probe failed: {err:?}"))?;
+    let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout)
+        .map_err(|err| format!("HF manifest probe failed: {err:?}"))?;
+    let header =
+        nerva_model::weights::safetensors::synthetic_safetensors_header_for_manifest(&manifest)
+            .map_err(|err| format!("safetensors header generation failed: {err:?}"))?;
+    let dir = std::env::temp_dir().join(format!(
+        "nerva-acceptance-safetensors-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&dir).map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+    let path = dir.join("model.safetensors");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(header.as_bytes());
+    bytes.resize(8 + header.len() + manifest.total_weight_bytes, 0);
+    fs::write(&path, bytes).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+
+    let file_header = nerva_model::weights::file::read_safetensors_header_file(&path)
+        .map_err(|err| format!("safetensors header read failed: {err:?}"))?;
+    let validation = nerva_model::weights::safetensors::validate_safetensors_header_for_manifest(
+        &file_header.header_json,
+        &manifest,
+    )
+    .map_err(|err| format!("safetensors manifest validation failed: {err:?}"))?;
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir(&dir);
+
+    let passed = file_header.header_bytes == header.len()
+        && file_header.data_start == 8 + header.len()
+        && file_header.payload_bytes == manifest.total_weight_bytes as u64
+        && validation.validated_tensors == manifest.entries.len()
+        && validation.total_data_bytes == manifest.total_weight_bytes
+        && validation.header_hash != 0;
+    Ok((
+        passed,
+        format!(
+            "manifest_entries={} validated_tensors={} header_bytes={} data_start={} payload_bytes={} total_data_bytes={} header_hash={}",
+            manifest.entries.len(),
+            validation.validated_tensors,
+            file_header.header_bytes,
+            file_header.data_start,
+            file_header.payload_bytes,
+            validation.total_data_bytes,
+            validation.header_hash,
+        ),
+    ))
+}
+
 pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
@@ -532,6 +596,11 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     match model_manifest_acceptance() {
         Ok((passed, details)) => report.push("hf_model_manifest", passed, details),
         Err(err) => report.push("hf_model_manifest", false, err),
+    }
+
+    match safetensors_file_header_acceptance() {
+        Ok((passed, details)) => report.push("safetensors_file_header", passed, details),
+        Err(err) => report.push("safetensors_file_header", false, err),
     }
 
     match nerva_model::attention::blockwise_attention_smoke() {

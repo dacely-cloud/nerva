@@ -5,7 +5,7 @@ use crate::{
     artifact::run_artifact,
     json::json_string_array,
     model_io::{
-        read_safetensors_header_only, run_hotset_probe, run_resident_shard_probe,
+        run_hotset_probe, run_resident_shard_probe, run_safetensors_probe,
         run_safetensors_shard_probe, run_weight_execution_probe,
     },
     parity::run_vllm_token_identity_parity,
@@ -15,20 +15,46 @@ const SHARD_ONE: &str = "model-00001-of-00002.safetensors";
 const SHARD_TWO: &str = "model-00002-of-00002.safetensors";
 
 #[test]
-fn reads_only_safetensors_header_from_file() {
+fn safetensors_probe_reads_file_header_and_validates_manifest() {
     let dir = std::env::temp_dir().join(format!("nerva-bench-header-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    let config_path = dir.join("config.json");
     let path = dir.join("model.safetensors");
-    let header = "{\"x\":{\"dtype\":\"F16\",\"shape\":[1],\"data_offsets\":[0,2]}}";
+    let config = r#"{
+            "model_type": "llama",
+            "hidden_size": 2,
+            "intermediate_size": 4,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "vocab_size": 4,
+            "torch_dtype": "float16"
+        }"#;
+    std::fs::write(&config_path, config).unwrap();
+    let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config).unwrap();
+    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap();
+    let header = synthetic_header_for_entries(manifest.architecture, &manifest.entries);
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
     bytes.extend_from_slice(header.as_bytes());
-    bytes.extend_from_slice(&[0xaa, 0xbb]);
+    bytes.resize(8 + header.len() + manifest.total_weight_bytes, 0);
     std::fs::write(&path, bytes).unwrap();
 
-    assert_eq!(read_safetensors_header_only(&path).unwrap(), header);
+    let json = run_safetensors_probe(
+        Some(config_path.to_string_lossy().into_owned()),
+        Some(path.to_string_lossy().into_owned()),
+    )
+    .unwrap();
+
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"file_header\""));
+    assert!(json.contains("\"validation\""));
+    assert!(json.contains("\"validated_tensors\":11"));
+    assert!(json.contains("\"payload_bytes\""));
 
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&config_path);
     let _ = std::fs::remove_dir(&dir);
 }
 
@@ -58,10 +84,12 @@ fn safetensors_shard_probe_reads_index_and_headers() {
     write_safetensors_header(
         &dir.join(SHARD_ONE),
         &synthetic_header_for_entries(manifest.architecture, &manifest.entries[..10]),
+        manifest.entries[..10].iter().map(|entry| entry.bytes).sum(),
     );
     write_safetensors_header(
         &dir.join(SHARD_TWO),
         &synthetic_header_for_entries(manifest.architecture, &manifest.entries[10..]),
+        manifest.entries[10..].iter().map(|entry| entry.bytes).sum(),
     );
 
     let json = run_safetensors_shard_probe(
@@ -219,6 +247,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"synthetic_device_token\""));
     assert!(json.contains("\"fp16_bf16_precision_block\""));
     assert!(json.contains("\"hf_model_manifest\""));
+    assert!(json.contains("\"safetensors_file_header\""));
     assert!(json.contains("\"vllm_token_identity_parity\""));
     assert!(json.contains("\"kv_residency_tiering\""));
     assert!(json.contains("\"transport_pinned_fallback\""));
@@ -272,9 +301,10 @@ fn synthetic_index_json(
     out
 }
 
-fn write_safetensors_header(path: &Path, header: &str) {
+fn write_safetensors_header(path: &Path, header: &str, payload_bytes: usize) {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
     bytes.extend_from_slice(header.as_bytes());
+    bytes.resize(8 + header.len() + payload_bytes, 0);
     std::fs::write(path, bytes).unwrap();
 }

@@ -1,3 +1,4 @@
+pub mod file;
 pub mod hash;
 pub mod layout;
 pub mod manifest;
