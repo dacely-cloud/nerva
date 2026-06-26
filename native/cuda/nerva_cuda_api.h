@@ -165,6 +165,37 @@ typedef struct NervaCudaTieredAttentionResult {
   uint64_t hot_path_allocations;
 } NervaCudaTieredAttentionResult;
 
+typedef struct NervaCudaBackendContractResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t device_ordinal;
+  int32_t driver_version;
+  int32_t runtime_version;
+  int32_t compute_capability_major;
+  int32_t compute_capability_minor;
+  uint64_t total_global_mem;
+  uint64_t requested_device_bytes;
+  uint64_t requested_pinned_bytes;
+  uint64_t allocated_device_bytes;
+  uint64_t allocated_pinned_bytes;
+  uint64_t stream_creations;
+  uint64_t stream_destroys;
+  uint64_t event_creations;
+  uint64_t event_destroys;
+  uint64_t device_allocations;
+  uint64_t device_frees;
+  uint64_t pinned_allocations;
+  uint64_t pinned_frees;
+  uint64_t memset_bytes;
+  uint64_t d2h_bytes;
+  uint64_t sync_calls;
+  uint64_t observed_word;
+  uint64_t hot_path_allocations;
+  char gpu_name[128];
+  char pci_bus_id[32];
+} NervaCudaBackendContractResult;
+
 int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out);
 int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      uint32_t ring_capacity,
@@ -178,6 +209,9 @@ int nerva_cuda_tiny_decode_smoke(uint32_t steps,
                                  uint32_t seed_token,
                                  NervaCudaTinyDecodeResult *out);
 int nerva_cuda_tiered_attention_smoke(NervaCudaTieredAttentionResult *out);
+int nerva_cuda_backend_contract_smoke(NervaCudaBackendContractResult *out,
+                                      uint64_t device_bytes,
+                                      uint64_t pinned_bytes);
 
 #ifdef __cplusplus
 }

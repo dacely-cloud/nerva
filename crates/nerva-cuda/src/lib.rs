@@ -4,6 +4,7 @@
 //! Runtime API calls and kernel launch mechanics.
 
 pub mod attention;
+pub mod backend;
 pub mod block;
 pub mod decode;
 pub mod graph;

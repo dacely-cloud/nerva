@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use crate::parse::parse_optional_u32;
+use crate::parse::{parse_optional_u32, parse_optional_usize};
 
 pub(crate) fn dispatch(
     command: Option<&str>,
@@ -8,6 +8,7 @@ pub(crate) fn dispatch(
 ) -> Option<ExitCode> {
     match command {
         Some("smoke") => Some(run_smoke()),
+        Some("cuda-backend") => Some(run_backend(args)),
         Some("cuda-graph") => Some(run_graph(args)),
         Some("cuda-block") => Some(run_block()),
         Some("cuda-loaded-block") => Some(run_loaded_block()),
@@ -16,6 +17,26 @@ pub(crate) fn dispatch(
         Some("cuda-tiny-decode") => Some(run_tiny_decode(args)),
         _ => None,
     }
+}
+
+fn run_backend(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let device_bytes = match parse_optional_usize(args.next(), 4096, "device_bytes") {
+        Ok(device_bytes) => device_bytes,
+        Err(reason) => {
+            eprintln!("{reason}");
+            return ExitCode::from(2);
+        }
+    };
+    let pinned_bytes = match parse_optional_usize(args.next(), 4096, "pinned_bytes") {
+        Ok(pinned_bytes) => pinned_bytes,
+        Err(reason) => {
+            eprintln!("{reason}");
+            return ExitCode::from(2);
+        }
+    };
+    let summary =
+        nerva_runtime::engine::cuda::cuda_backend_contract_smoke(device_bytes, pinned_bytes);
+    print_status_json(summary.to_json(), summary.passed())
 }
 
 fn run_smoke() -> ExitCode {

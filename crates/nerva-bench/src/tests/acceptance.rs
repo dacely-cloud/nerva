@@ -9,6 +9,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"failed\":0"));
     assert!(json.contains("\"vllm_rvllm_audit\""));
     assert!(json.contains("\"cuda_runtime_smoke\""));
+    assert!(json.contains("\"cuda_backend_contract\""));
     assert!(json.contains("\"cuda_graph_transaction\""));
     assert!(json.contains("\"cuda_device_sampler\""));
     assert!(json.contains("\"static_arenas\""));

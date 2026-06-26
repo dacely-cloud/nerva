@@ -1,5 +1,7 @@
 use nerva_cuda::attention::probe::tiered_attention_smoke;
 use nerva_cuda::attention::summary::CudaTieredAttentionSummary;
+use nerva_cuda::backend::probe::backend_contract_smoke;
+use nerva_cuda::backend::summary::CudaBackendContractSummary;
 use nerva_cuda::block::probe::{loaded_tiny_block_smoke, tiny_block_smoke};
 use nerva_cuda::block::summary::{CudaLoadedTinyBlockSummary, CudaTinyBlockSummary};
 use nerva_cuda::decode::probe::tiny_decode_smoke;
@@ -11,6 +13,13 @@ use nerva_cuda::sampler::summary::CudaGreedySamplerSummary;
 
 pub fn cuda_tiny_block_smoke() -> CudaTinyBlockSummary {
     tiny_block_smoke()
+}
+
+pub fn cuda_backend_contract_smoke(
+    device_bytes: usize,
+    pinned_bytes: usize,
+) -> CudaBackendContractSummary {
+    backend_contract_smoke(device_bytes, pinned_bytes)
 }
 
 pub fn cuda_loaded_tiny_block_smoke() -> CudaLoadedTinyBlockSummary {

@@ -11,6 +11,7 @@ impl NativeCudaSources {
         let native_dir = manifest_dir.join("../../native/cuda");
         let cuda_sources = [
             "nerva_cuda_device_smoke.cu",
+            "nerva_cuda_backend_contract.cu",
             "nerva_cuda_synthetic_graph.cu",
             "nerva_cuda_tiny_block.cu",
             "nerva_cuda_greedy_sampler.cu",

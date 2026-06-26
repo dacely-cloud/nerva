@@ -19,6 +19,17 @@ use crate::{
 pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
     match command {
         "smoke" => Ok(nerva_runtime::capabilities::discovery::cuda_smoke().to_json()),
+        "cuda-backend" => {
+            let device_bytes = parse_optional_usize(args.first().cloned(), 4096, "device_bytes")?;
+            let pinned_bytes = parse_optional_usize(args.get(1).cloned(), 4096, "pinned_bytes")?;
+            Ok(
+                nerva_runtime::engine::cuda::cuda_backend_contract_smoke(
+                    device_bytes,
+                    pinned_bytes,
+                )
+                .to_json(),
+            )
+        }
         "cuda-graph" => {
             let steps = parse_optional_u32(args.first().cloned(), 1024, "steps")?;
             let ring_capacity = parse_optional_u32(args.get(1).cloned(), 64, "ring_capacity")?;

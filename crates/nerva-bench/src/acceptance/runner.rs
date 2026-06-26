@@ -15,6 +15,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     report.push_audit_result("vllm_rvllm_audit", audit::audit_acceptance());
 
     cuda::runtime::push_smoke(&mut report);
+    cuda::backend::push_backend_contract(&mut report);
     cuda::graph::push_transaction(&mut report);
     cuda::sampler::push_device_sampler(&mut report);
 
