@@ -28,7 +28,7 @@ pub(crate) fn push_capability_provenance(report: &mut AcceptanceReport, runtime:
         "capability_provenance",
         capability_passed,
         format!(
-            "target={}-{} kernel_present={} fabric={:?} cxl={:?} cxl_devices={} cxl_memory_devices={} cxl_regions={} hip={:?} hip_runtime_present={} hip_runtime_version={} hip_amd_gpu_count={} hip_kfd_present={} hip_amdgpu_loaded={} amd_peerdirect={:?} pinned_host_staging={:?} gpu_direct_rdma={:?} dma_buf_export={:?} dma_buf_kernel_present={} dma_buf_nvidia_driver_present={} dma_buf_nvidia_capability_entries={} dma_buf_cuda_vmm_export_symbols_present={} cuda_posix_fd_handle_supported={} cuda_gpu_direct_rdma_supported={} cuda_gpu_direct_rdma_with_vmm_supported={} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} topology_cpu_count={}",
+            "target={}-{} kernel_present={} fabric={:?} cxl={:?} cxl_devices={} cxl_memory_devices={} cxl_regions={} hip={:?} hip_runtime_present={} hip_runtime_version={} hip_amd_gpu_count={} hip_kfd_present={} hip_amdgpu_loaded={} amd_peerdirect={:?} pinned_host_staging={:?} gpu_direct_rdma={:?} dma_buf_export={:?} dma_buf_kernel_present={} dma_buf_nvidia_driver_present={} dma_buf_nvidia_capability_entries={} dma_buf_cuda_vmm_export_symbols_present={} cuda_posix_fd_handle_supported={} cuda_vmm_posix_fd_export_verified={} cuda_gpu_direct_rdma_supported={} cuda_gpu_direct_rdma_with_vmm_supported={} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} topology_cpu_count={}",
             capabilities.target_os,
             capabilities.target_arch,
             capabilities.kernel_release.is_some(),
@@ -55,6 +55,7 @@ pub(crate) fn push_capability_provenance(report: &mut AcceptanceReport, runtime:
             capabilities.dma_buf_nvidia_capability_entries,
             capabilities.dma_buf_cuda_vmm_export_symbols_present,
             opt_bool(capabilities.cuda_posix_fd_handle_supported),
+            opt_bool(capabilities.cuda_vmm_posix_fd_export_verified),
             opt_bool(capabilities.cuda_gpu_direct_rdma_supported),
             opt_bool(capabilities.cuda_gpu_direct_rdma_with_vmm_supported),
             capabilities.rdma_core_loaded,

@@ -124,7 +124,7 @@ fn topology_helpers_parse_linux_id_and_pci_class_values() {
             CapabilityState::SupportedAndVerified,
             2,
             None,
-            CapabilityState::SupportedUnverified,
+            CapabilityState::SupportedAndVerified,
             None,
             Some(true),
         ),

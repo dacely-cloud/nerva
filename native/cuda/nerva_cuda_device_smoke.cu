@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 namespace {
 
@@ -26,6 +27,7 @@ void clear_result(NervaCudaDeviceSmokeResult *out) {
   out->compute_capability_major = 0;
   out->compute_capability_minor = 0;
   out->posix_fd_handle_supported = -1;
+  out->vmm_posix_fd_export_verified = -1;
   out->gpu_direct_rdma_supported = -1;
   out->gpu_direct_rdma_with_cuda_vmm_supported = -1;
   out->total_global_mem = 0;
@@ -48,6 +50,41 @@ void record_driver_attribute(
   if (result == CUDA_SUCCESS) {
     *out = value != 0 ? 1 : 0;
   }
+}
+
+int32_t verify_posix_fd_export(CUdevice device) {
+  CUmemAllocationProp prop{};
+  prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
+  prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+  prop.location.id = static_cast<int>(device);
+  prop.requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+
+  size_t bytes = 0;
+  CUresult result = cuMemGetAllocationGranularity(
+      &bytes,
+      &prop,
+      CU_MEM_ALLOC_GRANULARITY_MINIMUM);
+  if (result != CUDA_SUCCESS || bytes == 0) {
+    return 0;
+  }
+
+  CUmemGenericAllocationHandle handle = 0;
+  result = cuMemCreate(&handle, bytes, &prop, 0);
+  if (result != CUDA_SUCCESS) {
+    return 0;
+  }
+
+  int fd = -1;
+  result = cuMemExportToShareableHandle(
+      &fd,
+      handle,
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR,
+      0);
+  if (fd >= 0) {
+    close(fd);
+  }
+  cuMemRelease(handle);
+  return result == CUDA_SUCCESS && fd >= 0 ? 1 : 0;
 }
 
 }  // namespace
@@ -105,6 +142,11 @@ extern "C" int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out) {
         &out->posix_fd_handle_supported,
         driver_device,
         CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR_SUPPORTED);
+    if (out->posix_fd_handle_supported == 1) {
+      out->vmm_posix_fd_export_verified = verify_posix_fd_export(driver_device);
+    } else if (out->posix_fd_handle_supported == 0) {
+      out->vmm_posix_fd_export_verified = 0;
+    }
     record_driver_attribute(
         &out->gpu_direct_rdma_supported,
         driver_device,

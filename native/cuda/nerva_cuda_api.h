@@ -17,6 +17,7 @@ typedef struct NervaCudaDeviceSmokeResult {
   int32_t compute_capability_major;
   int32_t compute_capability_minor;
   int32_t posix_fd_handle_supported;
+  int32_t vmm_posix_fd_export_verified;
   int32_t gpu_direct_rdma_supported;
   int32_t gpu_direct_rdma_with_cuda_vmm_supported;
   uint64_t total_global_mem;

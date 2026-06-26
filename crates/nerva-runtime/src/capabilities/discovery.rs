@@ -35,6 +35,7 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
     let nvidia_peer_memory_module = detect_nvidia_peer_memory_module();
     let mut dma_buf_evidence = discover_dma_buf_export_evidence();
     dma_buf_evidence.cuda_posix_fd_handle_supported = cuda_smoke.posix_fd_handle_supported;
+    dma_buf_evidence.cuda_vmm_posix_fd_export_verified = cuda_smoke.vmm_posix_fd_export_verified;
     dma_buf_evidence.cuda_gpu_direct_rdma_supported = cuda_smoke.gpu_direct_rdma_supported;
     dma_buf_evidence.cuda_gpu_direct_rdma_with_vmm_supported =
         cuda_smoke.gpu_direct_rdma_with_cuda_vmm_supported;
@@ -86,6 +87,7 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
         dma_buf_nvidia_capability_entries: dma_buf_evidence.nvidia_capability_entries,
         dma_buf_cuda_vmm_export_symbols_present: dma_buf_evidence.cuda_vmm_export_symbols_present,
         cuda_posix_fd_handle_supported: dma_buf_evidence.cuda_posix_fd_handle_supported,
+        cuda_vmm_posix_fd_export_verified: dma_buf_evidence.cuda_vmm_posix_fd_export_verified,
         cuda_gpu_direct_rdma_supported: dma_buf_evidence.cuda_gpu_direct_rdma_supported,
         cuda_gpu_direct_rdma_with_vmm_supported: dma_buf_evidence
             .cuda_gpu_direct_rdma_with_vmm_supported,

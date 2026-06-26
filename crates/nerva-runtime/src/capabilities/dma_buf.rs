@@ -10,6 +10,7 @@ pub struct DmaBufExportEvidence {
     pub nvidia_capability_entries: usize,
     pub cuda_vmm_export_symbols_present: bool,
     pub cuda_posix_fd_handle_supported: Option<bool>,
+    pub cuda_vmm_posix_fd_export_verified: Option<bool>,
     pub cuda_gpu_direct_rdma_supported: Option<bool>,
     pub cuda_gpu_direct_rdma_with_vmm_supported: Option<bool>,
 }
@@ -21,13 +22,16 @@ pub fn discover_dma_buf_export_evidence() -> DmaBufExportEvidence {
         nvidia_capability_entries: count_entries(Path::new("/proc/driver/nvidia/capabilities")),
         cuda_vmm_export_symbols_present: cuda_vmm_export_symbols_present(),
         cuda_posix_fd_handle_supported: None,
+        cuda_vmm_posix_fd_export_verified: None,
         cuda_gpu_direct_rdma_supported: None,
         cuda_gpu_direct_rdma_with_vmm_supported: None,
     }
 }
 
 pub(crate) fn dma_buf_export_capability(evidence: &DmaBufExportEvidence) -> CapabilityState {
-    if dma_buf_export_supported_unverified(evidence) {
+    if evidence.cuda_vmm_posix_fd_export_verified == Some(true) {
+        CapabilityState::SupportedAndVerified
+    } else if dma_buf_export_supported_unverified(evidence) {
         CapabilityState::SupportedUnverified
     } else {
         CapabilityState::Unsupported
@@ -97,11 +101,30 @@ mod tests {
             nvidia_capability_entries: 3,
             cuda_vmm_export_symbols_present: true,
             cuda_posix_fd_handle_supported: Some(true),
+            cuda_vmm_posix_fd_export_verified: Some(false),
             cuda_gpu_direct_rdma_supported: Some(true),
             cuda_gpu_direct_rdma_with_vmm_supported: Some(true),
         };
         assert!(crate::capabilities::dma_buf::dma_buf_export_supported_unverified(&evidence));
         evidence.cuda_posix_fd_handle_supported = Some(false);
         assert!(!crate::capabilities::dma_buf::dma_buf_export_supported_unverified(&evidence));
+    }
+
+    #[test]
+    fn dma_buf_export_capability_promotes_verified_export() {
+        let evidence = crate::capabilities::dma_buf::DmaBufExportEvidence {
+            kernel_dma_buf_present: true,
+            nvidia_driver_present: true,
+            nvidia_capability_entries: 3,
+            cuda_vmm_export_symbols_present: true,
+            cuda_posix_fd_handle_supported: Some(true),
+            cuda_vmm_posix_fd_export_verified: Some(true),
+            cuda_gpu_direct_rdma_supported: Some(false),
+            cuda_gpu_direct_rdma_with_vmm_supported: Some(false),
+        };
+        assert_eq!(
+            crate::capabilities::dma_buf::dma_buf_export_capability(&evidence),
+            crate::capabilities::snapshot::CapabilityState::SupportedAndVerified
+        );
     }
 }

@@ -41,6 +41,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("dma_buf_nvidia_driver_present="));
     assert!(json.contains("dma_buf_cuda_vmm_export_symbols_present="));
     assert!(json.contains("cuda_posix_fd_handle_supported="));
+    assert!(json.contains("cuda_vmm_posix_fd_export_verified="));
     assert!(json.contains("cuda_gpu_direct_rdma_supported="));
     assert!(json.contains("cuda_gpu_direct_rdma_with_vmm_supported="));
     assert!(json.contains("\"synthetic_transaction\""));

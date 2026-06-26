@@ -67,6 +67,7 @@ fn capability_snapshot_reports_conservative_discrete_profile() {
             nvidia_capability_entries: snapshot.dma_buf_nvidia_capability_entries,
             cuda_vmm_export_symbols_present: snapshot.dma_buf_cuda_vmm_export_symbols_present,
             cuda_posix_fd_handle_supported: snapshot.cuda_posix_fd_handle_supported,
+            cuda_vmm_posix_fd_export_verified: snapshot.cuda_vmm_posix_fd_export_verified,
             cuda_gpu_direct_rdma_supported: snapshot.cuda_gpu_direct_rdma_supported,
             cuda_gpu_direct_rdma_with_vmm_supported: snapshot
                 .cuda_gpu_direct_rdma_with_vmm_supported,
@@ -101,6 +102,7 @@ fn capability_snapshot_reports_conservative_discrete_profile() {
     assert!(json.contains("\"dma_buf_nvidia_driver_present\""));
     assert!(json.contains("\"dma_buf_cuda_vmm_export_symbols_present\""));
     assert!(json.contains("\"cuda_posix_fd_handle_supported\""));
+    assert!(json.contains("\"cuda_vmm_posix_fd_export_verified\""));
     assert!(json.contains("\"cuda_gpu_direct_rdma_supported\""));
     assert!(json.contains("\"cuda_gpu_direct_rdma_with_vmm_supported\""));
     assert!(json.contains("\"topology\""));
@@ -125,6 +127,7 @@ fn cuda_probe_survives_capability_discovery_when_device_is_available() {
     assert_eq!(smoke.kernel_value, Some(0x4e45_5256));
     assert_eq!(smoke.hot_path_allocations, 0);
     assert!(smoke.posix_fd_handle_supported.is_some());
+    assert!(smoke.vmm_posix_fd_export_verified.is_some());
     assert!(smoke.gpu_direct_rdma_supported.is_some());
     assert!(smoke.gpu_direct_rdma_with_cuda_vmm_supported.is_some());
 }

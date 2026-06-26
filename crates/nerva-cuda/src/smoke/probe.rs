@@ -19,6 +19,7 @@ pub fn smoke() -> CudaSmokeSummary {
             compute_capability_major: Some(out.compute_capability_major),
             compute_capability_minor: Some(out.compute_capability_minor),
             posix_fd_handle_supported: attr_bool(out.posix_fd_handle_supported),
+            vmm_posix_fd_export_verified: attr_bool(out.vmm_posix_fd_export_verified),
             gpu_direct_rdma_supported: attr_bool(out.gpu_direct_rdma_supported),
             gpu_direct_rdma_with_cuda_vmm_supported: attr_bool(
                 out.gpu_direct_rdma_with_cuda_vmm_supported,
