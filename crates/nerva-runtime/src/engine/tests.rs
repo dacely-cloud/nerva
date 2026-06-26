@@ -1,10 +1,10 @@
 use super::*;
-use nerva_core::ResidentBlockId;
+use nerva_core::types::ResidentBlockId;
 
 const SHARD_ONE: &str = "model-00001-of-00001.safetensors";
 
-fn tiny_llama_manifest() -> nerva_model::HfTensorManifest {
-    let metadata = nerva_model::parse_hf_config_metadata(
+fn tiny_llama_manifest() -> nerva_model::weights::manifest::HfTensorManifest {
+    let metadata = nerva_model::hf::parser::parse_hf_config_metadata(
         r#"{
                 "model_type": "llama",
                 "hidden_size": 4,
@@ -17,11 +17,11 @@ fn tiny_llama_manifest() -> nerva_model::HfTensorManifest {
             }"#,
     )
     .unwrap();
-    let layout = nerva_model::plan_hf_weight_layout(&metadata).unwrap();
-    nerva_model::build_hf_tensor_manifest(&layout).unwrap()
+    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap()
 }
 
-fn single_shard_index_json(manifest: &nerva_model::HfTensorManifest) -> String {
+fn single_shard_index_json(manifest: &nerva_model::weights::manifest::HfTensorManifest) -> String {
     let mut out = format!(
         "{{\"metadata\":{{\"total_size\":{}}},\"weight_map\":{{",
         manifest.total_weight_bytes
@@ -40,14 +40,19 @@ fn single_shard_index_json(manifest: &nerva_model::HfTensorManifest) -> String {
     out
 }
 
-fn tiny_shard_plan() -> (nerva_model::SafetensorsShardPlan, usize) {
+fn tiny_shard_plan() -> (
+    nerva_model::weights::safetensors::SafetensorsShardPlan,
+    usize,
+) {
     let manifest = tiny_llama_manifest();
     let index = single_shard_index_json(&manifest);
-    let header = nerva_model::synthetic_safetensors_header_for_manifest(&manifest).unwrap();
+    let header =
+        nerva_model::weights::safetensors::synthetic_safetensors_header_for_manifest(&manifest)
+            .unwrap();
     let header_len = header.len();
-    let plan = nerva_model::plan_safetensors_shards_for_manifest(
+    let plan = nerva_model::weights::safetensors::plan_safetensors_shards_for_manifest(
         &index,
-        &[nerva_model::SafetensorsShardHeader::new(SHARD_ONE, &header)],
+        &[nerva_model::weights::safetensors::SafetensorsShardHeader::new(SHARD_ONE, &header)],
         &manifest,
     )
     .unwrap();
@@ -433,7 +438,9 @@ fn transport_capability_matrix_reports_required_sizes_and_degradation() {
 #[test]
 fn materializes_hf_weight_manifest_as_dram_resident_blocks() {
     let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
-    let manifest = nerva_model::hf_tensor_manifest_probe().unwrap().manifest;
+    let manifest = nerva_model::weights::manifest::hf_tensor_manifest_probe()
+        .unwrap()
+        .manifest;
     let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
 
     assert_eq!(table.entries.len(), manifest.entries.len());
@@ -453,7 +460,10 @@ fn materializes_hf_weight_manifest_as_dram_resident_blocks() {
     let block = table.registry.block(first.block_id).unwrap();
     assert_eq!(first.name, "model.embed_tokens.weight");
     assert_eq!(block.kind, BlockKind::Weight);
-    assert_eq!(block.semantics, nerva_core::MutationSemantics::Immutable);
+    assert_eq!(
+        block.semantics,
+        nerva_core::types::MutationSemantics::Immutable
+    );
     assert_eq!(block.tier, MemoryTier::Dram);
     assert_eq!(block.dtype, first.dtype);
     assert_eq!(block.layout, LayoutId(1));
@@ -462,7 +472,9 @@ fn materializes_hf_weight_manifest_as_dram_resident_blocks() {
 #[test]
 fn materialized_weight_manifest_preserves_last_block_and_decision() {
     let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
-    let manifest = nerva_model::hf_tensor_manifest_probe().unwrap().manifest;
+    let manifest = nerva_model::weights::manifest::hf_tensor_manifest_probe()
+        .unwrap()
+        .manifest;
     let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
 
     let last = table.entries.last().unwrap();
@@ -477,7 +489,9 @@ fn materialized_weight_manifest_preserves_last_block_and_decision() {
 #[test]
 fn materialized_weight_manifest_respects_dram_budget() {
     let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
-    let manifest = nerva_model::hf_tensor_manifest_probe().unwrap().manifest;
+    let manifest = nerva_model::weights::manifest::hf_tensor_manifest_probe()
+        .unwrap()
+        .manifest;
     let err = runtime
         .materialize_hf_weight_manifest_with_budget(
             &manifest,
@@ -749,7 +763,7 @@ fn resident_weight_execution_uses_gpu_resident_hotset_blocks() {
 #[test]
 fn resident_weight_execution_uses_exact_cpu_fallback_for_f32_cuda() {
     let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
-    let metadata = nerva_model::parse_hf_config_metadata(
+    let metadata = nerva_model::hf::parser::parse_hf_config_metadata(
         r#"{
                 "model_type": "llama",
                 "hidden_size": 4,
@@ -762,8 +776,8 @@ fn resident_weight_execution_uses_exact_cpu_fallback_for_f32_cuda() {
             }"#,
     )
     .unwrap();
-    let layout = nerva_model::plan_hf_weight_layout(&metadata).unwrap();
-    let manifest = nerva_model::build_hf_tensor_manifest(&layout).unwrap();
+    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap();
     let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
     let plan = runtime
         .plan_resident_weight_execution(&table, 2, Some(89))
@@ -836,7 +850,7 @@ fn resident_weight_execution_run_ledgers_gpu_resident_and_staged_work() {
 #[test]
 fn resident_weight_execution_run_ledgers_exact_cpu_fallback() {
     let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
-    let metadata = nerva_model::parse_hf_config_metadata(
+    let metadata = nerva_model::hf::parser::parse_hf_config_metadata(
         r#"{
                 "model_type": "llama",
                 "hidden_size": 4,
@@ -849,8 +863,8 @@ fn resident_weight_execution_run_ledgers_exact_cpu_fallback() {
             }"#,
     )
     .unwrap();
-    let layout = nerva_model::plan_hf_weight_layout(&metadata).unwrap();
-    let manifest = nerva_model::build_hf_tensor_manifest(&layout).unwrap();
+    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap();
     let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
     let plan = runtime
         .plan_resident_weight_execution(&table, 2, Some(89))

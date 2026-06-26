@@ -20,7 +20,7 @@ pub(crate) fn run() -> ExitCode {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("smoke") => {
-            let summary = nerva_runtime::cuda_smoke();
+            let summary = nerva_runtime::capabilities::cuda_smoke();
             println!("{}", summary.to_json());
             ExitCode::SUCCESS
         }
@@ -47,7 +47,7 @@ pub(crate) fn run() -> ExitCode {
                 }
             };
             let summary =
-                nerva_runtime::cuda_synthetic_graph_smoke(steps, ring_capacity, seed_token);
+                nerva_runtime::engine::cuda_synthetic_graph_smoke(steps, ring_capacity, seed_token);
             println!("{}", summary.to_json());
             if format!("{:?}", summary.status) == "Ok" {
                 ExitCode::SUCCESS
@@ -111,7 +111,7 @@ pub(crate) fn run() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        Some("block") => match nerva_model::reference_block_smoke() {
+        Some("block") => match nerva_model::reference::smoke::reference_block_smoke() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
                 ExitCode::SUCCESS
@@ -129,7 +129,7 @@ pub(crate) fn run() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            match nerva_model::tiny_greedy_decode_smoke(steps) {
+            match nerva_model::tiny::tiny_greedy_decode_smoke(steps) {
                 Ok(summary) => {
                     println!("{}", summary.to_json());
                     ExitCode::SUCCESS
@@ -330,7 +330,7 @@ pub(crate) fn run() -> ExitCode {
                 }
             }
         }
-        Some("attention") => match nerva_model::blockwise_attention_smoke() {
+        Some("attention") => match nerva_model::attention::blockwise_attention_smoke() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
                 ExitCode::SUCCESS
@@ -340,7 +340,7 @@ pub(crate) fn run() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        Some("warm") => match nerva_model::warm_compute_probe() {
+        Some("warm") => match nerva_model::warm_compute::warm_compute_probe() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
                 ExitCode::SUCCESS
@@ -350,7 +350,7 @@ pub(crate) fn run() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        Some("contracts") => match nerva_kernel_contracts::kernel_registry_probe() {
+        Some("contracts") => match nerva_kernel_contracts::registry::kernel_registry_probe() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
                 ExitCode::SUCCESS

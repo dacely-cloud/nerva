@@ -1,6 +1,14 @@
-use nerva_core::{BlockKind, DType, MemoryTier};
+use nerva_core::types::{BlockKind, DType, MemoryTier};
 
-use super::*;
+use crate::contract::{
+    KernelBufferContract, KernelBufferRole, KernelContract, KernelContractKind,
+    KernelContractProbeStatus, LaunchBounds, kernel_contract_probe,
+};
+use crate::registry::{
+    KernelBackend, KernelContractRegistry, KernelExactness, KernelFallback, KernelFallbackClass,
+    KernelImplementation, KernelOperation, KernelPlan, KernelQuery, KernelRegistryProbeStatus,
+    bootstrap_registry, kernel_registry_probe,
+};
 
 #[test]
 fn contract_accepts_device_resident_decode_buffer() {

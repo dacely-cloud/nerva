@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use nerva_core::{
+use nerva_core::types::{
     AllocationId, BlockKind, DType, GlobalBlockAddress, LayoutId, MemoryDomainId, MemoryTier,
     NervaError, ResidencyState, ResidentBlock, ResidentBlockId, Result,
 };
@@ -109,7 +109,7 @@ impl BlockRegistry {
 
         let block = ResidentBlock::new(id, request.kind, request.tier, request.bytes).with_shape(
             request.dtype,
-            nerva_core::BlockShape::scalar(),
+            nerva_core::types::BlockShape::scalar(),
             request.layout,
         );
         self.blocks.insert(id, block);

@@ -8,10 +8,8 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("NERVA currently supports Linux only.");
 
-mod json;
-mod types;
-
-pub use types::*;
+pub mod json;
+pub mod types;
 
 #[cfg(test)]
 mod tests;

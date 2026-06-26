@@ -2,7 +2,7 @@
 
 use std::os::raw::c_int;
 
-use crate::SmokeStatus;
+use crate::smoke::SmokeStatus;
 
 const CUDA_ERROR_NO_DEVICE: i32 = 100;
 

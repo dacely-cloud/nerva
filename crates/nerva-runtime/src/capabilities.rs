@@ -1,6 +1,7 @@
 use std::{env, fs};
 
-use nerva_core::{HostArch, MemoryFabricKind, host_arch};
+use nerva_core::types::{HostArch, MemoryFabricKind, host_arch};
+use nerva_cuda::smoke::{CudaSmokeSummary, SmokeStatus, smoke};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CapabilityState {
@@ -127,22 +128,20 @@ impl CapabilitySnapshot {
     }
 }
 
-pub fn cuda_smoke() -> nerva_cuda::CudaSmokeSummary {
-    nerva_cuda::smoke()
+pub fn cuda_smoke() -> CudaSmokeSummary {
+    smoke()
 }
 
 pub fn discover_capabilities() -> CapabilitySnapshot {
     let cuda_smoke = cuda_smoke();
     let cuda = match cuda_smoke.status {
-        nerva_cuda::SmokeStatus::Ok => CapabilityState::SupportedAndVerified,
-        nerva_cuda::SmokeStatus::Unavailable | nerva_cuda::SmokeStatus::Failed => {
-            CapabilityState::Unsupported
-        }
+        SmokeStatus::Ok => CapabilityState::SupportedAndVerified,
+        SmokeStatus::Unavailable | SmokeStatus::Failed => CapabilityState::Unsupported,
     };
     let cuda_status = match cuda_smoke.status {
-        nerva_cuda::SmokeStatus::Ok => "ok",
-        nerva_cuda::SmokeStatus::Unavailable => "unavailable",
-        nerva_cuda::SmokeStatus::Failed => "failed",
+        SmokeStatus::Ok => "ok",
+        SmokeStatus::Unavailable => "unavailable",
+        SmokeStatus::Failed => "failed",
     };
     let cuda_compute_capability = cuda_compute_capability(&cuda_smoke);
     let cuda_device_total_memory_bytes = cuda_smoke.device_total_memory_bytes;
@@ -232,7 +231,7 @@ pub fn discover_topology_snapshot() -> TopologySnapshot {
     }
 }
 
-fn cuda_compute_capability(summary: &nerva_cuda::CudaSmokeSummary) -> Option<String> {
+fn cuda_compute_capability(summary: &CudaSmokeSummary) -> Option<String> {
     match (
         summary.compute_capability_major,
         summary.compute_capability_minor,

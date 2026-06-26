@@ -1,13 +1,17 @@
-use nerva_core::{ExecutionOwner, MemoryTier, NervaError, Result, TokenId};
-use nerva_ledger::{
+use nerva_core::types::{ExecutionOwner, MemoryTier, NervaError, Result, TokenId};
+use nerva_ledger::types::{
     CandidateCost, ExecutionDecision, LedgerEvent, LedgerEventKind, MetricSource, TokenLedger,
 };
 
-use crate::common::{
-    TransformerBlockShape, copy_embedding_row, expected_cycle, greedy_argmax, hash_tokens,
-    mat_vec_row_major, require_len, require_token_in_vocab, token_ids_to_json,
+use crate::common::hash::hash_tokens;
+use crate::common::math::mat_vec_row_major;
+use crate::common::shape::TransformerBlockShape;
+use crate::common::token::{
+    copy_embedding_row, expected_cycle, greedy_argmax, require_token_in_vocab, token_ids_to_json,
 };
-use crate::reference::{ReferenceTransformerBlock, TransformerBlockScratch};
+use crate::common::validate::require_len;
+use crate::reference::block::ReferenceTransformerBlock;
+use crate::reference::scratch::TransformerBlockScratch;
 
 #[derive(Clone, Debug)]
 pub struct TinyGreedyModel {

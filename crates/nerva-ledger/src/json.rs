@@ -1,6 +1,6 @@
-use nerva_core::{CostSource, ExecutionOwner, MemoryTier, ResidentBlockId};
+use nerva_core::types::{CostSource, ExecutionOwner, MemoryTier, ResidentBlockId};
 
-use crate::{
+use crate::types::{
     BlockVersionDependency, CandidateCost, DeviceTimelineSpan, ExecutionDecision, FallbackDecision,
     LedgerEvent, ResidencyDecision, SyncClass, TokenLedger,
 };

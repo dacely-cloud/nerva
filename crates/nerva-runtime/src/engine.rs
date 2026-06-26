@@ -1,20 +1,25 @@
 use std::collections::BTreeMap;
 
-use nerva_core::{
+use nerva_core::types::{
     AllocationId, BlockKind, DeviceOrdinal, ExecutionOwner, LayoutId, MemoryTier, NervaError,
     RequestId, ResidencyState, Result, SequenceId, TokenId, ensure_supported_linux_host,
 };
-use nerva_kernel_contracts::{
+use nerva_cuda::graph::{CudaSyntheticGraphSummary, synthetic_graph_smoke};
+use nerva_kernel_contracts::registry::{
     KernelBackend, KernelOperation, KernelPlan, KernelQuery, bootstrap_registry,
 };
-use nerva_ledger::{
+use nerva_ledger::types::{
     BlockVersionDependency, CandidateCost, ExecutionDecision, FallbackClass, FallbackDecision,
     LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, SyncClass, TokenLedger,
 };
-use nerva_memory::{
-    ArenaKind, BlockAllocationRequest, BlockRegistry, KvPageSpec, KvPrefixKey, KvResidencyAction,
-    KvResidencyPlanner, KvResidencyPolicy, StaticArenaBootstrapSpec, StaticArenaSet,
+use nerva_memory::arena::{ArenaKind, StaticArenaBootstrapSpec, StaticArenaSet};
+use nerva_memory::kv::{
+    KvPagePool, KvPageSpec, KvPrefixKey, KvResidencyAction, KvResidencyPlanner, KvResidencyPolicy,
 };
+use nerva_memory::registry::{BlockAllocationRequest, BlockRegistry};
+use nerva_model::weights::layout::WeightBlockRole;
+use nerva_model::weights::manifest::{HfTensorManifest, hf_tensor_manifest_probe};
+use nerva_model::weights::safetensors::SafetensorsShardPlan;
 
 use crate::capabilities::{
     CapabilitySnapshot, TopologySnapshot, discover_capabilities, discover_topology_snapshot,
@@ -46,7 +51,7 @@ use crate::weights::{
     ResidentWeightProbeStatus, ResidentWeightProbeSummary, ResidentWeightTable,
 };
 #[cfg(test)]
-use nerva_core::{HostArch, MemoryFabricKind, host_arch};
+use nerva_core::types::{HostArch, MemoryFabricKind, host_arch};
 #[cfg(test)]
 use std::env;
 
@@ -442,7 +447,7 @@ impl Runtime {
 
     pub fn materialize_hf_weight_manifest(
         &self,
-        manifest: &nerva_model::HfTensorManifest,
+        manifest: &HfTensorManifest,
     ) -> Result<ResidentWeightTable> {
         self.materialize_hf_weight_manifest_with_budget(
             manifest,
@@ -452,7 +457,7 @@ impl Runtime {
 
     pub fn materialize_hf_weight_manifest_with_budget(
         &self,
-        manifest: &nerva_model::HfTensorManifest,
+        manifest: &HfTensorManifest,
         budget: ResidencyBudget,
     ) -> Result<ResidentWeightTable> {
         let _ = self.config;
@@ -517,7 +522,7 @@ impl Runtime {
     }
 
     pub fn run_resident_weight_probe(&self) -> Result<ResidentWeightProbeSummary> {
-        let manifest = nerva_model::hf_tensor_manifest_probe()?.manifest;
+        let manifest = hf_tensor_manifest_probe()?.manifest;
         let table = self.materialize_hf_weight_manifest(&manifest)?;
         let first = table.entries.first();
         let last = table.entries.last();
@@ -540,7 +545,7 @@ impl Runtime {
 
     pub fn materialize_safetensors_shard_plan(
         &self,
-        plan: &nerva_model::SafetensorsShardPlan,
+        plan: &SafetensorsShardPlan,
     ) -> Result<ResidentWeightTable> {
         self.materialize_safetensors_shard_plan_with_budget(
             plan,
@@ -550,7 +555,7 @@ impl Runtime {
 
     pub fn materialize_safetensors_shard_plan_with_budget(
         &self,
-        plan: &nerva_model::SafetensorsShardPlan,
+        plan: &SafetensorsShardPlan,
         budget: ResidencyBudget,
     ) -> Result<ResidentWeightTable> {
         let _ = self.config;
@@ -1527,7 +1532,7 @@ impl Runtime {
             || host_causality_edges != 0
         {
             return Err(NervaError::ResidencyViolation {
-                block_id: nerva_core::ResidentBlockId(0),
+                block_id: nerva_core::types::ResidentBlockId(0),
                 reason: "synthetic device token audit failed".to_string(),
             });
         }
@@ -1600,7 +1605,7 @@ impl Runtime {
             })?;
         let mut arenas = StaticArenaSet::new(0, 0, total_bytes);
         let mut registry = self.block_registry(ResidencyBudget::new(total_bytes, 0, total_bytes));
-        let mut pool = nerva_memory::KvPagePool::preallocate(
+        let mut pool = KvPagePool::preallocate(
             &mut arenas,
             &mut registry,
             config.pages,
@@ -1711,8 +1716,8 @@ pub fn cuda_synthetic_graph_smoke(
     steps: u32,
     ring_capacity: u32,
     seed_token: u32,
-) -> nerva_cuda::CudaSyntheticGraphSummary {
-    nerva_cuda::synthetic_graph_smoke(steps, ring_capacity, seed_token)
+) -> CudaSyntheticGraphSummary {
+    synthetic_graph_smoke(steps, ring_capacity, seed_token)
 }
 
 fn div_ceil_u64(value: u64, divisor: u64) -> u64 {
@@ -1747,19 +1752,19 @@ fn estimate_cpu_fallback_weight_ns(bytes: usize, tier: MemoryTier) -> u64 {
     copy_ns + estimate_cpu_dram_weight_ns(bytes)
 }
 
-fn weight_role_layout_id(role: nerva_model::WeightBlockRole) -> u32 {
+fn weight_role_layout_id(role: WeightBlockRole) -> u32 {
     match role {
-        nerva_model::WeightBlockRole::TokenEmbedding => 1,
-        nerva_model::WeightBlockRole::AttentionNorm => 2,
-        nerva_model::WeightBlockRole::QueryProjection => 3,
-        nerva_model::WeightBlockRole::KeyProjection => 4,
-        nerva_model::WeightBlockRole::ValueProjection => 5,
-        nerva_model::WeightBlockRole::OutputProjection => 6,
-        nerva_model::WeightBlockRole::MlpNorm => 7,
-        nerva_model::WeightBlockRole::GateProjection => 8,
-        nerva_model::WeightBlockRole::UpProjection => 9,
-        nerva_model::WeightBlockRole::DownProjection => 10,
-        nerva_model::WeightBlockRole::LmHead => 11,
+        WeightBlockRole::TokenEmbedding => 1,
+        WeightBlockRole::AttentionNorm => 2,
+        WeightBlockRole::QueryProjection => 3,
+        WeightBlockRole::KeyProjection => 4,
+        WeightBlockRole::ValueProjection => 5,
+        WeightBlockRole::OutputProjection => 6,
+        WeightBlockRole::MlpNorm => 7,
+        WeightBlockRole::GateProjection => 8,
+        WeightBlockRole::UpProjection => 9,
+        WeightBlockRole::DownProjection => 10,
+        WeightBlockRole::LmHead => 11,
     }
 }
 

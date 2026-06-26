@@ -1,8 +1,8 @@
-use nerva_core::{
+use nerva_core::types::{
     AllocationId, BlockKind, GlobalBlockAddress, MemoryDomainId, MemoryTier, NervaError,
     ResidentBlock, ResidentBlockId, ResidentBlockKind, Result,
 };
-use nerva_ledger::TokenLedger;
+use nerva_ledger::types::TokenLedger;
 
 use crate::registry::{BlockAllocationRequest, BlockRegistry};
 

@@ -1,6 +1,6 @@
 use std::fs;
 
-use nerva_core::TokenId;
+use nerva_core::types::TokenId;
 
 use crate::json::json_escape;
 
@@ -75,7 +75,7 @@ pub(crate) fn compare_vllm_token_identity(
     steps: usize,
 ) -> Result<TokenIdentityParitySummary, String> {
     let (source_format, vllm_tokens) = parse_vllm_token_ids(vllm_json)?;
-    let nerva_summary = nerva_model::tiny_greedy_decode_smoke(steps)
+    let nerva_summary = nerva_model::tiny::tiny_greedy_decode_smoke(steps)
         .map_err(|err| format!("NERVA tiny greedy decode failed: {err:?}"))?;
     let nerva_tokens = nerva_summary.tokens;
     let comparison = compare_token_slices(&vllm_tokens, &nerva_tokens);

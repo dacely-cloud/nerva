@@ -1,4 +1,4 @@
-use nerva_core::{
+use nerva_core::types::{
     CostSource, DeviceOrdinal, ExecutionOwner, MemoryTier, NervaError, ResidentBlockId, Result,
 };
 

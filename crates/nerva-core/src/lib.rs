@@ -7,9 +7,7 @@ compile_error!(
     "NERVA currently supports Linux only. Ubuntu x86_64 and aarch64 are the M0 host targets."
 );
 
-mod types;
-
-pub use types::*;
+pub mod types;
 
 #[cfg(test)]
 mod tests;

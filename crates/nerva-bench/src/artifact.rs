@@ -28,13 +28,13 @@ pub(crate) fn run_artifact(command: Option<String>, args: Vec<String>) -> Result
 
 fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
     match command {
-        "smoke" => Ok(nerva_runtime::cuda_smoke().to_json()),
+        "smoke" => Ok(nerva_runtime::capabilities::cuda_smoke().to_json()),
         "cuda-graph" => {
             let steps = parse_optional_u32(args.first().cloned(), 1024, "steps")?;
             let ring_capacity = parse_optional_u32(args.get(1).cloned(), 64, "ring_capacity")?;
             let seed_token = parse_optional_u32(args.get(2).cloned(), 1, "seed_token")?;
             Ok(
-                nerva_runtime::cuda_synthetic_graph_smoke(steps, ring_capacity, seed_token)
+                nerva_runtime::engine::cuda_synthetic_graph_smoke(steps, ring_capacity, seed_token)
                     .to_json(),
             )
         }
@@ -46,12 +46,12 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
             run_synthetic(steps, ring_capacity)
         }
         "ledger" => run_synthetic_ledger_probe(),
-        "block" => nerva_model::reference_block_smoke()
+        "block" => nerva_model::reference::smoke::reference_block_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("reference block failed: {err:?}")),
         "model" => {
             let steps = parse_optional_usize(args.first().cloned(), 8, "steps")?;
-            nerva_model::tiny_greedy_decode_smoke(steps)
+            nerva_model::tiny::tiny_greedy_decode_smoke(steps)
                 .map(|summary| summary.to_json())
                 .map_err(|err| format!("tiny greedy model failed: {err:?}"))
         }
@@ -102,13 +102,13 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
                 Some(compute_capability as u32),
             )
         }
-        "attention" => nerva_model::blockwise_attention_smoke()
+        "attention" => nerva_model::attention::blockwise_attention_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("blockwise attention failed: {err:?}")),
-        "warm" => nerva_model::warm_compute_probe()
+        "warm" => nerva_model::warm_compute::warm_compute_probe()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("warm compute probe failed: {err:?}")),
-        "contracts" => nerva_kernel_contracts::kernel_registry_probe()
+        "contracts" => nerva_kernel_contracts::registry::kernel_registry_probe()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("kernel contract probe failed: {err:?}")),
         "kv" => run_kv_probe(),

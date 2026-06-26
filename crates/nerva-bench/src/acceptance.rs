@@ -1,11 +1,12 @@
 use std::{fs, path::Path};
 
-use nerva_core::{DType, MemoryFabricKind, TokenId};
-use nerva_runtime::{
-    CapabilityState, KvResidencyProbeConfig, KvResidencyProbeStatus, ResidencyBudget, Runtime,
-    RuntimeConfig, SyntheticDecodeConfig, SyntheticDecodeStatus, TransportCapabilityMatrixStatus,
-    TransportPathProbeStatus,
+use nerva_core::types::{DType, MemoryFabricKind, TokenId};
+use nerva_runtime::capabilities::CapabilityState;
+use nerva_runtime::engine::{
+    KvResidencyProbeConfig, KvResidencyProbeStatus, ResidencyBudget, Runtime, RuntimeConfig,
+    SyntheticDecodeConfig, SyntheticDecodeStatus,
 };
+use nerva_runtime::transport::{TransportCapabilityMatrixStatus, TransportPathProbeStatus};
 
 use crate::{json::json_escape, parity::compare_vllm_token_identity};
 
@@ -148,13 +149,13 @@ fn audit_has_table_row(contents: &str, row: &str) -> bool {
 }
 
 fn model_manifest_acceptance() -> Result<(bool, String), String> {
-    let metadata = nerva_model::hf_metadata_probe()
+    let metadata = nerva_model::hf::probe::hf_metadata_probe()
         .map_err(|err| format!("HF metadata probe failed: {err:?}"))?;
-    let layout = nerva_model::hf_weight_layout_probe()
+    let layout = nerva_model::weights::layout::hf_weight_layout_probe()
         .map_err(|err| format!("HF layout probe failed: {err:?}"))?;
-    let manifest = nerva_model::hf_tensor_manifest_probe()
+    let manifest = nerva_model::weights::manifest::hf_tensor_manifest_probe()
         .map_err(|err| format!("HF manifest probe failed: {err:?}"))?;
-    let safetensors = nerva_model::safetensors_header_probe()
+    let safetensors = nerva_model::weights::safetensors::safetensors_header_probe()
         .map_err(|err| format!("safetensors header probe failed: {err:?}"))?;
 
     let metadata_body = &metadata.metadata;
@@ -250,7 +251,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     let (audit_passed, audit_details) = audit_acceptance();
     report.push("vllm_rvllm_audit", audit_passed, audit_details);
 
-    let cuda_smoke = nerva_runtime::cuda_smoke();
+    let cuda_smoke = nerva_runtime::capabilities::cuda_smoke();
     let cuda_smoke_passed = format!("{:?}", cuda_smoke.status) == "Ok"
         && cuda_smoke.kernel_value == Some(0x4e45_5256)
         && cuda_smoke.hot_path_allocations == 0;
@@ -279,7 +280,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         ),
     );
 
-    let cuda_graph = nerva_runtime::cuda_synthetic_graph_smoke(1024, 64, 1);
+    let cuda_graph = nerva_runtime::engine::cuda_synthetic_graph_smoke(1024, 64, 1);
     let cuda_graph_passed = format!("{:?}", cuda_graph.status) == "Ok"
         && cuda_graph.steps == 1024
         && cuda_graph.ring_capacity == 64
@@ -473,7 +474,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         }
     }
 
-    match nerva_model::reference_block_smoke() {
+    match nerva_model::reference::smoke::reference_block_smoke() {
         Ok(summary) => report.push(
             "reference_block",
             summary.hot_path_allocations == 0,
@@ -485,7 +486,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         Err(err) => report.push("reference_block", false, format!("{err:?}")),
     }
 
-    match nerva_model::tiny_greedy_decode_smoke(8) {
+    match nerva_model::tiny::tiny_greedy_decode_smoke(8) {
         Ok(summary) => report.push(
             "tiny_model_greedy_parity",
             summary.parity
@@ -514,7 +515,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         Err(err) => report.push("hf_model_manifest", false, err),
     }
 
-    match nerva_model::blockwise_attention_smoke() {
+    match nerva_model::attention::blockwise_attention_smoke() {
         Ok(summary) => report.push(
             "tiered_blockwise_attention",
             summary.cpu_block_events > 0
@@ -533,7 +534,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         Err(err) => report.push("tiered_blockwise_attention", false, format!("{err:?}")),
     }
 
-    match nerva_model::warm_compute_probe() {
+    match nerva_model::warm_compute::warm_compute_probe() {
         Ok(summary) => report.push(
             "warm_compute_selection",
             summary.parity
@@ -553,7 +554,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         Err(err) => report.push("warm_compute_selection", false, format!("{err:?}")),
     }
 
-    match nerva_kernel_contracts::kernel_registry_probe() {
+    match nerva_kernel_contracts::registry::kernel_registry_probe() {
         Ok(summary) => report.push(
             "kernel_contract_fallbacks",
             summary.direct_plans > 0
@@ -667,7 +668,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
 }
 
 fn resident_weight_execution_acceptance(runtime: &Runtime) -> Result<(bool, String), String> {
-    let manifest = nerva_model::hf_tensor_manifest_probe()
+    let manifest = nerva_model::weights::manifest::hf_tensor_manifest_probe()
         .map_err(|err| format!("HF tensor manifest probe failed: {err:?}"))?
         .manifest;
     let mut table = runtime

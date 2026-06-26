@@ -50,9 +50,9 @@ fn safetensors_shard_probe_reads_index_and_headers() {
         }"#;
     std::fs::write(&config_path, config).unwrap();
 
-    let metadata = nerva_model::parse_hf_config_metadata(config).unwrap();
-    let layout = nerva_model::plan_hf_weight_layout(&metadata).unwrap();
-    let manifest = nerva_model::build_hf_tensor_manifest(&layout).unwrap();
+    let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config).unwrap();
+    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap();
     let index = synthetic_index_json(&manifest, 10);
     std::fs::write(&index_path, index).unwrap();
     write_safetensors_header(
@@ -232,20 +232,23 @@ fn json_string_array_escapes_probe_args() {
 }
 
 fn synthetic_header_for_entries(
-    architecture: nerva_model::HfArchitectureKind,
-    entries: &[nerva_model::HfTensorManifestEntry],
+    architecture: nerva_model::hf::architecture::HfArchitectureKind,
+    entries: &[nerva_model::weights::manifest::HfTensorManifestEntry],
 ) -> String {
     let total_weight_bytes = entries.iter().map(|entry| entry.bytes).sum();
-    let manifest = nerva_model::HfTensorManifest {
+    let manifest = nerva_model::weights::manifest::HfTensorManifest {
         architecture,
         entries: entries.to_vec(),
         total_weight_bytes,
         manifest_hash: 0,
     };
-    nerva_model::synthetic_safetensors_header_for_manifest(&manifest).unwrap()
+    nerva_model::weights::safetensors::synthetic_safetensors_header_for_manifest(&manifest).unwrap()
 }
 
-fn synthetic_index_json(manifest: &nerva_model::HfTensorManifest, split_at: usize) -> String {
+fn synthetic_index_json(
+    manifest: &nerva_model::weights::manifest::HfTensorManifest,
+    split_at: usize,
+) -> String {
     let mut out = format!(
         "{{\"metadata\":{{\"total_size\":{}}},\"weight_map\":{{",
         manifest.total_weight_bytes

@@ -1,7 +1,7 @@
 use std::os::raw::c_char;
 
-use crate::smoke::{c_char_array_to_string, escape_json};
-use crate::{CudaSmokeSummary, CudaSyntheticGraphSummary, SmokeStatus};
+use crate::graph::CudaSyntheticGraphSummary;
+use crate::smoke::{CudaSmokeSummary, SmokeStatus, c_char_array_to_string, escape_json};
 
 #[test]
 fn json_escapes_control_chars() {

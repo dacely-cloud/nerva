@@ -1,4 +1,8 @@
-use super::*;
+use crate::types::{
+    BlockKind, BlockShape, DeviceOrdinal, ExecutionOwner, HostArch, MemoryDomainId, MemoryTier,
+    MutationSemantics, NervaError, ReplicaId, ResidentBlock, ResidentBlockId,
+    ensure_supported_linux_host, host_arch,
+};
 
 #[test]
 fn linux_host_gate_accepts_build_host_or_reports_other() {

@@ -1,8 +1,8 @@
 use crate::graph::{GraphLayout, GraphPool};
-use nerva_core::{
+use nerva_core::types::{
     DeviceOrdinal, MemoryTier, NervaError, RequestId, Result, SequenceId, TokenId, TransactionId,
 };
-use nerva_ledger::{
+use nerva_ledger::types::{
     DeviceTimelineSpan, LedgerEvent, LedgerEventKind, MetricSource, SyncClass, TokenLedger,
 };
 
@@ -96,7 +96,7 @@ impl DeviceTokenRing {
             && slot.token_index != token_index
         {
             return Err(NervaError::ResidencyViolation {
-                block_id: nerva_core::ResidentBlockId(0),
+                block_id: nerva_core::types::ResidentBlockId(0),
                 reason: "device token ring slot reused before host observation".to_string(),
             });
         }
@@ -138,12 +138,12 @@ impl DeviceTokenRing {
             || slot.completion != DeviceTokenCompletion::DeviceComplete
         {
             return Err(NervaError::ResidencyViolation {
-                block_id: nerva_core::ResidentBlockId(0),
+                block_id: nerva_core::types::ResidentBlockId(0),
                 reason: "device token ring read was stale or incomplete".to_string(),
             });
         }
         let token = slot.token.ok_or_else(|| NervaError::ResidencyViolation {
-            block_id: nerva_core::ResidentBlockId(0),
+            block_id: nerva_core::types::ResidentBlockId(0),
             reason: "device token ring slot has no token".to_string(),
         })?;
         Ok(DeviceTokenInput {
@@ -170,13 +170,13 @@ impl DeviceTokenRing {
             || slot.completion != DeviceTokenCompletion::DeviceComplete
         {
             return Err(NervaError::ResidencyViolation {
-                block_id: nerva_core::ResidentBlockId(0),
+                block_id: nerva_core::types::ResidentBlockId(0),
                 reason: "host token observation read stale device state".to_string(),
             });
         }
         slot.host_copied = true;
         slot.token.ok_or_else(|| NervaError::ResidencyViolation {
-            block_id: nerva_core::ResidentBlockId(0),
+            block_id: nerva_core::types::ResidentBlockId(0),
             reason: "host-visible token slot has no token".to_string(),
         })
     }
@@ -257,7 +257,7 @@ impl SyntheticEngine {
             )?;
             if device_input.token != input_token {
                 return Err(NervaError::ResidencyViolation {
-                    block_id: nerva_core::ResidentBlockId(0),
+                    block_id: nerva_core::types::ResidentBlockId(0),
                     reason: "next input token does not match prior sampled device token"
                         .to_string(),
                 });

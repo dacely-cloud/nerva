@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use nerva_core::{
+use nerva_core::types::{
     AllocationId, BlockKind, ExecutionOwner, MemoryTier, NervaError, ResidencyState,
     ResidentBlockId, Result,
 };
-use nerva_ledger::{
+use nerva_ledger::types::{
     CandidateCost, LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, TokenLedger,
 };
 
@@ -366,7 +366,7 @@ impl KvResidencyPlan {
                 block_id: entry.block_id,
                 old_tier: entry.old_tier,
                 new_tier: entry.new_tier,
-                executor_selected: ExecutionOwner::Gpu(nerva_core::DeviceOrdinal(0)),
+                executor_selected: ExecutionOwner::Gpu(nerva_core::types::DeviceOrdinal(0)),
                 candidate_costs: vec![
                     CandidateCost::estimated("keep-current-tier", 0),
                     CandidateCost::estimated("planned-tier", entry.predicted_visible_ns),

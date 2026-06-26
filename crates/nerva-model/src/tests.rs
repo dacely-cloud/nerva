@@ -1,8 +1,35 @@
-use super::*;
-use crate::common::{dot, json_escape, silu};
-use crate::tiny::tiny_cycle_model;
-use nerva_core::{DType, MemoryTier, TokenId};
-use nerva_ledger::{LedgerEventKind, TokenLedger};
+use crate::attention::{
+    BlockwiseAttentionScratch, BlockwiseAttentionSmokeStatus, KvAttentionBlock,
+    blockwise_attention_smoke, exact_blockwise_attention_into,
+};
+use crate::common::json::json_escape;
+use crate::common::math::{dot, silu};
+use crate::common::shape::TransformerBlockShape;
+use crate::hf::architecture::HfArchitectureKind;
+use crate::hf::parser::parse_hf_config_metadata;
+use crate::hf::probe::{HfMetadataProbeStatus, hf_metadata_probe};
+use crate::reference::block::ReferenceTransformerBlock;
+use crate::reference::scratch::TransformerBlockScratch;
+use crate::reference::smoke::{ReferenceBlockSmokeStatus, reference_block_smoke};
+use crate::tiny::{
+    TinyGreedyDecodeScratch, TinyGreedyDecodeStatus, tiny_cycle_model, tiny_greedy_decode_smoke,
+};
+use crate::warm_compute::{WarmComputeProbeStatus, WarmComputeStrategy, warm_compute_probe};
+use crate::weights::layout::{
+    HfWeightLayoutProbeStatus, WeightBlockRole, hf_weight_layout_probe, plan_hf_weight_layout,
+};
+use crate::weights::manifest::{
+    HfTensorManifest, HfTensorManifestEntry, HfTensorManifestProbeStatus, build_hf_tensor_manifest,
+    hf_tensor_manifest_probe,
+};
+use crate::weights::safetensors::{
+    SafetensorsShardHeader, SafetensorsValidationStatus, plan_safetensors_shards_for_manifest,
+    required_safetensors_shards_for_manifest, safetensors_header_from_bytes,
+    safetensors_header_probe, synthetic_safetensors_header_for_manifest,
+    validate_safetensors_header_for_manifest,
+};
+use nerva_core::types::{DType, MemoryTier, TokenId};
+use nerva_ledger::types::{LedgerEventKind, TokenLedger};
 
 const SHARD_ONE: &str = "model-00001-of-00002.safetensors";
 const SHARD_TWO: &str = "model-00002-of-00002.safetensors";

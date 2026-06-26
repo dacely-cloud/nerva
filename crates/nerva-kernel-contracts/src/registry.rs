@@ -1,4 +1,4 @@
-use nerva_core::{DType, NervaError, Result};
+use nerva_core::types::{DType, NervaError, Result};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum KernelBackend {

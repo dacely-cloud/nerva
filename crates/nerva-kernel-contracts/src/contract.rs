@@ -1,4 +1,4 @@
-use nerva_core::{BlockKind, DType, MemoryTier, NervaError, Result};
+use nerva_core::types::{BlockKind, DType, MemoryTier, NervaError, Result};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum KernelContractKind {

@@ -1,9 +1,12 @@
-use nerva_core::{DeviceOrdinal, ExecutionOwner, MemoryTier, NervaError, Result};
-use nerva_ledger::{
+use nerva_core::types::{DeviceOrdinal, ExecutionOwner, MemoryTier, NervaError, Result};
+use nerva_ledger::types::{
     CandidateCost, ExecutionDecision, LedgerEvent, LedgerEventKind, MetricSource, TokenLedger,
 };
 
-use crate::common::{TransformerBlockShape, dot, hash_f32s, require_len};
+use crate::common::hash::hash_f32s;
+use crate::common::math::dot;
+use crate::common::shape::TransformerBlockShape;
+use crate::common::validate::require_len;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct KvAttentionBlock<'a> {
