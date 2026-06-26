@@ -7,23 +7,25 @@ use nerva_ledger::types::token::TokenLedger;
 use crate::common::shape::TransformerBlockShape;
 use crate::precision::bits::{encode_f32_for_dtype, f32_to_f16_bits, hash_u16s};
 use crate::precision::block::PrecisionTransformerBlock;
+use crate::precision::file_smoke::constants::SHARD_NAME;
 use crate::precision::file_smoke::fixtures::{
     reference_block, single_shard_index_json, tensor_payload_for_manifest, tiny_file_block_manifest,
 };
 use crate::precision::file_smoke::loader::{LoadedBlockWeights, load_role};
-use crate::precision::file_smoke::{
-    PrecisionSafetensorsBlockSmokeStatus, PrecisionSafetensorsBlockSmokeSummary, SHARD_NAME,
+use crate::precision::file_smoke::summary::{
+    PrecisionSafetensorsBlockSmokeStatus, PrecisionSafetensorsBlockSmokeSummary,
 };
 use crate::precision::scratch::PrecisionTransformerBlockScratch;
 use crate::reference::scratch::TransformerBlockScratch;
 use crate::weights::layout::WeightBlockRole;
+use crate::weights::safetensors::header::synthetic_safetensors_header_for_manifest;
 use crate::weights::safetensors::planner::plan_safetensors_shards_for_manifest;
-use crate::weights::safetensors::{SafetensorsShardHeader, SafetensorsShardPlan};
+use crate::weights::safetensors::shard::{SafetensorsShardHeader, SafetensorsShardPlan};
 
 pub fn precision_block_from_safetensors_smoke() -> Result<PrecisionSafetensorsBlockSmokeSummary> {
     let shape = TransformerBlockShape::new(2, 1, 2);
     let manifest = tiny_file_block_manifest()?;
-    let header = crate::weights::safetensors::synthetic_safetensors_header_for_manifest(&manifest)?;
+    let header = synthetic_safetensors_header_for_manifest(&manifest)?;
     let index = single_shard_index_json(&manifest);
     let plan = plan_safetensors_shards_for_manifest(
         &index,

@@ -2,7 +2,7 @@ use crate::common::dtype::dtype_to_str;
 use crate::hf::hash::hash_metadata;
 use crate::weights::layout::HfWeightLayoutPlan;
 use crate::weights::manifest::HfTensorManifest;
-use crate::weights::safetensors::SafetensorsShardPlan;
+use crate::weights::safetensors::shard::SafetensorsShardPlan;
 
 pub(crate) fn hash_weight_layout(plan: &HfWeightLayoutPlan) -> u64 {
     let mut hash = hash_metadata(&plan.metadata);

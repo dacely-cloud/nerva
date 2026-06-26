@@ -14,5 +14,5 @@ mod probes;
 mod tests;
 
 fn main() -> std::process::ExitCode {
-    cli::run()
+    cli::runner::run()
 }

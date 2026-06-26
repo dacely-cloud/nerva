@@ -1,4 +1,4 @@
-use crate::acceptance::run_acceptance_probe;
+use crate::acceptance::runner::run_acceptance_probe;
 
 #[test]
 fn acceptance_probe_reports_current_invariants() {

@@ -5,7 +5,7 @@ use crate::hf::architecture::HfArchitectureKind;
 use crate::hf::parser::parse_hf_config_metadata;
 use crate::weights::layout::plan_hf_weight_layout;
 use crate::weights::manifest::{HfTensorManifest, HfTensorManifestEntry, build_hf_tensor_manifest};
-use crate::weights::safetensors::synthetic_safetensors_header_for_manifest;
+use crate::weights::safetensors::header::synthetic_safetensors_header_for_manifest;
 
 pub(crate) const SHARD_ONE: &str = "model-00001-of-00002.safetensors";
 pub(crate) const SHARD_TWO: &str = "model-00002-of-00002.safetensors";

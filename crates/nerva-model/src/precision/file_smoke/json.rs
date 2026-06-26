@@ -1,4 +1,4 @@
-use crate::precision::file_smoke::{
+use crate::precision::file_smoke::summary::{
     PrecisionSafetensorsBlockSmokeStatus, PrecisionSafetensorsBlockSmokeSummary,
 };
 

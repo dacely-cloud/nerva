@@ -4,7 +4,7 @@ use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::hash::hash_bytes;
 use crate::weights::layout::WeightBlockRole;
-use crate::weights::safetensors::{SafetensorsShardPlan, SafetensorsShardPlanEntry};
+use crate::weights::safetensors::shard::{SafetensorsShardPlan, SafetensorsShardPlanEntry};
 use crate::weights::tensor::read_safetensors_tensor_u16;
 
 pub(crate) fn load_role(

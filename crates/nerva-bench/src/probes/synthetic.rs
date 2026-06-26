@@ -1,6 +1,6 @@
 use nerva_core::types::id::{RequestId, SequenceId, TokenId};
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
-use nerva_runtime::engine::synthetic::SyntheticDecodeConfig;
+use nerva_runtime::engine::synthetic::config::SyntheticDecodeConfig;
 
 pub(crate) fn run_synthetic(steps: u64, ring_capacity: usize) -> Result<String, String> {
     let runtime = Runtime::new(RuntimeConfig::default())

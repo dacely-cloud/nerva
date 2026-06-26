@@ -4,7 +4,8 @@ use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
 
 use crate::engine::runtime::{Runtime, RuntimeConfig};
-use crate::engine::synthetic::{SyntheticDecodeConfig, SyntheticDecodeStatus};
+use crate::engine::synthetic::config::SyntheticDecodeConfig;
+use crate::engine::synthetic::summary::SyntheticDecodeStatus;
 use crate::graph::layout::GraphKey;
 use crate::token::ring::{DeviceTokenRef, DeviceTokenRing, TokenInputSource};
 

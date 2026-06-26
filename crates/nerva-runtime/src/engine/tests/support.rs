@@ -38,7 +38,7 @@ fn single_shard_index_json(manifest: &nerva_model::weights::manifest::HfTensorMa
 }
 
 pub(crate) fn tiny_shard_plan() -> (
-    nerva_model::weights::safetensors::SafetensorsShardPlan,
+    nerva_model::weights::safetensors::shard::SafetensorsShardPlan,
     usize,
 ) {
     let (plan, header) = tiny_shard_plan_with_header();
@@ -47,17 +47,23 @@ pub(crate) fn tiny_shard_plan() -> (
 }
 
 pub(crate) fn tiny_shard_plan_with_header() -> (
-    nerva_model::weights::safetensors::SafetensorsShardPlan,
+    nerva_model::weights::safetensors::shard::SafetensorsShardPlan,
     String,
 ) {
     let manifest = tiny_llama_manifest();
     let index = single_shard_index_json(&manifest);
     let header =
-        nerva_model::weights::safetensors::synthetic_safetensors_header_for_manifest(&manifest)
-            .unwrap();
+        nerva_model::weights::safetensors::header::synthetic_safetensors_header_for_manifest(
+            &manifest,
+        )
+        .unwrap();
     let plan = nerva_model::weights::safetensors::planner::plan_safetensors_shards_for_manifest(
         &index,
-        &[nerva_model::weights::safetensors::SafetensorsShardHeader::new(SHARD_ONE, &header)],
+        &[
+            nerva_model::weights::safetensors::shard::SafetensorsShardHeader::new(
+                SHARD_ONE, &header,
+            ),
+        ],
         &manifest,
     )
     .unwrap();

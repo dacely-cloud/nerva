@@ -7,7 +7,7 @@ pub(crate) fn run_safetensors_probe(
     safetensors_path: Option<String>,
 ) -> Result<String, String> {
     match (config_path, safetensors_path) {
-        (None, None) => nerva_model::weights::safetensors::safetensors_header_probe()
+        (None, None) => nerva_model::weights::safetensors::probe::safetensors_header_probe()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("safetensors header probe failed: {err:?}")),
         (Some(config_path), Some(safetensors_path)) => {
@@ -18,12 +18,11 @@ pub(crate) fn run_safetensors_probe(
                 &safetensors_path,
             ))
             .map_err(|err| format!("safetensors header read failed: {err:?}"))?;
-            let validation =
-                nerva_model::weights::safetensors::validate_safetensors_header_for_manifest(
-                    &header.header_json,
-                    &manifest,
-                )
-                .map_err(|err| format!("safetensors manifest validation failed: {err:?}"))?;
+            let validation = nerva_model::weights::safetensors::validation::validate_safetensors_header_for_manifest(
+                &header.header_json,
+                &manifest,
+            )
+            .map_err(|err| format!("safetensors manifest validation failed: {err:?}"))?;
             header
                 .require_payload_bytes(validation.total_data_bytes)
                 .map_err(|err| format!("safetensors payload validation failed: {err:?}"))?;
@@ -56,7 +55,7 @@ pub(crate) fn load_safetensors_shard_plan(
     config_path: Option<String>,
     index_path: Option<String>,
     checkpoint_dir: Option<String>,
-) -> Result<nerva_model::weights::safetensors::SafetensorsShardPlan, String> {
+) -> Result<nerva_model::weights::safetensors::shard::SafetensorsShardPlan, String> {
     let (Some(config_path), Some(index_path), Some(checkpoint_dir)) =
         (config_path, index_path, checkpoint_dir)
     else {
@@ -88,7 +87,7 @@ pub(crate) fn load_safetensors_shard_plan(
     let shard_header_refs = shard_headers
         .iter()
         .map(|(file_name, header)| {
-            nerva_model::weights::safetensors::SafetensorsShardHeader::new(
+            nerva_model::weights::safetensors::shard::SafetensorsShardHeader::new(
                 file_name,
                 &header.header_json,
             )

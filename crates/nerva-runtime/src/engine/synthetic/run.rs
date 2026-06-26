@@ -6,9 +6,8 @@ use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
 
 use crate::engine::runtime::Runtime;
-use crate::engine::synthetic::{
-    SyntheticDecodeConfig, SyntheticDecodeStatus, SyntheticDecodeSummary,
-};
+use crate::engine::synthetic::config::SyntheticDecodeConfig;
+use crate::engine::synthetic::summary::{SyntheticDecodeStatus, SyntheticDecodeSummary};
 use crate::graph::layout::GraphKey;
 use crate::token::ring::TokenInputSource;
 

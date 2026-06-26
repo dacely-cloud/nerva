@@ -22,8 +22,10 @@ pub(crate) fn safetensors_file_header_acceptance() -> Result<(bool, String), Str
     let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout)
         .map_err(|err| format!("HF manifest probe failed: {err:?}"))?;
     let header =
-        nerva_model::weights::safetensors::synthetic_safetensors_header_for_manifest(&manifest)
-            .map_err(|err| format!("safetensors header generation failed: {err:?}"))?;
+        nerva_model::weights::safetensors::header::synthetic_safetensors_header_for_manifest(
+            &manifest,
+        )
+        .map_err(|err| format!("safetensors header generation failed: {err:?}"))?;
     let dir = std::env::temp_dir().join(format!(
         "nerva-acceptance-safetensors-{}",
         std::process::id()
@@ -38,11 +40,12 @@ pub(crate) fn safetensors_file_header_acceptance() -> Result<(bool, String), Str
 
     let file_header = nerva_model::weights::file::read_safetensors_header_file(&path)
         .map_err(|err| format!("safetensors header read failed: {err:?}"))?;
-    let validation = nerva_model::weights::safetensors::validate_safetensors_header_for_manifest(
-        &file_header.header_json,
-        &manifest,
-    )
-    .map_err(|err| format!("safetensors manifest validation failed: {err:?}"))?;
+    let validation =
+        nerva_model::weights::safetensors::validation::validate_safetensors_header_for_manifest(
+            &file_header.header_json,
+            &manifest,
+        )
+        .map_err(|err| format!("safetensors manifest validation failed: {err:?}"))?;
 
     let _ = fs::remove_file(&path);
     let _ = fs::remove_dir(&dir);
@@ -86,14 +89,20 @@ pub(crate) fn safetensors_file_prefetch_acceptance() -> Result<(bool, String), S
     let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout)
         .map_err(|err| format!("HF manifest probe failed: {err:?}"))?;
     let header =
-        nerva_model::weights::safetensors::synthetic_safetensors_header_for_manifest(&manifest)
-            .map_err(|err| format!("safetensors header generation failed: {err:?}"))?;
+        nerva_model::weights::safetensors::header::synthetic_safetensors_header_for_manifest(
+            &manifest,
+        )
+        .map_err(|err| format!("safetensors header generation failed: {err:?}"))?;
     let shard_name = "model.safetensors";
     let index = single_shard_index_json(&manifest, shard_name);
     let shard_plan =
         nerva_model::weights::safetensors::planner::plan_safetensors_shards_for_manifest(
             &index,
-            &[nerva_model::weights::safetensors::SafetensorsShardHeader::new(shard_name, &header)],
+            &[
+                nerva_model::weights::safetensors::shard::SafetensorsShardHeader::new(
+                    shard_name, &header,
+                ),
+            ],
             &manifest,
         )
         .map_err(|err| format!("safetensors shard planning failed: {err:?}"))?;

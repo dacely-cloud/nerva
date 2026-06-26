@@ -14,7 +14,8 @@ pub(crate) fn synthetic_header_for_entries(
         total_weight_bytes,
         manifest_hash: 0,
     };
-    nerva_model::weights::safetensors::synthetic_safetensors_header_for_manifest(&manifest).unwrap()
+    nerva_model::weights::safetensors::header::synthetic_safetensors_header_for_manifest(&manifest)
+        .unwrap()
 }
 
 pub(crate) fn synthetic_index_json(

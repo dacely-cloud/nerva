@@ -3,8 +3,8 @@ use crate::precision::bits::{
     bf16_bits_to_f32, f16_bits_to_f32, f32_to_bf16_bits, f32_to_f16_bits,
 };
 use crate::precision::block::PrecisionTransformerBlock;
-use crate::precision::file_smoke::PrecisionSafetensorsBlockSmokeStatus;
 use crate::precision::file_smoke::run::precision_block_from_safetensors_smoke;
+use crate::precision::file_smoke::summary::PrecisionSafetensorsBlockSmokeStatus;
 use crate::precision::scratch::PrecisionTransformerBlockScratch;
 use crate::precision::smoke::{PrecisionBlockSmokeStatus, precision_block_smoke};
 use nerva_core::types::dtype::DType;

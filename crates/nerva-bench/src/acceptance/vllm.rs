@@ -1,4 +1,4 @@
-use crate::parity::compare_vllm_token_identity;
+use crate::parity::run::compare_vllm_token_identity;
 
 pub(crate) fn vllm_token_identity_acceptance() -> Result<(bool, String), String> {
     let vllm_style_json =

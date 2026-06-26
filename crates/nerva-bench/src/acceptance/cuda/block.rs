@@ -1,4 +1,4 @@
-use nerva_model::precision::file_smoke::PrecisionSafetensorsBlockSmokeSummary;
+use nerva_model::precision::file_smoke::summary::PrecisionSafetensorsBlockSmokeSummary;
 
 use crate::acceptance::report::AcceptanceReport;
 

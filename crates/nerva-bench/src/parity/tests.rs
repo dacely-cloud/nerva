@@ -1,4 +1,5 @@
-use crate::parity::{TokenIdentityParityStatus, compare_vllm_token_identity};
+use crate::parity::run::compare_vllm_token_identity;
+use crate::parity::summary::TokenIdentityParityStatus;
 
 #[test]
 fn accepts_vllm_nested_token_ids_for_exact_identity() {

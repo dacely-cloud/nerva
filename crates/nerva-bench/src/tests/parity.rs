@@ -1,5 +1,5 @@
 use crate::artifact::run_artifact;
-use crate::parity::run_vllm_token_identity_parity;
+use crate::parity::run::run_vllm_token_identity_parity;
 
 #[test]
 fn vllm_token_identity_parity_reads_vllm_style_json() {

@@ -1,6 +1,6 @@
 use nerva_core::types::id::TokenId;
 
-use crate::engine::synthetic::{SyntheticDecodeStatus, SyntheticDecodeSummary};
+use crate::engine::synthetic::summary::{SyntheticDecodeStatus, SyntheticDecodeSummary};
 
 impl SyntheticDecodeSummary {
     pub fn to_json(self) -> String {

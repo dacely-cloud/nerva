@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use crate::cli::exit;
-use crate::parity::load_vllm_token_identity_parity;
+use crate::parity::run::load_vllm_token_identity_parity;
 use crate::parse::parse_optional_usize;
 use nerva_core::types::dtype::DType;
 

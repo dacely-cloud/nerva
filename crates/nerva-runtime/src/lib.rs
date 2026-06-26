@@ -7,6 +7,7 @@ pub mod capabilities;
 pub mod engine;
 pub mod execution;
 pub mod graph;
+pub mod memory_loop;
 pub mod token;
 pub mod transport;
 pub mod weights;

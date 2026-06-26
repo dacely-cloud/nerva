@@ -1,7 +1,8 @@
 use nerva_core::types::id::TokenId;
 use nerva_runtime::engine::residency::ResidencyBudget;
 use nerva_runtime::engine::runtime::Runtime;
-use nerva_runtime::engine::synthetic::{SyntheticDecodeConfig, SyntheticDecodeStatus};
+use nerva_runtime::engine::synthetic::config::SyntheticDecodeConfig;
+use nerva_runtime::engine::synthetic::summary::SyntheticDecodeStatus;
 
 use crate::acceptance::report::AcceptanceReport;
 

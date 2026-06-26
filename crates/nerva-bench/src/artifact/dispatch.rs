@@ -1,5 +1,5 @@
 use crate::{
-    acceptance::run_acceptance_probe,
+    acceptance::runner::run_acceptance_probe,
     cli::model::precision_model_pair_json,
     model_io::{
         config::{run_layout_probe, run_manifest_probe, run_metadata_probe},
@@ -9,9 +9,9 @@ use crate::{
         },
         safetensors::{run_safetensors_probe, run_safetensors_shard_probe},
     },
-    parity::run_vllm_token_identity_parity,
+    parity::run::run_vllm_token_identity_parity,
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
-    probes::{kv, runtime, synthetic, transaction, transport},
+    probes::{kv, memory_loop, runtime, synthetic, transaction, transport},
 };
 
 pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
@@ -56,6 +56,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         }
         "ledger" => synthetic::run_synthetic_ledger_probe(),
         "transaction" => transaction::run_transaction_probe(),
+        "memory-loop" => memory_loop::run_memory_loop_probe(),
         "block" => nerva_model::reference::smoke::reference_block_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("reference block failed: {err:?}")),

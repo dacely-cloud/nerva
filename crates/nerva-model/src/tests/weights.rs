@@ -8,9 +8,8 @@ use crate::weights::layout::{
 use crate::weights::manifest::{
     HfTensorManifestProbeStatus, build_hf_tensor_manifest, hf_tensor_manifest_probe,
 };
-use crate::weights::safetensors::{
-    synthetic_safetensors_header_for_manifest, validate_safetensors_header_for_manifest,
-};
+use crate::weights::safetensors::header::synthetic_safetensors_header_for_manifest;
+use crate::weights::safetensors::validation::validate_safetensors_header_for_manifest;
 use nerva_core::types::dtype::DType;
 
 #[test]

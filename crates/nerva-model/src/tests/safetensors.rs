@@ -6,13 +6,16 @@ use crate::tests::support::{
 use crate::weights::file::{read_safetensors_header_file, read_safetensors_header_file_with_limit};
 use crate::weights::layout::plan_hf_weight_layout;
 use crate::weights::manifest::build_hf_tensor_manifest;
+use crate::weights::safetensors::header::{
+    safetensors_header_from_bytes, synthetic_safetensors_header_for_manifest,
+};
 use crate::weights::safetensors::planner::{
     plan_safetensors_shards_for_manifest, required_safetensors_shards_for_manifest,
 };
-use crate::weights::safetensors::{
-    SafetensorsShardHeader, SafetensorsValidationStatus, safetensors_header_from_bytes,
-    safetensors_header_probe, synthetic_safetensors_header_for_manifest,
-    validate_safetensors_header_for_manifest,
+use crate::weights::safetensors::probe::safetensors_header_probe;
+use crate::weights::safetensors::shard::SafetensorsShardHeader;
+use crate::weights::safetensors::validation::{
+    SafetensorsValidationStatus, validate_safetensors_header_for_manifest,
 };
 
 #[test]

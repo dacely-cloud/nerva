@@ -3,6 +3,7 @@ mod basic;
 mod capabilities;
 mod graph;
 mod kv;
+mod memory_loop;
 mod support;
 mod synthetic;
 mod transaction;

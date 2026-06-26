@@ -7,7 +7,7 @@ pub(crate) fn model_manifest_acceptance() -> Result<(bool, String), String> {
         .map_err(|err| format!("HF layout probe failed: {err:?}"))?;
     let manifest = nerva_model::weights::manifest::hf_tensor_manifest_probe()
         .map_err(|err| format!("HF manifest probe failed: {err:?}"))?;
-    let safetensors = nerva_model::weights::safetensors::safetensors_header_probe()
+    let safetensors = nerva_model::weights::safetensors::probe::safetensors_header_probe()
         .map_err(|err| format!("safetensors header probe failed: {err:?}"))?;
 
     let metadata_body = &metadata.metadata;

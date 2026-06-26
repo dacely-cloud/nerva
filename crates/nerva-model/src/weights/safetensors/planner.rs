@@ -7,12 +7,12 @@ use crate::common::json::{find_top_level_json_value, optional_usize};
 use crate::weights::hash::hash_safetensors_shard_plan;
 use crate::weights::manifest::HfTensorManifest;
 use crate::weights::safetensors::parse::parse_json_string_map_value;
-use crate::weights::safetensors::tensor::{
-    safetensors_file_data_start, safetensors_tensor_data_offsets,
-};
-use crate::weights::safetensors::{
+use crate::weights::safetensors::shard::{
     SafetensorsShardHeader, SafetensorsShardPlan, SafetensorsShardPlanEntry,
     SafetensorsShardPlanShard,
+};
+use crate::weights::safetensors::tensor::{
+    safetensors_file_data_start, safetensors_tensor_data_offsets,
 };
 
 pub fn required_safetensors_shards_for_manifest(

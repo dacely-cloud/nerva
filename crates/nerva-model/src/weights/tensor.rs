@@ -9,7 +9,7 @@ use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::hash::hash_bytes;
 use crate::common::json::json_escape;
-use crate::weights::safetensors::SafetensorsShardPlanEntry;
+use crate::weights::safetensors::shard::SafetensorsShardPlanEntry;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoadedSafetensorsTensorU16 {
