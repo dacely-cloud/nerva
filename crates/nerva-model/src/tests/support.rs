@@ -1,4 +1,4 @@
-use crate::common::json::json_escape;
+use crate::common::json::format::json_escape;
 use crate::common::math::dot;
 use crate::common::shape::TransformerBlockShape;
 use crate::hf::architecture::HfArchitectureKind;

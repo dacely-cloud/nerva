@@ -1,54 +1,21 @@
-use nerva_core::types::block::address::GlobalBlockAddress;
-use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::{AllocationId, LayoutId, MemoryDomainId};
+use nerva_core::types::id::AllocationId;
 use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::TokenLedger;
-use nerva_memory::registry::{BlockAllocationRequest, BlockRegistry};
+use nerva_memory::registry::BlockRegistry;
 
 use crate::transport::registration::cache::TransportRegistrationCache;
+use crate::transport::registration::probe::blocks::allocate_ready_transport_block;
+use crate::transport::registration::probe::counters::RegistrationProbeCounters;
+use crate::transport::registration::probe::lookup::record_lookup;
 use crate::transport::registration::summary::{
     TransportRegistrationStatus, TransportRegistrationSummary,
 };
-use crate::transport::registration::types::{
-    TransportRegistrationBackend, TransportRegistrationLookup,
-};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RegistrationProbeCounters {
-    bootstrap_registrations: u64,
-    cache_hits: u64,
-    cache_misses: u64,
-    stale_address_rejections: u64,
-    stale_version_rejections: u64,
-    hot_path_registration_attempts: u64,
-    hot_path_registration_rejections: u64,
-    per_token_registrations: u64,
-    pinned_host_registrations: u64,
-    gpu_direct_registrations: u64,
-}
-
-impl RegistrationProbeCounters {
-    const fn new() -> Self {
-        Self {
-            bootstrap_registrations: 0,
-            cache_hits: 0,
-            cache_misses: 0,
-            stale_address_rejections: 0,
-            stale_version_rejections: 0,
-            hot_path_registration_attempts: 0,
-            hot_path_registration_rejections: 0,
-            per_token_registrations: 0,
-            pinned_host_registrations: 0,
-            gpu_direct_registrations: 0,
-        }
-    }
-}
+use crate::transport::registration::types::TransportRegistrationBackend;
 
 pub fn run_transport_registration_probe() -> Result<TransportRegistrationSummary> {
     let mut registry = BlockRegistry::new([
@@ -101,16 +68,7 @@ pub fn run_transport_registration_probe() -> Result<TransportRegistrationSummary
     ] {
         let block = registry.block(id).expect("probe block exists");
         cache.register(block, block.authoritative_copy, backend)?;
-        counters.bootstrap_registrations += 1;
-        match backend {
-            TransportRegistrationBackend::RdmaPinnedHost
-            | TransportRegistrationBackend::DpdkPinnedHost => {
-                counters.pinned_host_registrations += 1
-            }
-            TransportRegistrationBackend::RdmaGpuDirect | TransportRegistrationBackend::DpdkGpu => {
-                counters.gpu_direct_registrations += 1
-            }
-        }
+        counters.record_bootstrap_registration(backend);
     }
 
     for (id, backend, label) in [
@@ -182,8 +140,7 @@ pub fn run_transport_registration_probe() -> Result<TransportRegistrationSummary
         "registration_cache_stale_version_rejected",
     );
 
-    counters.hot_path_registration_attempts += 1;
-    counters.hot_path_registration_rejections += 1;
+    counters.record_hot_path_registration_rejection();
     ledger.record(LedgerEvent {
         kind: LedgerEventKind::Stall,
         sync_class: None,
@@ -199,10 +156,7 @@ pub fn run_transport_registration_probe() -> Result<TransportRegistrationSummary
     ledger.require_zero_hot_path_allocations()?;
     ledger.require_classified_syncs()?;
 
-    let lookup_count = counters.cache_hits
-        + counters.cache_misses
-        + counters.stale_address_rejections
-        + counters.stale_version_rejections;
+    let lookup_count = counters.lookup_count();
     let registration_cache_hit_rate_per_mille = if lookup_count == 0 {
         0
     } else {
@@ -230,103 +184,4 @@ pub fn run_transport_registration_probe() -> Result<TransportRegistrationSummary
         hot_path_allocations: ledger.hot_path_allocations,
         error: None,
     })
-}
-
-fn allocate_ready_transport_block(
-    registry: &mut BlockRegistry,
-    tier: MemoryTier,
-    dtype: DType,
-    bytes: usize,
-    allocation: AllocationId,
-    offset: u64,
-) -> Result<nerva_core::types::id::ResidentBlockId> {
-    let id = registry.allocate(
-        BlockAllocationRequest::new(BlockKind::TransportBuffer, tier, bytes)
-            .with_dtype(dtype)
-            .with_layout(LayoutId(1)),
-    )?;
-    registry.bind_address(
-        id,
-        GlobalBlockAddress {
-            domain: MemoryDomainId::for_tier(tier),
-            allocation,
-            offset,
-        },
-    )?;
-    {
-        let block = registry.block_mut(id).expect("allocated block exists");
-        block.owner = ExecutionOwner::Nic(nerva_core::types::id::TransportDeviceId(0));
-        block.version = 1;
-    }
-    registry.mark_ready(id)?;
-    Ok(id)
-}
-
-fn record_lookup(
-    registry: &BlockRegistry,
-    cache: &TransportRegistrationCache,
-    ledger: &mut TokenLedger,
-    counters: &mut RegistrationProbeCounters,
-    block_id: nerva_core::types::id::ResidentBlockId,
-    backend: TransportRegistrationBackend,
-    required_version: u64,
-    label: &'static str,
-) {
-    let block = registry.block(block_id).expect("probe block exists");
-    match cache.lookup(block, block.authoritative_copy, backend, required_version) {
-        TransportRegistrationLookup::Hit(registration) => {
-            counters.cache_hits += 1;
-            ledger.record(LedgerEvent {
-                kind: LedgerEventKind::Transport,
-                sync_class: None,
-                metric_source: MetricSource::EstimatedModel,
-                block_id: Some(block.id),
-                from_tier: Some(registration.tier),
-                to_tier: Some(registration.tier),
-                bytes: registration.bytes,
-                latency_ns: 1,
-                label,
-            });
-        }
-        TransportRegistrationLookup::Miss => {
-            counters.cache_misses += 1;
-            ledger.record(LedgerEvent {
-                kind: LedgerEventKind::Stall,
-                sync_class: None,
-                metric_source: MetricSource::RuntimeTimestamp,
-                block_id: Some(block.id),
-                from_tier: Some(block.tier),
-                to_tier: Some(block.tier),
-                bytes: block.bytes,
-                latency_ns: 1,
-                label,
-            });
-        }
-        TransportRegistrationLookup::StaleAddress(registration) => {
-            counters.stale_address_rejections += 1;
-            ledger.record_sync(
-                SyncClass::PhaseHandoff,
-                Some(block.id),
-                Some(registration.tier),
-                Some(block.tier),
-                block.bytes,
-                1,
-                MetricSource::RuntimeTimestamp,
-                label,
-            );
-        }
-        TransportRegistrationLookup::StaleVersion(registration) => {
-            counters.stale_version_rejections += 1;
-            ledger.record_sync(
-                SyncClass::PhaseHandoff,
-                Some(block.id),
-                Some(registration.tier),
-                Some(block.tier),
-                block.bytes,
-                1,
-                MetricSource::RuntimeTimestamp,
-                label,
-            );
-        }
-    }
 }

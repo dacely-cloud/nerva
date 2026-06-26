@@ -1,6 +1,7 @@
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::hash::hash_bytes;
+use crate::common::json::parse::find_top_level_json_value;
 use crate::weights::manifest::HfTensorManifest;
 use crate::weights::safetensors::tensor;
 
@@ -45,9 +46,11 @@ pub fn validate_safetensors_header_for_manifest(
     let mut validated_tensors = 0usize;
     let mut total_data_bytes = 0usize;
     for entry in &manifest.entries {
-        let tensor_json = crate::common::json::find_top_level_json_value(header_json, &entry.name)?
-            .ok_or_else(|| NervaError::InvalidArgument {
-                reason: format!("safetensors header is missing tensor {}", entry.name),
+        let tensor_json =
+            find_top_level_json_value(header_json, &entry.name)?.ok_or_else(|| {
+                NervaError::InvalidArgument {
+                    reason: format!("safetensors header is missing tensor {}", entry.name),
+                }
             })?;
         tensor::validate_safetensors_tensor_header(tensor_json, entry)?;
         validated_tensors =

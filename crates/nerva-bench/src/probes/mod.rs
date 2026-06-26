@@ -1,6 +1,7 @@
 pub(crate) mod kv;
 pub(crate) mod memory_loop;
 pub(crate) mod phase;
+pub(crate) mod queue;
 pub(crate) mod runtime;
 pub(crate) mod synthetic;
 pub(crate) mod token;

@@ -2,7 +2,7 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::dtype::dtype_to_str;
-use crate::common::json::optional_string;
+use crate::common::json::fields::optional_string;
 use crate::weights::manifest::HfTensorManifestEntry;
 use crate::weights::safetensors::parse::required_usize_array;
 

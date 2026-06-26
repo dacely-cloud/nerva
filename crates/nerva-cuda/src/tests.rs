@@ -1,11 +1,14 @@
 use std::os::raw::c_char;
 
-use crate::attention::CudaTieredAttentionSummary;
-use crate::block::{CudaLoadedTinyBlockSummary, CudaTinyBlockSummary};
-use crate::decode::CudaTinyDecodeSummary;
-use crate::graph::CudaSyntheticGraphSummary;
-use crate::sampler::CudaGreedySamplerSummary;
-use crate::smoke::{CudaSmokeSummary, SmokeStatus, c_char_array_to_string, escape_json};
+use crate::attention::summary::CudaTieredAttentionSummary;
+use crate::block::summary::{CudaLoadedTinyBlockSummary, CudaTinyBlockSummary};
+use crate::decode::summary::CudaTinyDecodeSummary;
+use crate::graph::summary::CudaSyntheticGraphSummary;
+use crate::json::escape_json;
+use crate::sampler::summary::CudaGreedySamplerSummary;
+use crate::smoke::ffi::c_char_array_to_string;
+use crate::smoke::status::SmokeStatus;
+use crate::smoke::summary::CudaSmokeSummary;
 
 #[test]
 fn json_escapes_control_chars() {

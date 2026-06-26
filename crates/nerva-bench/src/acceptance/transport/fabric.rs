@@ -1,6 +1,6 @@
 use nerva_runtime::capabilities::snapshot::CapabilityState;
 use nerva_runtime::engine::runtime::Runtime;
-use nerva_runtime::transport::fabric::backend::FabricBackendStatus;
+use nerva_runtime::transport::fabric::backend::types::FabricBackendStatus;
 use nerva_runtime::transport::fabric::summary::FabricTopologyStatus;
 
 use crate::acceptance::report::AcceptanceReport;

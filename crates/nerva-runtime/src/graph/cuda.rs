@@ -1,4 +1,4 @@
-use nerva_cuda::graph::CudaSyntheticGraphSummary;
+use nerva_cuda::graph::summary::CudaSyntheticGraphSummary;
 
 pub fn cuda_synthetic_graph_smoke(
     steps: u32,

@@ -6,7 +6,7 @@ use std::{
 
 use nerva_core::types::error::{NervaError, Result};
 
-use crate::common::json::json_escape;
+use crate::common::json::format::json_escape;
 
 pub const DEFAULT_MAX_SAFETENSORS_HEADER_BYTES: usize = 256 * 1024 * 1024;
 

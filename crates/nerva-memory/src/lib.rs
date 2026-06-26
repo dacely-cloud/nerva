@@ -6,6 +6,7 @@ compile_error!("NERVA currently supports Linux only.");
 pub mod arena;
 pub mod kv;
 pub mod phase;
+pub mod queue;
 pub mod registry;
 
 #[cfg(test)]

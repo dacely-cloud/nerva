@@ -4,7 +4,7 @@ use nerva_core::types::ownership::ExecutionOwner;
 
 use crate::capabilities::snapshot::CapabilityState;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
-use crate::transport::fabric::backend::FabricBackendStatus;
+use crate::transport::fabric::backend::types::FabricBackendStatus;
 use crate::transport::fabric::summary::FabricTopologyStatus;
 use crate::transport::matrix::types::TransportCapabilityMatrixStatus;
 use crate::transport::path::{

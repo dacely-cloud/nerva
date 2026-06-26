@@ -1,7 +1,7 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::memory::MemoryTier;
 
-use crate::common::json::{json_opt_str, json_opt_usize};
+use crate::common::json::format::{json_opt_str, json_opt_usize};
 use crate::weights::layout::WeightBlockRole;
 
 #[derive(Copy, Clone, Debug, PartialEq)]

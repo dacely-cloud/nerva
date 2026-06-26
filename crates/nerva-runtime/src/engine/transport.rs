@@ -1,14 +1,15 @@
 use nerva_core::types::error::Result;
 
 use crate::engine::runtime::Runtime;
-use crate::transport::fabric::backend::{FabricBackendSummary, run_fabric_backend_probe};
+use crate::transport::fabric::backend::probe::run_fabric_backend_probe;
+use crate::transport::fabric::backend::types::FabricBackendSummary;
 use crate::transport::fabric::probe::run_fabric_topology_probe;
 use crate::transport::fabric::summary::FabricTopologySummary;
 use crate::transport::matrix::run as matrix_run;
 use crate::transport::matrix::types::TransportCapabilityMatrixSummary;
 use crate::transport::path::{self, TransportPathDecision, TransportPathRequest};
 use crate::transport::probe::{self, TransportPathProbeSummary};
-use crate::transport::registration::probe::run_transport_registration_probe;
+use crate::transport::registration::probe::run::run_transport_registration_probe;
 use crate::transport::registration::summary::TransportRegistrationSummary;
 use crate::transport::stage::config::StagePipelineConfig;
 use crate::transport::stage::run;

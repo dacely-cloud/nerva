@@ -1,7 +1,7 @@
 use nerva_core::types::dtype::DType;
 
 use crate::common::dtype::json_opt_dtype;
-use crate::common::json::{json_opt_f32, json_opt_usize};
+use crate::common::json::format::{json_opt_f32, json_opt_usize};
 use crate::common::shape::TransformerBlockShape;
 use crate::hf::architecture::HfArchitectureKind;
 

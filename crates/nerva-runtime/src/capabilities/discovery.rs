@@ -5,7 +5,9 @@ use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState};
 use crate::capabilities::topology::discover_topology_snapshot;
 use nerva_core::types::arch::host_arch;
 use nerva_core::types::memory::MemoryFabricKind;
-use nerva_cuda::smoke::{CudaSmokeSummary, SmokeStatus, smoke};
+use nerva_cuda::smoke::probe::smoke;
+use nerva_cuda::smoke::status::SmokeStatus;
+use nerva_cuda::smoke::summary::CudaSmokeSummary;
 
 pub fn cuda_smoke() -> CudaSmokeSummary {
     smoke()

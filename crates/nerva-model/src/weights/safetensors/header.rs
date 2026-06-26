@@ -1,6 +1,6 @@
 use nerva_core::types::error::{NervaError, Result};
 
-use crate::common::json::json_escape;
+use crate::common::json::format::json_escape;
 use crate::weights::manifest::HfTensorManifest;
 use crate::weights::safetensors::tensor;
 

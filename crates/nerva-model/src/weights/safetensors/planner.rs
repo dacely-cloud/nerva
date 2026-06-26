@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::hash::hash_bytes;
-use crate::common::json::{find_top_level_json_value, optional_usize};
+use crate::common::json::fields::optional_usize;
+use crate::common::json::parse::find_top_level_json_value;
 use crate::weights::hash::hash_safetensors_shard_plan;
 use crate::weights::manifest::HfTensorManifest;
 use crate::weights::safetensors::parse::parse_json_string_map_value;
