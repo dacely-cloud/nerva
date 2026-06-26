@@ -1,5 +1,5 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::transport::contract::types::{ReceiveDescriptor, TransferDescriptor};
 use crate::transport::registration::types::{TransportRegistration, TransportRegistrationBackend};

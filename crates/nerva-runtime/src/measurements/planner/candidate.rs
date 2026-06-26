@@ -1,4 +1,4 @@
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::decision::CandidateCost;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

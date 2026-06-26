@@ -1,5 +1,5 @@
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::decision::{CandidateCost, ExecutionDecision};
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;

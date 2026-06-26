@@ -1,5 +1,5 @@
-use nerva_core::types::id::ResidentBlockId;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;

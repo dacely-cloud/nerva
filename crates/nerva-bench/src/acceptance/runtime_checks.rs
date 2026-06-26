@@ -1,4 +1,4 @@
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 use nerva_runtime::engine::hot_path::status::HotPathGuardStatus;
 use nerva_runtime::engine::residency::ResidencyBudget;
 use nerva_runtime::engine::runtime::Runtime;

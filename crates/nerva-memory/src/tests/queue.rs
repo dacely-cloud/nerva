@@ -1,13 +1,17 @@
-use nerva_core::types::block::taxonomy::BlockKind;
-use nerva_core::types::id::{DeviceOrdinal, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::{CoherencePolicy, ExecutionOwner, MutationSemantics};
+use nerva_core::types::block::kind::BlockKind;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::device::DeviceOrdinal;
+
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::coherence::CoherencePolicy;
+use nerva_core::types::ownership::mutation::MutationSemantics;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 use crate::queue::probe::run::run_shared_work_queue_probe;
 use crate::queue::ring::SharedWorkQueue;
 use crate::queue::types::{SharedQueueDescriptor, SharedQueueRejectionKind, SharedWorkQueueSpec};
 use crate::registry::request::BlockAllocationRequest;
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 #[test]
 fn shared_queue_probe_reports_bounded_handle_queue() {

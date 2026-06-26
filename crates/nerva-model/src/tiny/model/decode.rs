@@ -1,5 +1,5 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::math::mat_vec_row_major;

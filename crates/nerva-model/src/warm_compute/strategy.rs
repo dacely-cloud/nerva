@@ -1,5 +1,5 @@
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum WarmComputeStrategy {

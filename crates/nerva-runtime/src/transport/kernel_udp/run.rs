@@ -2,7 +2,7 @@ use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;

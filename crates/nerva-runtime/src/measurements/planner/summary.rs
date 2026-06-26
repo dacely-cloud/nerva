@@ -1,5 +1,5 @@
-use nerva_core::types::cost::CostSource;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::cost::source::CostSource;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;
 

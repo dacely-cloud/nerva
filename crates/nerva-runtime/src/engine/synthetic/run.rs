@@ -1,5 +1,7 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::{RequestId, ResidentBlockId, SequenceId};
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::request::RequestId;
+use nerva_core::types::id::sequence::SequenceId;
 
 use crate::engine::runtime::Runtime;
 use crate::engine::synthetic::config::SyntheticDecodeConfig;

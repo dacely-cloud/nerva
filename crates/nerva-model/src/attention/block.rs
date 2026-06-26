@@ -1,4 +1,4 @@
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct KvAttentionBlock<'a> {

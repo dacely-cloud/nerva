@@ -1,4 +1,4 @@
-use nerva_core::types::cost::CostSource;
+use nerva_core::types::cost::source::CostSource;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_ledger::types::decision::ExecutionDecision;
 use nerva_ledger::types::metric::MetricSource;

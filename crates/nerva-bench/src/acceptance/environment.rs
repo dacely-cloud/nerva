@@ -1,4 +1,4 @@
-use nerva_core::types::memory::MemoryFabricKind;
+use nerva_core::types::memory::fabric::MemoryFabricKind;
 use nerva_runtime::capabilities::snapshot::CapabilityState;
 use nerva_runtime::engine::runtime::Runtime;
 

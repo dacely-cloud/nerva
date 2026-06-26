@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::ResidentBlockId;
-use nerva_core::types::memory::MemoryTier;
-use nerva_memory::registry::table::BlockRegistry;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_memory::registry::table::registry::BlockRegistry;
 
 use crate::memory_loop::types::{MemoryLoopConfig, MemoryLoopTaskKind, MemoryLoopTaskSpec};
 

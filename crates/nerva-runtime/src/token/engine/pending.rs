@@ -1,5 +1,5 @@
 use nerva_core::types::error::Result;
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 
 use crate::token::engine::ledger;
 use crate::token::engine::synthetic::SyntheticEngine;

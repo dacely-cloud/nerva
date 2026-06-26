@@ -8,9 +8,9 @@ use crate::transport::path::planner::plan_transport_path;
 use crate::transport::path::request::TransportPathRequest;
 use crate::transport::path::types::{TransferMode, TransportPathClass};
 use nerva_core::types::error::Result;
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 const MATRIX_SIZES: [(usize, TransferMode); 6] = [
     (32 * 1024, TransferMode::Decode),

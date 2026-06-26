@@ -1,56 +1,18 @@
-use std::collections::BTreeMap;
-
 use nerva_core::types::block::address::GlobalBlockAddress;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::block::resident::ResidentBlock;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::{AllocationId, MemoryDomainId, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::memory::MemoryDomainId;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_core::types::shape::BlockShape;
 
-use crate::registry::account::TierAccount;
 use crate::registry::domain::memory_tier_for_domain;
 use crate::registry::request::BlockAllocationRequest;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BlockRegistry {
-    next_id: u64,
-    accounts: BTreeMap<MemoryTier, TierAccount>,
-    blocks: BTreeMap<ResidentBlockId, ResidentBlock>,
-}
+use crate::registry::table::registry::BlockRegistry;
 
 impl BlockRegistry {
-    pub fn new(accounts: impl IntoIterator<Item = (MemoryTier, usize)>) -> Self {
-        let mut registry = Self {
-            next_id: 1,
-            accounts: BTreeMap::new(),
-            blocks: BTreeMap::new(),
-        };
-        for (tier, capacity_bytes) in accounts {
-            registry.accounts.insert(
-                tier,
-                TierAccount {
-                    tier,
-                    capacity_bytes,
-                    used_bytes: 0,
-                },
-            );
-        }
-        registry
-    }
-
-    pub fn account(&self, tier: MemoryTier) -> Option<TierAccount> {
-        self.accounts.get(&tier).copied()
-    }
-
-    pub fn used_bytes(&self, tier: MemoryTier) -> usize {
-        self.account(tier).map_or(0, |account| account.used_bytes)
-    }
-
-    pub fn remaining_bytes(&self, tier: MemoryTier) -> Option<usize> {
-        self.account(tier).map(|account| account.remaining_bytes())
-    }
-
     pub fn block(&self, id: ResidentBlockId) -> Option<&ResidentBlock> {
         self.blocks.get(&id)
     }
@@ -145,7 +107,7 @@ impl BlockRegistry {
         Ok(())
     }
 
-    fn require_block(&self, id: ResidentBlockId) -> Result<&ResidentBlock> {
+    pub(crate) fn require_block(&self, id: ResidentBlockId) -> Result<&ResidentBlock> {
         self.blocks
             .get(&id)
             .ok_or_else(|| NervaError::InvalidArgument {
@@ -153,42 +115,11 @@ impl BlockRegistry {
             })
     }
 
-    fn require_block_mut(&mut self, id: ResidentBlockId) -> Result<&mut ResidentBlock> {
+    pub(crate) fn require_block_mut(&mut self, id: ResidentBlockId) -> Result<&mut ResidentBlock> {
         self.blocks
             .get_mut(&id)
             .ok_or_else(|| NervaError::InvalidArgument {
                 reason: format!("unknown resident block id {}", id.0),
             })
-    }
-
-    fn reserve_tier(&mut self, tier: MemoryTier, bytes: usize) -> Result<()> {
-        let account = self
-            .accounts
-            .get_mut(&tier)
-            .ok_or_else(|| NervaError::InvalidArgument {
-                reason: format!("memory tier {tier:?} is not configured"),
-            })?;
-        let new_used =
-            account
-                .used_bytes
-                .checked_add(bytes)
-                .ok_or_else(|| NervaError::AllocationFailed {
-                    bytes,
-                    reason: "tier accounting overflow".to_string(),
-                })?;
-        if new_used > account.capacity_bytes {
-            return Err(NervaError::AllocationFailed {
-                bytes,
-                reason: format!("memory tier {tier:?} exhausted"),
-            });
-        }
-        account.used_bytes = new_used;
-        Ok(())
-    }
-
-    fn release_tier(&mut self, tier: MemoryTier, bytes: usize) {
-        if let Some(account) = self.accounts.get_mut(&tier) {
-            account.used_bytes = account.used_bytes.saturating_sub(bytes);
-        }
     }
 }

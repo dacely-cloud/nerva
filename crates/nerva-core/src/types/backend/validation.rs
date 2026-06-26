@@ -2,7 +2,7 @@ use crate::types::backend::capabilities::DeviceBackendCapabilities;
 use crate::types::backend::operation::{
     BackendAllocationContract, BackendGraphExecContract, BackendQueueContract,
 };
-use crate::types::memory::MemoryTier;
+use crate::types::memory::tier::MemoryTier;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct BackendContractValidation {

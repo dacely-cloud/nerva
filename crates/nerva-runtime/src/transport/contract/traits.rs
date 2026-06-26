@@ -1,6 +1,6 @@
 use nerva_core::types::block::resident::ResidentBlock;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::ReplicaId;
+use nerva_core::types::id::replica::ReplicaId;
 
 use crate::transport::contract::types::{
     ReceiveDescriptor, TransferCompletion, TransferDescriptor, TransferId,

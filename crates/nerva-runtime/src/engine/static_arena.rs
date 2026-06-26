@@ -1,9 +1,10 @@
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::Result;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_memory::arena::kind::ArenaKind;
-use nerva_memory::arena::set::{StaticArenaBootstrapSpec, StaticArenaSet};
-use nerva_memory::registry::table::BlockRegistry;
+use nerva_memory::arena::set::bootstrap::StaticArenaBootstrapSpec;
+use nerva_memory::arena::set::static_set::StaticArenaSet;
+use nerva_memory::registry::table::registry::BlockRegistry;
 
 use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;

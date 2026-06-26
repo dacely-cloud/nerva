@@ -12,19 +12,3 @@ pub enum BlockKind {
     Ledger,
     Metadata,
 }
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Lifetime {
-    Static,
-    Request,
-    Token,
-    Scratch,
-    External,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Hotness {
-    Cold,
-    Warm,
-    Hot,
-}

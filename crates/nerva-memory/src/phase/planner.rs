@@ -1,13 +1,14 @@
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::block::resident::ResidentBlock;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::ownership::{ExecutionOwner, MutationSemantics};
+use nerva_core::types::ownership::mutation::MutationSemantics;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 use crate::phase::types::{
     PhaseHandoffEntry, PhaseHandoffPlan, PhaseHandoffPlanner, PhaseHandoffRejection,
     PhaseHandoffRejectionKind, PhaseHandoffRequest,
 };
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 impl PhaseHandoffPlanner {
     pub fn plan(

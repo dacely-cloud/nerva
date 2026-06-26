@@ -1,8 +1,8 @@
-use nerva_core::types::block::taxonomy::BlockKind;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::LayoutId;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::layout::LayoutId;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::decision::{CandidateCost, ResidencyDecision};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;

@@ -1,12 +1,12 @@
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::phase::types::{PhaseHandoffApplySummary, PhaseHandoffPlan};
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 impl PhaseHandoffPlan {
     pub fn apply(

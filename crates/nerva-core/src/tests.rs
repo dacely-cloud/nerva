@@ -7,13 +7,21 @@ use crate::types::backend::operation::{
     BackendTransactionDescriptor,
 };
 use crate::types::backend::validation::validate_backend_contract;
+use crate::types::block::kind::BlockKind;
 use crate::types::block::resident::ResidentBlock;
-use crate::types::block::taxonomy::BlockKind;
 use crate::types::dtype::DType;
 use crate::types::error::NervaError;
-use crate::types::id::{DeviceOrdinal, MemoryDomainId, ReplicaId, ResidentBlockId, TransactionId};
-use crate::types::memory::{MemoryFabricKind, MemoryTier};
-use crate::types::ownership::{ExecutionOwner, MutationSemantics};
+use crate::types::id::block::ResidentBlockId;
+use crate::types::id::device::DeviceOrdinal;
+use crate::types::id::memory::MemoryDomainId;
+use crate::types::id::replica::ReplicaId;
+use crate::types::id::transaction::TransactionId;
+
+use crate::types::memory::fabric::MemoryFabricKind;
+use crate::types::memory::tier::MemoryTier;
+use crate::types::ownership::mutation::MutationSemantics;
+use crate::types::ownership::owner::ExecutionOwner;
+
 use crate::types::shape::BlockShape;
 
 #[test]

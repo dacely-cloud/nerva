@@ -1,4 +1,7 @@
-use nerva_core::types::id::{RequestId, SequenceId, TokenId};
+use nerva_core::types::id::request::RequestId;
+use nerva_core::types::id::sequence::SequenceId;
+use nerva_core::types::id::token::TokenId;
+
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 use nerva_runtime::engine::synthetic::config::SyntheticDecodeConfig;
 

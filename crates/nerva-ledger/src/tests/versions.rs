@@ -1,4 +1,4 @@
-use nerva_core::types::id::ResidentBlockId;
+use nerva_core::types::id::block::ResidentBlockId;
 
 use crate::types::decision::BlockVersionDependency;
 use crate::types::token::ledger::TokenLedger;

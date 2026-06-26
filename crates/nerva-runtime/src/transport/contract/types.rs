@@ -1,4 +1,8 @@
-use nerva_core::types::id::{ReplicaId, RequestId, ResidentBlockId, SequenceId, TransportDeviceId};
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::replica::ReplicaId;
+use nerva_core::types::id::request::RequestId;
+use nerva_core::types::id::sequence::SequenceId;
+use nerva_core::types::id::transport::TransportDeviceId;
 
 use crate::transport::path::types::TransferMode;
 use crate::transport::registration::types::TransportRegistration;

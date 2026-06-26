@@ -1,7 +1,9 @@
-use nerva_core::types::block::taxonomy::BlockKind;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::error::NervaError;
-use nerva_core::types::id::{LayoutId, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::layout::LayoutId;
+
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
@@ -34,7 +36,7 @@ fn materializes_hf_weight_manifest_as_dram_resident_blocks() {
     assert_eq!(block.kind, BlockKind::Weight);
     assert_eq!(
         block.semantics,
-        nerva_core::types::ownership::MutationSemantics::Immutable
+        nerva_core::types::ownership::mutation::MutationSemantics::Immutable
     );
     assert_eq!(block.tier, MemoryTier::Dram);
     assert_eq!(block.dtype, first.dtype);

@@ -1,9 +1,4 @@
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum CostSource {
-    Unknown,
-    Estimated,
-    Measured,
-}
+use crate::types::cost::source::CostSource;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CostEstimate {

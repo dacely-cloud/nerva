@@ -1,10 +1,13 @@
 use crate::registry::request::BlockAllocationRequest;
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::block::residency::ResidencyState;
-use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::NervaError;
-use nerva_core::types::id::{AllocationId, MemoryDomainId, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::memory::MemoryDomainId;
+
+use nerva_core::types::memory::tier::MemoryTier;
 
 #[test]
 fn registry_tracks_tier_capacity() {

@@ -1,10 +1,10 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::AllocationId;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::token::ledger::TokenLedger;
 use nerva_memory::arena::kind::ArenaKind;
-use nerva_memory::arena::set::StaticArenaSet;
+use nerva_memory::arena::set::static_set::StaticArenaSet;
 use nerva_memory::kv::page::{KvPageSpec, KvPrefixKey};
 use nerva_memory::kv::pool::table::KvPagePool;
 use nerva_memory::kv::residency::types::{
@@ -111,7 +111,7 @@ fn validate_config(config: KvResidencyProbeConfig) -> Result<()> {
 
 fn seed_kv_pool(
     pool: &mut KvPagePool,
-    registry: &mut nerva_memory::registry::table::BlockRegistry,
+    registry: &mut nerva_memory::registry::table::registry::BlockRegistry,
     config: KvResidencyProbeConfig,
 ) -> Result<()> {
     let active = pool.allocate_page(0, 16, config.current_step.saturating_sub(1))?;

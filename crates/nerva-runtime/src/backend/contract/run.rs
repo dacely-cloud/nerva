@@ -3,7 +3,7 @@ use nerva_core::types::backend::operation::BackendTransactionDescriptor;
 use nerva_core::types::backend::validation::{
     BackendContractValidation, validate_backend_contract,
 };
-use nerva_core::types::id::TransactionId;
+use nerva_core::types::id::transaction::TransactionId;
 use nerva_cuda::smoke::status::SmokeStatus;
 
 use crate::backend::contract::adapter::{CudaBackendContractAdapter, cuda_capabilities_from_probe};

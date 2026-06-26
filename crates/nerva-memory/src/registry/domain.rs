@@ -1,5 +1,5 @@
-use nerva_core::types::id::MemoryDomainId;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::memory::MemoryDomainId;
+use nerva_core::types::memory::tier::MemoryTier;
 
 pub(crate) fn memory_tier_for_domain(domain: MemoryDomainId) -> Option<MemoryTier> {
     Some(match domain {

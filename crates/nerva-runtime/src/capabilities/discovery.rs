@@ -4,7 +4,7 @@ use crate::capabilities::linux::read_trimmed_first_line;
 use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState};
 use crate::capabilities::topology::discover_topology_snapshot;
 use nerva_core::types::arch::host_arch;
-use nerva_core::types::memory::MemoryFabricKind;
+use nerva_core::types::memory::fabric::MemoryFabricKind;
 use nerva_cuda::smoke::probe::smoke;
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_cuda::smoke::summary::CudaSmokeSummary;

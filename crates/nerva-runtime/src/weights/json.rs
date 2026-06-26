@@ -1,4 +1,4 @@
-use nerva_core::types::id::ResidentBlockId;
+use nerva_core::types::id::block::ResidentBlockId;
 
 pub(crate) fn json_opt_block_id(value: Option<ResidentBlockId>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.0.to_string())

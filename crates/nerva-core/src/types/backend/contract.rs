@@ -1,7 +1,7 @@
 use crate::types::backend::capabilities::DeviceBackendCapabilities;
 use crate::types::backend::operation::{BackendSubmissionId, BackendTransactionDescriptor};
 use crate::types::error::Result;
-use crate::types::id::DeviceOrdinal;
+use crate::types::id::device::DeviceOrdinal;
 
 pub trait DeviceBackend {
     type Device;

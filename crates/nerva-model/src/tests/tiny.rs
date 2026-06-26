@@ -8,7 +8,7 @@ use crate::tiny::precision::smoke::{
 use crate::tiny::scratch::TinyGreedyDecodeScratch;
 use crate::tiny::smoke::{tiny_cycle_model, tiny_greedy_decode_smoke};
 use nerva_core::types::dtype::DType;
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 use nerva_ledger::types::event::LedgerEventKind;
 
 #[test]

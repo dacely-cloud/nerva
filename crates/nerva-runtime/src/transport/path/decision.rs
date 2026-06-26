@@ -1,7 +1,7 @@
 use crate::transport::estimate::estimate_transport_visible_ns;
 use crate::transport::path::request::TransportPathRequest;
 use crate::transport::path::types::{TransportPathClass, TransportPathKind};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::fallback::{FallbackClass, FallbackDecision};
 use nerva_ledger::types::metric::MetricSource;

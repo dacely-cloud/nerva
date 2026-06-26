@@ -1,4 +1,4 @@
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SyntheticDecodeConfig {

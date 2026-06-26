@@ -1,5 +1,5 @@
 use crate::types::arch::HostArch;
-use crate::types::id::ResidentBlockId;
+use crate::types::id::block::ResidentBlockId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NervaError {

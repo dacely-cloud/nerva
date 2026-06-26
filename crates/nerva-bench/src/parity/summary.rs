@@ -1,4 +1,4 @@
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 
 use crate::json::json_escape;
 use crate::parity::json::{json_opt_usize, token_ids_to_json};

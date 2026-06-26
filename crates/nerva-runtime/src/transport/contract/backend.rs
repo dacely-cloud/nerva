@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use nerva_core::types::block::resident::ResidentBlock;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::ReplicaId;
+use nerva_core::types::id::replica::ReplicaId;
 
 use crate::transport::contract::backend::validate::{
     validate_receive_descriptor, validate_transfer_descriptor,

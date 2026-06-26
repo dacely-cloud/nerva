@@ -1,12 +1,12 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::AllocationId;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
-use nerva_memory::registry::table::BlockRegistry;
+use nerva_memory::registry::table::registry::BlockRegistry;
 
 use crate::transport::registration::cache::TransportRegistrationCache;
 use crate::transport::registration::probe::blocks::allocate_ready_transport_block;

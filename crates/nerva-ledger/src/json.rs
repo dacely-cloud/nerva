@@ -1,7 +1,7 @@
-use nerva_core::types::cost::CostSource;
-use nerva_core::types::id::ResidentBlockId;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::cost::source::CostSource;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 use crate::types::decision::{
     BlockVersionDependency, CandidateCost, ExecutionDecision, ResidencyDecision,

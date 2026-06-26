@@ -1,4 +1,4 @@
-use nerva_core::types::id::ResidentBlockId;
+use nerva_core::types::id::block::ResidentBlockId;
 
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::weights::probe::ResidentWeightProbeStatus;

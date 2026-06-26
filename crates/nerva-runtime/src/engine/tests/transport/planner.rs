@@ -1,6 +1,6 @@
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 use crate::capabilities::snapshot::CapabilityState;
 use crate::engine::runtime::{Runtime, RuntimeConfig};

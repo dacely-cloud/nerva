@@ -1,4 +1,4 @@
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 
 use crate::engine::synthetic::summary::{SyntheticDecodeStatus, SyntheticDecodeSummary};
 

@@ -1,7 +1,7 @@
 use std::env;
 
 use nerva_core::types::arch::{HostArch, host_arch};
-use nerva_core::types::memory::MemoryFabricKind;
+use nerva_core::types::memory::fabric::MemoryFabricKind;
 
 use crate::capabilities::discovery::gpu_direct_rdma_capability;
 use crate::capabilities::json::json_string_array;

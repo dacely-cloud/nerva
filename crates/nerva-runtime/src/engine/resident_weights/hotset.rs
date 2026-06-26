@@ -1,7 +1,7 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::AllocationId;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::decision::{CandidateCost, ResidencyDecision};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;
@@ -143,7 +143,7 @@ impl Runtime {
 
 fn record_keep_dram_decision(
     ledger: &mut TokenLedger,
-    block_id: nerva_core::types::id::ResidentBlockId,
+    block_id: nerva_core::types::id::block::ResidentBlockId,
     tier: MemoryTier,
     bytes: usize,
     reason: &'static str,

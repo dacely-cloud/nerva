@@ -1,7 +1,7 @@
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::block::residency::ResidencyState;
-use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::decision::BlockVersionDependency;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::fallback::{FallbackClass, FallbackDecision};

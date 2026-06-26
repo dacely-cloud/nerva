@@ -1,7 +1,7 @@
 use nerva_core::types::backend::capabilities::{DeviceBackendCapabilities, DeviceBackendKind};
 use nerva_core::types::backend::validation::BackendContractValidation;
 use nerva_core::types::dtype::DType;
-use nerva_core::types::memory::MemoryFabricKind;
+use nerva_core::types::memory::fabric::MemoryFabricKind;
 
 use crate::backend::contract::json::{backend_kind_to_str, dtype_array};
 use crate::backend::contract::status::BackendContractProbeStatus;

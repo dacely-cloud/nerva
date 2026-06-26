@@ -1,4 +1,4 @@
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 
 pub(crate) fn token_ids_to_json(tokens: &[TokenId]) -> String {
     let mut out = String::from("[");

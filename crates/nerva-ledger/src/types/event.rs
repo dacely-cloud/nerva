@@ -1,5 +1,7 @@
-use nerva_core::types::id::{DeviceOrdinal, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::device::DeviceOrdinal;
+
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::types::metric::MetricSource;
 use crate::types::sync::SyncClass;

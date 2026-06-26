@@ -1,9 +1,9 @@
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::AllocationId;
+use nerva_core::types::id::allocation::AllocationId;
 
 use crate::kv::residency::types::{KvResidencyAction, KvResidencyPlan};
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 impl KvResidencyPlan {
     pub fn apply(&self, registry: &mut BlockRegistry) -> Result<()> {

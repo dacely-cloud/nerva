@@ -1,6 +1,6 @@
 use nerva_core::types::arch::ensure_supported_linux_host;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::DeviceOrdinal;
+use nerva_core::types::id::device::DeviceOrdinal;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::capabilities::discovery::discover_capabilities;

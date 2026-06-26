@@ -1,7 +1,10 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::{
-    DeviceOrdinal, RequestId, ResidentBlockId, SequenceId, TokenId, TransactionId,
-};
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::id::request::RequestId;
+use nerva_core::types::id::sequence::SequenceId;
+use nerva_core::types::id::token::TokenId;
+use nerva_core::types::id::transaction::TransactionId;
 
 use crate::graph::layout::GraphLayout;
 use crate::graph::pool::GraphPool;

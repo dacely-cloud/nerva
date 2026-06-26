@@ -2,7 +2,7 @@ use crate::capabilities::json::{
     host_arch_to_str, json_opt_string, json_opt_usize, json_string_array, memory_fabric_to_str,
 };
 use nerva_core::types::arch::HostArch;
-use nerva_core::types::memory::MemoryFabricKind;
+use nerva_core::types::memory::fabric::MemoryFabricKind;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CapabilityState {

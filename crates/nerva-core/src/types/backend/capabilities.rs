@@ -1,6 +1,6 @@
 use crate::types::dtype::DType;
-use crate::types::id::DeviceOrdinal;
-use crate::types::memory::MemoryFabricKind;
+use crate::types::id::device::DeviceOrdinal;
+use crate::types::memory::fabric::MemoryFabricKind;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum DeviceBackendKind {

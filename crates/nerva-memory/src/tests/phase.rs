@@ -1,14 +1,16 @@
-use nerva_core::types::block::taxonomy::BlockKind;
-use nerva_core::types::id::{DeviceOrdinal, TransportDeviceId};
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::block::kind::BlockKind;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::id::transport::TransportDeviceId;
+
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::phase::probe::run_phase_handoff_probe;
 use crate::phase::types::{PhaseHandoffPlanner, PhaseHandoffRejectionKind, PhaseHandoffRequest};
 use crate::registry::request::BlockAllocationRequest;
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 #[test]
 fn phase_handoff_probe_records_handoffs_and_rejections() {

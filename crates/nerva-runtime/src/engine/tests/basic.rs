@@ -1,4 +1,4 @@
-use nerva_core::types::id::DeviceOrdinal;
+use nerva_core::types::id::device::DeviceOrdinal;
 
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 

@@ -1,10 +1,14 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::{AllocationId, RequestId, SequenceId, TransportDeviceId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_core::types::id::request::RequestId;
+use nerva_core::types::id::sequence::SequenceId;
+use nerva_core::types::id::transport::TransportDeviceId;
+
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
-use nerva_memory::registry::table::BlockRegistry;
+use nerva_memory::registry::table::registry::BlockRegistry;
 
 use crate::engine::runtime::Runtime;
 use crate::transport::contract::backend::PinnedHostLoopbackTransport;

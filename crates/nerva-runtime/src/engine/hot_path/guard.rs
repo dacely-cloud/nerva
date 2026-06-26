@@ -2,7 +2,7 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::token::ledger::TokenLedger;
 use nerva_memory::arena::kind::ArenaKind;
-use nerva_memory::arena::set::StaticArenaSet;
+use nerva_memory::arena::set::static_set::StaticArenaSet;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HotPathGuard {

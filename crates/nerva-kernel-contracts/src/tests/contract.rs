@@ -1,6 +1,6 @@
-use nerva_core::types::block::taxonomy::BlockKind;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::dtype::DType;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::contract::probe::{KernelContractProbeStatus, kernel_contract_probe};
 use crate::contract::types::{

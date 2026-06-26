@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::AllocationId;
-use nerva_memory::registry::table::BlockRegistry;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_memory::registry::table::registry::BlockRegistry;
 
 use crate::memory_loop::planned::MemoryLoopPlan;
 use crate::memory_loop::summarize::summarize_plan;

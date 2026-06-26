@@ -1,4 +1,5 @@
-use crate::types::id::{AllocationId, MemoryDomainId};
+use crate::types::id::allocation::AllocationId;
+use crate::types::id::memory::MemoryDomainId;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct GlobalBlockAddress {

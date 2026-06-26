@@ -1,6 +1,8 @@
 use nerva_core::types::block::address::GlobalBlockAddress;
-use nerva_core::types::id::{ReplicaId, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::replica::ReplicaId;
+
+use nerva_core::types::memory::tier::MemoryTier;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TransportRegistrationBackend {

@@ -1,6 +1,6 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::common::dtype::dtype_size_bytes;
 

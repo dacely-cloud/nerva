@@ -1,4 +1,4 @@
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_model::weights::layout::entry::WeightBlockRole;
 
 pub(super) fn div_ceil_u64(value: u64, divisor: u64) -> u64 {

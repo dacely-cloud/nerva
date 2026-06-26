@@ -1,18 +1,29 @@
-use crate::types::cost::CostEstimate;
+use crate::types::cost::estimate::CostEstimate;
 use crate::types::dtype::DType;
 use crate::types::error::{NervaError, Result};
-use crate::types::id::{
-    AllocationId, LayoutId, MemoryDomainId, ReplicaId, ResidentBlockId, UseDistance,
-};
-use crate::types::memory::{MemoryFabricKind, MemoryTier};
-use crate::types::ownership::{AccessPolicy, CoherencePolicy, ExecutionOwner, MutationSemantics};
+use crate::types::id::allocation::AllocationId;
+use crate::types::id::block::ResidentBlockId;
+use crate::types::id::layout::LayoutId;
+use crate::types::id::memory::MemoryDomainId;
+use crate::types::id::replica::ReplicaId;
+use crate::types::id::use_distance::UseDistance;
+
+use crate::types::memory::fabric::MemoryFabricKind;
+use crate::types::memory::tier::MemoryTier;
+use crate::types::ownership::access::AccessPolicy;
+use crate::types::ownership::coherence::CoherencePolicy;
+use crate::types::ownership::mutation::MutationSemantics;
+use crate::types::ownership::owner::ExecutionOwner;
+
 use crate::types::shape::BlockShape;
 
 use super::address::GlobalBlockAddress;
 use super::defaults::{default_hotness, default_lifetime, default_mutation_semantics};
 use super::flags::BlockFlags;
+use super::hotness::Hotness;
+use super::kind::BlockKind;
+use super::lifetime::Lifetime;
 use super::residency::{ResidencySet, ResidencyState};
-use super::taxonomy::{BlockKind, Hotness, Lifetime};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResidentBlock {

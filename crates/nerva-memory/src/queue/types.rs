@@ -1,5 +1,6 @@
-use nerva_core::types::id::ResidentBlockId;
-use nerva_core::types::ownership::{CoherencePolicy, ExecutionOwner};
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::ownership::coherence::CoherencePolicy;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SharedWorkQueueSpec {

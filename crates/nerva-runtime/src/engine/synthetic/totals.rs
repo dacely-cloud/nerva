@@ -1,5 +1,5 @@
 use nerva_core::types::error::Result;
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;

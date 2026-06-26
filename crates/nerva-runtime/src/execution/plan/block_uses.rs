@@ -3,7 +3,7 @@ use nerva_ledger::types::decision::BlockVersionDependency;
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
-use nerva_memory::registry::table::BlockRegistry;
+use nerva_memory::registry::table::registry::BlockRegistry;
 
 use crate::execution::types::TransactionOperation;
 

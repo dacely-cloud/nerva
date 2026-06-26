@@ -1,8 +1,11 @@
 use nerva_core::types::block::address::GlobalBlockAddress;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::block::resident::ResidentBlock;
-use nerva_core::types::block::taxonomy::BlockKind;
-use nerva_core::types::id::{AllocationId, MemoryDomainId, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::memory::MemoryDomainId;
+
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::arena::region::ArenaReservation;
 

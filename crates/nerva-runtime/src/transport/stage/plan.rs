@@ -4,9 +4,9 @@ use crate::transport::path::planner::plan_transport_path;
 use crate::transport::path::request::TransportPathRequest;
 use crate::transport::stage::config::StagePipelineConfig;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct StageSpec {

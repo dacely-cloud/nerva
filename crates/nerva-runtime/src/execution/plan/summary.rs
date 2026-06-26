@@ -1,5 +1,5 @@
 use nerva_core::types::error::Result;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;

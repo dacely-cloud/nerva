@@ -1,4 +1,4 @@
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 
 pub(crate) fn memory_tier_to_str(value: MemoryTier) -> &'static str {
     match value {

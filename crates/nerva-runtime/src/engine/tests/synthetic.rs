@@ -1,5 +1,9 @@
 use nerva_core::types::error::NervaError;
-use nerva_core::types::id::{DeviceOrdinal, RequestId, SequenceId, TokenId};
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::id::request::RequestId;
+use nerva_core::types::id::sequence::SequenceId;
+use nerva_core::types::id::token::TokenId;
+
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
 

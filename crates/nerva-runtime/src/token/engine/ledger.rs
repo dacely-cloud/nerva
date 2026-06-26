@@ -1,6 +1,8 @@
 use nerva_core::types::error::Result;
-use nerva_core::types::id::{DeviceOrdinal, TokenId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::id::token::TokenId;
+
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;

@@ -1,16 +1,21 @@
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::block::residency::ResidencyState;
-use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::{DeviceOrdinal, ResidentBlockId, TransportDeviceId};
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::{ExecutionOwner, MutationSemantics};
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::id::transport::TransportDeviceId;
+
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::mutation::MutationSemantics;
+use nerva_core::types::ownership::owner::ExecutionOwner;
+
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::phase::summary::{PhaseHandoffProbeStatus, PhaseHandoffProbeSummary};
 use crate::phase::types::{PhaseHandoffPlanner, PhaseHandoffRejectionKind, PhaseHandoffRequest};
 use crate::registry::request::BlockAllocationRequest;
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 pub fn run_phase_handoff_probe() -> Result<PhaseHandoffProbeSummary> {
     let mut registry = BlockRegistry::new([

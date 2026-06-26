@@ -3,8 +3,10 @@ use std::collections::BTreeMap;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::block::resident::ResidentBlock;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::{ReplicaId, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::replica::ReplicaId;
+
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::transport::registration::types::{
     TransportRegistration, TransportRegistrationBackend, TransportRegistrationKey,

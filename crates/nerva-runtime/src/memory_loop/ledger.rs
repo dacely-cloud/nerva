@@ -1,4 +1,4 @@
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::decision::{CandidateCost, ResidencyDecision};
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;

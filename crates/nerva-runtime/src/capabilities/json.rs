@@ -1,5 +1,5 @@
 use nerva_core::types::arch::HostArch;
-use nerva_core::types::memory::MemoryFabricKind;
+use nerva_core::types::memory::fabric::MemoryFabricKind;
 
 pub(crate) fn json_opt_usize(value: Option<usize>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.to_string())

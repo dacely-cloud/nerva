@@ -1,6 +1,6 @@
-use nerva_core::types::id::ResidentBlockId;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum TransactionAccess {

@@ -8,8 +8,9 @@ use nerva_core::types::backend::operation::{
 };
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::memory::{MemoryFabricKind, MemoryTier};
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::memory::fabric::MemoryFabricKind;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_cuda::backend::summary::CudaBackendContractSummary;
 use nerva_cuda::graph::summary::CudaSyntheticGraphSummary;
 use nerva_cuda::sampler::summary::CudaGreedySamplerSummary;

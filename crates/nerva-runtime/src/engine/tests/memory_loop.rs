@@ -1,4 +1,4 @@
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::memory_loop::plan::plan_memory_loop;

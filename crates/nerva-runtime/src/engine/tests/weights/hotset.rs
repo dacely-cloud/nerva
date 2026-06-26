@@ -1,5 +1,5 @@
 use nerva_core::types::block::residency::ResidencyState;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};

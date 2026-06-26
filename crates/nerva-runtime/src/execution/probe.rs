@@ -1,11 +1,13 @@
-use nerva_core::types::block::taxonomy::BlockKind;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::{DeviceOrdinal, LayoutId};
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::id::layout::LayoutId;
+
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_memory::registry::request::BlockAllocationRequest;
-use nerva_memory::registry::table::BlockRegistry;
+use nerva_memory::registry::table::registry::BlockRegistry;
 
 use crate::execution::plan::planner::plan_execution_transaction;
 use crate::execution::summary::ExecutionTransactionSummary;
@@ -15,11 +17,11 @@ use crate::execution::types::{
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceTransactionBlocks {
-    pub device_token: nerva_core::types::id::ResidentBlockId,
-    pub weight_tile: nerva_core::types::id::ResidentBlockId,
-    pub kv_page: nerva_core::types::id::ResidentBlockId,
-    pub logits: nerva_core::types::id::ResidentBlockId,
-    pub host_token: nerva_core::types::id::ResidentBlockId,
+    pub device_token: nerva_core::types::id::block::ResidentBlockId,
+    pub weight_tile: nerva_core::types::id::block::ResidentBlockId,
+    pub kv_page: nerva_core::types::id::block::ResidentBlockId,
+    pub logits: nerva_core::types::id::block::ResidentBlockId,
+    pub host_token: nerva_core::types::id::block::ResidentBlockId,
 }
 
 pub fn run_execution_transaction_probe(
@@ -209,7 +211,7 @@ fn allocate_ready_block(
     dtype: DType,
     bytes: usize,
     owner: ExecutionOwner,
-) -> Result<nerva_core::types::id::ResidentBlockId> {
+) -> Result<nerva_core::types::id::block::ResidentBlockId> {
     let id = registry.allocate(
         BlockAllocationRequest::new(kind, tier, bytes)
             .with_dtype(dtype)

@@ -1,6 +1,6 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::types::decision::{BlockVersionDependency, ExecutionDecision, ResidencyDecision};
 use crate::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
@@ -46,7 +46,7 @@ impl TokenLedger {
     pub fn record_sync(
         &mut self,
         sync_class: SyncClass,
-        block_id: Option<nerva_core::types::id::ResidentBlockId>,
+        block_id: Option<nerva_core::types::id::block::ResidentBlockId>,
         from_tier: Option<MemoryTier>,
         to_tier: Option<MemoryTier>,
         bytes: usize,

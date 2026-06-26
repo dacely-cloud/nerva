@@ -1,12 +1,16 @@
-use nerva_core::types::block::taxonomy::BlockKind;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::{DeviceOrdinal, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::{CoherencePolicy, ExecutionOwner, MutationSemantics};
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::device::DeviceOrdinal;
+
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::coherence::CoherencePolicy;
+use nerva_core::types::ownership::mutation::MutationSemantics;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 use crate::queue::types::SharedQueueDescriptor;
 use crate::registry::request::BlockAllocationRequest;
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 pub(crate) fn allocate_queue_block(registry: &mut BlockRegistry) -> Result<ResidentBlockId> {
     let block_id = registry.allocate(BlockAllocationRequest::new(

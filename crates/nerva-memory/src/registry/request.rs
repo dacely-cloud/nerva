@@ -1,7 +1,7 @@
-use nerva_core::types::block::taxonomy::BlockKind;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::dtype::DType;
-use nerva_core::types::id::LayoutId;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::layout::LayoutId;
+use nerva_core::types::memory::tier::MemoryTier;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlockAllocationRequest {

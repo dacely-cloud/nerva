@@ -1,4 +1,4 @@
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 
 pub(crate) const TOKEN_STREAM_HASH_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 

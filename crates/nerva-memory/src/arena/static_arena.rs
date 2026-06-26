@@ -1,7 +1,7 @@
 use nerva_core::types::block::address::GlobalBlockAddress;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::AllocationId;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::arena::kind::{AllocationPhase, ArenaKind};
 use crate::arena::region::{ArenaCheckpoint, ArenaRegion};
@@ -32,7 +32,7 @@ impl StaticArena {
         self.kind.tier()
     }
 
-    pub const fn domain(&self) -> nerva_core::types::id::MemoryDomainId {
+    pub const fn domain(&self) -> nerva_core::types::id::memory::MemoryDomainId {
         self.kind.domain()
     }
 

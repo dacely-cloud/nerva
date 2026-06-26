@@ -1,5 +1,5 @@
 use nerva_core::types::block::residency::ResidencyState;
-use nerva_core::types::id::DeviceOrdinal;
+use nerva_core::types::id::device::DeviceOrdinal;
 
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::execution::plan::planner::plan_execution_transaction;

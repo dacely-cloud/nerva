@@ -1,5 +1,5 @@
-use nerva_core::types::id::ResidentBlockId;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::memory::tier::MemoryTier;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct KvResidencyPolicy {

@@ -1,6 +1,6 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 
 use crate::common::token::require_token_in_vocab;
 use crate::common::validate::require_len;

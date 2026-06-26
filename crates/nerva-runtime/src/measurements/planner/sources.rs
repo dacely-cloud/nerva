@@ -1,6 +1,6 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::metric::MetricSource;
 
 use crate::measurements::entry::{MeasurementEntry, MeasurementKind};

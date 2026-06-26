@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use nerva_core::types::block::taxonomy::BlockKind;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::arena::kind::AllocationPhase;
-use crate::arena::set::StaticArenaSet;
+use crate::arena::set::static_set::StaticArenaSet;
 use crate::kv::page::{KvPageDescriptor, KvPageSpec};
 use crate::kv::pool::table::KvPagePool;
 use crate::registry::request::BlockAllocationRequest;
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 impl KvPagePool {
     pub fn preallocate(

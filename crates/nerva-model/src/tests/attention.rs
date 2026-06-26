@@ -4,7 +4,7 @@ use crate::attention::scratch::BlockwiseAttentionScratch;
 use crate::attention::smoke::{BlockwiseAttentionSmokeStatus, blockwise_attention_smoke};
 use crate::common::shape::TransformerBlockShape;
 use crate::tests::support::dense_attention_reference;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::token::ledger::TokenLedger;
 

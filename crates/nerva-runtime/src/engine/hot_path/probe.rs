@@ -2,7 +2,7 @@ use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_memory::arena::kind::ArenaKind;
-use nerva_memory::arena::set::StaticArenaBootstrapSpec;
+use nerva_memory::arena::set::bootstrap::StaticArenaBootstrapSpec;
 
 use crate::engine::hot_path::guard::{HotPathGuard, allocation_event_count};
 use crate::engine::hot_path::status::HotPathGuardStatus;

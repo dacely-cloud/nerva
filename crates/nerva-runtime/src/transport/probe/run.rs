@@ -5,9 +5,9 @@ use crate::transport::path::types::TransferMode;
 use crate::transport::probe::accumulator::TransportProbeAccumulator;
 use crate::transport::probe::summary::TransportPathProbeSummary;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 pub fn run_transport_path_probe(
     device: DeviceOrdinal,

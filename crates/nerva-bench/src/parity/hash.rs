@@ -1,4 +1,4 @@
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 
 pub(crate) fn hash_tokens(values: &[TokenId]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;

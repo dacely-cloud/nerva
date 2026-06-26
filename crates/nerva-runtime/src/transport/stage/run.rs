@@ -5,7 +5,7 @@ use crate::transport::stage::plan::plan_stage_pipeline;
 use crate::transport::stage::route::probe_stage_route_validation;
 use crate::transport::stage::summary::{StagePipelineStatus, StagePipelineSummary};
 use nerva_core::types::error::Result;
-use nerva_core::types::id::DeviceOrdinal;
+use nerva_core::types::id::device::DeviceOrdinal;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;

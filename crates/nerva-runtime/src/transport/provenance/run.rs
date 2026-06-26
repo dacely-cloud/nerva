@@ -6,7 +6,7 @@ use crate::transport::provenance::entry::build_transport_metric_provenance_entri
 use crate::transport::provenance::ledger::record_transport_provenance_events;
 use crate::transport::provenance::summary::TransportMetricProvenanceSummary;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::DeviceOrdinal;
+use nerva_core::types::id::device::DeviceOrdinal;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 impl Runtime {

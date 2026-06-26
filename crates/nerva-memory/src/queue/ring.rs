@@ -1,13 +1,15 @@
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::block::residency::ResidencyState;
-use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::ownership::{CoherencePolicy, ExecutionOwner, MutationSemantics};
+use nerva_core::types::ownership::coherence::CoherencePolicy;
+use nerva_core::types::ownership::mutation::MutationSemantics;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 use crate::queue::types::{
     SharedQueueCompletion, SharedQueueDescriptor, SharedQueueRejection, SharedQueueRejectionKind,
     SharedWorkQueueSpec,
 };
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SharedWorkQueue {
@@ -125,7 +127,7 @@ impl SharedWorkQueue {
 
 fn validate_queue_block(
     registry: &BlockRegistry,
-    block_id: nerva_core::types::id::ResidentBlockId,
+    block_id: nerva_core::types::id::block::ResidentBlockId,
 ) -> Result<()> {
     let block = registry
         .block(block_id)

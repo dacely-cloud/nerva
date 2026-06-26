@@ -3,7 +3,7 @@ use crate::transport::dpdk_udp::config::DpdkUdpProbeConfig;
 use crate::transport::dpdk_udp::protocol::{DpdkUdpMemoryPath, plan_dpdk_udp_protocol};
 use crate::transport::dpdk_udp::summary::{DpdkUdpProtocolStatus, DpdkUdpProtocolSummary};
 use nerva_core::types::error::Result;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::fallback::{FallbackClass, FallbackDecision};
 use nerva_ledger::types::metric::MetricSource;

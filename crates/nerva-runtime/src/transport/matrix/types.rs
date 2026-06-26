@@ -1,6 +1,6 @@
 use crate::capabilities::snapshot::CapabilityState;
 use crate::transport::path::types::{TransferMode, TransportPathClass, TransportPathKind};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum TransportCapabilityMatrixStatus {

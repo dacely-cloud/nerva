@@ -1,7 +1,9 @@
 use nerva_core::types::error::Result;
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::{CoherencePolicy, ExecutionOwner};
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::coherence::CoherencePolicy;
+use nerva_core::types::ownership::owner::ExecutionOwner;
+
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
@@ -14,7 +16,7 @@ use crate::queue::probe::fixtures::{
 use crate::queue::ring::SharedWorkQueue;
 use crate::queue::summary::{SharedQueueProbeStatus, SharedQueueProbeSummary};
 use crate::queue::types::SharedWorkQueueSpec;
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
 
 pub fn run_shared_work_queue_probe() -> Result<SharedQueueProbeSummary> {
     let mut registry = BlockRegistry::new([

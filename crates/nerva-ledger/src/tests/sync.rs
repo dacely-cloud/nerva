@@ -1,4 +1,4 @@
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::types::event::{LedgerEvent, LedgerEventKind};
 use crate::types::metric::MetricSource;

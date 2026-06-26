@@ -1,4 +1,4 @@
-use crate::types::id::ReplicaId;
+use crate::types::id::replica::ReplicaId;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ResidencyState {

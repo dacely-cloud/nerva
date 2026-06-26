@@ -1,5 +1,7 @@
-use crate::types::id::{DeviceOrdinal, TransactionId};
-use crate::types::memory::MemoryTier;
+use crate::types::id::device::DeviceOrdinal;
+use crate::types::id::transaction::TransactionId;
+
+use crate::types::memory::tier::MemoryTier;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct BackendDeviceHandle {

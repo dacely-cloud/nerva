@@ -1,4 +1,4 @@
-use nerva_core::types::id::TokenId;
+use nerva_core::types::id::token::TokenId;
 
 const TOKEN_KEYS: &[&str] = &[
     "token_ids",

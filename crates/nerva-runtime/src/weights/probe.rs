@@ -1,4 +1,4 @@
-use nerva_core::types::id::ResidentBlockId;
+use nerva_core::types::id::block::ResidentBlockId;
 
 use crate::weights::json::{json_opt_block_id, json_opt_string};
 

@@ -1,5 +1,5 @@
-use nerva_core::types::id::DeviceOrdinal;
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::device::DeviceOrdinal;
+use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
 use crate::types::metric::MetricSource;

@@ -1,5 +1,5 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::TransportDeviceId;
+use nerva_core::types::id::transport::TransportDeviceId;
 
 use crate::transport::stage::plan::StagePipelinePlan;
 

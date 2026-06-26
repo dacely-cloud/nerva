@@ -1,5 +1,5 @@
-use nerva_core::types::id::ResidentBlockId;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::weights::json::json_opt_string;

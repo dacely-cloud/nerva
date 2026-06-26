@@ -2,15 +2,19 @@ use crate::arena::host::HostArena;
 use crate::arena::kind::{AllocationPhase, ArenaKind};
 use crate::arena::region::ArenaReservation;
 use crate::arena::resident::resident_block_for_reservation;
-use crate::arena::set::{StaticArenaBootstrapSpec, StaticArenaSet};
+use crate::arena::set::bootstrap::StaticArenaBootstrapSpec;
+use crate::arena::set::static_set::StaticArenaSet;
 use crate::arena::static_arena::StaticArena;
 use crate::registry::request::BlockAllocationRequest;
-use crate::registry::table::BlockRegistry;
+use crate::registry::table::registry::BlockRegistry;
+use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::block::residency::ResidencyState;
-use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::NervaError;
-use nerva_core::types::id::{AllocationId, MemoryDomainId, ResidentBlockId};
-use nerva_core::types::memory::MemoryTier;
+use nerva_core::types::id::allocation::AllocationId;
+use nerva_core::types::id::block::ResidentBlockId;
+use nerva_core::types::id::memory::MemoryDomainId;
+
+use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::token::ledger::TokenLedger;
 

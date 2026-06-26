@@ -1,7 +1,7 @@
 use crate::capabilities::snapshot::{CapabilitySnapshot, CapabilityState};
 use crate::transport::path::types::TransferMode;
-use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::ExecutionOwner;
+use nerva_core::types::memory::tier::MemoryTier;
+use nerva_core::types::ownership::owner::ExecutionOwner;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct TransportPathRequest {

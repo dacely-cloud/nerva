@@ -1,7 +1,9 @@
-use crate::types::memory::MemoryTier;
-use crate::types::ownership::MutationSemantics;
+use crate::types::memory::tier::MemoryTier;
+use crate::types::ownership::mutation::MutationSemantics;
 
-use super::taxonomy::{BlockKind, Hotness, Lifetime};
+use super::hotness::Hotness;
+use super::kind::BlockKind;
+use super::lifetime::Lifetime;
 
 pub const fn default_mutation_semantics(kind: BlockKind) -> MutationSemantics {
     match kind {

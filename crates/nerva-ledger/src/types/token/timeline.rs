@@ -1,5 +1,5 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::DeviceOrdinal;
+use nerva_core::types::id::device::DeviceOrdinal;
 
 use crate::types::event::DeviceTimelineSpan;
 
