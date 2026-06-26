@@ -7,6 +7,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"acceptance_schema\":\"nerva-acceptance-v1\""));
     assert!(json.contains("\"status\":\"ok\""));
     assert!(json.contains("\"failed\":0"));
+    assert!(json.contains("\"benchmark_artifact_reproducibility\""));
     assert!(json.contains("\"vllm_rvllm_audit\""));
     assert!(json.contains("\"runtime_backend_contract\""));
     assert!(json.contains("\"cuda_runtime_smoke\""));

@@ -11,9 +11,11 @@ pub(crate) fn artifact_metadata_json(command: &str, args: &[String]) -> String {
         )
     });
     format!(
-        "{{\"command\":\"{}\",\"args\":{},\"git_commit\":\"{}\",\"package_version\":\"{}\",\"profile\":\"{}\",\"target\":\"{}-{}\",\"rustc_version\":\"{}\",\"cargo_version\":\"{}\",\"rustflags\":{},\"cargo_encoded_rustflags\":{},\"capabilities\":{}}}",
+        "{{\"command\":\"{}\",\"args\":{},\"command_line\":{},\"cwd\":\"{}\",\"git_commit\":\"{}\",\"package_version\":\"{}\",\"profile\":\"{}\",\"target\":\"{}-{}\",\"rustc_version\":\"{}\",\"cargo_version\":\"{}\",\"rustflags\":{},\"cargo_encoded_rustflags\":{},\"environment\":{},\"capabilities\":{}}}",
         json_escape(command),
         json_string_array(args),
+        json_string_array(&artifact_command_line(command, args)),
+        json_escape(&current_dir()),
         json_escape(&current_git_commit()),
         env!("CARGO_PKG_VERSION"),
         build_profile(),
@@ -23,8 +25,30 @@ pub(crate) fn artifact_metadata_json(command: &str, args: &[String]) -> String {
         json_escape(&command_version("cargo")),
         json_env_string("RUSTFLAGS"),
         json_env_string("CARGO_ENCODED_RUSTFLAGS"),
+        selected_environment_json(),
         capabilities,
     )
+}
+
+fn artifact_command_line(command: &str, args: &[String]) -> Vec<String> {
+    let mut out = vec![
+        "cargo".to_string(),
+        "run".to_string(),
+        "-p".to_string(),
+        "nerva-bench".to_string(),
+        "--".to_string(),
+        "artifact".to_string(),
+        command.to_string(),
+    ];
+    out.extend(args.iter().cloned());
+    out
+}
+
+fn current_dir() -> String {
+    std::env::current_dir()
+        .ok()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn current_git_commit() -> String {
@@ -61,4 +85,28 @@ fn command_version(command: &str) -> String {
         .ok()
         .and_then(|stdout| stdout.lines().next().map(str::to_string))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn selected_environment_json() -> String {
+    const ENV_NAMES: &[&str] = &[
+        "CUDA_VISIBLE_DEVICES",
+        "HIP_VISIBLE_DEVICES",
+        "NERVA_GIT_COMMIT",
+        "RUST_BACKTRACE",
+        "RUST_LOG",
+        "UCX_NET_DEVICES",
+        "UCX_TLS",
+    ];
+    let mut out = String::from("{");
+    for (index, name) in ENV_NAMES.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(name);
+        out.push_str("\":");
+        out.push_str(&json_env_string(name));
+    }
+    out.push('}');
+    out
 }

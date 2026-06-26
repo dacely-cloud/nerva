@@ -11,12 +11,17 @@ fn artifact_wraps_probe_with_reproducibility_metadata() {
     assert!(json.contains("\"artifact_schema\":\"nerva-bench-v1\""));
     assert!(json.contains("\"command\":\"synthetic\""));
     assert!(json.contains("\"args\":[\"2\",\"4\"]"));
+    assert!(json.contains("\"command_line\":[\"cargo\",\"run\",\"-p\",\"nerva-bench\""));
+    assert!(json.contains("\"cwd\""));
     assert!(json.contains("\"git_commit\""));
     assert!(json.contains("\"package_version\""));
     assert!(json.contains("\"rustc_version\""));
     assert!(json.contains("\"cargo_version\""));
     assert!(json.contains("\"rustflags\""));
     assert!(json.contains("\"cargo_encoded_rustflags\""));
+    assert!(json.contains("\"environment\""));
+    assert!(json.contains("\"CUDA_VISIBLE_DEVICES\""));
+    assert!(json.contains("\"HIP_VISIBLE_DEVICES\""));
     assert!(json.contains("\"capabilities\""));
     assert!(json.contains("\"target_os\":\"linux\""));
     assert!(json.contains("\"cuda_compute_capability\""));

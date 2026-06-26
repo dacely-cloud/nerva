@@ -2,8 +2,8 @@ use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 use crate::acceptance::report::AcceptanceReport;
 use crate::acceptance::{
-    audit, backend, cuda, environment, execution, measurements, memory_loop, mgpu, model, phase,
-    queue, resident_weights, runtime_checks, token, transport,
+    artifact, audit, backend, cuda, environment, execution, measurements, memory_loop, mgpu, model,
+    phase, queue, resident_weights, runtime_checks, token, transport,
 };
 
 pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
@@ -12,6 +12,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     let mut report = AcceptanceReport::default();
 
     environment::push_capability_provenance(&mut report, &runtime);
+    artifact::push_artifact_reproducibility(&mut report);
     report.push_audit_result("vllm_rvllm_audit", audit::audit_acceptance());
     backend::push_backend_contract(&mut report, &runtime);
 

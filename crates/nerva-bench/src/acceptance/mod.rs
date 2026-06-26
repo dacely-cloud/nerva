@@ -1,3 +1,4 @@
+mod artifact;
 mod audit;
 mod backend;
 mod cuda;
