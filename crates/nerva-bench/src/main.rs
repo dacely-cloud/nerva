@@ -6,6 +6,7 @@ mod artifact;
 mod cli;
 mod json;
 mod model_io;
+mod parity;
 mod parse;
 mod probes;
 

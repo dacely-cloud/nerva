@@ -8,6 +8,7 @@ use crate::{
         run_resident_shard_probe, run_resident_weight_probe, run_safetensors_probe,
         run_safetensors_shard_probe, run_weight_execution_probe,
     },
+    parity::load_vllm_token_identity_parity,
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
     probes::{
         run_capabilities, run_kv_probe, run_synthetic, run_synthetic_ledger_probe,
@@ -135,6 +136,31 @@ pub(crate) fn run() -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("tiny greedy model failed: {err:?}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        Some("vllm-parity") => {
+            let path = args.next();
+            let steps = match parse_optional_usize(args.next(), 8, "steps") {
+                Ok(steps) => steps,
+                Err(reason) => {
+                    eprintln!("{reason}");
+                    return ExitCode::from(2);
+                }
+            };
+            match load_vllm_token_identity_parity(path, steps) {
+                Ok(summary) => {
+                    let passed = summary.passed();
+                    println!("{}", summary.to_json());
+                    if passed {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(reason) => {
+                    eprintln!("{reason}");
                     ExitCode::from(1)
                 }
             }
@@ -391,7 +417,7 @@ pub(crate) fn run() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- cuda-graph [steps] [ring_capacity] [seed_token]\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- topology\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- ledger\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- transport-matrix\n       cargo run -p nerva-bench -- acceptance\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- cuda-graph [steps] [ring_capacity] [seed_token]\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- topology\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- ledger\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- vllm-parity vllm_tokens.json [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- transport-matrix\n       cargo run -p nerva-bench -- acceptance\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
             );
             ExitCode::from(2)
         }

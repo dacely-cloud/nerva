@@ -462,7 +462,7 @@ NERVA is also not a Python or PyTorch wrapper, and it is not a thin scheduler bo
 
 ### Current stage
 
-The current development stage is runtime foundation plus deterministic block, single-model, tiered-attention, warm-compute, kernel-contract, and residency probes. The first target is not a serving system; it is a runtime that proves it can initialize the device when one is visible, own memory, allocate static arenas, replay a synthetic decode graph, keep token state on device, emit token ledgers, avoid hot-path allocation, run an exact reference Transformer block, run one exact tiny greedy decode path, execute exact blockwise attention across DRAM and VRAM tiers, choose CPU/GPU compute placement from visible candidate costs, validate kernel buffer contracts, and make KV residency decisions visible.
+The current development stage is runtime foundation plus deterministic block, single-model, vLLM-style token-identity parity, tiered-attention, warm-compute, kernel-contract, and residency probes. The first target is not a serving system; it is a runtime that proves it can initialize the device when one is visible, own memory, allocate static arenas, replay a synthetic decode graph, keep token state on device, emit token ledgers, avoid hot-path allocation, run an exact reference Transformer block, run one exact tiny greedy decode path, compare that token stream against a vLLM-style token artifact, execute exact blockwise attention across DRAM and VRAM tiers, choose CPU/GPU compute placement from visible candidate costs, validate kernel buffer contracts, and make KV residency decisions visible.
 
 ```bash
 cargo run -p nerva-bench -- smoke
@@ -470,13 +470,14 @@ cargo run -p nerva-bench -- cuda-graph 1024 64 1
 cargo run -p nerva-bench -- synthetic 1024 64
 cargo run -p nerva-bench -- block
 cargo run -p nerva-bench -- model 8
+cargo run -p nerva-bench -- vllm-parity path/to/vllm_tokens.json 8
 cargo run -p nerva-bench -- attention
 cargo run -p nerva-bench -- warm
 cargo run -p nerva-bench -- contracts
 cargo run -p nerva-bench -- kv
 ```
 
-The `model` probe is intentionally tiny: a deterministic f32 reference model with exact greedy token parity and ledger checks. The `attention` probe is also small, but it verifies exact online-softmax merging across warm DRAM and hot VRAM KV blocks. The `warm` probe compares exact CPU-resident, GPU-resident, GPU-staged, and hybrid dense matvec candidates, records the selected execution owner, and proves the staged path can lose to compute-near-data. The `contracts` probe validates the first decode-kernel contract shape: launch bounds, device-resident buffers, and no hot-path allocation permission. The `kv` probe exercises a small KV page pool with prefetch, demotion, eviction, copy attribution, and visible-stall ledger events. The next milestones are to connect these contracts to real FP16/BF16 model blocks, then to broader residency planning, CPU/GPU compute-near-data experiments, multi-GPU, and distributed execution.
+The `model` probe is intentionally tiny: a deterministic f32 reference model with exact greedy token parity and ledger checks. The `vllm-parity` probe consumes a vLLM-style token JSON artifact and compares exact token identity, first mismatch, missing/extra token counts, output hashes, and hot-path allocation status against NERVA's deterministic token stream. The `attention` probe is also small, but it verifies exact online-softmax merging across warm DRAM and hot VRAM KV blocks. The `warm` probe compares exact CPU-resident, GPU-resident, GPU-staged, and hybrid dense matvec candidates, records the selected execution owner, and proves the staged path can lose to compute-near-data. The `contracts` probe validates the first decode-kernel contract shape: launch bounds, device-resident buffers, and no hot-path allocation permission. The `kv` probe exercises a small KV page pool with prefetch, demotion, eviction, copy attribution, and visible-stall ledger events. The next milestones are to connect these contracts to real FP16/BF16 model blocks, then to broader residency planning, CPU/GPU compute-near-data experiments, multi-GPU, and distributed execution.
 
 ### Long-term goal
 
@@ -515,6 +516,7 @@ This repository is in the runtime foundation stage, so it is not a production mo
 | Device token | 1,024 synthetic decode steps run on device-ring causality with zero stale, missing, extra, mismatched, or host-causality tokens. |
 | Real block | One exact f32 Transformer block runs through a preallocated scratch path with zero hot-path allocations. |
 | Single model | One exact tiny f32 greedy decode path checks deterministic token parity and per-token ledgers. |
+| vLLM token parity | A vLLM-style token artifact is compared against NERVA token IDs with exact mismatch, missing, extra, and hash accounting. |
 | Tiered attention | Exact online-softmax blockwise attention merges warm DRAM and hot VRAM KV blocks without changing semantics. |
 | Warm compute | Exact dense matvec candidates compare CPU-resident, GPU-resident, GPU-staged, and hybrid execution with selected-owner ledgering. |
 | Kernel contracts | Decode-kernel contract descriptors validate launch bounds, device-resident buffers, and zero hot-path allocation permission. |
@@ -540,10 +542,11 @@ cargo run -p nerva-bench -- cuda-graph 1024 64 1
 cargo run -p nerva-bench -- synthetic 1024 64
 cargo run -p nerva-bench -- block
 cargo run -p nerva-bench -- model 8
+cargo run -p nerva-bench -- vllm-parity path/to/vllm_tokens.json 8
 cargo run -p nerva-bench -- attention
 cargo run -p nerva-bench -- warm
 cargo run -p nerva-bench -- contracts
 cargo run -p nerva-bench -- kv
 ```
 
-The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, exact token parity for the model probe, exact dense-reference parity for the attention tests, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, warm-compute `execution_decisions`, contract `device_resident_buffers`, and the explicit KV residency transfer and stall ledger events.
+The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, exact token parity for the model probe, exact vLLM-style token identity parity, exact dense-reference parity for the attention tests, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, warm-compute `execution_decisions`, contract `device_resident_buffers`, and the explicit KV residency transfer and stall ledger events.

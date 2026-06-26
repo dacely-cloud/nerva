@@ -33,7 +33,7 @@
 
 - FP16/BF16 exact path.
 - HF metadata parser.
-- vLLM parity harness for token identity.
+- vLLM-style token identity parity harness.
 
 ## Future
 

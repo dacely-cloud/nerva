@@ -7,7 +7,7 @@ use nerva_runtime::{
     TransportPathProbeStatus,
 };
 
-use crate::json::json_escape;
+use crate::{json::json_escape, parity::compare_vllm_token_identity};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AcceptanceCheck {
@@ -504,6 +504,11 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         Err(err) => report.push("tiny_model_greedy_parity", false, format!("{err:?}")),
     }
 
+    match vllm_token_identity_acceptance() {
+        Ok((passed, details)) => report.push("vllm_token_identity_parity", passed, details),
+        Err(err) => report.push("vllm_token_identity_parity", false, err),
+    }
+
     match model_manifest_acceptance() {
         Ok((passed, details)) => report.push("hf_model_manifest", passed, details),
         Err(err) => report.push("hf_model_manifest", false, err),
@@ -712,6 +717,30 @@ fn resident_weight_execution_acceptance(runtime: &Runtime) -> Result<(bool, Stri
             hotset.hot_path_allocations
                 + plan.ledger.hot_path_allocations
                 + run.hot_path_allocations,
+        ),
+    ))
+}
+
+fn vllm_token_identity_acceptance() -> Result<(bool, String), String> {
+    let vllm_style_json =
+        r#"{"request_id":"nerva-m4-parity","outputs":[{"token_ids":[1,2,3,0,1,2,3,0]}]}"#;
+    let summary = compare_vllm_token_identity(vllm_style_json, 8)?;
+    Ok((
+        summary.passed(),
+        format!(
+            "source_format={} steps={} matched={} mismatched={} missing={} extra={} first_mismatch={} vllm_hash={} nerva_hash={} hot_path_allocations={}",
+            summary.source_format,
+            summary.steps,
+            summary.matched_tokens,
+            summary.mismatched_tokens,
+            summary.missing_tokens,
+            summary.extra_tokens,
+            summary
+                .first_mismatch_index
+                .map_or_else(|| "none".to_string(), |value| value.to_string()),
+            summary.vllm_token_hash,
+            summary.nerva_token_hash,
+            summary.hot_path_allocations,
         ),
     ))
 }

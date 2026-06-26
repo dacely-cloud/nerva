@@ -8,6 +8,7 @@ use crate::{
         run_resident_shard_probe, run_resident_weight_probe, run_safetensors_probe,
         run_safetensors_shard_probe, run_weight_execution_probe,
     },
+    parity::run_vllm_token_identity_parity,
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
     probes::{
         run_capabilities, run_kv_probe, run_synthetic, run_synthetic_ledger_probe,
@@ -53,6 +54,10 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
             nerva_model::tiny_greedy_decode_smoke(steps)
                 .map(|summary| summary.to_json())
                 .map_err(|err| format!("tiny greedy model failed: {err:?}"))
+        }
+        "vllm-parity" => {
+            let steps = parse_optional_usize(args.get(1).cloned(), 8, "steps")?;
+            run_vllm_token_identity_parity(args.first().cloned(), steps)
         }
         "metadata" => run_metadata_probe(args.first().cloned()),
         "layout" => run_layout_probe(args.first().cloned()),
