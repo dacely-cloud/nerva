@@ -28,6 +28,7 @@ pub(crate) fn dispatch(
         Some("production-invariants") => Some(exit::print_json_result(
             runtime::run_production_invariant_probe(),
         )),
+        Some("request-state") => Some(exit::print_json_result(runtime::run_request_state_probe())),
         Some("topology") => Some(exit::print_json_result(runtime::run_topology_probe())),
         Some("synthetic") => Some(run_synthetic_command(args)),
         Some("ledger") => Some(exit::print_json_result(

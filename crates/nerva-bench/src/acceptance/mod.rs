@@ -15,6 +15,7 @@ mod phase;
 mod production;
 mod queue;
 mod report;
+mod request;
 mod resident_weights;
 pub(crate) mod runner;
 mod runtime_checks;

@@ -3,8 +3,8 @@ use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 use crate::acceptance::report::AcceptanceReport;
 use crate::acceptance::{
     artifact, audit, backend, correctness, cuda, environment, execution, measurements, memory_loop,
-    mgpu, model, phase, production, queue, resident_weights, runtime_checks, security, token,
-    transport,
+    mgpu, model, phase, production, queue, request, resident_weights, runtime_checks, security,
+    token, transport,
 };
 
 pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
@@ -27,6 +27,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     security::push_security_isolation(&mut report, &runtime);
     correctness::push_correctness_validation(&mut report, &runtime);
     production::push_production_invariants(&mut report, &runtime);
+    request::push_request_state(&mut report);
     environment::push_topology_snapshot(&mut report, &runtime);
     runtime_checks::push_synthetic_decode(&mut report, &runtime);
     runtime_checks::push_critical_path(&mut report, &runtime);

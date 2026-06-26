@@ -48,3 +48,9 @@ pub(crate) fn run_production_invariant_probe() -> Result<String, String> {
         .map(|summary| summary.to_json())
         .map_err(|err| format!("production invariant probe failed: {err:?}"))
 }
+
+pub(crate) fn run_request_state_probe() -> Result<String, String> {
+    nerva_runtime::request::probe::run_request_state_probe()
+        .map(|summary| summary.to_json())
+        .map_err(|err| format!("request state probe failed: {err:?}"))
+}
