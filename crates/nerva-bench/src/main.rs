@@ -844,7 +844,7 @@ fn artifact_metadata_json(command: &str, args: &[String]) -> String {
         )
     });
     format!(
-        "{{\"command\":\"{}\",\"args\":{},\"git_commit\":\"{}\",\"package_version\":\"{}\",\"profile\":\"{}\",\"target\":\"{}-{}\",\"capabilities\":{}}}",
+        "{{\"command\":\"{}\",\"args\":{},\"git_commit\":\"{}\",\"package_version\":\"{}\",\"profile\":\"{}\",\"target\":\"{}-{}\",\"rustc_version\":\"{}\",\"cargo_version\":\"{}\",\"rustflags\":{},\"cargo_encoded_rustflags\":{},\"capabilities\":{}}}",
         json_escape(command),
         json_string_array(args),
         json_escape(&current_git_commit()),
@@ -852,6 +852,10 @@ fn artifact_metadata_json(command: &str, args: &[String]) -> String {
         build_profile(),
         std::env::consts::OS,
         std::env::consts::ARCH,
+        json_escape(&command_version("rustc")),
+        json_escape(&command_version("cargo")),
+        json_env_string("RUSTFLAGS"),
+        json_env_string("CARGO_ENCODED_RUSTFLAGS"),
         capabilities,
     )
 }
@@ -877,6 +881,26 @@ fn build_profile() -> &'static str {
     } else {
         "release"
     }
+}
+
+fn command_version(command: &str) -> String {
+    let Ok(output) = Command::new(command).arg("--version").output() else {
+        return "unknown".to_string();
+    };
+    if !output.status.success() {
+        return "unknown".to_string();
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .and_then(|stdout| stdout.lines().next().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn json_env_string(name: &str) -> String {
+    std::env::var(name).map_or_else(
+        |_| "null".to_string(),
+        |value| format!("\"{}\"", json_escape(&value)),
+    )
 }
 
 fn json_string_array(values: &[String]) -> String {
@@ -1370,6 +1394,10 @@ mod tests {
         assert!(json.contains("\"args\":[\"2\",\"4\"]"));
         assert!(json.contains("\"git_commit\""));
         assert!(json.contains("\"package_version\""));
+        assert!(json.contains("\"rustc_version\""));
+        assert!(json.contains("\"cargo_version\""));
+        assert!(json.contains("\"rustflags\""));
+        assert!(json.contains("\"cargo_encoded_rustflags\""));
         assert!(json.contains("\"capabilities\""));
         assert!(json.contains("\"target_os\":\"linux\""));
         assert!(json.contains("\"summary\""));
