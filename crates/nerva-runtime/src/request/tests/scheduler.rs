@@ -5,6 +5,7 @@ use nerva_core::types::id::token::TokenId;
 use crate::request::scheduler::admission::RequestAdmission;
 use crate::request::scheduler::bounded::BoundedRequestScheduler;
 use crate::request::scheduler::probe::run_request_scheduler_probe;
+use crate::request::scheduler::selection::SchedulerSelectionOutcome;
 
 #[test]
 fn bounded_scheduler_rejects_full_and_duplicate_admission() {
@@ -93,8 +94,8 @@ fn bounded_scheduler_rotates_decoding_selection() {
 
     scheduler.begin_decode(RequestId(20)).unwrap();
     scheduler.begin_decode(RequestId(21)).unwrap();
-    let first = scheduler.select_next_decoding().unwrap();
-    let second = scheduler.select_next_decoding().unwrap();
+    let first = ready_selection(scheduler.select_next_decoding());
+    let second = ready_selection(scheduler.select_next_decoding());
 
     assert_eq!(first.request_id, RequestId(20));
     assert_eq!(first.slot, 0);
@@ -102,6 +103,21 @@ fn bounded_scheduler_rotates_decoding_selection() {
     assert_eq!(second.slot, 1);
     assert_eq!(first.scanned_slots, 1);
     assert_eq!(second.scanned_slots, 1);
+}
+
+#[test]
+fn bounded_scheduler_reports_no_ready_scan() {
+    let mut scheduler = BoundedRequestScheduler::new(2).unwrap();
+    let outcome = scheduler.select_next_decoding();
+
+    match outcome {
+        SchedulerSelectionOutcome::NoReady(miss) => {
+            assert_eq!(miss.scanned_slots, 2);
+            assert_eq!(miss.skipped_slots, 2);
+            assert!(!miss.wrapped);
+        }
+        SchedulerSelectionOutcome::Ready(_) => panic!("empty scheduler cannot be ready"),
+    }
 }
 
 #[test]
@@ -120,6 +136,8 @@ fn request_scheduler_probe_reports_bounded_admission_and_completion() {
     assert_eq!(summary.reused_slots, 1);
     assert_eq!(summary.selection_decisions, summary.generated_tokens);
     assert_eq!(summary.no_ready_selection_rejections, 1);
+    assert_eq!(summary.no_ready_selection_scanned_slots, 2);
+    assert_eq!(summary.no_ready_selection_skipped_slots, 2);
     assert!(summary.selection_scanned_slots >= summary.selection_decisions);
     assert!(summary.selection_skipped_slots > 0);
     assert_eq!(summary.generated_tokens, summary.host_observed_tokens);
@@ -138,4 +156,13 @@ fn request_scheduler_probe_reports_bounded_admission_and_completion() {
     assert!(summary.to_json().contains("\"bounded_slots\":true"));
     assert!(summary.to_json().contains("\"token_ledgers\":5"));
     assert!(summary.to_json().contains("\"selection_decisions\":5"));
+}
+
+fn ready_selection(
+    outcome: SchedulerSelectionOutcome,
+) -> crate::request::scheduler::selection::SchedulerSelection {
+    match outcome {
+        SchedulerSelectionOutcome::Ready(selection) => selection,
+        SchedulerSelectionOutcome::NoReady(_) => panic!("expected ready scheduler selection"),
+    }
 }

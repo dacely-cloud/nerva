@@ -33,7 +33,7 @@ pub(crate) fn push_request_scheduler(report: &mut AcceptanceReport) {
             "request_scheduler_admission",
             summary.passed(),
             format!(
-                "capacity={} admitted={} active={} completed={} full_rejections={} duplicate_rejections={} missing_request_rejections={} premature_release_rejections={} released_slots={} reused_slots={} iterations={} selection_decisions={} selection_scanned_slots={} selection_skipped_slots={} selection_wraps={} no_ready_selection_rejections={} max_active={} generated_tokens={} host_observed_tokens={} token_ledgers={} critical_path_reports={} graph_replay_events={} device_activity_events={} copy_events={} soft_visibility_syncs={} host_event_wait_ns={} gpu_idle_ns={} estimated_events={} runtime_timestamp_events={} unclassified_syncs={} bounded_slots={} unbounded_queue_ops={} host_wait_gpu_idle_separated={} hot_path_allocations={}",
+                "capacity={} admitted={} active={} completed={} full_rejections={} duplicate_rejections={} missing_request_rejections={} premature_release_rejections={} released_slots={} reused_slots={} iterations={} selection_decisions={} selection_scanned_slots={} selection_skipped_slots={} selection_wraps={} no_ready_selection_rejections={} no_ready_selection_scanned_slots={} no_ready_selection_skipped_slots={} max_active={} generated_tokens={} host_observed_tokens={} token_ledgers={} critical_path_reports={} graph_replay_events={} device_activity_events={} copy_events={} soft_visibility_syncs={} host_event_wait_ns={} gpu_idle_ns={} estimated_events={} runtime_timestamp_events={} unclassified_syncs={} bounded_slots={} unbounded_queue_ops={} host_wait_gpu_idle_separated={} hot_path_allocations={}",
                 summary.capacity,
                 summary.admitted_requests,
                 summary.active_requests,
@@ -50,6 +50,8 @@ pub(crate) fn push_request_scheduler(report: &mut AcceptanceReport) {
                 summary.selection_skipped_slots,
                 summary.selection_wraps,
                 summary.no_ready_selection_rejections,
+                summary.no_ready_selection_scanned_slots,
+                summary.no_ready_selection_skipped_slots,
                 summary.max_active_requests,
                 summary.generated_tokens,
                 summary.host_observed_tokens,

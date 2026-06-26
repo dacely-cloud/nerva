@@ -1,4 +1,4 @@
-use crate::request::scheduler::selection::SchedulerSelection;
+use crate::request::scheduler::selection::{SchedulerSelection, SchedulerSelectionMiss};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SchedulerSelectionTotals {
@@ -7,17 +7,21 @@ pub(crate) struct SchedulerSelectionTotals {
     pub(crate) skipped_slots: u64,
     pub(crate) wraps: u64,
     pub(crate) no_ready_rejections: u64,
+    pub(crate) no_ready_scanned_slots: u64,
+    pub(crate) no_ready_skipped_slots: u64,
 }
 
 impl SchedulerSelectionTotals {
-    pub(crate) fn record(&mut self, selection: SchedulerSelection) {
+    pub(crate) fn record_ready(&mut self, selection: SchedulerSelection) {
         self.decisions += 1;
         self.scanned_slots += selection.scanned_slots as u64;
         self.skipped_slots += selection.skipped_slots as u64;
         self.wraps += selection.wrapped as u64;
     }
 
-    pub(crate) fn record_no_ready(&mut self) {
+    pub(crate) fn record_no_ready(&mut self, miss: SchedulerSelectionMiss) {
         self.no_ready_rejections += 1;
+        self.no_ready_scanned_slots += miss.scanned_slots as u64;
+        self.no_ready_skipped_slots += miss.skipped_slots as u64;
     }
 }

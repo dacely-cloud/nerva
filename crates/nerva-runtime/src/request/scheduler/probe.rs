@@ -8,6 +8,7 @@ use crate::request::probe::next_cycle_token;
 use crate::request::scheduler::admission::RequestAdmission;
 use crate::request::scheduler::bounded::BoundedRequestScheduler;
 use crate::request::scheduler::ledger::scheduler_token_ledger;
+use crate::request::scheduler::selection::SchedulerSelectionOutcome;
 use crate::request::scheduler::selection_totals::SchedulerSelectionTotals;
 use crate::request::scheduler::summary::{RequestSchedulerProbeStatus, RequestSchedulerSummary};
 use crate::request::scheduler::totals::SchedulerLedgerTotals;
@@ -83,8 +84,8 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
     host_observed_tokens += observe_and_count(&mut scheduler, RequestId(1), usize::MAX)?;
     scheduler.release_completed(RequestId(1))?;
     released_slots += 1;
-    if scheduler.select_next_decoding().is_none() {
-        selection_totals.record_no_ready();
+    if let SchedulerSelectionOutcome::NoReady(miss) = scheduler.select_next_decoding() {
+        selection_totals.record_no_ready(miss);
     }
 
     let missing_request_rejections = scheduler.next_device_input(RequestId(99)).is_err() as u64;
@@ -108,6 +109,8 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
         selection_skipped_slots: selection_totals.skipped_slots,
         selection_wraps: selection_totals.wraps,
         no_ready_selection_rejections: selection_totals.no_ready_rejections,
+        no_ready_selection_scanned_slots: selection_totals.no_ready_scanned_slots,
+        no_ready_selection_skipped_slots: selection_totals.no_ready_skipped_slots,
         max_active_requests: max_active,
         host_observed_tokens: host_observed_tokens as u64,
         generated_tokens,
@@ -152,12 +155,19 @@ fn drive_selected_step(
     selection_totals: &mut SchedulerSelectionTotals,
     iterations: &mut u64,
 ) -> Result<()> {
-    let selection = scheduler.select_next_decoding().ok_or_else(|| {
-        nerva_core::types::error::NervaError::InvalidArgument {
-            reason: "scheduler has no decodable request".to_string(),
+    let outcome = scheduler.select_next_decoding();
+    let selection = match outcome {
+        SchedulerSelectionOutcome::Ready(selection) => {
+            selection_totals.record_ready(selection);
+            selection
         }
-    })?;
-    selection_totals.record(selection);
+        SchedulerSelectionOutcome::NoReady(miss) => {
+            selection_totals.record_no_ready(miss);
+            return Err(nerva_core::types::error::NervaError::InvalidArgument {
+                reason: "scheduler has no decodable request".to_string(),
+            });
+        }
+    };
     let request_id = selection.request_id;
     let seed = scheduler.next_device_input(request_id)?;
     let token = next_cycle_token(seed);
