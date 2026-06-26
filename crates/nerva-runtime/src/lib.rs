@@ -6,8 +6,8 @@ compile_error!("NERVA currently supports Linux only.");
 use std::collections::BTreeMap;
 
 use nerva_core::{
-    AllocationId, DeviceOrdinal, MemoryTier, NervaError, RequestId, Result, SequenceId, TokenId,
-    TransactionId, ensure_supported_linux_host,
+    AllocationId, DeviceOrdinal, HostArch, MemoryFabricKind, MemoryTier, NervaError, RequestId,
+    Result, SequenceId, TokenId, TransactionId, ensure_supported_linux_host, host_arch,
 };
 use nerva_ledger::{LedgerEvent, LedgerEventKind, TokenLedger};
 use nerva_memory::{
@@ -42,6 +42,59 @@ impl ResidencyBudget {
             pinned_dram_bytes,
             dram_bytes,
         }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum CapabilityState {
+    SupportedAndVerified,
+    SupportedUnverified,
+    Unsupported,
+    DegradedToPinnedHost,
+}
+
+impl CapabilityState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SupportedAndVerified => "SUPPORTED_AND_VERIFIED",
+            Self::SupportedUnverified => "SUPPORTED_UNVERIFIED",
+            Self::Unsupported => "UNSUPPORTED",
+            Self::DegradedToPinnedHost => "DEGRADED_TO_PINNED_HOST",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapabilitySnapshot {
+    pub host_arch: HostArch,
+    pub fabric: MemoryFabricKind,
+    pub cuda: CapabilityState,
+    pub cuda_status: &'static str,
+    pub cuda_error: Option<String>,
+    pub hip: CapabilityState,
+    pub pinned_host_staging: CapabilityState,
+    pub gpu_direct_rdma: CapabilityState,
+    pub amd_peerdirect: CapabilityState,
+    pub dma_buf_export: CapabilityState,
+    pub cxl: CapabilityState,
+}
+
+impl CapabilitySnapshot {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"host_arch\":\"{}\",\"fabric\":\"{}\",\"cuda\":\"{}\",\"cuda_status\":\"{}\",\"cuda_error\":{},\"hip\":\"{}\",\"pinned_host_staging\":\"{}\",\"gpu_direct_rdma\":\"{}\",\"amd_peerdirect\":\"{}\",\"dma_buf_export\":\"{}\",\"cxl\":\"{}\"}}",
+            host_arch_to_str(self.host_arch),
+            memory_fabric_to_str(self.fabric),
+            self.cuda.as_str(),
+            self.cuda_status,
+            json_opt_string(self.cuda_error.as_deref()),
+            self.hip.as_str(),
+            self.pinned_host_staging.as_str(),
+            self.gpu_direct_rdma.as_str(),
+            self.amd_peerdirect.as_str(),
+            self.dma_buf_export.as_str(),
+            self.cxl.as_str(),
+        )
     }
 }
 
@@ -786,6 +839,36 @@ impl Runtime {
         SyntheticEngine::new(token_ring_capacity)
     }
 
+    pub fn discover_capabilities(&self) -> CapabilitySnapshot {
+        let _ = self.config;
+        let cuda_smoke = cuda_smoke();
+        let cuda = match cuda_smoke.status {
+            nerva_cuda::SmokeStatus::Ok => CapabilityState::SupportedAndVerified,
+            nerva_cuda::SmokeStatus::Unavailable | nerva_cuda::SmokeStatus::Failed => {
+                CapabilityState::Unsupported
+            }
+        };
+        let cuda_status = match cuda_smoke.status {
+            nerva_cuda::SmokeStatus::Ok => "ok",
+            nerva_cuda::SmokeStatus::Unavailable => "unavailable",
+            nerva_cuda::SmokeStatus::Failed => "failed",
+        };
+
+        CapabilitySnapshot {
+            host_arch: host_arch(),
+            fabric: MemoryFabricKind::DiscreteExplicit,
+            cuda,
+            cuda_status,
+            cuda_error: cuda_smoke.error,
+            hip: CapabilityState::Unsupported,
+            pinned_host_staging: CapabilityState::SupportedUnverified,
+            gpu_direct_rdma: CapabilityState::DegradedToPinnedHost,
+            amd_peerdirect: CapabilityState::Unsupported,
+            dma_buf_export: CapabilityState::Unsupported,
+            cxl: CapabilityState::Unsupported,
+        }
+    }
+
     pub fn run_synthetic_decode(
         &self,
         config: SyntheticDecodeConfig,
@@ -1061,6 +1144,48 @@ fn json_opt_token(value: Option<TokenId>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.0.to_string())
 }
 
+fn host_arch_to_str(value: HostArch) -> &'static str {
+    match value {
+        HostArch::X86_64 => "x86_64",
+        HostArch::Aarch64 => "aarch64",
+        HostArch::Other => "other",
+    }
+}
+
+fn memory_fabric_to_str(value: MemoryFabricKind) -> &'static str {
+    match value {
+        MemoryFabricKind::DiscreteExplicit => "DiscreteExplicit",
+        MemoryFabricKind::UnifiedVirtualManaged => "UnifiedVirtualManaged",
+        MemoryFabricKind::CoherentSharedPhysical => "CoherentSharedPhysical",
+        MemoryFabricKind::CxlCoherentFabric => "CxlCoherentFabric",
+    }
+}
+
+fn json_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => {
+                escaped.push_str(&format!("\\u{:04x}", ch as u32));
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn json_opt_string(value: Option<&str>) -> String {
+    value.map_or_else(
+        || "null".to_string(),
+        |value| format!("\"{}\"", json_escape(value)),
+    )
+}
+
 fn json_opt_static_str(value: Option<&'static str>) -> String {
     value.map_or_else(|| "null".to_string(), |value| format!("\"{}\"", value))
 }
@@ -1074,6 +1199,55 @@ mod tests {
         let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
         assert_eq!(runtime.config().device, DeviceOrdinal(0));
         assert_eq!(runtime.empty_token_ledger(9).token_index, 9);
+    }
+
+    #[test]
+    fn capability_snapshot_reports_conservative_discrete_profile() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let snapshot = runtime.discover_capabilities();
+
+        assert_eq!(snapshot.host_arch, host_arch());
+        assert_eq!(snapshot.fabric, MemoryFabricKind::DiscreteExplicit);
+        assert!(matches!(
+            snapshot.cuda,
+            CapabilityState::SupportedAndVerified | CapabilityState::Unsupported
+        ));
+        assert_eq!(snapshot.hip, CapabilityState::Unsupported);
+        assert_eq!(
+            snapshot.pinned_host_staging,
+            CapabilityState::SupportedUnverified
+        );
+        assert_eq!(
+            snapshot.gpu_direct_rdma,
+            CapabilityState::DegradedToPinnedHost
+        );
+        assert_eq!(snapshot.amd_peerdirect, CapabilityState::Unsupported);
+        assert_eq!(snapshot.dma_buf_export, CapabilityState::Unsupported);
+        assert_eq!(snapshot.cxl, CapabilityState::Unsupported);
+
+        let json = snapshot.to_json();
+        assert!(json.contains("\"fabric\":\"DiscreteExplicit\""));
+        assert!(json.contains("\"gpu_direct_rdma\":\"DEGRADED_TO_PINNED_HOST\""));
+    }
+
+    #[test]
+    fn capability_snapshot_json_escapes_cuda_error() {
+        let snapshot = CapabilitySnapshot {
+            host_arch: HostArch::X86_64,
+            fabric: MemoryFabricKind::DiscreteExplicit,
+            cuda: CapabilityState::Unsupported,
+            cuda_status: "failed",
+            cuda_error: Some("quote\" slash\\ newline\n".to_string()),
+            hip: CapabilityState::Unsupported,
+            pinned_host_staging: CapabilityState::SupportedUnverified,
+            gpu_direct_rdma: CapabilityState::DegradedToPinnedHost,
+            amd_peerdirect: CapabilityState::Unsupported,
+            dma_buf_export: CapabilityState::Unsupported,
+            cxl: CapabilityState::Unsupported,
+        };
+
+        let json = snapshot.to_json();
+        assert!(json.contains("quote\\\" slash\\\\ newline\\n"));
     }
 
     #[test]
