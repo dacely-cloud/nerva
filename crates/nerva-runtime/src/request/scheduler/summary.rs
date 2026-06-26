@@ -9,10 +9,13 @@ pub struct RequestSchedulerSummary {
     pub capacity: usize,
     pub admitted_requests: u64,
     pub active_requests: usize,
-    pub completed_requests: usize,
+    pub completed_requests: u64,
     pub full_rejections: u64,
     pub duplicate_rejections: u64,
     pub missing_request_rejections: u64,
+    pub premature_release_rejections: u64,
+    pub released_slots: u64,
+    pub reused_slots: u64,
     pub scheduler_iterations: u64,
     pub max_active_requests: usize,
     pub host_observed_tokens: u64,
@@ -37,11 +40,14 @@ pub struct RequestSchedulerSummary {
 impl RequestSchedulerSummary {
     pub fn passed(&self) -> bool {
         self.capacity == 2
-            && self.admitted_requests == 2
-            && self.completed_requests == 2
+            && self.admitted_requests == 3
+            && self.completed_requests == 3
             && self.full_rejections == 1
             && self.duplicate_rejections == 1
             && self.missing_request_rejections == 1
+            && self.premature_release_rejections == 1
+            && self.released_slots == 2
+            && self.reused_slots == 1
             && self.generated_tokens == self.host_observed_tokens
             && self.token_ledgers == self.generated_tokens
             && self.critical_path_reports == self.generated_tokens
@@ -65,7 +71,7 @@ impl RequestSchedulerSummary {
             RequestSchedulerProbeStatus::Ok => "ok",
         };
         format!(
-            "{{\"status\":\"{}\",\"capacity\":{},\"admitted_requests\":{},\"active_requests\":{},\"completed_requests\":{},\"full_rejections\":{},\"duplicate_rejections\":{},\"missing_request_rejections\":{},\"scheduler_iterations\":{},\"max_active_requests\":{},\"host_observed_tokens\":{},\"generated_tokens\":{},\"token_ledgers\":{},\"critical_path_reports\":{},\"graph_replay_events\":{},\"device_activity_events\":{},\"copy_events\":{},\"soft_visibility_syncs\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"estimated_events\":{},\"runtime_timestamp_events\":{},\"unclassified_syncs\":{},\"bounded_slots\":{},\"unbounded_queue_ops\":{},\"host_wait_gpu_idle_separated\":{},\"hot_path_allocations\":{}}}",
+            "{{\"status\":\"{}\",\"capacity\":{},\"admitted_requests\":{},\"active_requests\":{},\"completed_requests\":{},\"full_rejections\":{},\"duplicate_rejections\":{},\"missing_request_rejections\":{},\"premature_release_rejections\":{},\"released_slots\":{},\"reused_slots\":{},\"scheduler_iterations\":{},\"max_active_requests\":{},\"host_observed_tokens\":{},\"generated_tokens\":{},\"token_ledgers\":{},\"critical_path_reports\":{},\"graph_replay_events\":{},\"device_activity_events\":{},\"copy_events\":{},\"soft_visibility_syncs\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"estimated_events\":{},\"runtime_timestamp_events\":{},\"unclassified_syncs\":{},\"bounded_slots\":{},\"unbounded_queue_ops\":{},\"host_wait_gpu_idle_separated\":{},\"hot_path_allocations\":{}}}",
             status,
             self.capacity,
             self.admitted_requests,
@@ -74,6 +80,9 @@ impl RequestSchedulerSummary {
             self.full_rejections,
             self.duplicate_rejections,
             self.missing_request_rejections,
+            self.premature_release_rejections,
+            self.released_slots,
+            self.reused_slots,
             self.scheduler_iterations,
             self.max_active_requests,
             self.host_observed_tokens,

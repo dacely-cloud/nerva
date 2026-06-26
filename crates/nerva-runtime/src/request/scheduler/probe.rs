@@ -15,13 +15,15 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
     let device = DeviceOrdinal(0);
     let mut scheduler = BoundedRequestScheduler::new(2)?;
     let mut ledger_totals = SchedulerLedgerTotals::default();
+    let mut released_slots = 0;
+    let mut reused_slots = 0;
+    let mut host_observed_tokens = 0;
     let prompt_a = vec![TokenId(0)];
     let prompt_b = vec![TokenId(1)];
+    let slot_b = scheduler.admit(admission(2, 2, prompt_b.clone(), 2, Some(TokenId(2))))?;
     scheduler.admit(admission(1, 1, prompt_a.clone(), 3, Some(TokenId(3))))?;
-    scheduler.admit(admission(2, 2, prompt_b.clone(), 2, Some(TokenId(2))))?;
-    let full_rejections = scheduler
-        .admit(admission(3, 3, vec![TokenId(2)], 1, None))
-        .is_err() as u64;
+    let reuse_admission = admission(3, 3, vec![TokenId(2)], 1, Some(TokenId(3)));
+    let full_rejections = scheduler.admit(reuse_admission.clone()).is_err() as u64;
     let duplicate_rejections = scheduler.admit(admission(1, 9, prompt_a, 1, None)).is_err() as u64;
 
     scheduler.begin_decode(RequestId(1))?;
@@ -42,7 +44,24 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
         &mut ledger_totals,
         &mut iterations,
     )?;
-    scheduler.observe_host_tokens(RequestId(2), usize::MAX)?;
+    let premature_release_rejections = scheduler.release_completed(RequestId(2)).is_err() as u64;
+    host_observed_tokens += observe_and_count(&mut scheduler, RequestId(2), usize::MAX)?;
+    let released_slot = scheduler.release_completed(RequestId(2))?;
+    released_slots += 1;
+    let reused_slot = scheduler.admit(reuse_admission)?;
+    reused_slots += (reused_slot == released_slot && reused_slot == slot_b) as u64;
+    scheduler.begin_decode(RequestId(3))?;
+    max_active = max_active.max(scheduler.active_count());
+    drive_one_step(
+        &mut scheduler,
+        RequestId(3),
+        device,
+        &mut ledger_totals,
+        &mut iterations,
+    )?;
+    host_observed_tokens += observe_and_count(&mut scheduler, RequestId(3), usize::MAX)?;
+    scheduler.release_completed(RequestId(3))?;
+    released_slots += 1;
     max_active = max_active.max(scheduler.active_count());
     drive_one_step(
         &mut scheduler,
@@ -51,7 +70,7 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
         &mut ledger_totals,
         &mut iterations,
     )?;
-    scheduler.observe_host_tokens(RequestId(1), 1)?;
+    host_observed_tokens += observe_and_count(&mut scheduler, RequestId(1), 1)?;
     max_active = max_active.max(scheduler.active_count());
     drive_one_step(
         &mut scheduler,
@@ -60,24 +79,26 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
         &mut ledger_totals,
         &mut iterations,
     )?;
-    scheduler.observe_host_tokens(RequestId(1), usize::MAX)?;
+    host_observed_tokens += observe_and_count(&mut scheduler, RequestId(1), usize::MAX)?;
 
     let missing_request_rejections = scheduler.next_device_input(RequestId(99)).is_err() as u64;
-    let generated_tokens = generated_token_count(&scheduler, &[RequestId(1), RequestId(2)]) as u64;
-    let host_observed_tokens = host_token_count(&scheduler, &[RequestId(1), RequestId(2)]) as u64;
+    let generated_tokens = ledger_totals.token_ledgers;
 
     Ok(RequestSchedulerSummary {
         status: RequestSchedulerProbeStatus::Ok,
         capacity: scheduler.capacity(),
-        admitted_requests: 2,
+        admitted_requests: 3,
         active_requests: scheduler.active_count(),
-        completed_requests: scheduler.completed_count(),
+        completed_requests: scheduler.completed_count() as u64 + released_slots,
         full_rejections,
         duplicate_rejections,
         missing_request_rejections,
+        premature_release_rejections,
+        released_slots,
+        reused_slots,
         scheduler_iterations: iterations,
         max_active_requests: max_active,
-        host_observed_tokens,
+        host_observed_tokens: host_observed_tokens as u64,
         generated_tokens,
         token_ledgers: ledger_totals.token_ledgers,
         critical_path_reports: ledger_totals.critical_path_reports,
@@ -130,26 +151,12 @@ fn drive_one_step(
     Ok(())
 }
 
-fn generated_token_count(scheduler: &BoundedRequestScheduler, requests: &[RequestId]) -> usize {
-    requests
-        .iter()
-        .map(|request| {
-            scheduler
-                .controller(*request)
-                .map(|controller| controller.generated_tokens.len())
-                .unwrap_or(0)
-        })
-        .sum()
-}
-
-fn host_token_count(scheduler: &BoundedRequestScheduler, requests: &[RequestId]) -> usize {
-    requests
-        .iter()
-        .map(|request| {
-            scheduler
-                .controller(*request)
-                .map(|controller| controller.host_observed_tokens.len())
-                .unwrap_or(0)
-        })
-        .sum()
+fn observe_and_count(
+    scheduler: &mut BoundedRequestScheduler,
+    request_id: RequestId,
+    max_tokens: usize,
+) -> Result<usize> {
+    scheduler
+        .observe_host_tokens(request_id, max_tokens)
+        .map(|batch| batch.tokens.len())
 }

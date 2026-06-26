@@ -73,6 +73,31 @@ impl BoundedRequestScheduler {
             .observe_host_tokens(max_tokens))
     }
 
+    pub fn release_completed(&mut self, request_id: RequestId) -> Result<usize> {
+        let slot = self
+            .find_slot(request_id)
+            .ok_or_else(|| NervaError::InvalidArgument {
+                reason: format!("request {} is not admitted", request_id.0),
+            })?;
+        let controller = self.slots[slot]
+            .as_ref()
+            .ok_or_else(|| NervaError::InvalidArgument {
+                reason: format!("request {} slot is empty", request_id.0),
+            })?;
+        if controller.phase != RequestPhase::Completed {
+            return Err(NervaError::InvalidArgument {
+                reason: format!("request {} is not completed", request_id.0),
+            });
+        }
+        if controller.host_visibility_lag() != 0 {
+            return Err(NervaError::InvalidArgument {
+                reason: format!("request {} has unobserved host tokens", request_id.0),
+            });
+        }
+        self.slots[slot] = None;
+        Ok(slot)
+    }
+
     pub fn active_count(&self) -> usize {
         self.slots
             .iter()

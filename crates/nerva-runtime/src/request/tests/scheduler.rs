@@ -33,16 +33,56 @@ fn bounded_scheduler_rejects_full_and_duplicate_admission() {
 }
 
 #[test]
+fn bounded_scheduler_reuses_slot_only_after_completion_and_host_drain() {
+    let mut scheduler = BoundedRequestScheduler::new(1).unwrap();
+    let admission = RequestAdmission {
+        request_id: RequestId(10),
+        sequence_id: SequenceId(10),
+        prompt_tokens: vec![TokenId(0)],
+        max_new_tokens: 1,
+        eos_token: None,
+    };
+
+    assert_eq!(scheduler.admit(admission).unwrap(), 0);
+    scheduler.begin_decode(RequestId(10)).unwrap();
+    assert!(scheduler.release_completed(RequestId(10)).is_err());
+    scheduler
+        .record_device_token(RequestId(10), 0, TokenId(1))
+        .unwrap();
+    assert!(scheduler.release_completed(RequestId(10)).is_err());
+    scheduler
+        .observe_host_tokens(RequestId(10), usize::MAX)
+        .unwrap();
+    assert_eq!(scheduler.release_completed(RequestId(10)).unwrap(), 0);
+    assert!(scheduler.controller(RequestId(10)).is_err());
+    assert_eq!(
+        scheduler
+            .admit(RequestAdmission {
+                request_id: RequestId(11),
+                sequence_id: SequenceId(11),
+                prompt_tokens: vec![TokenId(1)],
+                max_new_tokens: 1,
+                eos_token: None,
+            })
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn request_scheduler_probe_reports_bounded_admission_and_completion() {
     let summary = run_request_scheduler_probe().unwrap();
 
     assert!(summary.passed());
     assert_eq!(summary.capacity, 2);
-    assert_eq!(summary.admitted_requests, 2);
-    assert_eq!(summary.completed_requests, 2);
+    assert_eq!(summary.admitted_requests, 3);
+    assert_eq!(summary.completed_requests, 3);
     assert_eq!(summary.full_rejections, 1);
     assert_eq!(summary.duplicate_rejections, 1);
     assert_eq!(summary.missing_request_rejections, 1);
+    assert_eq!(summary.premature_release_rejections, 1);
+    assert_eq!(summary.released_slots, 2);
+    assert_eq!(summary.reused_slots, 1);
     assert_eq!(summary.generated_tokens, summary.host_observed_tokens);
     assert_eq!(summary.token_ledgers, summary.generated_tokens);
     assert_eq!(summary.critical_path_reports, summary.generated_tokens);
@@ -57,5 +97,5 @@ fn request_scheduler_probe_reports_bounded_admission_and_completion() {
     assert!(summary.runtime_timestamp_events > 0);
     assert!(summary.host_wait_gpu_idle_separated);
     assert!(summary.to_json().contains("\"bounded_slots\":true"));
-    assert!(summary.to_json().contains("\"token_ledgers\":4"));
+    assert!(summary.to_json().contains("\"token_ledgers\":5"));
 }
