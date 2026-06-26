@@ -1,0 +1,41 @@
+use nerva_ledger::types::token::ledger::TokenLedger;
+
+use crate::weights::execution::step::ResidentWeightExecutionStep;
+use crate::weights::json::json_opt_string;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightExecutionPlan {
+    pub steps: Vec<ResidentWeightExecutionStep>,
+    pub total_weight_bytes: usize,
+    pub total_predicted_visible_ns: u64,
+    pub cpu_steps: u64,
+    pub gpu_resident_steps: u64,
+    pub gpu_staged_steps: u64,
+    pub fallback_steps: u64,
+    pub fallback_decisions: u64,
+    pub block_version_dependencies: u64,
+    pub first_tensor: Option<String>,
+    pub last_tensor: Option<String>,
+    pub ledger: TokenLedger,
+}
+
+impl ResidentWeightExecutionPlan {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_predicted_visible_ns\":{},\"cpu_steps\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"fallback_decisions\":{},\"block_version_dependencies\":{},\"first_tensor\":{},\"last_tensor\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
+            self.steps.len(),
+            self.total_weight_bytes,
+            self.total_predicted_visible_ns,
+            self.cpu_steps,
+            self.gpu_resident_steps,
+            self.gpu_staged_steps,
+            self.fallback_steps,
+            self.fallback_decisions,
+            self.block_version_dependencies,
+            json_opt_string(self.first_tensor.as_deref()),
+            json_opt_string(self.last_tensor.as_deref()),
+            self.ledger.execution_decisions.len(),
+            self.ledger.hot_path_allocations,
+        )
+    }
+}

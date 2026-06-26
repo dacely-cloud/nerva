@@ -7,7 +7,7 @@ use nerva_ledger::types::token::ledger::TokenLedger;
 use crate::engine::resident_weights::helpers::{
     div_ceil_u64, estimate_cpu_dram_weight_ns, estimate_gpu_resident_weight_ns,
 };
-use crate::weights::execution::ResidentWeightExecutionStep;
+use crate::weights::execution::step::ResidentWeightExecutionStep;
 
 pub(super) fn record_cpu_dram_step(ledger: &mut TokenLedger, step: &ResidentWeightExecutionStep) {
     ledger.record(LedgerEvent {

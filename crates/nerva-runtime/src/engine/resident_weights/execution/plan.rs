@@ -12,9 +12,9 @@ use crate::engine::resident_weights::execution::selection::{
 };
 use crate::engine::runtime::Runtime;
 use crate::weights::block::ResidentWeightTable;
-use crate::weights::execution::{
-    ResidentWeightExecutionPlan, ResidentWeightExecutionStep, ResidentWeightExecutionStrategy,
-};
+use crate::weights::execution::plan::ResidentWeightExecutionPlan;
+use crate::weights::execution::step::ResidentWeightExecutionStep;
+use crate::weights::execution::strategy::ResidentWeightExecutionStrategy;
 
 impl Runtime {
     pub fn plan_resident_weight_execution(

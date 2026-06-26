@@ -15,7 +15,7 @@ use crate::engine::resident_weights::helpers::{
     estimate_gpu_staged_weight_ns,
 };
 use crate::weights::block::ResidentWeightBlockRef;
-use crate::weights::execution::ResidentWeightExecutionStrategy;
+use crate::weights::execution::strategy::ResidentWeightExecutionStrategy;
 
 pub(super) struct ResidentWeightStepSelection {
     pub(super) strategy: ResidentWeightExecutionStrategy,

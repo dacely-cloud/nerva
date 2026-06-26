@@ -4,7 +4,7 @@ use nerva_ledger::types::fallback::FallbackClass;
 use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::engine::tests::support::tiny_llama_manifest;
-use crate::weights::execution::ResidentWeightExecutionStrategy;
+use crate::weights::execution::strategy::ResidentWeightExecutionStrategy;
 
 #[test]
 fn resident_weight_execution_plans_gpu_staged_for_dram_fp16_weights() {
