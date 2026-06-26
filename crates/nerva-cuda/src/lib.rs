@@ -25,6 +25,17 @@ const SMOKE_WORD: u32 = 0x4e45_5256;
 const CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR: c_int = 75;
 const CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR: c_int = 76;
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct NervaCudaSmokeResult {
+    status: i32,
+    value: u32,
+}
+
+unsafe extern "C" {
+    fn nerva_cuda_smoke(out: *mut NervaCudaSmokeResult) -> c_int;
+}
+
 const SMOKE_PTX: &str = r#"
 .version 6.4
 .target sm_50
@@ -65,6 +76,37 @@ pub struct CudaSmokeSummary {
     pub kernel_value: Option<u32>,
     pub hot_path_allocations: u64,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeAbiSmokeSummary {
+    pub return_code: i32,
+    pub status: i32,
+    pub value: u32,
+    pub matched: bool,
+}
+
+impl NativeAbiSmokeSummary {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"return_code\":{},\"status\":{},\"value\":{},\"matched\":{}}}",
+            self.return_code, self.status, self.value, self.matched,
+        )
+    }
+}
+
+pub fn native_abi_smoke() -> NativeAbiSmokeSummary {
+    let mut out = NervaCudaSmokeResult {
+        status: -1,
+        value: 0,
+    };
+    let return_code = unsafe { nerva_cuda_smoke(&mut out) };
+    NativeAbiSmokeSummary {
+        return_code,
+        status: out.status,
+        value: out.value,
+        matched: return_code == 0 && out.status == 0 && out.value == SMOKE_WORD,
+    }
 }
 
 impl CudaSmokeSummary {
@@ -771,5 +813,15 @@ mod tests {
         if cfg!(any(unix, target_os = "windows")) {
             assert!(!cuda_driver_library_names().is_empty());
         }
+    }
+
+    #[test]
+    fn native_abi_smoke_returns_expected_word() {
+        let summary = native_abi_smoke();
+        assert_eq!(summary.return_code, 0);
+        assert_eq!(summary.status, 0);
+        assert_eq!(summary.value, SMOKE_WORD);
+        assert!(summary.matched);
+        assert!(summary.to_json().contains("\"matched\":true"));
     }
 }

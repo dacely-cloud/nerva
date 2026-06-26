@@ -3263,6 +3263,10 @@ pub fn cuda_smoke() -> nerva_cuda::CudaSmokeSummary {
     nerva_cuda::smoke()
 }
 
+pub fn cuda_native_abi_smoke() -> nerva_cuda::NativeAbiSmokeSummary {
+    nerva_cuda::native_abi_smoke()
+}
+
 fn cuda_compute_capability(summary: &nerva_cuda::CudaSmokeSummary) -> Option<String> {
     Some(format!(
         "{}.{}",

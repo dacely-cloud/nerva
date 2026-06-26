@@ -647,6 +647,16 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     let (audit_passed, audit_details) = audit_acceptance();
     report.push("vllm_rvllm_audit", audit_passed, audit_details);
 
+    let cuda_abi = nerva_runtime::cuda_native_abi_smoke();
+    report.push(
+        "cuda_native_abi",
+        cuda_abi.matched,
+        format!(
+            "return_code={} status={} value=0x{:08x} matched={}",
+            cuda_abi.return_code, cuda_abi.status, cuda_abi.value, cuda_abi.matched,
+        ),
+    );
+
     let topology = runtime.discover_topology();
     report.push(
         "topology_snapshot",
@@ -1643,6 +1653,7 @@ mod tests {
         assert!(json.contains("\"status\":\"ok\""));
         assert!(json.contains("\"failed\":0"));
         assert!(json.contains("\"vllm_rvllm_audit\""));
+        assert!(json.contains("\"cuda_native_abi\""));
         assert!(json.contains("\"topology_snapshot\""));
         assert!(json.contains("\"synthetic_device_token\""));
         assert!(json.contains("\"hf_model_manifest\""));
