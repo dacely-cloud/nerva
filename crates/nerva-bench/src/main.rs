@@ -11,7 +11,8 @@ use std::{
 use nerva_core::{MemoryFabricKind, TokenId};
 use nerva_runtime::{
     CapabilityState, KvResidencyProbeConfig, KvResidencyProbeStatus, ResidencyBudget, Runtime,
-    RuntimeConfig, SyntheticDecodeConfig, SyntheticDecodeStatus, TransportPathProbeStatus,
+    RuntimeConfig, SyntheticDecodeConfig, SyntheticDecodeStatus, TransportCapabilityMatrixStatus,
+    TransportPathProbeStatus,
 };
 
 fn main() -> ExitCode {
@@ -302,6 +303,16 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("transport-matrix") => match run_transport_matrix_probe() {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("{reason}");
+                ExitCode::from(1)
+            }
+        },
         Some("acceptance") => match build_acceptance_report() {
             Ok(report) => {
                 let passed = report.passed();
@@ -329,7 +340,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- acceptance\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- transport-matrix\n       cargo run -p nerva-bench -- acceptance\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
             );
             ExitCode::from(2)
         }
@@ -366,6 +377,15 @@ fn run_transport_probe() -> Result<String, String> {
     let summary = runtime
         .run_transport_path_probe()
         .map_err(|err| format!("transport path probe failed: {err:?}"))?;
+    Ok(summary.to_json())
+}
+
+fn run_transport_matrix_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let summary = runtime
+        .run_transport_capability_matrix_probe()
+        .map_err(|err| format!("transport capability matrix probe failed: {err:?}"))?;
     Ok(summary.to_json())
 }
 
@@ -635,6 +655,31 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         Err(err) => report.push("transport_pinned_fallback", false, format!("{err:?}")),
     }
 
+    match runtime.run_transport_capability_matrix_probe() {
+        Ok(summary) => report.push(
+            "transport_capability_matrix",
+            matches!(summary.status, TransportCapabilityMatrixStatus::Ok)
+                && summary.sizes == 6
+                && summary.entries.len() == 24
+                && summary.degraded_to_pinned_host_entries > 0
+                && summary.pageable_copies == 0
+                && summary.per_token_registrations == 0
+                && summary.hot_path_allocations == 0,
+            format!(
+                "sizes={} entries={} host_staged={} gpu_direct={} degraded_to_pinned_host={} pageable_copies={} per_token_registrations={} hot_path_allocations={}",
+                summary.sizes,
+                summary.entries.len(),
+                summary.host_staged_entries,
+                summary.gpu_direct_entries,
+                summary.degraded_to_pinned_host_entries,
+                summary.pageable_copies,
+                summary.per_token_registrations,
+                summary.hot_path_allocations,
+            ),
+        ),
+        Err(err) => report.push("transport_capability_matrix", false, format!("{err:?}")),
+    }
+
     match resident_weight_execution_acceptance(&runtime) {
         Ok((passed, details)) => report.push("resident_weight_execution", passed, details),
         Err(err) => report.push("resident_weight_execution", false, err),
@@ -784,6 +829,7 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
             .map_err(|err| format!("kernel contract probe failed: {err:?}")),
         "kv" => run_kv_probe(),
         "transport" => run_transport_probe(),
+        "transport-matrix" => run_transport_matrix_probe(),
         "acceptance" => run_acceptance_probe(),
         _ => Err(format!("unknown artifact probe '{command}'")),
     }
@@ -1339,6 +1385,7 @@ mod tests {
         assert!(json.contains("\"synthetic_device_token\""));
         assert!(json.contains("\"kv_residency_tiering\""));
         assert!(json.contains("\"transport_pinned_fallback\""));
+        assert!(json.contains("\"transport_capability_matrix\""));
         assert!(json.contains("\"resident_weight_execution\""));
     }
 
