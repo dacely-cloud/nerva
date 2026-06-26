@@ -3348,6 +3348,14 @@ pub fn cuda_smoke() -> nerva_cuda::CudaSmokeSummary {
     nerva_cuda::smoke()
 }
 
+pub fn cuda_synthetic_graph_smoke(
+    steps: u32,
+    ring_capacity: u32,
+    seed_token: u32,
+) -> nerva_cuda::CudaSyntheticGraphSummary {
+    nerva_cuda::synthetic_graph_smoke(steps, ring_capacity, seed_token)
+}
+
 fn cuda_compute_capability(summary: &nerva_cuda::CudaSmokeSummary) -> Option<String> {
     Some(format!(
         "{}.{}",

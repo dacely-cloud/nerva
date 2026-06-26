@@ -466,6 +466,7 @@ The current development stage is runtime foundation plus deterministic block, si
 
 ```bash
 cargo run -p nerva-bench -- smoke
+cargo run -p nerva-bench -- cuda-graph 1024 64 1
 cargo run -p nerva-bench -- synthetic 1024 64
 cargo run -p nerva-bench -- block
 cargo run -p nerva-bench -- model 8
@@ -510,7 +511,7 @@ This repository is in the runtime foundation stage, so it is not a production mo
 |---|---|
 | Device smoke | CUDA driver and runtime load, primary context setup, device allocation, pinned-host allocation, one kernel, and a JSON ledger summary. |
 | Static arena | CPU, pinned-host, and GPU logical arenas are preallocated, and any hot-path arena allocation attempt is rejected and ledgered. |
-| Synthetic transaction | A captured synthetic decode graph replay is counted separately from device activity, copies, and host-visibility waits. |
+| Synthetic transaction | A native CUDA graph captures a synthetic device-token step against preallocated device state/ring/pinned observation, and the Rust synthetic ledger counts graph replay separately from device activity, copies, and host-visibility waits. |
 | Device token | 1,024 synthetic decode steps run on device-ring causality with zero stale, missing, extra, mismatched, or host-causality tokens. |
 | Real block | One exact f32 Transformer block runs through a preallocated scratch path with zero hot-path allocations. |
 | Single model | One exact tiny f32 greedy decode path checks deterministic token parity and per-token ledgers. |
@@ -525,6 +526,8 @@ NERVA currently builds on Linux only, and the first host targets are Ubuntu on `
 
 The CUDA backend supports **CUDA 12.x and CUDA 13.x only.** Older CUDA stacks are not supported, and newer CUDA major versions should be treated as unsupported until the loader and smoke checks are updated to match. The CUDA loader is written to probe platform-specific driver and runtime library names, but the runtime crates stay gated to Linux while the M0 runtime contracts are being built.
 
+CUDA architecture selection uses explicit overrides first, local GPU detection second, and toolkit-supported fallback architectures last. Use `NERVA_CUDA_ARCHITECTURES`, `CUDAARCHS`, or `CMAKE_CUDA_ARCHITECTURES` for a list such as `75;86;89;120`; use `NERVA_CUDA_ARCH` or `CUDA_ARCH` for one target such as `sm_120` or `12.0`. `CUDA_HOME`, `CUDA_PATH`, and `CUDACXX` select the CUDA toolkit and compiler when the default `nvcc` is not the right one.
+
 ### Running the checks
 
 ```bash
@@ -533,6 +536,7 @@ cargo test --workspace
 
 ```bash
 cargo run -p nerva-bench -- smoke
+cargo run -p nerva-bench -- cuda-graph 1024 64 1
 cargo run -p nerva-bench -- synthetic 1024 64
 cargo run -p nerva-bench -- block
 cargo run -p nerva-bench -- model 8

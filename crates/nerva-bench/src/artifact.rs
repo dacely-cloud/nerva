@@ -8,7 +8,7 @@ use crate::{
         run_resident_shard_probe, run_resident_weight_probe, run_safetensors_probe,
         run_safetensors_shard_probe, run_weight_execution_probe,
     },
-    parse::{parse_optional_u64, parse_optional_usize},
+    parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
     probes::{
         run_capabilities, run_kv_probe, run_synthetic, run_synthetic_ledger_probe,
         run_topology_probe, run_transport_matrix_probe, run_transport_probe,
@@ -28,6 +28,15 @@ pub(crate) fn run_artifact(command: Option<String>, args: Vec<String>) -> Result
 fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
     match command {
         "smoke" => Ok(nerva_runtime::cuda_smoke().to_json()),
+        "cuda-graph" => {
+            let steps = parse_optional_u32(args.first().cloned(), 1024, "steps")?;
+            let ring_capacity = parse_optional_u32(args.get(1).cloned(), 64, "ring_capacity")?;
+            let seed_token = parse_optional_u32(args.get(2).cloned(), 1, "seed_token")?;
+            Ok(
+                nerva_runtime::cuda_synthetic_graph_smoke(steps, ring_capacity, seed_token)
+                    .to_json(),
+            )
+        }
         "capabilities" => run_capabilities(),
         "topology" => run_topology_probe(),
         "synthetic" => {

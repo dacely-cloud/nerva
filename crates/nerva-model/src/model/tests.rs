@@ -1,4 +1,3 @@
-
 use super::*;
 
 const SHARD_ONE: &str = "model-00001-of-00002.safetensors";
