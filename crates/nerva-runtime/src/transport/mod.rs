@@ -8,5 +8,6 @@ pub mod matrix;
 pub mod measured;
 pub mod path;
 pub mod probe;
+pub mod provenance;
 pub mod registration;
 pub mod stage;

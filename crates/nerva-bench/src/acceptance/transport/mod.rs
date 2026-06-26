@@ -6,5 +6,6 @@ pub(crate) mod kv;
 pub(crate) mod matrix;
 pub(crate) mod measured;
 pub(crate) mod path;
+pub(crate) mod provenance;
 pub(crate) mod registration;
 pub(crate) mod stage;

@@ -57,6 +57,9 @@ pub(crate) fn dispatch(
         Some("measured-transport") => Some(exit::print_json_result(
             transport::run_measured_transport_selector_probe(),
         )),
+        Some("transport-provenance") => Some(exit::print_json_result(
+            transport::run_transport_metric_provenance_probe(),
+        )),
         Some("transport") => Some(exit::print_json_result(transport::run_transport_probe())),
         Some("transport-contract") => Some(exit::print_json_result(
             transport::run_transport_contract_probe(),

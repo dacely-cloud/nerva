@@ -6,5 +6,6 @@ mod matrix;
 mod measured;
 mod path_probe;
 mod planner;
+mod provenance;
 mod registration;
 mod stage;
