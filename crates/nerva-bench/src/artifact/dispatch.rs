@@ -78,6 +78,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "transaction" => transaction::run_transaction_probe(),
         "compute-near-data" => compute::run_compute_near_data_probe(),
         "measurements" => measurements::run_measurement_table_probe(),
+        "measured-planner" => measurements::run_measured_planner_probe(),
         "memory-loop" => memory_loop::run_memory_loop_probe(),
         "block" => nerva_model::reference::smoke::reference_block_smoke()
             .map(|summary| summary.to_json())

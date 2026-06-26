@@ -31,6 +31,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     execution::push_transaction_planner(&mut report, &runtime);
     execution::push_compute_near_data(&mut report, &runtime);
     measurements::push_measurement_table(&mut report, &runtime);
+    measurements::push_measured_planner(&mut report, &runtime);
     memory_loop::push_memory_fabric_loop(&mut report, &runtime);
 
     model::push_reference_block(&mut report);

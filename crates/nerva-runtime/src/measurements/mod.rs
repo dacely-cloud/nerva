@@ -3,6 +3,7 @@ mod copy;
 mod cpu;
 mod entry;
 mod merge;
+pub mod planner;
 pub mod probe;
 mod queue;
 pub mod summary;
