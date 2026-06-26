@@ -56,6 +56,7 @@ version = "0.1.0"
 dependencies = [
  "nerva-core",
  "nerva-cuda",
+ "nerva-kernel-contracts",
  "nerva-ledger",
  "nerva-memory",
  "nerva-model",

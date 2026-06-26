@@ -10,8 +10,12 @@ use nerva_core::{
     MemoryTier, NervaError, RequestId, ResidencyState, ResidentBlockId, Result, SequenceId,
     TokenId, TransactionId, ensure_supported_linux_host, host_arch,
 };
+use nerva_kernel_contracts::{
+    KernelBackend, KernelOperation, KernelPlan, KernelQuery, bootstrap_registry,
+};
 use nerva_ledger::{
-    CandidateCost, LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, TokenLedger,
+    CandidateCost, ExecutionDecision, LedgerEvent, LedgerEventKind, MetricSource,
+    ResidencyDecision, TokenLedger,
 };
 use nerva_memory::{
     ArenaKind, BlockAllocationRequest, BlockRegistry, KvPageSpec, KvPrefixKey, KvResidencyAction,
@@ -372,6 +376,71 @@ impl ResidentWeightHotsetSummary {
             json_opt_string(self.first_promoted_tensor.as_deref()),
             json_opt_string(self.last_promoted_tensor.as_deref()),
             self.hot_path_allocations,
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ResidentWeightExecutionStrategy {
+    CpuDram,
+    GpuResident,
+    GpuStaged,
+    CpuExactFallback,
+}
+
+impl ResidentWeightExecutionStrategy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CpuDram => "cpu-dram",
+            Self::GpuResident => "gpu-resident",
+            Self::GpuStaged => "gpu-staged",
+            Self::CpuExactFallback => "cpu-exact-fallback",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightExecutionStep {
+    pub step_index: u64,
+    pub block_id: ResidentBlockId,
+    pub name: String,
+    pub strategy: ResidentWeightExecutionStrategy,
+    pub executor: ExecutionOwner,
+    pub bytes: usize,
+    pub predicted_visible_ns: u64,
+    pub kernel_name: &'static str,
+    pub fallback: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightExecutionPlan {
+    pub steps: Vec<ResidentWeightExecutionStep>,
+    pub total_weight_bytes: usize,
+    pub total_predicted_visible_ns: u64,
+    pub cpu_steps: u64,
+    pub gpu_resident_steps: u64,
+    pub gpu_staged_steps: u64,
+    pub fallback_steps: u64,
+    pub first_tensor: Option<String>,
+    pub last_tensor: Option<String>,
+    pub ledger: TokenLedger,
+}
+
+impl ResidentWeightExecutionPlan {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"steps\":{},\"total_weight_bytes\":{},\"total_predicted_visible_ns\":{},\"cpu_steps\":{},\"gpu_resident_steps\":{},\"gpu_staged_steps\":{},\"fallback_steps\":{},\"first_tensor\":{},\"last_tensor\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
+            self.steps.len(),
+            self.total_weight_bytes,
+            self.total_predicted_visible_ns,
+            self.cpu_steps,
+            self.gpu_resident_steps,
+            self.gpu_staged_steps,
+            self.fallback_steps,
+            json_opt_string(self.first_tensor.as_deref()),
+            json_opt_string(self.last_tensor.as_deref()),
+            self.ledger.execution_decisions.len(),
+            self.ledger.hot_path_allocations,
         )
     }
 }
@@ -1986,6 +2055,200 @@ impl Runtime {
         })
     }
 
+    pub fn plan_resident_weight_execution(
+        &self,
+        table: &ResidentWeightTable,
+        max_steps: usize,
+        compute_capability: Option<u32>,
+    ) -> Result<ResidentWeightExecutionPlan> {
+        if max_steps == 0 {
+            return Err(NervaError::InvalidArgument {
+                reason: "resident weight execution max_steps must be non-zero".to_string(),
+            });
+        }
+
+        let registry = bootstrap_registry();
+        let mut ledger = TokenLedger::new(0);
+        let mut steps = Vec::new();
+        let mut total_weight_bytes = 0usize;
+        let mut total_predicted_visible_ns = 0u64;
+        let mut cpu_steps = 0u64;
+        let mut gpu_resident_steps = 0u64;
+        let mut gpu_staged_steps = 0u64;
+        let mut fallback_steps = 0u64;
+
+        for (index, entry) in table.entries.iter().take(max_steps).enumerate() {
+            let block = table.registry.block(entry.block_id).ok_or_else(|| {
+                NervaError::InvalidArgument {
+                    reason: format!("resident weight {} references unknown block", entry.name),
+                }
+            })?;
+            if block.kind != BlockKind::Weight
+                || block.tier != entry.tier
+                || block.dtype != entry.dtype
+            {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!("resident weight {} block metadata drifted", entry.name),
+                });
+            }
+            if block.state != ResidencyState::Ready {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!("resident weight {} is not Ready", entry.name),
+                });
+            }
+
+            let cuda_plan = registry.resolve(KernelQuery::new(
+                KernelOperation::DenseMatVec,
+                KernelBackend::Cuda,
+                entry.dtype,
+                compute_capability,
+            ))?;
+            let cpu_direct = registry
+                .resolve(KernelQuery::new(
+                    KernelOperation::DenseMatVec,
+                    KernelBackend::CpuReference,
+                    entry.dtype,
+                    None,
+                ))
+                .ok()
+                .and_then(|plan| match plan {
+                    KernelPlan::Direct { implementation } => Some(implementation),
+                    KernelPlan::Fallback { .. } => None,
+                });
+
+            let (strategy, executor, predicted_visible_ns, kernel_name, fallback, reason) =
+                match cuda_plan {
+                    KernelPlan::Direct { implementation } => {
+                        if entry.tier == MemoryTier::Vram {
+                            (
+                                ResidentWeightExecutionStrategy::GpuResident,
+                                ExecutionOwner::Gpu(self.config.device),
+                                estimate_gpu_resident_weight_ns(entry.bytes),
+                                implementation.name,
+                                false,
+                                "weight is already resident in VRAM",
+                            )
+                        } else if let Some(cpu_implementation) = cpu_direct {
+                            let cpu_ns = estimate_cpu_dram_weight_ns(entry.bytes);
+                            let staged_ns = estimate_gpu_staged_weight_ns(entry.bytes);
+                            if cpu_ns <= staged_ns {
+                                (
+                                    ResidentWeightExecutionStrategy::CpuDram,
+                                    ExecutionOwner::Cpu,
+                                    cpu_ns,
+                                    cpu_implementation.name,
+                                    false,
+                                    "CPU compute wins for DRAM-resident weight",
+                                )
+                            } else {
+                                (
+                                    ResidentWeightExecutionStrategy::GpuStaged,
+                                    ExecutionOwner::Gpu(self.config.device),
+                                    staged_ns,
+                                    implementation.name,
+                                    false,
+                                    "GPU staged compute wins despite transfer",
+                                )
+                            }
+                        } else {
+                            (
+                                ResidentWeightExecutionStrategy::GpuStaged,
+                                ExecutionOwner::Gpu(self.config.device),
+                                estimate_gpu_staged_weight_ns(entry.bytes),
+                                implementation.name,
+                                false,
+                                "no exact CPU contract; use declared GPU staged kernel",
+                            )
+                        }
+                    }
+                    KernelPlan::Fallback {
+                        fallback: implementation,
+                        ..
+                    } => (
+                        ResidentWeightExecutionStrategy::CpuExactFallback,
+                        ExecutionOwner::Cpu,
+                        estimate_cpu_fallback_weight_ns(entry.bytes, entry.tier),
+                        implementation.name,
+                        true,
+                        "CUDA request selected exact named CPU fallback",
+                    ),
+                };
+
+            total_weight_bytes = total_weight_bytes.checked_add(entry.bytes).ok_or_else(|| {
+                NervaError::AllocationFailed {
+                    bytes: entry.bytes,
+                    reason: "resident weight execution byte count overflow".to_string(),
+                }
+            })?;
+            total_predicted_visible_ns = total_predicted_visible_ns
+                .checked_add(predicted_visible_ns)
+                .ok_or_else(|| NervaError::AllocationFailed {
+                    bytes: predicted_visible_ns as usize,
+                    reason: "resident weight execution visible cost overflow".to_string(),
+                })?;
+            match strategy {
+                ResidentWeightExecutionStrategy::CpuDram
+                | ResidentWeightExecutionStrategy::CpuExactFallback => cpu_steps += 1,
+                ResidentWeightExecutionStrategy::GpuResident => gpu_resident_steps += 1,
+                ResidentWeightExecutionStrategy::GpuStaged => gpu_staged_steps += 1,
+            }
+            fallback_steps += u64::from(fallback);
+
+            ledger.record_execution_decision(ExecutionDecision {
+                operation: "resident_weight_dense_matvec",
+                executor_selected: executor,
+                candidate_costs: vec![
+                    CandidateCost::estimated("cpu-dram", estimate_cpu_dram_weight_ns(entry.bytes)),
+                    CandidateCost::estimated(
+                        "gpu-resident",
+                        estimate_gpu_resident_weight_ns(entry.bytes),
+                    ),
+                    CandidateCost::estimated(
+                        "gpu-staged",
+                        estimate_gpu_staged_weight_ns(entry.bytes),
+                    ),
+                ],
+                reason,
+                predicted_visible_ns,
+                actual_visible_ns: Some(0),
+                metric_source: MetricSource::EstimatedModel,
+            });
+            steps.push(ResidentWeightExecutionStep {
+                step_index: index as u64,
+                block_id: entry.block_id,
+                name: entry.name.clone(),
+                strategy,
+                executor,
+                bytes: entry.bytes,
+                predicted_visible_ns,
+                kernel_name,
+                fallback,
+            });
+        }
+
+        if steps.is_empty() {
+            return Err(NervaError::InvalidArgument {
+                reason: "resident weight execution has no steps".to_string(),
+            });
+        }
+        ledger.require_zero_hot_path_allocations()?;
+
+        let first_tensor = steps.first().map(|step| step.name.clone());
+        let last_tensor = steps.last().map(|step| step.name.clone());
+        Ok(ResidentWeightExecutionPlan {
+            steps,
+            total_weight_bytes,
+            total_predicted_visible_ns,
+            cpu_steps,
+            gpu_resident_steps,
+            gpu_staged_steps,
+            fallback_steps,
+            first_tensor,
+            last_tensor,
+            ledger,
+        })
+    }
+
     pub fn run_synthetic_decode(
         &self,
         config: SyntheticDecodeConfig,
@@ -2292,6 +2555,26 @@ fn estimate_transport_visible_ns(path: TransportPathKind, bytes: usize, mode: Tr
 
 fn div_ceil_u64(value: u64, divisor: u64) -> u64 {
     value / divisor + u64::from(value % divisor != 0)
+}
+
+fn estimate_cpu_dram_weight_ns(bytes: usize) -> u64 {
+    250 + div_ceil_u64(bytes as u64, 8)
+}
+
+fn estimate_gpu_resident_weight_ns(bytes: usize) -> u64 {
+    80 + div_ceil_u64(bytes as u64, 128)
+}
+
+fn estimate_gpu_staged_weight_ns(bytes: usize) -> u64 {
+    5_000 + div_ceil_u64(bytes as u64, 24) + estimate_gpu_resident_weight_ns(bytes)
+}
+
+fn estimate_cpu_fallback_weight_ns(bytes: usize, tier: MemoryTier) -> u64 {
+    let copy_ns = match tier {
+        MemoryTier::Vram | MemoryTier::SharedHbmOrLpddr => div_ceil_u64(bytes as u64, 24),
+        _ => 0,
+    };
+    copy_ns + estimate_cpu_dram_weight_ns(bytes)
 }
 
 fn weight_role_layout_id(role: nerva_model::WeightBlockRole) -> u32 {
@@ -2841,6 +3124,112 @@ mod tests {
         assert_eq!(summary.promoted_bytes, 88);
         assert_eq!(summary.vram_used_bytes, 88);
         assert_eq!(summary.dram_used_bytes, 376);
+    }
+
+    #[test]
+    fn resident_weight_execution_plans_gpu_staged_for_dram_fp16_weights() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = tiny_llama_manifest();
+        let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
+        let plan = runtime
+            .plan_resident_weight_execution(&table, 3, Some(89))
+            .unwrap();
+
+        assert_eq!(plan.steps.len(), 3);
+        assert_eq!(plan.cpu_steps, 0);
+        assert_eq!(plan.gpu_resident_steps, 0);
+        assert_eq!(plan.gpu_staged_steps, 3);
+        assert_eq!(plan.fallback_steps, 0);
+        assert_eq!(plan.ledger.execution_decisions.len(), 3);
+        assert_eq!(
+            plan.steps[0].strategy,
+            ResidentWeightExecutionStrategy::GpuStaged
+        );
+        assert_eq!(
+            plan.steps[0].kernel_name,
+            "cuda_decode_dense_matvec_fp16_bf16"
+        );
+        assert!(plan.to_json().contains("\"gpu_staged_steps\":3"));
+    }
+
+    #[test]
+    fn resident_weight_execution_uses_gpu_resident_hotset_blocks() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = tiny_llama_manifest();
+        let mut table = runtime
+            .materialize_hf_weight_manifest_with_budget(
+                &manifest,
+                ResidencyBudget::new(128, 0, manifest.total_weight_bytes),
+            )
+            .unwrap();
+        runtime
+            .promote_resident_weight_hotset(&mut table, 100)
+            .unwrap();
+        let plan = runtime
+            .plan_resident_weight_execution(&table, 3, Some(89))
+            .unwrap();
+
+        assert_eq!(plan.gpu_resident_steps, 2);
+        assert_eq!(plan.gpu_staged_steps, 1);
+        assert_eq!(
+            plan.steps[0].strategy,
+            ResidentWeightExecutionStrategy::GpuResident
+        );
+        assert_eq!(
+            plan.steps[2].strategy,
+            ResidentWeightExecutionStrategy::GpuStaged
+        );
+    }
+
+    #[test]
+    fn resident_weight_execution_uses_exact_cpu_fallback_for_f32_cuda() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let metadata = nerva_model::parse_hf_config_metadata(
+            r#"{
+                "model_type": "llama",
+                "hidden_size": 4,
+                "intermediate_size": 8,
+                "num_hidden_layers": 1,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 10,
+                "torch_dtype": "float32"
+            }"#,
+        )
+        .unwrap();
+        let layout = nerva_model::plan_hf_weight_layout(&metadata).unwrap();
+        let manifest = nerva_model::build_hf_tensor_manifest(&layout).unwrap();
+        let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
+        let plan = runtime
+            .plan_resident_weight_execution(&table, 2, Some(89))
+            .unwrap();
+
+        assert_eq!(plan.cpu_steps, 2);
+        assert_eq!(plan.fallback_steps, 2);
+        assert!(plan.steps.iter().all(|step| step.fallback));
+        assert!(
+            plan.steps
+                .iter()
+                .all(|step| step.kernel_name == "cpu_reference_dense_matvec_f32")
+        );
+    }
+
+    #[test]
+    fn resident_weight_execution_rejects_non_ready_blocks() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = tiny_llama_manifest();
+        let mut table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
+        let first = table.entries.first().unwrap().block_id;
+        table
+            .registry
+            .transition(first, ResidencyState::Prefetching)
+            .unwrap();
+
+        assert!(
+            runtime
+                .plan_resident_weight_execution(&table, 1, Some(89))
+                .is_err()
+        );
     }
 
     #[test]

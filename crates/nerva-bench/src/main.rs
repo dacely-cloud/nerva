@@ -196,6 +196,56 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("weight-exec") => {
+            let config_path = args.next();
+            let vram_bytes =
+                match parse_optional_usize(args.next(), 512 * 1024 * 1024, "vram_bytes") {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        eprintln!("{reason}");
+                        return ExitCode::from(2);
+                    }
+                };
+            let max_promote_bytes =
+                match parse_optional_usize(args.next(), vram_bytes, "max_promote_bytes") {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        eprintln!("{reason}");
+                        return ExitCode::from(2);
+                    }
+                };
+            let max_steps = match parse_optional_usize(args.next(), 32, "max_steps") {
+                Ok(value) => value,
+                Err(reason) => {
+                    eprintln!("{reason}");
+                    return ExitCode::from(2);
+                }
+            };
+            let compute_capability = match parse_optional_u64(args.next(), 89, "compute_capability")
+            {
+                Ok(value) => value,
+                Err(reason) => {
+                    eprintln!("{reason}");
+                    return ExitCode::from(2);
+                }
+            };
+            match run_weight_execution_probe(
+                config_path,
+                vram_bytes,
+                max_promote_bytes,
+                max_steps,
+                Some(compute_capability as u32),
+            ) {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(reason) => {
+                    eprintln!("{reason}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         Some("attention") => match nerva_model::blockwise_attention_smoke() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
@@ -248,7 +298,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
             );
             ExitCode::from(2)
         }
@@ -525,23 +575,7 @@ fn run_hotset_probe(
 ) -> Result<String, String> {
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
-    let manifest = match config_path {
-        Some(path) => {
-            let config = std::fs::read_to_string(&path)
-                .map_err(|err| format!("failed to read {path}: {err}"))?;
-            let metadata = nerva_model::parse_hf_config_metadata(&config)
-                .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
-            let plan = nerva_model::plan_hf_weight_layout(&metadata)
-                .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
-            nerva_model::build_hf_tensor_manifest(&plan)
-                .map_err(|err| format!("HF tensor manifest failed: {err:?}"))?
-        }
-        None => {
-            nerva_model::hf_tensor_manifest_probe()
-                .map_err(|err| format!("HF tensor manifest probe failed: {err:?}"))?
-                .manifest
-        }
-    };
+    let manifest = load_manifest_from_optional_config(config_path)?;
     let mut table = runtime
         .materialize_hf_weight_manifest_with_budget(
             &manifest,
@@ -558,6 +592,58 @@ fn run_hotset_probe(
         table.manifest_hash,
         hotset.to_json(),
     ))
+}
+
+fn run_weight_execution_probe(
+    config_path: Option<String>,
+    vram_bytes: usize,
+    max_promote_bytes: usize,
+    max_steps: usize,
+    compute_capability: Option<u32>,
+) -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let manifest = load_manifest_from_optional_config(config_path)?;
+    let mut table = runtime
+        .materialize_hf_weight_manifest_with_budget(
+            &manifest,
+            ResidencyBudget::new(vram_bytes, 0, manifest.total_weight_bytes),
+        )
+        .map_err(|err| format!("resident weight materialization failed: {err:?}"))?;
+    let hotset = runtime
+        .promote_resident_weight_hotset(&mut table, max_promote_bytes)
+        .map_err(|err| format!("resident weight hotset promotion failed: {err:?}"))?;
+    let execution = runtime
+        .plan_resident_weight_execution(&table, max_steps, compute_capability)
+        .map_err(|err| format!("resident weight execution planning failed: {err:?}"))?;
+    Ok(format!(
+        "{{\"status\":\"ok\",\"blocks\":{},\"total_weight_bytes\":{},\"manifest_hash\":{},\"hotset\":{},\"execution\":{}}}",
+        table.entries.len(),
+        table.total_weight_bytes,
+        table.manifest_hash,
+        hotset.to_json(),
+        execution.to_json(),
+    ))
+}
+
+fn load_manifest_from_optional_config(
+    config_path: Option<String>,
+) -> Result<nerva_model::HfTensorManifest, String> {
+    match config_path {
+        Some(path) => {
+            let config = std::fs::read_to_string(&path)
+                .map_err(|err| format!("failed to read {path}: {err}"))?;
+            let metadata = nerva_model::parse_hf_config_metadata(&config)
+                .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+            let plan = nerva_model::plan_hf_weight_layout(&metadata)
+                .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
+            nerva_model::build_hf_tensor_manifest(&plan)
+                .map_err(|err| format!("HF tensor manifest failed: {err:?}"))
+        }
+        None => nerva_model::hf_tensor_manifest_probe()
+            .map(|summary| summary.manifest)
+            .map_err(|err| format!("HF tensor manifest probe failed: {err:?}")),
+    }
 }
 
 fn parse_optional_u64(
@@ -674,6 +760,19 @@ mod tests {
         assert!(hotset_json.contains("\"status\":\"ok\""));
         assert!(hotset_json.contains("\"hotset\""));
         assert!(hotset_json.contains("\"promoted_blocks\":7"));
+
+        let execution_json = run_weight_execution_probe(
+            Some(config_path.to_string_lossy().into_owned()),
+            128,
+            100,
+            3,
+            Some(89),
+        )
+        .unwrap();
+        assert!(execution_json.contains("\"status\":\"ok\""));
+        assert!(execution_json.contains("\"execution\""));
+        assert!(execution_json.contains("\"gpu_resident_steps\":2"));
+        assert!(execution_json.contains("\"gpu_staged_steps\":1"));
 
         let _ = std::fs::remove_file(dir.join(SHARD_ONE));
         let _ = std::fs::remove_file(dir.join(SHARD_TWO));

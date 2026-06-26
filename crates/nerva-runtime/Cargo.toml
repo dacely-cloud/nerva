@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 nerva-core.workspace = true
 nerva-cuda.workspace = true
+nerva-kernel-contracts.workspace = true
 nerva-ledger.workspace = true
 nerva-memory.workspace = true
 nerva-model.workspace = true
