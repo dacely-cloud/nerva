@@ -6,14 +6,16 @@ compile_error!("NERVA currently supports Linux only.");
 use std::collections::BTreeMap;
 
 use nerva_core::{
-    AllocationId, DeviceOrdinal, ExecutionOwner, HostArch, MemoryFabricKind, MemoryTier,
-    NervaError, RequestId, Result, SequenceId, TokenId, TransactionId, ensure_supported_linux_host,
-    host_arch,
+    AllocationId, BlockKind, DeviceOrdinal, ExecutionOwner, HostArch, LayoutId, MemoryFabricKind,
+    MemoryTier, NervaError, RequestId, ResidentBlockId, Result, SequenceId, TokenId, TransactionId,
+    ensure_supported_linux_host, host_arch,
 };
-use nerva_ledger::{LedgerEvent, LedgerEventKind, TokenLedger};
+use nerva_ledger::{
+    CandidateCost, LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, TokenLedger,
+};
 use nerva_memory::{
-    ArenaKind, BlockRegistry, KvPageSpec, KvPrefixKey, KvResidencyAction, KvResidencyPlanner,
-    KvResidencyPolicy, StaticArenaSet,
+    ArenaKind, BlockAllocationRequest, BlockRegistry, KvPageSpec, KvPrefixKey, KvResidencyAction,
+    KvResidencyPlanner, KvResidencyPolicy, StaticArenaSet,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -253,6 +255,68 @@ impl TransportPathDecision {
             latency_ns: 1,
             label: "transport_ordering_barrier",
         });
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightBlockRef {
+    pub name: String,
+    pub block_id: ResidentBlockId,
+    pub bytes: usize,
+    pub dtype: nerva_core::DType,
+    pub tier: MemoryTier,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightTable {
+    pub registry: BlockRegistry,
+    pub entries: Vec<ResidentWeightBlockRef>,
+    pub total_weight_bytes: usize,
+    pub manifest_hash: u64,
+    pub ledger: TokenLedger,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ResidentWeightProbeStatus {
+    Ok,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightProbeSummary {
+    pub status: ResidentWeightProbeStatus,
+    pub blocks: usize,
+    pub total_weight_bytes: usize,
+    pub dram_used_bytes: usize,
+    pub vram_used_bytes: usize,
+    pub residency_decisions: u64,
+    pub first_block_id: Option<ResidentBlockId>,
+    pub last_block_id: Option<ResidentBlockId>,
+    pub first_tensor: Option<String>,
+    pub last_tensor: Option<String>,
+    pub manifest_hash: u64,
+    pub hot_path_allocations: u64,
+}
+
+impl ResidentWeightProbeSummary {
+    pub fn to_json(&self) -> String {
+        let status = match self.status {
+            ResidentWeightProbeStatus::Ok => "ok",
+        };
+        format!(
+            "{{\"status\":\"{}\",\"blocks\":{},\"total_weight_bytes\":{},\"dram_used_bytes\":{},\"vram_used_bytes\":{},\"residency_decisions\":{},\"first_block_id\":{},\"last_block_id\":{},\"first_tensor\":{},\"last_tensor\":{},\"manifest_hash\":{},\"hot_path_allocations\":{}}}",
+            status,
+            self.blocks,
+            self.total_weight_bytes,
+            self.dram_used_bytes,
+            self.vram_used_bytes,
+            self.residency_decisions,
+            json_opt_block_id(self.first_block_id),
+            json_opt_block_id(self.last_block_id),
+            json_opt_string(self.first_tensor.as_deref()),
+            json_opt_string(self.last_tensor.as_deref()),
+            self.manifest_hash,
+            self.hot_path_allocations,
+        )
     }
 }
 
@@ -1303,6 +1367,101 @@ impl Runtime {
         Ok(probe.finish())
     }
 
+    pub fn materialize_hf_weight_manifest(
+        &self,
+        manifest: &nerva_model::HfTensorManifest,
+    ) -> Result<ResidentWeightTable> {
+        self.materialize_hf_weight_manifest_with_budget(
+            manifest,
+            ResidencyBudget::new(0, 0, manifest.total_weight_bytes),
+        )
+    }
+
+    pub fn materialize_hf_weight_manifest_with_budget(
+        &self,
+        manifest: &nerva_model::HfTensorManifest,
+        budget: ResidencyBudget,
+    ) -> Result<ResidentWeightTable> {
+        let _ = self.config;
+        let mut registry = self.block_registry(budget);
+        let mut ledger = TokenLedger::new(0);
+        let mut entries = Vec::with_capacity(manifest.entries.len());
+        let mut materialized_bytes = 0usize;
+
+        for entry in &manifest.entries {
+            let block_id = registry.allocate(
+                BlockAllocationRequest::new(BlockKind::Weight, entry.tier, entry.bytes)
+                    .with_dtype(entry.dtype)
+                    .with_layout(LayoutId(weight_role_layout_id(entry.role))),
+            )?;
+            registry.mark_ready(block_id)?;
+            materialized_bytes = materialized_bytes.checked_add(entry.bytes).ok_or_else(|| {
+                NervaError::AllocationFailed {
+                    bytes: entry.bytes,
+                    reason: "resident weight byte count overflow".to_string(),
+                }
+            })?;
+            ledger.record_residency_decision(ResidencyDecision {
+                block_id,
+                old_tier: MemoryTier::Disk,
+                new_tier: entry.tier,
+                executor_selected: ExecutionOwner::Cpu,
+                candidate_costs: vec![
+                    CandidateCost::estimated("cold-disk-backing", entry.bytes as u64),
+                    CandidateCost::estimated("resident-dram-backing", 0),
+                ],
+                reason: "initialize exact weight block as DRAM-resident immutable backing",
+                predicted_overlap_ns: 0,
+                actual_visible_ns: Some(0),
+                metric_source: MetricSource::EstimatedModel,
+            });
+            entries.push(ResidentWeightBlockRef {
+                name: entry.name.clone(),
+                block_id,
+                bytes: entry.bytes,
+                dtype: entry.dtype,
+                tier: entry.tier,
+            });
+        }
+
+        if materialized_bytes != manifest.total_weight_bytes {
+            return Err(NervaError::InvalidArgument {
+                reason: "resident weight byte count does not match manifest".to_string(),
+            });
+        }
+        ledger.require_zero_hot_path_allocations()?;
+
+        Ok(ResidentWeightTable {
+            registry,
+            entries,
+            total_weight_bytes: materialized_bytes,
+            manifest_hash: manifest.manifest_hash,
+            ledger,
+        })
+    }
+
+    pub fn run_resident_weight_probe(&self) -> Result<ResidentWeightProbeSummary> {
+        let manifest = nerva_model::hf_tensor_manifest_probe()?.manifest;
+        let table = self.materialize_hf_weight_manifest(&manifest)?;
+        let first = table.entries.first();
+        let last = table.entries.last();
+
+        Ok(ResidentWeightProbeSummary {
+            status: ResidentWeightProbeStatus::Ok,
+            blocks: table.entries.len(),
+            total_weight_bytes: table.total_weight_bytes,
+            dram_used_bytes: table.registry.used_bytes(MemoryTier::Dram),
+            vram_used_bytes: table.registry.used_bytes(MemoryTier::Vram),
+            residency_decisions: table.ledger.residency_decisions.len() as u64,
+            first_block_id: first.map(|entry| entry.block_id),
+            last_block_id: last.map(|entry| entry.block_id),
+            first_tensor: first.map(|entry| entry.name.clone()),
+            last_tensor: last.map(|entry| entry.name.clone()),
+            manifest_hash: table.manifest_hash,
+            hot_path_allocations: table.ledger.hot_path_allocations,
+        })
+    }
+
     pub fn run_synthetic_decode(
         &self,
         config: SyntheticDecodeConfig,
@@ -1611,6 +1770,22 @@ fn div_ceil_u64(value: u64, divisor: u64) -> u64 {
     value / divisor + u64::from(value % divisor != 0)
 }
 
+fn weight_role_layout_id(role: nerva_model::WeightBlockRole) -> u32 {
+    match role {
+        nerva_model::WeightBlockRole::TokenEmbedding => 1,
+        nerva_model::WeightBlockRole::AttentionNorm => 2,
+        nerva_model::WeightBlockRole::QueryProjection => 3,
+        nerva_model::WeightBlockRole::KeyProjection => 4,
+        nerva_model::WeightBlockRole::ValueProjection => 5,
+        nerva_model::WeightBlockRole::OutputProjection => 6,
+        nerva_model::WeightBlockRole::MlpNorm => 7,
+        nerva_model::WeightBlockRole::GateProjection => 8,
+        nerva_model::WeightBlockRole::UpProjection => 9,
+        nerva_model::WeightBlockRole::DownProjection => 10,
+        nerva_model::WeightBlockRole::LmHead => 11,
+    }
+}
+
 fn mix_u32(out: &mut [u8; 32], offset: usize, value: u32) {
     let bytes = value.to_le_bytes();
     for (idx, byte) in bytes.iter().enumerate() {
@@ -1620,6 +1795,10 @@ fn mix_u32(out: &mut [u8; 32], offset: usize, value: u32) {
 }
 
 fn json_opt_token(value: Option<TokenId>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.0.to_string())
+}
+
+fn json_opt_block_id(value: Option<ResidentBlockId>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.0.to_string())
 }
 
@@ -1827,6 +2006,86 @@ mod tests {
         assert_eq!(summary.hot_path_allocations, 0);
         assert!(summary.explicit_copy_bytes > 0);
         assert!(summary.to_json().contains("\"pinned_host_paths\":6"));
+    }
+
+    #[test]
+    fn materializes_hf_weight_manifest_as_dram_resident_blocks() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = nerva_model::hf_tensor_manifest_probe().unwrap().manifest;
+        let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
+
+        assert_eq!(table.entries.len(), manifest.entries.len());
+        assert_eq!(table.total_weight_bytes, manifest.total_weight_bytes);
+        assert_eq!(
+            table.registry.used_bytes(MemoryTier::Dram),
+            manifest.total_weight_bytes
+        );
+        assert_eq!(table.registry.used_bytes(MemoryTier::Vram), 0);
+        assert_eq!(table.ledger.hot_path_allocations, 0);
+        assert_eq!(
+            table.ledger.residency_decisions.len(),
+            manifest.entries.len()
+        );
+
+        let first = table.entries.first().unwrap();
+        let block = table.registry.block(first.block_id).unwrap();
+        assert_eq!(first.name, "model.embed_tokens.weight");
+        assert_eq!(block.kind, BlockKind::Weight);
+        assert_eq!(block.semantics, nerva_core::MutationSemantics::Immutable);
+        assert_eq!(block.tier, MemoryTier::Dram);
+        assert_eq!(block.dtype, first.dtype);
+        assert_eq!(block.layout, LayoutId(1));
+    }
+
+    #[test]
+    fn materialized_weight_manifest_preserves_last_block_and_decision() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = nerva_model::hf_tensor_manifest_probe().unwrap().manifest;
+        let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
+
+        let last = table.entries.last().unwrap();
+        let decision = table.ledger.residency_decisions.last().unwrap();
+        assert_eq!(last.name, "lm_head.weight");
+        assert_eq!(last.block_id, ResidentBlockId(290));
+        assert_eq!(decision.block_id, last.block_id);
+        assert_eq!(decision.old_tier, MemoryTier::Disk);
+        assert_eq!(decision.new_tier, MemoryTier::Dram);
+    }
+
+    #[test]
+    fn materialized_weight_manifest_respects_dram_budget() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let manifest = nerva_model::hf_tensor_manifest_probe().unwrap().manifest;
+        let err = runtime
+            .materialize_hf_weight_manifest_with_budget(
+                &manifest,
+                ResidencyBudget::new(0, 0, manifest.total_weight_bytes - 1),
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, NervaError::AllocationFailed { .. }));
+    }
+
+    #[test]
+    fn resident_weight_probe_reports_manifest_materialization() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let summary = runtime.run_resident_weight_probe().unwrap();
+
+        assert_eq!(summary.status, ResidentWeightProbeStatus::Ok);
+        assert_eq!(summary.blocks, 290);
+        assert_eq!(summary.total_weight_bytes, 11_866_210_304);
+        assert_eq!(summary.dram_used_bytes, summary.total_weight_bytes);
+        assert_eq!(summary.vram_used_bytes, 0);
+        assert_eq!(summary.residency_decisions, 290);
+        assert_eq!(summary.first_block_id, Some(ResidentBlockId(1)));
+        assert_eq!(summary.last_block_id, Some(ResidentBlockId(290)));
+        assert_eq!(
+            summary.first_tensor.as_deref(),
+            Some("model.embed_tokens.weight")
+        );
+        assert_eq!(summary.last_tensor.as_deref(), Some("lm_head.weight"));
+        assert_eq!(summary.hot_path_allocations, 0);
+        assert!(summary.to_json().contains("\"blocks\":290"));
     }
 
     #[test]

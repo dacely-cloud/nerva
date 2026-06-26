@@ -119,6 +119,16 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("resident-weights") => match run_resident_weight_probe(args.next()) {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("{reason}");
+                ExitCode::from(1)
+            }
+        },
         Some("attention") => match nerva_model::blockwise_attention_smoke() {
             Ok(summary) => {
                 println!("{}", summary.to_json());
@@ -171,7 +181,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
             );
             ExitCode::from(2)
         }
@@ -292,6 +302,38 @@ fn run_safetensors_probe(
             "safetensors requires either no args or both config.json and model.safetensors"
                 .to_string(),
         ),
+    }
+}
+
+fn run_resident_weight_probe(config_path: Option<String>) -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    match config_path {
+        Some(path) => {
+            let config = std::fs::read_to_string(&path)
+                .map_err(|err| format!("failed to read {path}: {err}"))?;
+            let metadata = nerva_model::parse_hf_config_metadata(&config)
+                .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+            let plan = nerva_model::plan_hf_weight_layout(&metadata)
+                .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
+            let manifest = nerva_model::build_hf_tensor_manifest(&plan)
+                .map_err(|err| format!("HF tensor manifest failed: {err:?}"))?;
+            let table = runtime
+                .materialize_hf_weight_manifest(&manifest)
+                .map_err(|err| format!("resident weight materialization failed: {err:?}"))?;
+            Ok(format!(
+                "{{\"status\":\"ok\",\"blocks\":{},\"total_weight_bytes\":{},\"dram_used_bytes\":{},\"manifest_hash\":{},\"hot_path_allocations\":{}}}",
+                table.entries.len(),
+                table.total_weight_bytes,
+                table.registry.used_bytes(nerva_core::MemoryTier::Dram),
+                table.manifest_hash,
+                table.ledger.hot_path_allocations,
+            ))
+        }
+        None => runtime
+            .run_resident_weight_probe()
+            .map(|summary| summary.to_json())
+            .map_err(|err| format!("resident weight probe failed: {err:?}")),
     }
 }
 
