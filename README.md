@@ -2,8 +2,6 @@
 
 <img src="./images/logo.svg" alt="Nerva" width="600" />
 
----
-
 ### AI inference beyond the VRAM wall.
 
 #### An inference operating system for large models.
@@ -14,8 +12,8 @@ An inference operating system for AI models: memory residency, device-first toke
 
 <br/>
 
-**Stop treating VRAM like the model.**  
-**Stop treating the GPU like the whole machine.**  
+**Stop treating VRAM like the model.**<br/>
+**Stop treating the GPU like the whole machine.**<br/>
 **Stop letting inference fall off a cliff when the model no longer fits.**
 
 <br/>
@@ -37,23 +35,26 @@ An inference operating system for AI models: memory residency, device-first toke
 <br/>
 
 1. [What NERVA is](#what-nerva-is)
-2. [The thesis](#the-thesis)
-3. [Why inference needs a new machine](#why-inference-needs-a-new-machine)
-4. [What changes](#what-changes)
-5. [ResidentBlocks](#residentblocks)
-6. [Memory residency](#memory-residency)
-7. [CPU and GPU roles](#cpu-and-gpu-roles)
-8. [Device-first decoding](#device-first-decoding)
-9. [KV cache as virtual memory](#kv-cache-as-virtual-memory)
-10. [Static arenas and synchronization discipline](#static-arenas-and-synchronization-discipline)
-11. [Token ledgers](#token-ledgers)
-12. [Hardware model](#hardware-model)
-13. [Coherent shared-memory target](#coherent-shared-memory-target)
-14. [Future transport and distributed inference](#future-transport-and-distributed-inference)
-15. [Relationship to vLLM and rvLLM](#relationship-to-vllm-and-rvllm)
-16. [What NERVA is not](#what-nerva-is-not)
-17. [Current stage](#current-stage)
-18. [Long-term goal](#long-term-goal)
+2. [Current implementation](#current-implementation)
+3. [Requirements](#requirements)
+4. [Run the checks](#run-the-checks)
+5. [The thesis](#the-thesis)
+6. [Why inference needs a new machine](#why-inference-needs-a-new-machine)
+7. [What changes](#what-changes)
+8. [ResidentBlocks](#residentblocks)
+9. [Memory residency](#memory-residency)
+10. [CPU and GPU roles](#cpu-and-gpu-roles)
+11. [Device-first decoding](#device-first-decoding)
+12. [KV cache as virtual memory](#kv-cache-as-virtual-memory)
+13. [Static arenas and synchronization discipline](#static-arenas-and-synchronization-discipline)
+14. [Token ledgers](#token-ledgers)
+15. [Hardware model](#hardware-model)
+16. [Coherent shared-memory target](#coherent-shared-memory-target)
+17. [Future transport and distributed inference](#future-transport-and-distributed-inference)
+18. [Relationship to vLLM and rvLLM](#relationship-to-vllm-and-rvllm)
+19. [What NERVA is not](#what-nerva-is-not)
+20. [Current stage](#current-stage)
+21. [Long-term goal](#long-term-goal)
 
 </details>
 
@@ -72,6 +73,52 @@ Instead of treating inference as a sequence of framework calls that launch GPU k
 The point is simple but deep:
 
 **The model is not loaded. The model is scheduled.**
+
+---
+
+## Current implementation
+
+This repository is in the runtime foundation stage. It is not a production model server yet.
+
+The current code proves the first runtime contracts:
+
+| Checkpoint | Current artifact |
+|---|---|
+| Device smoke | CUDA driver/runtime load, primary context setup, device allocation, pinned-host allocation, one kernel, JSON ledger summary. |
+| Static arena | CPU, pinned-host, and GPU logical arenas are preallocated; hot-path arena allocation attempts are rejected and ledgered. |
+| Synthetic transaction | Captured synthetic decode graph replay is counted separately from device activity, copies, and host visibility waits. |
+| Device token | 1,024 synthetic decode steps use device-ring causality with zero stale, missing, extra, mismatched, or host-causality tokens. |
+| Real block | One exact f32 Transformer block runs through a preallocated scratch path with zero hot-path allocations. |
+| Residency probe | KV page placement across DRAM and VRAM produces explicit prefetch, demotion, eviction, copy, stall, and residency-decision ledger entries. |
+
+The implementation is intentionally small. It is meant to lock the runtime contracts before a larger model path is added.
+
+---
+
+## Requirements
+
+NERVA currently builds on Linux only. The first host targets are Ubuntu on `x86_64` and `aarch64`.
+
+**WARNING: the CUDA backend currently supports CUDA 12.x and CUDA 13.x only.** Older CUDA stacks are not supported. Newer CUDA major versions should be treated as unsupported until the loader and smoke checks are updated.
+
+The CUDA loader is written to probe platform-specific CUDA driver and runtime library names, but the runtime crates are still gated to Linux while the M0 runtime contracts are being built.
+
+---
+
+## Run the checks
+
+```bash
+cargo test --workspace
+```
+
+```bash
+cargo run -p nerva-bench -- smoke
+cargo run -p nerva-bench -- synthetic 1024 64
+cargo run -p nerva-bench -- block
+cargo run -p nerva-bench -- kv
+```
+
+The benchmark commands emit single-line JSON summaries. The important acceptance fields are `hot_path_allocations: 0`, zero synthetic token audit failures, graph/device/copy/host-wait event counts, and explicit KV residency transfer/stall ledger events.
 
 ---
 
@@ -252,11 +299,20 @@ NERVA is not, at this stage, a finished serving system, a multi-GPU engine, or a
 
 ## Current stage
 
-The current development stage is runtime foundation.
+The current development stage is runtime foundation plus deterministic residency probes.
 
-The first target is not a real model. It is a runtime that proves it can initialize the device, own memory, allocate static arenas, replay a synthetic decode graph, keep token state on device, emit a token ledger, and avoid hot-path allocation.
+The first target is not a serving system. It is a runtime that proves it can initialize the device when one is visible, own memory, allocate static arenas, replay a synthetic decode graph, keep token state on device, emit token ledgers, avoid hot-path allocation, run an exact reference Transformer block, and make KV residency decisions visible.
 
-Only once that foundation exists should NERVA run a real Transformer block, only once one real block is correct should it run a small model, and only once a small model works should it begin serious residency planning, CPU/GPU compute-near-data experiments, tiered KV, multi-GPU, or distributed execution. The order is intentional, because a bad runtime with a real model is still a bad runtime.
+Current verified probes:
+
+```bash
+cargo run -p nerva-bench -- smoke
+cargo run -p nerva-bench -- synthetic
+cargo run -p nerva-bench -- block
+cargo run -p nerva-bench -- kv
+```
+
+The `kv` probe exercises a small KV page pool with prefetch, demotion, eviction, copy attribution, and visible-stall ledger events. That is still not real model execution. The next milestones are to connect these contracts to real FP16/BF16 model blocks, then to a small exact greedy decode path, and only after that to broader residency planning, CPU/GPU compute-near-data experiments, tiered KV attention, multi-GPU, or distributed execution.
 
 ---
 
