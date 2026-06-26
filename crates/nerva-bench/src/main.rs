@@ -2,6 +2,7 @@
 compile_error!("NERVA currently supports Linux only.");
 
 use std::{
+    fs,
     io::Read,
     path::Path,
     path::PathBuf,
@@ -469,6 +470,80 @@ impl AcceptanceReport {
     }
 }
 
+const AUDIT_PATH: &str = "docs/audits/VLLM_RVLLM_ARCHITECTURE_AUDIT.md";
+const REQUIRED_AUDIT_ROWS: &[&str] = &[
+    "runtime language",
+    "hot path owner",
+    "request scheduler",
+    "GPU context ownership",
+    "graph capture/replay",
+    "static arenas",
+    "hot-path allocation",
+    "token source of truth",
+    "sampling",
+    "host output handoff",
+    "KV cache",
+    "weight loading",
+    "kernel contracts",
+    "silent fallback behavior",
+    "CUDA portability",
+    "AMD/HIP portability",
+    "model coverage",
+    "old hardware viability",
+    "exact FP16/BF16 viability",
+    "DRAM warm-tier compute",
+    "transport assumptions",
+    "ResidentBlock compatibility",
+];
+
+fn audit_acceptance() -> (bool, String) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join(AUDIT_PATH);
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return (false, format!("missing audit file at {}", path.display()));
+    };
+    let required_sections = [
+        "## vLLM Summary",
+        "## rvLLM Summary",
+        "| Area | vLLM | rvLLM | NERVA decision |",
+        "## Required Questions",
+    ];
+    let section_hits = required_sections
+        .iter()
+        .filter(|section| contents.contains(**section))
+        .count();
+    let missing_rows = REQUIRED_AUDIT_ROWS
+        .iter()
+        .filter(|row| !audit_has_table_row(&contents, row))
+        .copied()
+        .collect::<Vec<_>>();
+    let passed = section_hits == required_sections.len() && missing_rows.is_empty();
+    let missing = if missing_rows.is_empty() {
+        "none".to_string()
+    } else {
+        missing_rows.join("|")
+    };
+    (
+        passed,
+        format!(
+            "path={} sections={}/{} required_rows={} missing_rows={}",
+            AUDIT_PATH,
+            section_hits,
+            required_sections.len(),
+            REQUIRED_AUDIT_ROWS.len(),
+            missing,
+        ),
+    )
+}
+
+fn audit_has_table_row(contents: &str, row: &str) -> bool {
+    contents
+        .lines()
+        .any(|line| line.trim_start().starts_with(&format!("| {row} |")))
+}
+
 fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
@@ -503,6 +578,9 @@ fn build_acceptance_report() -> Result<AcceptanceReport, String> {
             capabilities.topology.cpu_count,
         ),
     );
+
+    let (audit_passed, audit_details) = audit_acceptance();
+    report.push("vllm_rvllm_audit", audit_passed, audit_details);
 
     let topology = runtime.discover_topology();
     report.push(
@@ -1494,6 +1572,7 @@ mod tests {
         assert!(json.contains("\"acceptance_schema\":\"nerva-acceptance-v1\""));
         assert!(json.contains("\"status\":\"ok\""));
         assert!(json.contains("\"failed\":0"));
+        assert!(json.contains("\"vllm_rvllm_audit\""));
         assert!(json.contains("\"topology_snapshot\""));
         assert!(json.contains("\"synthetic_device_token\""));
         assert!(json.contains("\"kv_residency_tiering\""));

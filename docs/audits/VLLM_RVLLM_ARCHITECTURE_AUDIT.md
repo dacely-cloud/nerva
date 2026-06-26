@@ -334,19 +334,32 @@ NERVA decision: early serving should be compatibility-shaped like vLLM, while ru
 |---|---|---|---|
 | runtime language | Python + Torch + C++/CUDA/Triton | Rust + CUDA, some JAX/TPU and Metal | Rust core with C/CUDA native boundary. |
 | hot path owner | Python engine/scheduler | Rust production path for Gemma | Rust runtime owns hot path; Python only compatibility shim later. |
+| request scheduler | EngineCore scheduler and Python request state | Narrow serving/runtime scheduler | Start with single-owner Rust scheduler; defer vLLM-compatible serving until runtime invariants pass. |
+| GPU context ownership | Worker and GPUModelRunner through Torch/CUDA platform setup | Rust runtime/context wrappers own CUDA context and streams | CUDA-specific ownership stays in `nerva-cuda`; core runtime sees typed backend handles only. |
 | GPU execution | Torch modules and custom ops | Direct driver/cuBLASLt/CUTLASS/PTX | Direct CUDA first. |
 | CUDA graphs | PyTorch CUDA graph wrappers | Rust `CapturedGraph` handles | Rust graph executor with typed layout hashes. |
+| graph capture/replay | Captured/replayed inside Python-owned model runner path | Rust graph pool keyed by layout/bucket | Predeclared NERVA transactions with stable ResidentBlock addresses and ledgered graph replay. |
 | memory arenas | PyTorch allocator plus caches | HBM/unified bump arenas | Static arenas underneath `ResidentBlock` residency manager. |
+| static arenas | Mostly framework allocator and preallocated tensors | HBM, unified, and pinned arenas | All hot-path arenas are preallocated; workspace reset is constant-time. |
+| hot-path allocation | Python/Torch objects and selected tensor paths can still allocate | Stronger arena discipline, but model-specific | NERVA hot path rejects allocator events and ledgers violations. |
 | KV cache | mature logical paged cache | fixed model KV layout | KV virtual memory over ResidentBlocks. |
 | token state | host/scheduler authoritative | device feedback plus host harvest | device-resident token ring and sampler transaction. |
+| token source of truth | Host scheduler and request state | Partly device feedback for greedy graph path | Device token ring is authoritative for next decode step; host output is a replica. |
 | sampling | mature sampler, host-visible output | deterministic host tail plus device top-k | device sampler first, host audit ledger second. |
+| host output handoff | Async output copy/event sync before Python output conversion | Pinned host harvest for output/EOS checks | SoftVisibilitySync is ledgered and not a dependency for device-fast-path decode. |
 | model loading | broad HF ecosystem | generic loader plus Gemma-specialized path | start with HF metadata parser, keep model-specific lowering behind traits. |
+| weight loading | Torch/HF loader materializes framework tensors | Loader plus model-specific packed paths | Canonical weight metadata first; packed replicas are backend contract outputs, not source of truth. |
 | kernel strategy | broad backend registry | manifest-pinned owned kernels | manifest-pinned native kernels, backend traits, no silent fallback. |
+| kernel contracts | CustomOp/backend dispatch via framework integration | Manifest-pinned kernels and launchers | Explicit kernel contracts declare dtype/layout/graph safety/fallback exactness. |
+| silent fallback behavior | Framework fallback risk exists unless audited per path | Mostly fail-closed for owned paths | Missing optimized paths must select named exact fallback or planning failure. |
+| CUDA portability | Broad NVIDIA path through Torch/native ops | CUDA-first, newer GPU focused | CUDA backend is capability-gated; no CUDA type leaks into core abstractions. |
+| AMD/HIP portability | ROCm platform split exists in vLLM | No clean first-class HIP runtime found | Keep backend contracts HIP-capable; implement `nerva-hip` only after CUDA contracts stabilize. |
 | serving API | mature OpenAI server | narrower serving crates | vLLM-compatible API surface after core smoke. |
 | model coverage | very broad | strongest on Gemma 4 | do not begin Gemma-only; encode portability gates. |
 | old hardware viability | broader via Torch backends | runtime lacks SM75/SM86 targets | support Linux x86_64/aarch64 first; GPU backends explicitly gated by compute target. |
 | exact FP16/BF16 viability | strong via Torch/native kernels | present but FP8-optimized | FP16/BF16 exact path first, FP8 optional. |
 | DRAM warm-tier compute | not a first-class tier | no ResidentBlock warm tier | implement warm-tier CPU compute as NERVA-specific work. |
+| transport assumptions | Distributed abstractions lean on vLLM/PyTorch ecosystem | No general NERVA-Fabric transport contract | Transport moves named block versions and exposes direct GPU paths only when verified. |
 | ResidentBlock compatibility | absent | absent | foundational abstraction. |
 
 ## Required Questions
