@@ -1,4 +1,5 @@
 use super::*;
+use nerva_core::ResidentBlockId;
 
 const SHARD_ONE: &str = "model-00001-of-00001.safetensors";
 
