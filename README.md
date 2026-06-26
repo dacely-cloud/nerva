@@ -64,6 +64,41 @@ NERVA starts from a different assumption. The runtime should know where every me
 
 ## The architecture
 
+At the top level, NERVA replaces the GPU-centric command loop with an inference virtual machine, where a CPU control plane drives policy and scheduling, a memory operating system owns where every block lives, a GPU hot plane executes a prebuilt decode transaction, and a transport layer moves named block versions between domains. The device token ring is what closes the decode loop, and the host observes it asynchronously rather than gating every step.
+
+```mermaid
+flowchart TB
+    REQ["Request and prompt"] --> CPU
+    subgraph CONTROL["CPU — latency and control plane"]
+        CPU["Request and token state machine"]
+        SCHED["Execution planner and scheduler"]
+        HILO["HILO residency planner"]
+        LEDGER["Token and stall ledger"]
+    end
+    subgraph MEMOS["Memory operating system"]
+        BT["Global block table of ResidentBlocks"]
+        KVM["KV virtual-memory manager"]
+        ARENA["Static arena manager"]
+        PFE["Prefetch and eviction engine"]
+    end
+    subgraph HOT["GPU — hot tensor plane"]
+        EXEC["Prebuilt decode graph or transaction"]
+        RING["Device token ring"]
+    end
+    TM["Transport manager — RDMA, DPDK, pinned-host"]
+    CPU --> SCHED --> HILO --> BT
+    BT --> KVM
+    BT --> ARENA
+    HILO --> PFE
+    SCHED --> EXEC
+    EXEC --> RING
+    RING -->|next step consumes slot| EXEC
+    RING -.async observe.-> CPU
+    EXEC --> LEDGER
+    PFE <--> TM
+    BT <--> TM
+```
+
 ### Why inference needs a new machine
 
 LLM inference is not one workload. It contains dense matrix math, attention over a growing KV cache, token sampling, request scheduling, memory allocation, device synchronization, CPU-visible output, host-to-device transfer, cache management, and sometimes disk or network staging. Treating all of that as "GPU work" hides the actual problem.
@@ -91,9 +126,43 @@ The core NERVA object is the **ResidentBlock**, which is any meaningful unit of 
 
 This is the conceptual difference between NERVA and a normal tensor runtime. A tensor says "here are values," whereas a ResidentBlock says "here are values, here is where they live, here is who owns them, here is when they matter, and here is the cost of moving or computing against them." That richer object is the foundation of everything else.
 
+Every block moves through an explicit residency state machine, and no executor is allowed to consume a block until its required replica is `Ready` and its version satisfies the execution dependency, which is what keeps a moved or evicted block from being read before its transfer finishes.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unmapped
+    Unmapped --> Allocated: reserve in arena
+    Allocated --> Prefetching: stage toward executor
+    Prefetching --> Ready: transfer complete
+    Ready --> InUse: executor consumes
+    InUse --> Ready: phase released
+    Ready --> Draining: scheduled to move
+    Draining --> Evicting: copy out complete
+    Evicting --> Unmapped: slot reclaimed
+    InUse --> Invalid: freed or lifetime end
+    Invalid --> [*]
+```
+
 ### Memory residency
 
 NERVA treats memory as a hierarchy of roles rather than a binary capacity wall.
+
+```mermaid
+flowchart TB
+    DISK["Disk / NVMe — cold tier<br/>model files, cold KV snapshots, persistent prefix cache"]
+    CXL["CXL / coherent fabric — expandable warm or cold tier"]
+    DRAM["DRAM — warm tier and CPU-compute tier<br/>warm weights, warm KV, prefix cache, computable shards"]
+    PIN["Pinned DRAM — staging tier<br/>registered transfer and transport rings"]
+    VRAM["VRAM / local HBM — hot tier<br/>active weights, hot KV, activations, device token ring"]
+    DISK -->|planned prefetch| DRAM
+    CXL --- DRAM
+    DRAM -->|stage| PIN
+    PIN -->|async H2D| VRAM
+    VRAM -->|demote or evict| DRAM
+    GPU["GPU — hot tensor plane"] --- VRAM
+    CPUc["CPU — control and warm compute"] --- DRAM
+    NIC["NIC / fabric — explicit transport device"] --- PIN
+```
 
 **VRAM** is the hot tier, and it should hold active weights, hot KV pages, current activations, graph workspaces, sampler state, prefetch slots, and the device token ring. It should not fill up with cold KV, duplicated prefixes, dead temporaries, or layout-conversion garbage.
 
@@ -113,6 +182,18 @@ The CPU is the latency control plane. It owns request state, scheduler state, st
 
 The deciding policy is compute-near-data versus move-data-to-compute. For batch-one decode, many operations look like a huge weight matrix applied to a tiny current activation, and if that weight block already lives in DRAM then copying the whole thing to the GPU may cost more than letting the CPU compute a partial result and merge the smaller output. NERVA is designed to measure and decide that explicitly, which makes CPU computation a planned mode rather than a desperate fallback.
 
+```mermaid
+flowchart TB
+    OP["Decode operation: large weight block, tiny activation"] --> Q{"Where does the weight block already live?"}
+    Q -->|VRAM, hot| G["GPU executes on device"]
+    Q -->|DRAM, warm| D{"Move block to GPU, or compute beside it on the CPU?"}
+    D -->|moving is cheaper| MV["Stage block to GPU, execute on GPU"]
+    D -->|compute-near-data is cheaper| CN["CPU computes partial result, merge smaller output"]
+    G --> MERGE["Merged exact result"]
+    MV --> MERGE
+    CN --> MERGE
+```
+
 ### Device-first decoding
 
 Decode is the heart of the runtime. Traditional decode often forces a CPU-visible boundary on every token, so the GPU computes, sampling happens, a token is copied or exposed to the host, the CPU updates state, and only then does the next step proceed.
@@ -121,11 +202,38 @@ NERVA separates device token state from host token state. The device token state
 
 This is not a license to ignore correctness. It is a way to classify correctness boundaries precisely, separating hard syncs, soft host-visibility syncs, debug-only syncs, and policy syncs required by complex stop strings, grammar constraints, or tool-call boundaries. The result is a decode loop designed as a device-resident transaction rather than a CPU-mediated token loop.
 
+```mermaid
+sequenceDiagram
+    participant G as GPU hot loop
+    participant R as Device token ring
+    participant C as CPU control loop
+    Note over G,R: decode step t
+    G->>R: write sampled token t into versioned slot
+    R-->>G: step t+1 consumes the same slot directly
+    R--)C: async copy of token t to host
+    Note over C: stream, stop policy, metadata — off the decode path
+    C-->>G: explicit policy barrier only when a policy demands it
+```
+
 ### KV cache as virtual memory
 
 KV cache is not just a tensor, it is virtual memory. Each KV page carries a layer, a head or group, a token range, a size, a dtype, a location, a hotness, an owner, reuse information, and predicted next-use behavior. With that, the runtime can keep recent hot KV in VRAM, move warm KV to DRAM, retain cold KV outside the hot set, and eventually compute attention across multiple tiers at once.
 
 The long-term design supports exact blockwise attention, where hot KV blocks run on the GPU, warm KV blocks may run on the CPU when that is cheaper than staging them, and partial attention results merge through the same online-softmax logic used by IO-aware attention algorithms. The constraint that matters here is exactness, because this tiered KV design never drops context, approximates attention, quantizes KV, or changes model semantics. It only changes where KV lives and where partial work executes.
+
+```mermaid
+flowchart TB
+    subgraph PAGES["KV pages — each tracks layer, head, token range, hotness, owner"]
+        HOTKV["Hot KV pages in VRAM"]
+        WARMKV["Warm KV pages in DRAM"]
+        COLDKV["Cold KV pages retained off the hot set"]
+    end
+    HOTKV --> AG["GPU blockwise attention"]
+    WARMKV --> AC["CPU blockwise attention when cheaper than staging"]
+    AG --> MERGE["Online-softmax merge"]
+    AC --> MERGE
+    MERGE --> OUT["Exact attention output — context never dropped"]
+```
 
 ### Static arenas and synchronization
 
@@ -159,9 +267,49 @@ NERVA answers this with phase-owned coherence, where a block can be CPU-owned, G
 
 Networking is not part of the initial runtime, but the architecture is built so a future NERVA can grow into a multi-host inference system. The distributed rule is simple, which is to move activations, not weights. If a system owns a range of model layers then its weights and KV stay local, and the next system only needs the boundary activation, which makes distributed inference possible without pretending every GPU belongs to one giant memory pool.
 
+```mermaid
+flowchart LR
+    IN["Prompt / hidden state"] --> S1
+    subgraph S1["System 1 — stage A"]
+        W1["Weights A + KV A, local"]
+    end
+    subgraph S2["System 2 — stage B"]
+        W2["Weights B + KV B, local"]
+    end
+    subgraph S3["System 3 — stage C"]
+        W3["Weights C + KV C, local"]
+    end
+    subgraph S4["System 4 — stage D"]
+        W4["Weights D + KV D, local"]
+    end
+    S1 -->|boundary activation| S2
+    S2 -->|boundary activation| S3
+    S3 -->|boundary activation| S4
+    S4 --> LOGITS["Logits, then next token"]
+```
+
+This pattern solves capacity rather than active-weight bandwidth, since a dense exact model still has to touch its active weights on each pass, and single-request decode stays sequential across stages, so pipeline utilization improves with multiple requests or chunked prefill rather than making serial token latency free.
+
 The location of that activation still matters, though. If it lives in GPU VRAM and the NIC cannot read GPU memory directly then the path has to bounce through pinned host memory, whereas GPU-direct RDMA or AMD PeerDirect lets the NIC read or write GPU memory directly. NERVA can build the runtime, the stage pipeline, the activation transport, the RDMA or DPDK data plane, the pinned fallback, the scheduler, and topology-aware routing, but it cannot fabricate peer-memory access when the GPU driver and hardware refuse to expose VRAM for peer DMA.
 
 Future transport modes therefore include true GPU-direct RDMA, an optimized pinned-host bounce, CPU-produced boundary tensors written straight into pinned send buffers, and GPU kernels that write directly into mapped pinned host memory when that is the best available fallback. The backends behind them include RDMA, UCX, libibverbs, DPDK UDP, kernel UDP for testing, and TCP only for control or debugging, because TCP is not a production tensor data plane. DPDK belongs on that list as a future packet transport rather than a substitute for GPU-direct memory support, since it can bypass the kernel network stack and carry custom tensor datagrams but still cannot let a NIC read GPU VRAM without the required memory mappings and driver support.
+
+The runtime detects the best available path at startup and records the decision in the ledger, so an unsupported direct path degrades to a measured pinned-host fallback rather than silently picking an arbitrary slow route.
+
+```mermaid
+flowchart TB
+    START["Move a boundary activation"] --> CAP{"GPU-direct peer DMA verified at startup?"}
+    CAP -->|yes| A["Path A — true GPU-direct RDMA<br/>GPU VRAM to NIC to remote GPU VRAM"]
+    CAP -->|no| MAP{"Mapped pinned host output measured faster?"}
+    MAP -->|yes, small decode activation| Dp["Path D — GPU kernel writes mapped pinned host memory, NIC sends it"]
+    MAP -->|no| LAST{"Last stage produced on the CPU?"}
+    LAST -->|yes| Cp["Path C — CPU writes boundary into pinned send buffer, NIC sends it"]
+    LAST -->|no| B["Path B — async D2H into pinned ring, RDMA or DPDK, remote pinned ring, H2D<br/>universal discrete-GPU fallback"]
+    A --> LEDGER["Path choice recorded in the ledger"]
+    Dp --> LEDGER
+    Cp --> LEDGER
+    B --> LEDGER
+```
 
 ---
 
@@ -185,18 +333,16 @@ NERVA is also not a Python or PyTorch wrapper, and it is not a thin scheduler bo
 
 ### Current stage
 
-The current development stage is runtime foundation plus deterministic block, single-model, tiered-attention, and residency probes. The first target is not a serving system; it is a runtime that proves it can initialize the device when one is visible, own memory, allocate static arenas, replay a synthetic decode graph, keep token state on device, emit token ledgers, avoid hot-path allocation, run an exact reference Transformer block, run one exact tiny greedy decode path, execute exact blockwise attention across DRAM and VRAM tiers, and make KV residency decisions visible.
+The current development stage is runtime foundation plus deterministic residency probes. The first target is not a serving system, it is a runtime that proves it can initialize the device when one is visible, own memory, allocate static arenas, replay a synthetic decode graph, keep token state on device, emit token ledgers, avoid hot-path allocation, run an exact reference Transformer block, and make KV residency decisions visible.
 
 ```bash
 cargo run -p nerva-bench -- smoke
-cargo run -p nerva-bench -- synthetic 1024 64
+cargo run -p nerva-bench -- synthetic
 cargo run -p nerva-bench -- block
-cargo run -p nerva-bench -- model 8
-cargo run -p nerva-bench -- attention
 cargo run -p nerva-bench -- kv
 ```
 
-The `model` probe is intentionally tiny: a deterministic f32 reference model with exact greedy token parity and ledger checks. The `attention` probe is also small, but it verifies exact online-softmax merging across warm DRAM and hot VRAM KV blocks. The `kv` probe exercises a small KV page pool with prefetch, demotion, eviction, copy attribution, and visible-stall ledger events. The next milestones are to connect these contracts to real FP16/BF16 model blocks, then to broader residency planning, CPU/GPU compute-near-data experiments, multi-GPU, and distributed execution.
+The `kv` probe exercises a small KV page pool with prefetch, demotion, eviction, copy attribution, and visible-stall ledger events, and that is still not real model execution. The next milestones are to connect these contracts to real FP16/BF16 model blocks, then to a small exact greedy decode path, and only after that to broader residency planning, CPU/GPU compute-near-data experiments, tiered KV attention, multi-GPU, and distributed execution.
 
 ### Long-term goal
 
@@ -221,8 +367,6 @@ This repository is in the runtime foundation stage, so it is not a production mo
 | Synthetic transaction | A captured synthetic decode graph replay is counted separately from device activity, copies, and host-visibility waits. |
 | Device token | 1,024 synthetic decode steps run on device-ring causality with zero stale, missing, extra, mismatched, or host-causality tokens. |
 | Real block | One exact f32 Transformer block runs through a preallocated scratch path with zero hot-path allocations. |
-| Single model | One exact tiny f32 greedy decode path checks deterministic token parity and per-token ledgers. |
-| Tiered attention | Exact online-softmax blockwise attention merges warm DRAM and hot VRAM KV blocks without changing semantics. |
 | Residency probe | KV page placement across DRAM and VRAM produces explicit prefetch, demotion, eviction, copy, stall, and residency-decision ledger entries. |
 
 ### Requirements
@@ -241,9 +385,7 @@ cargo test --workspace
 cargo run -p nerva-bench -- smoke
 cargo run -p nerva-bench -- synthetic 1024 64
 cargo run -p nerva-bench -- block
-cargo run -p nerva-bench -- model 8
-cargo run -p nerva-bench -- attention
 cargo run -p nerva-bench -- kv
 ```
 
-The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, exact token parity for the model probe, exact dense-reference parity for the attention tests, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, and the explicit KV residency transfer and stall ledger events.
+The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, and the explicit KV residency transfer and stall ledger events.
