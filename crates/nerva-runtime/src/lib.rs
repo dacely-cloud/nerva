@@ -15,7 +15,7 @@ use nerva_kernel_contracts::{
 };
 use nerva_ledger::{
     CandidateCost, ExecutionDecision, LedgerEvent, LedgerEventKind, MetricSource,
-    ResidencyDecision, TokenLedger,
+    ResidencyDecision, SyncClass, TokenLedger,
 };
 use nerva_memory::{
     ArenaKind, BlockAllocationRequest, BlockRegistry, KvPageSpec, KvPrefixKey, KvResidencyAction,
@@ -233,6 +233,7 @@ impl TransportPathDecision {
         if self.explicit_copy_bytes > 0 {
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(self.request.source_tier),
                 to_tier: Some(MemoryTier::PinnedDram),
@@ -243,6 +244,7 @@ impl TransportPathDecision {
         }
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::Transport,
+            sync_class: None,
             block_id: None,
             from_tier: Some(self.request.source_tier),
             to_tier: Some(self.request.destination_tier),
@@ -250,15 +252,15 @@ impl TransportPathDecision {
             latency_ns: self.estimated_visible_ns,
             label: self.path.as_str(),
         });
-        ledger.record(LedgerEvent {
-            kind: LedgerEventKind::Sync,
-            block_id: None,
-            from_tier: Some(self.request.source_tier),
-            to_tier: Some(self.request.destination_tier),
-            bytes: 0,
-            latency_ns: 1,
-            label: "transport_ordering_barrier",
-        });
+        ledger.record_sync(
+            SyncClass::PhaseHandoff,
+            None,
+            Some(self.request.source_tier),
+            Some(self.request.destination_tier),
+            0,
+            1,
+            "transport_ordering_barrier",
+        );
     }
 }
 
@@ -985,6 +987,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
         let mut ledger = TokenLedger::new(plan.token_index);
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::GraphReplay,
+            sync_class: None,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -994,6 +997,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
         });
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::DeviceActivity,
+            sync_class: None,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -1003,6 +1007,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
         });
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::Copy,
+            sync_class: None,
             block_id: None,
             from_tier: Some(MemoryTier::Vram),
             to_tier: Some(MemoryTier::PinnedDram),
@@ -1010,15 +1015,15 @@ impl<'engine> PendingSyntheticStep<'engine> {
             latency_ns: 1,
             label: "async_host_token_observation",
         });
-        ledger.record(LedgerEvent {
-            kind: LedgerEventKind::Sync,
-            block_id: None,
-            from_tier: Some(MemoryTier::Vram),
-            to_tier: Some(MemoryTier::PinnedDram),
-            bytes: 0,
-            latency_ns: 1,
-            label: "soft_visibility_host_wait",
-        });
+        ledger.record_sync(
+            SyncClass::SoftVisibilitySync,
+            None,
+            Some(MemoryTier::Vram),
+            Some(MemoryTier::PinnedDram),
+            0,
+            1,
+            "soft_visibility_host_wait",
+        );
 
         Ok(StepOutput {
             request_id: plan.request_id,
@@ -1077,10 +1082,12 @@ pub struct SyntheticDecodeSummary {
     pub device_events: u64,
     pub copy_events: u64,
     pub host_wait_events: u64,
+    pub soft_visibility_syncs: u64,
     pub graph_replay_latency_ns: u64,
     pub device_latency_ns: u64,
     pub copy_latency_ns: u64,
     pub host_wait_latency_ns: u64,
+    pub soft_visibility_sync_latency_ns: u64,
     pub total_latency_ns: u64,
     pub hot_path_allocations: u64,
     pub observed_tokens: u64,
@@ -1173,6 +1180,7 @@ pub struct TransportPathProbeSummary {
     pub transport_events: u64,
     pub copy_events: u64,
     pub sync_events: u64,
+    pub phase_handoff_syncs: u64,
     pub nic_tx_bytes: usize,
     pub nic_rx_bytes: usize,
     pub explicit_copy_bytes: usize,
@@ -1268,6 +1276,7 @@ impl TransportProbeAccumulator {
             transport_events: self.ledger.event_count(LedgerEventKind::Transport),
             copy_events: self.ledger.event_count(LedgerEventKind::Copy),
             sync_events: self.ledger.event_count(LedgerEventKind::Sync),
+            phase_handoff_syncs: self.ledger.sync_count_for(SyncClass::PhaseHandoff),
             nic_tx_bytes: self.nic_tx_bytes,
             nic_rx_bytes: self.nic_rx_bytes,
             explicit_copy_bytes: self.explicit_copy_bytes,
@@ -1322,7 +1331,7 @@ impl TransportPathProbeSummary {
             TransportPathProbeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"requests\":{},\"decode_requests\":{},\"prefill_requests\":{},\"gpu_direct_paths\":{},\"pinned_host_paths\":{},\"cpu_produced_paths\":{},\"mapped_pinned_paths\":{},\"transport_events\":{},\"copy_events\":{},\"sync_events\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"explicit_copy_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"requests\":{},\"decode_requests\":{},\"prefill_requests\":{},\"gpu_direct_paths\":{},\"pinned_host_paths\":{},\"cpu_produced_paths\":{},\"mapped_pinned_paths\":{},\"transport_events\":{},\"copy_events\":{},\"sync_events\":{},\"phase_handoff_syncs\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"explicit_copy_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             self.requests,
             self.decode_requests,
@@ -1334,6 +1343,7 @@ impl TransportPathProbeSummary {
             self.transport_events,
             self.copy_events,
             self.sync_events,
+            self.phase_handoff_syncs,
             self.nic_tx_bytes,
             self.nic_rx_bytes,
             self.explicit_copy_bytes,
@@ -1353,7 +1363,7 @@ impl SyntheticDecodeSummary {
             SyntheticDecodeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"soft_visibility_syncs\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"soft_visibility_sync_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
             status,
             self.steps,
             self.token_ring_capacity,
@@ -1365,10 +1375,12 @@ impl SyntheticDecodeSummary {
             self.device_events,
             self.copy_events,
             self.host_wait_events,
+            self.soft_visibility_syncs,
             self.graph_replay_latency_ns,
             self.device_latency_ns,
             self.copy_latency_ns,
             self.host_wait_latency_ns,
+            self.soft_visibility_sync_latency_ns,
             self.total_latency_ns,
             self.hot_path_allocations,
             self.observed_tokens,
@@ -1565,6 +1577,7 @@ impl Runtime {
         let cpu_decision = self.plan_transport_path(cpu_request)?;
         probe.record(cpu_decision);
         probe.ledger.require_zero_hot_path_allocations()?;
+        probe.ledger.require_classified_syncs()?;
 
         Ok(probe.finish())
     }
@@ -1815,6 +1828,7 @@ impl Runtime {
                         })?;
                 ledger.record(LedgerEvent {
                     kind: LedgerEventKind::Prefetch,
+                    sync_class: None,
                     block_id: Some(entry.block_id),
                     from_tier: Some(MemoryTier::Disk),
                     to_tier: Some(MemoryTier::PinnedDram),
@@ -1824,6 +1838,7 @@ impl Runtime {
                 });
                 ledger.record(LedgerEvent {
                     kind: LedgerEventKind::Copy,
+                    sync_class: None,
                     block_id: Some(entry.block_id),
                     from_tier: Some(MemoryTier::PinnedDram),
                     to_tier: Some(entry.tier),
@@ -1930,6 +1945,7 @@ impl Runtime {
             })?;
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Prefetch,
+                sync_class: None,
                 block_id: Some(task.block_id),
                 from_tier: Some(MemoryTier::Disk),
                 to_tier: Some(MemoryTier::PinnedDram),
@@ -1939,6 +1955,7 @@ impl Runtime {
             });
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
+                sync_class: None,
                 block_id: Some(task.block_id),
                 from_tier: Some(MemoryTier::PinnedDram),
                 to_tier: Some(task.target_tier),
@@ -2352,6 +2369,7 @@ impl Runtime {
                     }
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::CpuActivity,
+                        sync_class: None,
                         block_id: Some(step.block_id),
                         from_tier: Some(MemoryTier::Dram),
                         to_tier: Some(MemoryTier::Dram),
@@ -2372,6 +2390,7 @@ impl Runtime {
                     gpu_resident_steps += 1;
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::DeviceActivity,
+                        sync_class: None,
                         block_id: Some(step.block_id),
                         from_tier: Some(MemoryTier::Vram),
                         to_tier: Some(MemoryTier::Vram),
@@ -2394,6 +2413,7 @@ impl Runtime {
                     let compute_ns = estimate_gpu_resident_weight_ns(step.bytes);
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::Copy,
+                        sync_class: None,
                         block_id: Some(step.block_id),
                         from_tier: Some(block.tier),
                         to_tier: Some(MemoryTier::Vram),
@@ -2403,6 +2423,7 @@ impl Runtime {
                     });
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::DeviceActivity,
+                        sync_class: None,
                         block_id: Some(step.block_id),
                         from_tier: Some(MemoryTier::Vram),
                         to_tier: Some(MemoryTier::Vram),
@@ -2418,6 +2439,7 @@ impl Runtime {
                         let copy_ns = div_ceil_u64(step.bytes as u64, 24);
                         ledger.record(LedgerEvent {
                             kind: LedgerEventKind::Copy,
+                            sync_class: None,
                             block_id: Some(step.block_id),
                             from_tier: Some(block.tier),
                             to_tier: Some(MemoryTier::Dram),
@@ -2428,6 +2450,7 @@ impl Runtime {
                     }
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::CpuActivity,
+                        sync_class: None,
                         block_id: Some(step.block_id),
                         from_tier: Some(MemoryTier::Dram),
                         to_tier: Some(MemoryTier::Dram),
@@ -2478,10 +2501,12 @@ impl Runtime {
         let mut device_events: u64 = 0;
         let mut copy_events: u64 = 0;
         let mut host_wait_events: u64 = 0;
+        let mut soft_visibility_syncs: u64 = 0;
         let mut graph_replay_latency_ns: u64 = 0;
         let mut device_latency_ns: u64 = 0;
         let mut copy_latency_ns: u64 = 0;
         let mut host_wait_latency_ns: u64 = 0;
+        let mut soft_visibility_sync_latency_ns: u64 = 0;
         let mut total_latency_ns: u64 = 0;
         let mut hot_path_allocations: u64 = 0;
         let mut observed_tokens: u64 = 0;
@@ -2495,6 +2520,7 @@ impl Runtime {
                 .launch_device_next(RequestId(1), SequenceId(1), token_index, config.seed_token)?
                 .collect()?;
             output.ledger.require_zero_hot_path_allocations()?;
+            output.ledger.require_classified_syncs()?;
             let token_graph_events = output.ledger.event_count(LedgerEventKind::GraphReplay);
             let token_device_events = output.ledger.event_count(LedgerEventKind::DeviceActivity);
             let token_kernel_events = output.ledger.event_count(LedgerEventKind::KernelLaunch)
@@ -2502,12 +2528,15 @@ impl Runtime {
                 + token_device_events;
             let token_copy_events = output.ledger.event_count(LedgerEventKind::Copy);
             let token_host_wait_events = output.ledger.event_count(LedgerEventKind::Sync);
+            let token_soft_visibility_syncs =
+                output.ledger.sync_count_for(SyncClass::SoftVisibilitySync);
 
             graph_replay_events += token_graph_events;
             kernel_events += token_kernel_events;
             device_events += token_device_events;
             copy_events += token_copy_events;
             host_wait_events += token_host_wait_events;
+            soft_visibility_syncs += token_soft_visibility_syncs;
             graph_replay_latency_ns = graph_replay_latency_ns
                 .saturating_add(output.ledger.latency_ns_for(LedgerEventKind::GraphReplay));
             device_latency_ns = device_latency_ns.saturating_add(
@@ -2519,6 +2548,11 @@ impl Runtime {
                 copy_latency_ns.saturating_add(output.ledger.latency_ns_for(LedgerEventKind::Copy));
             host_wait_latency_ns = host_wait_latency_ns
                 .saturating_add(output.ledger.latency_ns_for(LedgerEventKind::Sync));
+            soft_visibility_sync_latency_ns = soft_visibility_sync_latency_ns.saturating_add(
+                output
+                    .ledger
+                    .sync_latency_ns_for(SyncClass::SoftVisibilitySync),
+            );
             total_latency_ns = total_latency_ns.saturating_add(output.ledger.total_latency_ns());
             hot_path_allocations =
                 hot_path_allocations.saturating_add(output.ledger.hot_path_allocations);
@@ -2573,10 +2607,12 @@ impl Runtime {
             device_events,
             copy_events,
             host_wait_events,
+            soft_visibility_syncs,
             graph_replay_latency_ns,
             device_latency_ns,
             copy_latency_ns,
             host_wait_latency_ns,
+            soft_visibility_sync_latency_ns,
             total_latency_ns,
             hot_path_allocations,
             observed_tokens,
@@ -3073,6 +3109,7 @@ mod tests {
         assert_eq!(summary.transport_events, 7);
         assert_eq!(summary.copy_events, 6);
         assert_eq!(summary.sync_events, 7);
+        assert_eq!(summary.phase_handoff_syncs, 7);
         assert_eq!(summary.pageable_copies, 0);
         assert_eq!(summary.per_token_registrations, 0);
         assert_eq!(summary.hot_path_allocations, 0);
@@ -3608,6 +3645,11 @@ mod tests {
         assert_eq!(output.ledger.event_count(LedgerEventKind::Copy), 1);
         assert_eq!(output.ledger.event_count(LedgerEventKind::Sync), 1);
         assert_eq!(
+            output.ledger.sync_count_for(SyncClass::SoftVisibilitySync),
+            1
+        );
+        assert!(output.ledger.require_classified_syncs().is_ok());
+        assert_eq!(
             engine
                 .token_ring()
                 .consume_device_input(RequestId(1), SequenceId(1), 0)
@@ -3687,10 +3729,12 @@ mod tests {
         assert_eq!(summary.device_events, 1024);
         assert_eq!(summary.copy_events, 1024);
         assert_eq!(summary.host_wait_events, 1024);
+        assert_eq!(summary.soft_visibility_syncs, 1024);
         assert_eq!(summary.graph_replay_latency_ns, 1024);
         assert_eq!(summary.device_latency_ns, 3072);
         assert_eq!(summary.copy_latency_ns, 1024);
         assert_eq!(summary.host_wait_latency_ns, 1024);
+        assert_eq!(summary.soft_visibility_sync_latency_ns, 1024);
         assert_eq!(summary.total_latency_ns, 6144);
         assert_eq!(summary.hot_path_allocations, 0);
         assert_eq!(summary.observed_tokens, 1024);

@@ -1751,6 +1751,7 @@ impl TinyGreedyModel {
             });
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::DeviceActivity,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(MemoryTier::Dram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2677,6 +2678,7 @@ fn run_warm_compute_candidate(
             let compute_ns = (rows * cols) as u64;
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::CpuActivity,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(MemoryTier::Dram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2691,6 +2693,7 @@ fn run_warm_compute_candidate(
             let compute_ns = rows as u64;
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::DeviceActivity,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Vram),
@@ -2706,6 +2709,7 @@ fn run_warm_compute_candidate(
             let copy_out_ns = output_bytes as u64;
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(MemoryTier::Dram),
                 to_tier: Some(MemoryTier::Vram),
@@ -2716,6 +2720,7 @@ fn run_warm_compute_candidate(
             mat_vec_row_major(matrix, input, &mut output);
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::DeviceActivity,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Vram),
@@ -2725,6 +2730,7 @@ fn run_warm_compute_candidate(
             });
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2744,6 +2750,7 @@ fn run_warm_compute_candidate(
             let merge_ns = merge_bytes as u64;
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::CpuActivity,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(MemoryTier::Dram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2753,6 +2760,7 @@ fn run_warm_compute_candidate(
             });
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::DeviceActivity,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Vram),
@@ -2762,6 +2770,7 @@ fn run_warm_compute_candidate(
             });
             ledger.record(LedgerEvent {
                 kind: LedgerEventKind::Copy,
+                sync_class: None,
                 block_id: None,
                 from_tier: Some(MemoryTier::Vram),
                 to_tier: Some(MemoryTier::Dram),
@@ -2900,6 +2909,7 @@ fn record_attention_block_event(
     });
     ledger.record(LedgerEvent {
         kind,
+        sync_class: None,
         block_id: None,
         from_tier: Some(block.tier),
         to_tier: Some(block.tier),

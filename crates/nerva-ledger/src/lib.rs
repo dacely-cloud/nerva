@@ -42,6 +42,7 @@ pub enum SyncClass {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LedgerEvent {
     pub kind: LedgerEventKind,
+    pub sync_class: Option<SyncClass>,
     pub block_id: Option<ResidentBlockId>,
     pub from_tier: Option<MemoryTier>,
     pub to_tier: Option<MemoryTier>,
@@ -126,6 +127,28 @@ impl TokenLedger {
         self.events.push(event);
     }
 
+    pub fn record_sync(
+        &mut self,
+        sync_class: SyncClass,
+        block_id: Option<ResidentBlockId>,
+        from_tier: Option<MemoryTier>,
+        to_tier: Option<MemoryTier>,
+        bytes: usize,
+        latency_ns: u64,
+        label: &'static str,
+    ) {
+        self.record(LedgerEvent {
+            kind: LedgerEventKind::Sync,
+            sync_class: Some(sync_class),
+            block_id,
+            from_tier,
+            to_tier,
+            bytes,
+            latency_ns,
+            label,
+        });
+    }
+
     pub fn record_residency_decision(&mut self, decision: ResidencyDecision) {
         self.residency_decisions.push(decision);
     }
@@ -142,6 +165,7 @@ impl TokenLedger {
     ) {
         self.record(LedgerEvent {
             kind: LedgerEventKind::Allocation,
+            sync_class: None,
             block_id: None,
             from_tier: None,
             to_tier: Some(to_tier),
@@ -170,6 +194,25 @@ impl TokenLedger {
             .sum()
     }
 
+    pub fn sync_count_for(&self, sync_class: SyncClass) -> u64 {
+        self.events
+            .iter()
+            .filter(|event| {
+                event.kind == LedgerEventKind::Sync && event.sync_class == Some(sync_class)
+            })
+            .count() as u64
+    }
+
+    pub fn sync_latency_ns_for(&self, sync_class: SyncClass) -> u64 {
+        self.events
+            .iter()
+            .filter(|event| {
+                event.kind == LedgerEventKind::Sync && event.sync_class == Some(sync_class)
+            })
+            .map(|event| event.latency_ns)
+            .sum()
+    }
+
     pub fn require_zero_hot_path_allocations(&self) -> Result<()> {
         if self.hot_path_allocations == 0 {
             Ok(())
@@ -181,6 +224,29 @@ impl TokenLedger {
                 ),
             })
         }
+    }
+
+    pub fn require_classified_syncs(&self) -> Result<()> {
+        for event in &self.events {
+            match (event.kind, event.sync_class) {
+                (LedgerEventKind::Sync, Some(_)) => {}
+                (LedgerEventKind::Sync, None) => {
+                    return Err(NervaError::InvalidArgument {
+                        reason: format!("sync event '{}' is missing SyncClass", event.label),
+                    });
+                }
+                (_, Some(_)) => {
+                    return Err(NervaError::InvalidArgument {
+                        reason: format!(
+                            "non-sync event '{}' carries an invalid SyncClass",
+                            event.label
+                        ),
+                    });
+                }
+                (_, None) => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -203,6 +269,7 @@ mod tests {
         let mut ledger = TokenLedger::new(5);
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::GraphReplay,
+            sync_class: None,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -212,6 +279,7 @@ mod tests {
         });
         ledger.record(LedgerEvent {
             kind: LedgerEventKind::DeviceActivity,
+            sync_class: None,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -219,22 +287,54 @@ mod tests {
             latency_ns: 7,
             label: "device",
         });
-        ledger.record(LedgerEvent {
-            kind: LedgerEventKind::Sync,
-            block_id: None,
-            from_tier: Some(MemoryTier::Vram),
-            to_tier: Some(MemoryTier::PinnedDram),
-            bytes: 0,
-            latency_ns: 3,
-            label: "soft_visibility_host_wait",
-        });
+        ledger.record_sync(
+            SyncClass::SoftVisibilitySync,
+            None,
+            Some(MemoryTier::Vram),
+            Some(MemoryTier::PinnedDram),
+            0,
+            3,
+            "soft_visibility_host_wait",
+        );
 
         assert_eq!(ledger.event_count(LedgerEventKind::GraphReplay), 1);
         assert_eq!(ledger.event_count(LedgerEventKind::DeviceActivity), 1);
         assert_eq!(ledger.event_count(LedgerEventKind::Sync), 1);
+        assert_eq!(ledger.sync_count_for(SyncClass::SoftVisibilitySync), 1);
         assert_eq!(ledger.latency_ns_for(LedgerEventKind::DeviceActivity), 7);
         assert_eq!(ledger.latency_ns_for(LedgerEventKind::Sync), 3);
+        assert_eq!(ledger.sync_latency_ns_for(SyncClass::SoftVisibilitySync), 3);
         assert_eq!(ledger.total_latency_ns(), 12);
+        assert!(ledger.require_classified_syncs().is_ok());
+    }
+
+    #[test]
+    fn classified_sync_validation_rejects_missing_or_misplaced_classes() {
+        let mut missing = TokenLedger::new(0);
+        missing.record(LedgerEvent {
+            kind: LedgerEventKind::Sync,
+            sync_class: None,
+            block_id: None,
+            from_tier: None,
+            to_tier: None,
+            bytes: 0,
+            latency_ns: 1,
+            label: "unclassified_wait",
+        });
+        assert!(missing.require_classified_syncs().is_err());
+
+        let mut misplaced = TokenLedger::new(1);
+        misplaced.record(LedgerEvent {
+            kind: LedgerEventKind::Copy,
+            sync_class: Some(SyncClass::HardSync),
+            block_id: None,
+            from_tier: Some(MemoryTier::Dram),
+            to_tier: Some(MemoryTier::Vram),
+            bytes: 4,
+            latency_ns: 1,
+            label: "copy_with_sync_class",
+        });
+        assert!(misplaced.require_classified_syncs().is_err());
     }
 
     #[test]

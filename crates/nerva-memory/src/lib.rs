@@ -784,6 +784,7 @@ impl KvResidencyPlan {
                 KvResidencyAction::PrefetchToHot => {
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::Prefetch,
+                        sync_class: None,
                         block_id: Some(entry.block_id),
                         from_tier: Some(entry.old_tier),
                         to_tier: Some(entry.new_tier),
@@ -793,6 +794,7 @@ impl KvResidencyPlan {
                     });
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::Copy,
+                        sync_class: None,
                         block_id: Some(entry.block_id),
                         from_tier: Some(entry.old_tier),
                         to_tier: Some(entry.new_tier),
@@ -805,6 +807,7 @@ impl KvResidencyPlan {
                 KvResidencyAction::DemoteToWarm => {
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::Eviction,
+                        sync_class: None,
                         block_id: Some(entry.block_id),
                         from_tier: Some(entry.old_tier),
                         to_tier: Some(entry.new_tier),
@@ -814,6 +817,7 @@ impl KvResidencyPlan {
                     });
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::Copy,
+                        sync_class: None,
                         block_id: Some(entry.block_id),
                         from_tier: Some(entry.old_tier),
                         to_tier: Some(entry.new_tier),
@@ -826,6 +830,7 @@ impl KvResidencyPlan {
                 KvResidencyAction::EvictCold => {
                     ledger.record(LedgerEvent {
                         kind: LedgerEventKind::Eviction,
+                        sync_class: None,
                         block_id: Some(entry.block_id),
                         from_tier: Some(entry.old_tier),
                         to_tier: Some(entry.new_tier),
@@ -836,6 +841,7 @@ impl KvResidencyPlan {
                     if entry.changes_tier() {
                         ledger.record(LedgerEvent {
                             kind: LedgerEventKind::Copy,
+                            sync_class: None,
                             block_id: Some(entry.block_id),
                             from_tier: Some(entry.old_tier),
                             to_tier: Some(entry.new_tier),
@@ -1058,6 +1064,7 @@ fn record_visible_transfer_stall(ledger: &mut TokenLedger, entry: &KvResidencyPl
     }
     ledger.record(LedgerEvent {
         kind: LedgerEventKind::Stall,
+        sync_class: None,
         block_id: Some(entry.block_id),
         from_tier: Some(entry.old_tier),
         to_tier: Some(entry.new_tier),
