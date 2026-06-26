@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const MAX_RUST_MODULE_LINES: usize = 200;
+
 #[test]
 fn rust_modules_do_not_use_reexport_shims() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -31,6 +33,36 @@ fn rust_modules_do_not_use_reexport_shims() {
     assert!(
         violations.is_empty(),
         "module hygiene violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn rust_modules_stay_split_by_responsibility() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("crate should live under repo_root/crates");
+    let mut files = Vec::new();
+    collect_rust_files(&repo_root.join("crates"), &mut files);
+
+    let mut violations = Vec::new();
+    for path in files {
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let lines = content.lines().count();
+        if lines > MAX_RUST_MODULE_LINES {
+            violations.push(format!(
+                "{}: {lines} lines",
+                path.strip_prefix(repo_root).unwrap_or(&path).display()
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "Rust modules over {MAX_RUST_MODULE_LINES} lines must be split:\n{}",
         violations.join("\n")
     );
 }
@@ -88,9 +120,13 @@ fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 fn is_forbidden_import(trimmed: &str) -> bool {
-    trimmed.starts_with("pub use ")
-        || trimmed.starts_with("pub(crate) use ")
-        || trimmed.starts_with("use super::*")
+    let mut parts = trimmed.split_whitespace();
+    let first = parts.next();
+    let second = parts.next();
+
+    matches!((first, second), (Some("pub"), Some("use")))
+        || matches!((first, second), (Some("pub(crate)"), Some("use")))
+        || matches!((first, second), (Some("use"), Some("super::*")))
 }
 
 fn is_allowed_mod_rs_line(trimmed: &str) -> bool {

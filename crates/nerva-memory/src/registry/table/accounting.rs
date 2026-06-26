@@ -10,7 +10,8 @@ impl BlockRegistry {
     }
 
     pub fn used_bytes(&self, tier: MemoryTier) -> usize {
-        self.account(tier).map_or(0, |account| account.used_bytes)
+        self.account(tier)
+            .map_or(0, |account| account.occupied_bytes)
     }
 
     pub fn remaining_bytes(&self, tier: MemoryTier) -> Option<usize> {
@@ -24,27 +25,25 @@ impl BlockRegistry {
             .ok_or_else(|| NervaError::InvalidArgument {
                 reason: format!("memory tier {tier:?} is not configured"),
             })?;
-        let new_used =
-            account
-                .used_bytes
-                .checked_add(bytes)
-                .ok_or_else(|| NervaError::AllocationFailed {
-                    bytes,
-                    reason: "tier accounting overflow".to_string(),
-                })?;
+        let new_used = account.occupied_bytes.checked_add(bytes).ok_or_else(|| {
+            NervaError::AllocationFailed {
+                bytes,
+                reason: "tier accounting overflow".to_string(),
+            }
+        })?;
         if new_used > account.capacity_bytes {
             return Err(NervaError::AllocationFailed {
                 bytes,
                 reason: format!("memory tier {tier:?} exhausted"),
             });
         }
-        account.used_bytes = new_used;
+        account.occupied_bytes = new_used;
         Ok(())
     }
 
     pub(crate) fn release_tier(&mut self, tier: MemoryTier, bytes: usize) {
         if let Some(account) = self.accounts.get_mut(&tier) {
-            account.used_bytes = account.used_bytes.saturating_sub(bytes);
+            account.occupied_bytes = account.occupied_bytes.saturating_sub(bytes);
         }
     }
 }

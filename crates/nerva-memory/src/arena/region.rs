@@ -12,7 +12,7 @@ pub struct ArenaReservation {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ArenaCheckpoint {
-    pub(crate) used: usize,
+    pub(crate) cursor: usize,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

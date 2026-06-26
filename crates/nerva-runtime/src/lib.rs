@@ -12,6 +12,7 @@ pub mod graph;
 pub mod measurements;
 pub mod memory_loop;
 pub mod mgpu;
+pub mod production;
 pub mod token;
 pub mod transport;
 pub mod weights;

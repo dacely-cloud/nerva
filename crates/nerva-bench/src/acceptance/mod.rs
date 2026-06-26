@@ -12,6 +12,7 @@ mod memory_loop;
 mod mgpu;
 mod model;
 mod phase;
+mod production;
 mod queue;
 mod report;
 mod resident_weights;

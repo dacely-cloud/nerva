@@ -54,17 +54,17 @@ impl StaticArena {
 
     pub const fn checkpoint(&self) -> ArenaCheckpoint {
         ArenaCheckpoint {
-            used: self.used_bytes,
+            cursor: self.used_bytes,
         }
     }
 
     pub fn restore(&mut self, checkpoint: ArenaCheckpoint) -> Result<()> {
-        if checkpoint.used > self.used_bytes {
+        if checkpoint.cursor > self.used_bytes {
             return Err(NervaError::InvalidArgument {
                 reason: "arena checkpoint is ahead of current usage".to_string(),
             });
         }
-        self.used_bytes = checkpoint.used;
+        self.used_bytes = checkpoint.cursor;
         Ok(())
     }
 

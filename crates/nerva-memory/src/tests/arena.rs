@@ -80,9 +80,9 @@ fn static_arena_checkpoint_restore_rewinds_scratch() {
     let _scratch = arena
         .reserve("scratch", 128, 16, AllocationPhase::Initialization)
         .unwrap();
-    assert!(arena.used() > checkpoint.used);
+    assert!(arena.used() > checkpoint.cursor);
     arena.restore(checkpoint).unwrap();
-    assert_eq!(arena.used(), checkpoint.used);
+    assert_eq!(arena.used(), checkpoint.cursor);
 }
 
 #[test]

@@ -25,6 +25,9 @@ pub(crate) fn dispatch(
         Some("correctness") => Some(exit::print_json_result(
             runtime::run_correctness_validation_probe(),
         )),
+        Some("production-invariants") => Some(exit::print_json_result(
+            runtime::run_production_invariant_probe(),
+        )),
         Some("topology") => Some(exit::print_json_result(runtime::run_topology_probe())),
         Some("synthetic") => Some(run_synthetic_command(args)),
         Some("ledger") => Some(exit::print_json_result(

@@ -35,3 +35,21 @@ fn classified_sync_validation_rejects_missing_or_misplaced_classes() {
     });
     assert!(misplaced.require_classified_syncs().is_err());
 }
+
+#[test]
+fn production_runtime_invariants_reject_debug_syncs() {
+    let mut ledger = TokenLedger::new(2);
+    ledger.record_sync(
+        SyncClass::DebugSync,
+        None,
+        None,
+        None,
+        0,
+        1,
+        MetricSource::RuntimeTimestamp,
+        "debug_device_wait",
+    );
+
+    assert!(ledger.require_classified_syncs().is_ok());
+    assert!(ledger.require_production_runtime_invariants().is_err());
+}

@@ -36,6 +36,34 @@ fn fallback_decisions_are_recorded_separately_from_events() {
         ledger.fallback_count_for(FallbackClass::CapabilityDegraded),
         1
     );
+    assert!(ledger.require_production_runtime_invariants().is_ok());
+}
+
+#[test]
+fn production_runtime_invariants_reject_debug_or_unmeasured_fallbacks() {
+    let mut debug = TokenLedger::new(1);
+    debug.record_fallback_decision(FallbackDecision {
+        label: "debug_framework_fallback",
+        class: FallbackClass::DebugOnly,
+        requested: "cuda_kernel",
+        selected: "debug_cpu_path",
+        reason: "debug probe",
+        visible_ns: Some(1),
+        metric_source: MetricSource::EstimatedModel,
+    });
+    assert!(debug.require_production_runtime_invariants().is_err());
+
+    let mut unmeasured = TokenLedger::new(2);
+    unmeasured.record_fallback_decision(FallbackDecision {
+        label: "unmeasured_transport_fallback",
+        class: FallbackClass::CapabilityDegraded,
+        requested: "gpu_direct_rdma",
+        selected: "pinned_host_bounce",
+        reason: "direct path unsupported",
+        visible_ns: None,
+        metric_source: MetricSource::EstimatedModel,
+    });
+    assert!(unmeasured.require_production_runtime_invariants().is_err());
 }
 
 #[test]

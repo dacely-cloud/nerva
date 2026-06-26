@@ -8,6 +8,7 @@ pub mod kv_probe;
 pub mod memory_loop;
 pub mod multi_gpu;
 pub mod phase_handoff;
+pub mod production;
 pub mod residency;
 pub mod resident_weights;
 pub mod runtime;

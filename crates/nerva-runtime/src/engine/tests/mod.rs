@@ -11,6 +11,7 @@ mod kv_attention;
 mod measurements;
 mod memory_loop;
 mod multi_gpu;
+mod production;
 mod security;
 mod support;
 mod synthetic;

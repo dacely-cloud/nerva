@@ -26,7 +26,7 @@ impl BlockRegistry {
                 TierAccount {
                     tier,
                     capacity_bytes,
-                    used_bytes: 0,
+                    occupied_bytes: 0,
                 },
             );
         }

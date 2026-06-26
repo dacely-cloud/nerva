@@ -1,6 +1,8 @@
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::types::event::LedgerEventKind;
+use crate::types::fallback::FallbackClass;
+use crate::types::sync::SyncClass;
 use crate::types::token::ledger::TokenLedger;
 
 impl TokenLedger {
@@ -50,6 +52,46 @@ impl TokenLedger {
                     });
                 }
                 (_, None) => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub fn require_production_runtime_invariants(&self) -> Result<()> {
+        self.require_classified_syncs()?;
+        for event in &self.events {
+            if event.kind == LedgerEventKind::Sync && event.sync_class == Some(SyncClass::DebugSync)
+            {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!("debug sync '{}' is forbidden in production", event.label),
+                });
+            }
+        }
+        for fallback in &self.fallback_decisions {
+            if fallback.class == FallbackClass::DebugOnly {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!(
+                        "debug fallback '{}' is forbidden in production",
+                        fallback.label
+                    ),
+                });
+            }
+            if fallback.visible_ns.is_none() {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!(
+                        "fallback '{}' has no visible-cost measurement or estimate",
+                        fallback.label
+                    ),
+                });
+            }
+            if fallback.label.is_empty()
+                || fallback.requested.is_empty()
+                || fallback.selected.is_empty()
+                || fallback.reason.is_empty()
+            {
+                return Err(NervaError::InvalidArgument {
+                    reason: "fallback decision is missing a required production label".to_string(),
+                });
             }
         }
         Ok(())

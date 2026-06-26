@@ -4,11 +4,11 @@ use nerva_core::types::memory::tier::MemoryTier;
 pub struct TierAccount {
     pub tier: MemoryTier,
     pub capacity_bytes: usize,
-    pub used_bytes: usize,
+    pub occupied_bytes: usize,
 }
 
 impl TierAccount {
     pub const fn remaining_bytes(self) -> usize {
-        self.capacity_bytes.saturating_sub(self.used_bytes)
+        self.capacity_bytes.saturating_sub(self.occupied_bytes)
     }
 }
