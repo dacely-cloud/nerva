@@ -12,6 +12,7 @@ use crate::common::shape::TransformerBlockShape;
 pub(crate) fn record_attention_block_event(
     shape: TransformerBlockShape,
     block: &KvAttentionBlock<'_>,
+    measured_ns: u64,
     ledger: &mut TokenLedger,
 ) {
     let (kind, executor_selected, reason) = match block.tier {
@@ -38,11 +39,12 @@ pub(crate) fn record_attention_block_event(
         candidate_costs: vec![
             CandidateCost::estimated("compute-near-current-tier", latency_ns),
             CandidateCost::estimated("stage-to-gpu", latency_ns + 2),
+            CandidateCost::measured("compute-near-current-tier", measured_ns),
         ],
         reason,
         predicted_visible_ns: latency_ns,
-        actual_visible_ns: Some(latency_ns),
-        metric_source: MetricSource::EstimatedModel,
+        actual_visible_ns: Some(measured_ns),
+        metric_source: MetricSource::RuntimeTimestamp,
     });
     ledger.record(LedgerEvent {
         kind,

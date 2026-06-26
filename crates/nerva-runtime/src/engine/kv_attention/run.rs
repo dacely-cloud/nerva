@@ -1,7 +1,9 @@
+use nerva_core::types::cost::source::CostSource;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::allocation::AllocationId;
 use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
+use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;
 use nerva_memory::arena::kind::ArenaKind;
 use nerva_memory::arena::set::static_set::StaticArenaSet;
@@ -135,10 +137,33 @@ impl Runtime {
             output_hash,
             reference_hash,
             execution_decisions: ledger.execution_decisions.len() as u64,
+            runtime_timestamp_decisions: decisions_with_source(
+                &ledger,
+                MetricSource::RuntimeTimestamp,
+            ),
+            measured_candidate_costs: candidate_costs_with_source(&ledger, CostSource::Measured),
+            estimated_candidate_costs: candidate_costs_with_source(&ledger, CostSource::Estimated),
             block_version_dependencies: ledger.block_version_dependencies.len() as u64,
             cpu_block_events: ledger.event_count(LedgerEventKind::CpuActivity),
             device_block_events: ledger.event_count(LedgerEventKind::DeviceActivity),
             hot_path_allocations: ledger.hot_path_allocations,
         })
     }
+}
+
+fn decisions_with_source(ledger: &TokenLedger, source: MetricSource) -> u64 {
+    ledger
+        .execution_decisions
+        .iter()
+        .filter(|decision| decision.metric_source == source)
+        .count() as u64
+}
+
+fn candidate_costs_with_source(ledger: &TokenLedger, source: CostSource) -> u64 {
+    ledger
+        .execution_decisions
+        .iter()
+        .flat_map(|decision| decision.candidate_costs.iter())
+        .filter(|cost| cost.source == source)
+        .count() as u64
 }

@@ -45,10 +45,13 @@ pub(crate) fn push_tiered_kv_attention(report: &mut AcceptanceReport, runtime: &
                 && summary.cpu_block_events == 1
                 && summary.device_block_events == 1
                 && summary.execution_decisions == 2
+                && summary.runtime_timestamp_decisions == 2
+                && summary.measured_candidate_costs == 2
+                && summary.estimated_candidate_costs == 4
                 && summary.block_version_dependencies == 2
                 && summary.hot_path_allocations == 0,
             format!(
-                "pages={} tokens={} dram_pages={} vram_pages={} parity={} max_abs_error={} execution_decisions={} block_version_dependencies={} cpu_block_events={} device_block_events={} hot_path_allocations={}",
+                "pages={} tokens={} dram_pages={} vram_pages={} parity={} max_abs_error={} execution_decisions={} runtime_timestamp_decisions={} measured_candidate_costs={} estimated_candidate_costs={} block_version_dependencies={} cpu_block_events={} device_block_events={} hot_path_allocations={}",
                 summary.pages,
                 summary.tokens,
                 summary.dram_pages,
@@ -56,6 +59,9 @@ pub(crate) fn push_tiered_kv_attention(report: &mut AcceptanceReport, runtime: &
                 summary.parity,
                 summary.max_abs_error,
                 summary.execution_decisions,
+                summary.runtime_timestamp_decisions,
+                summary.measured_candidate_costs,
+                summary.estimated_candidate_costs,
                 summary.block_version_dependencies,
                 summary.cpu_block_events,
                 summary.device_block_events,

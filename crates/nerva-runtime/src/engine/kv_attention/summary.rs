@@ -17,6 +17,9 @@ pub struct TieredKvAttentionProbeSummary {
     pub output_hash: u64,
     pub reference_hash: u64,
     pub execution_decisions: u64,
+    pub runtime_timestamp_decisions: u64,
+    pub measured_candidate_costs: u64,
+    pub estimated_candidate_costs: u64,
     pub block_version_dependencies: u64,
     pub cpu_block_events: u64,
     pub device_block_events: u64,
@@ -29,7 +32,7 @@ impl TieredKvAttentionProbeSummary {
             TieredKvAttentionProbeStatus::Ok => "ok",
         };
         format!(
-            "{{\"status\":\"{}\",\"pages\":{},\"tokens\":{},\"dram_pages\":{},\"vram_pages\":{},\"output\":[{},{}],\"reference\":[{},{}],\"max_abs_error\":{},\"parity\":{},\"output_hash\":{},\"reference_hash\":{},\"execution_decisions\":{},\"block_version_dependencies\":{},\"cpu_block_events\":{},\"device_block_events\":{},\"hot_path_allocations\":{}}}",
+            "{{\"status\":\"{}\",\"pages\":{},\"tokens\":{},\"dram_pages\":{},\"vram_pages\":{},\"output\":[{},{}],\"reference\":[{},{}],\"max_abs_error\":{},\"parity\":{},\"output_hash\":{},\"reference_hash\":{},\"execution_decisions\":{},\"runtime_timestamp_decisions\":{},\"measured_candidate_costs\":{},\"estimated_candidate_costs\":{},\"block_version_dependencies\":{},\"cpu_block_events\":{},\"device_block_events\":{},\"hot_path_allocations\":{}}}",
             status,
             self.pages,
             self.tokens,
@@ -44,6 +47,9 @@ impl TieredKvAttentionProbeSummary {
             self.output_hash,
             self.reference_hash,
             self.execution_decisions,
+            self.runtime_timestamp_decisions,
+            self.measured_candidate_costs,
+            self.estimated_candidate_costs,
             self.block_version_dependencies,
             self.cpu_block_events,
             self.device_block_events,

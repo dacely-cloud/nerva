@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use nerva_core::types::error::{NervaError, Result};
 use nerva_ledger::types::token::ledger::TokenLedger;
 
@@ -46,8 +48,7 @@ pub fn exact_blockwise_attention_into(
                 reason: "KV attention total token count overflow".to_string(),
             }
         })?;
-        record_attention_block_event(shape, block, ledger);
-
+        let start = Instant::now();
         for head in 0..shape.heads {
             let head_start = head * head_dim;
             let head_end = head_start + head_dim;
@@ -97,6 +98,7 @@ pub fn exact_blockwise_attention_into(
             scratch.global_l[head] = global_l * global_scale + local_l * local_scale;
             scratch.global_m[head] = next_m;
         }
+        record_attention_block_event(shape, block, elapsed_ns(start), ledger);
     }
 
     if total_tokens == 0 {
@@ -120,4 +122,8 @@ pub fn exact_blockwise_attention_into(
     }
 
     Ok(())
+}
+
+fn elapsed_ns(start: Instant) -> u64 {
+    start.elapsed().as_nanos().max(1).min(u64::MAX as u128) as u64
 }

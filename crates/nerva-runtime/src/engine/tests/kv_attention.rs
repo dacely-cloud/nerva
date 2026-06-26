@@ -19,6 +19,9 @@ fn tiered_kv_attention_probe_executes_against_resident_pages() {
     assert!(summary.parity);
     assert_eq!(summary.max_abs_error, 0.0);
     assert_eq!(summary.execution_decisions, 2);
+    assert_eq!(summary.runtime_timestamp_decisions, 2);
+    assert_eq!(summary.measured_candidate_costs, 2);
+    assert_eq!(summary.estimated_candidate_costs, 4);
     assert_eq!(summary.block_version_dependencies, 2);
     assert_eq!(summary.cpu_block_events, 1);
     assert_eq!(summary.device_block_events, 1);
@@ -29,6 +32,7 @@ fn tiered_kv_attention_probe_executes_against_resident_pages() {
             .to_json()
             .contains("\"block_version_dependencies\":2")
     );
+    assert!(summary.to_json().contains("\"measured_candidate_costs\":2"));
 }
 
 #[test]
