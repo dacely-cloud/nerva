@@ -8,9 +8,10 @@ use std::{
     process::{Command, ExitCode},
 };
 
-use nerva_core::TokenId;
+use nerva_core::{MemoryFabricKind, TokenId};
 use nerva_runtime::{
-    KvResidencyProbeConfig, ResidencyBudget, Runtime, RuntimeConfig, SyntheticDecodeConfig,
+    CapabilityState, KvResidencyProbeConfig, KvResidencyProbeStatus, ResidencyBudget, Runtime,
+    RuntimeConfig, SyntheticDecodeConfig, SyntheticDecodeStatus, TransportPathProbeStatus,
 };
 
 fn main() -> ExitCode {
@@ -301,6 +302,21 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("acceptance") => match build_acceptance_report() {
+            Ok(report) => {
+                let passed = report.passed();
+                println!("{}", report.to_json());
+                if passed {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(1)
+                }
+            }
+            Err(reason) => {
+                eprintln!("{reason}");
+                ExitCode::from(1)
+            }
+        },
         Some("artifact") => match run_artifact(args.next(), args.collect()) {
             Ok(json) => {
                 println!("{json}");
@@ -313,7 +329,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- acceptance\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
             );
             ExitCode::from(2)
         }
@@ -351,6 +367,339 @@ fn run_transport_probe() -> Result<String, String> {
         .run_transport_path_probe()
         .map_err(|err| format!("transport path probe failed: {err:?}"))?;
     Ok(summary.to_json())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AcceptanceCheck {
+    name: &'static str,
+    passed: bool,
+    details: String,
+}
+
+impl AcceptanceCheck {
+    fn to_json(&self) -> String {
+        format!(
+            "{{\"name\":\"{}\",\"passed\":{},\"details\":\"{}\"}}",
+            self.name,
+            self.passed,
+            json_escape(&self.details),
+        )
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct AcceptanceReport {
+    checks: Vec<AcceptanceCheck>,
+}
+
+impl AcceptanceReport {
+    fn push(&mut self, name: &'static str, passed: bool, details: impl Into<String>) {
+        self.checks.push(AcceptanceCheck {
+            name,
+            passed,
+            details: details.into(),
+        });
+    }
+
+    fn passed(&self) -> bool {
+        !self.checks.is_empty() && self.checks.iter().all(|check| check.passed)
+    }
+
+    fn passed_count(&self) -> usize {
+        self.checks.iter().filter(|check| check.passed).count()
+    }
+
+    fn failed_count(&self) -> usize {
+        self.checks.len() - self.passed_count()
+    }
+
+    fn to_json(&self) -> String {
+        let mut items = String::from("[");
+        for (index, check) in self.checks.iter().enumerate() {
+            if index != 0 {
+                items.push(',');
+            }
+            items.push_str(&check.to_json());
+        }
+        items.push(']');
+        format!(
+            "{{\"status\":\"{}\",\"acceptance_schema\":\"nerva-acceptance-v1\",\"checks\":{},\"passed\":{},\"failed\":{},\"items\":{}}}",
+            if self.passed() { "ok" } else { "failed" },
+            self.checks.len(),
+            self.passed_count(),
+            self.failed_count(),
+            items,
+        )
+    }
+}
+
+fn build_acceptance_report() -> Result<AcceptanceReport, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let mut report = AcceptanceReport::default();
+
+    let capabilities = runtime.discover_capabilities();
+    let capability_passed = capabilities.target_os == "linux"
+        && !capabilities.target_arch.is_empty()
+        && capabilities.kernel_release.is_some()
+        && matches!(capabilities.fabric, MemoryFabricKind::DiscreteExplicit)
+        && !matches!(
+            capabilities.pinned_host_staging,
+            CapabilityState::Unsupported
+        );
+    report.push(
+        "capability_provenance",
+        capability_passed,
+        format!(
+            "target={}-{} kernel_present={} fabric={:?} pinned_host_staging={:?}",
+            capabilities.target_os,
+            capabilities.target_arch,
+            capabilities.kernel_release.is_some(),
+            capabilities.fabric,
+            capabilities.pinned_host_staging,
+        ),
+    );
+
+    match runtime.run_synthetic_decode(SyntheticDecodeConfig::new(1024, 64, TokenId(1))) {
+        Ok(summary) => {
+            let passed = matches!(summary.status, SyntheticDecodeStatus::Ok)
+                && summary.steps == 1024
+                && summary.graph_replays == 1024
+                && summary.observed_tokens == 1024
+                && summary.soft_visibility_syncs == 1024
+                && summary.device_timeline_active_ns > 0
+                && summary.device_timeline_idle_ns == 0
+                && summary.hot_path_allocations == 0
+                && summary.stale_tokens == 0
+                && summary.missing_tokens == 0
+                && summary.extra_tokens == 0
+                && summary.mismatched_tokens == 0
+                && summary.host_causality_edges == 0;
+            report.push(
+                "synthetic_device_token",
+                passed,
+                format!(
+                    "steps={} observed={} soft_visibility_syncs={} hot_path_allocations={} stale={} missing={} extra={} mismatched={} host_causality_edges={} gpu_idle_ns={}",
+                    summary.steps,
+                    summary.observed_tokens,
+                    summary.soft_visibility_syncs,
+                    summary.hot_path_allocations,
+                    summary.stale_tokens,
+                    summary.missing_tokens,
+                    summary.extra_tokens,
+                    summary.mismatched_tokens,
+                    summary.host_causality_edges,
+                    summary.device_timeline_idle_ns,
+                ),
+            );
+        }
+        Err(err) => report.push("synthetic_device_token", false, format!("{err:?}")),
+    }
+
+    match nerva_model::reference_block_smoke() {
+        Ok(summary) => report.push(
+            "reference_block",
+            summary.hot_path_allocations == 0,
+            format!(
+                "hidden={} heads={} output_hash={} hot_path_allocations={}",
+                summary.hidden, summary.heads, summary.output_hash, summary.hot_path_allocations,
+            ),
+        ),
+        Err(err) => report.push("reference_block", false, format!("{err:?}")),
+    }
+
+    match nerva_model::tiny_greedy_decode_smoke(8) {
+        Ok(summary) => report.push(
+            "tiny_model_greedy_parity",
+            summary.parity
+                && summary.ledger_count == summary.steps as u64
+                && summary.hot_path_allocations == 0,
+            format!(
+                "steps={} parity={} ledger_count={} device_events={} hot_path_allocations={} output_hash={}",
+                summary.steps,
+                summary.parity,
+                summary.ledger_count,
+                summary.device_events,
+                summary.hot_path_allocations,
+                summary.output_hash,
+            ),
+        ),
+        Err(err) => report.push("tiny_model_greedy_parity", false, format!("{err:?}")),
+    }
+
+    match nerva_model::blockwise_attention_smoke() {
+        Ok(summary) => report.push(
+            "tiered_blockwise_attention",
+            summary.cpu_block_events > 0
+                && summary.device_block_events > 0
+                && summary.hot_path_allocations == 0,
+            format!(
+                "blocks={} tokens={} cpu_block_events={} device_block_events={} hot_path_allocations={} output_hash={}",
+                summary.blocks,
+                summary.tokens,
+                summary.cpu_block_events,
+                summary.device_block_events,
+                summary.hot_path_allocations,
+                summary.output_hash,
+            ),
+        ),
+        Err(err) => report.push("tiered_blockwise_attention", false, format!("{err:?}")),
+    }
+
+    match nerva_model::warm_compute_probe() {
+        Ok(summary) => report.push(
+            "warm_compute_selection",
+            summary.parity
+                && summary.cpu_beats_staged
+                && summary.execution_decisions > 0
+                && summary.hot_path_allocations == 0,
+            format!(
+                "selected_strategy={} parity={} cpu_beats_staged={} execution_decisions={} hot_path_allocations={} output_hash={}",
+                summary.selected_strategy.label(),
+                summary.parity,
+                summary.cpu_beats_staged,
+                summary.execution_decisions,
+                summary.hot_path_allocations,
+                summary.output_hash,
+            ),
+        ),
+        Err(err) => report.push("warm_compute_selection", false, format!("{err:?}")),
+    }
+
+    match nerva_kernel_contracts::kernel_registry_probe() {
+        Ok(summary) => report.push(
+            "kernel_contract_fallbacks",
+            summary.direct_plans > 0
+                && summary.fallback_plans > 0
+                && summary.rejected_plans > 0
+                && summary.exact_fallbacks > 0,
+            format!(
+                "implementations={} fallbacks={} direct_plans={} fallback_plans={} rejected_plans={} exact_fallbacks={}",
+                summary.implementations,
+                summary.fallbacks,
+                summary.direct_plans,
+                summary.fallback_plans,
+                summary.rejected_plans,
+                summary.exact_fallbacks,
+            ),
+        ),
+        Err(err) => report.push("kernel_contract_fallbacks", false, format!("{err:?}")),
+    }
+
+    match runtime.run_kv_residency_probe(KvResidencyProbeConfig::default()) {
+        Ok(summary) => report.push(
+            "kv_residency_tiering",
+            matches!(summary.status, KvResidencyProbeStatus::Ok)
+                && summary.decisions > 0
+                && summary.prefetches > 0
+                && summary.demotions > 0
+                && summary.evictions > 0
+                && summary.stall_events > 0
+                && summary.hot_path_allocations == 0,
+            format!(
+                "pages={} decisions={} prefetches={} demotions={} evictions={} stall_events={} hot_path_allocations={}",
+                summary.pages,
+                summary.decisions,
+                summary.prefetches,
+                summary.demotions,
+                summary.evictions,
+                summary.stall_events,
+                summary.hot_path_allocations,
+            ),
+        ),
+        Err(err) => report.push("kv_residency_tiering", false, format!("{err:?}")),
+    }
+
+    match runtime.run_transport_path_probe() {
+        Ok(summary) => report.push(
+            "transport_pinned_fallback",
+            matches!(summary.status, TransportPathProbeStatus::Ok)
+                && summary.requests > 0
+                && summary.pinned_host_paths > 0
+                && summary.fallback_decisions > 0
+                && summary.phase_handoff_syncs > 0
+                && summary.pageable_copies == 0
+                && summary.per_token_registrations == 0
+                && summary.hot_path_allocations == 0,
+            format!(
+                "requests={} pinned_host_paths={} fallback_decisions={} phase_handoff_syncs={} pageable_copies={} per_token_registrations={} hot_path_allocations={}",
+                summary.requests,
+                summary.pinned_host_paths,
+                summary.fallback_decisions,
+                summary.phase_handoff_syncs,
+                summary.pageable_copies,
+                summary.per_token_registrations,
+                summary.hot_path_allocations,
+            ),
+        ),
+        Err(err) => report.push("transport_pinned_fallback", false, format!("{err:?}")),
+    }
+
+    match resident_weight_execution_acceptance(&runtime) {
+        Ok((passed, details)) => report.push("resident_weight_execution", passed, details),
+        Err(err) => report.push("resident_weight_execution", false, err),
+    }
+
+    Ok(report)
+}
+
+fn resident_weight_execution_acceptance(runtime: &Runtime) -> Result<(bool, String), String> {
+    let manifest = nerva_model::hf_tensor_manifest_probe()
+        .map_err(|err| format!("HF tensor manifest probe failed: {err:?}"))?
+        .manifest;
+    let mut table = runtime
+        .materialize_hf_weight_manifest_with_budget(
+            &manifest,
+            ResidencyBudget::new(512 * 1024 * 1024, 0, manifest.total_weight_bytes),
+        )
+        .map_err(|err| format!("resident weight materialization failed: {err:?}"))?;
+    let hotset = runtime
+        .promote_resident_weight_hotset(&mut table, 512 * 1024 * 1024)
+        .map_err(|err| format!("resident weight hotset promotion failed: {err:?}"))?;
+    let plan = runtime
+        .plan_resident_weight_execution(&table, 32, Some(89))
+        .map_err(|err| format!("resident weight execution planning failed: {err:?}"))?;
+    let run = runtime
+        .execute_resident_weight_execution_plan(&table, &plan)
+        .map_err(|err| format!("resident weight execution run failed: {err:?}"))?;
+
+    let passed = hotset.promoted_blocks > 0
+        && hotset.hot_path_allocations == 0
+        && !plan.steps.is_empty()
+        && plan.gpu_resident_steps > 0
+        && plan.gpu_staged_steps > 0
+        && plan.block_version_dependencies == plan.steps.len() as u64
+        && plan.ledger.hot_path_allocations == 0
+        && run.steps == plan.steps.len()
+        && run.gpu_resident_steps == plan.gpu_resident_steps
+        && run.gpu_staged_steps == plan.gpu_staged_steps
+        && run.block_version_dependencies == run.steps as u64
+        && run.hot_path_allocations == 0;
+
+    Ok((
+        passed,
+        format!(
+            "promoted_blocks={} plan_steps={} plan_gpu_resident={} plan_gpu_staged={} plan_fallbacks={} plan_block_versions={} run_steps={} run_gpu_resident={} run_gpu_staged={} run_fallbacks={} run_block_versions={} hot_path_allocations={}",
+            hotset.promoted_blocks,
+            plan.steps.len(),
+            plan.gpu_resident_steps,
+            plan.gpu_staged_steps,
+            plan.fallback_decisions,
+            plan.block_version_dependencies,
+            run.steps,
+            run.gpu_resident_steps,
+            run.gpu_staged_steps,
+            run.fallback_decisions,
+            run.block_version_dependencies,
+            hotset.hot_path_allocations
+                + plan.ledger.hot_path_allocations
+                + run.hot_path_allocations,
+        ),
+    ))
+}
+
+fn run_acceptance_probe() -> Result<String, String> {
+    build_acceptance_report().map(|report| report.to_json())
 }
 
 fn run_artifact(command: Option<String>, args: Vec<String>) -> Result<String, String> {
@@ -435,6 +784,7 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
             .map_err(|err| format!("kernel contract probe failed: {err:?}")),
         "kv" => run_kv_probe(),
         "transport" => run_transport_probe(),
+        "acceptance" => run_acceptance_probe(),
         _ => Err(format!("unknown artifact probe '{command}'")),
     }
 }
@@ -977,6 +1327,19 @@ mod tests {
         assert!(json.contains("\"target_os\":\"linux\""));
         assert!(json.contains("\"summary\""));
         assert!(json.contains("\"device_timeline_idle_ns\":0"));
+    }
+
+    #[test]
+    fn acceptance_probe_reports_current_invariants() {
+        let json = run_acceptance_probe().unwrap();
+
+        assert!(json.contains("\"acceptance_schema\":\"nerva-acceptance-v1\""));
+        assert!(json.contains("\"status\":\"ok\""));
+        assert!(json.contains("\"failed\":0"));
+        assert!(json.contains("\"synthetic_device_token\""));
+        assert!(json.contains("\"kv_residency_tiering\""));
+        assert!(json.contains("\"transport_pinned_fallback\""));
+        assert!(json.contains("\"resident_weight_execution\""));
     }
 
     #[test]
