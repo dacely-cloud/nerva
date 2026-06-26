@@ -5,8 +5,8 @@ use nerva_core::types::memory::MemoryTier;
 use nerva_core::types::ownership::ExecutionOwner;
 use nerva_ledger::types::decision::{CandidateCost, ResidencyDecision};
 use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::token::TokenLedger;
-use nerva_memory::registry::BlockAllocationRequest;
+use nerva_ledger::types::token::ledger::TokenLedger;
+use nerva_memory::registry::request::BlockAllocationRequest;
 use nerva_model::weights::manifest::{HfTensorManifest, hf_tensor_manifest_probe};
 use nerva_model::weights::safetensors::shard::SafetensorsShardPlan;
 

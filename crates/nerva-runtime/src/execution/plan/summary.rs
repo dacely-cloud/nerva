@@ -2,7 +2,7 @@ use nerva_core::types::error::Result;
 use nerva_core::types::ownership::ExecutionOwner;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::execution::summary::{ExecutionTransactionStatus, ExecutionTransactionSummary};
 use crate::execution::types::ExecutionTransactionSpec;

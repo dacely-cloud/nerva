@@ -4,7 +4,8 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::{DeviceOrdinal, LayoutId};
 use nerva_core::types::memory::MemoryTier;
 use nerva_core::types::ownership::ExecutionOwner;
-use nerva_memory::registry::{BlockAllocationRequest, BlockRegistry};
+use nerva_memory::registry::request::BlockAllocationRequest;
+use nerva_memory::registry::table::BlockRegistry;
 
 use crate::execution::plan::planner::plan_execution_transaction;
 use crate::execution::summary::ExecutionTransactionSummary;

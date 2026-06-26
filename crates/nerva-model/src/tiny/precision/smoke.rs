@@ -2,12 +2,12 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::TokenId;
 use nerva_ledger::types::event::LedgerEventKind;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::hash::hash_tokens;
 use crate::common::shape::TransformerBlockShape;
 use crate::common::token::expected_cycle;
-use crate::precision::block::PrecisionTransformerBlock;
+use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::tiny::precision::model::TinyPrecisionGreedyModel;
 use crate::tiny::precision::output::{
     TinyPrecisionGreedyDecodeStatus, TinyPrecisionGreedyDecodeSummary,

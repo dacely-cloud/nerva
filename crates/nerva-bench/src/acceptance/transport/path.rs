@@ -1,5 +1,5 @@
 use nerva_runtime::engine::runtime::Runtime;
-use nerva_runtime::transport::probe::TransportPathProbeStatus;
+use nerva_runtime::transport::probe::status::TransportPathProbeStatus;
 
 use crate::acceptance::report::AcceptanceReport;
 

@@ -1,4 +1,4 @@
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::memory_loop::summary::MemoryLoopSummary;
 use crate::memory_loop::types::MemoryLoopTaskSpec;

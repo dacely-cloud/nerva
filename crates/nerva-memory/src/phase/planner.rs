@@ -7,7 +7,7 @@ use crate::phase::types::{
     PhaseHandoffEntry, PhaseHandoffPlan, PhaseHandoffPlanner, PhaseHandoffRejection,
     PhaseHandoffRejectionKind, PhaseHandoffRequest,
 };
-use crate::registry::BlockRegistry;
+use crate::registry::table::BlockRegistry;
 
 impl PhaseHandoffPlanner {
     pub fn plan(

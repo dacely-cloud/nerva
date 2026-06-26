@@ -4,7 +4,7 @@ use crate::transport::matrix::summary;
 use crate::transport::matrix::types::TransportCapabilityMatrixSummary;
 use nerva_core::types::error::Result;
 use nerva_core::types::id::DeviceOrdinal;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 pub fn run_transport_capability_matrix_probe(
     device: DeviceOrdinal,

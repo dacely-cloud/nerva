@@ -1,5 +1,5 @@
 use crate::capabilities::snapshot::CapabilitySnapshot;
-use crate::transport::path::TransportPathClass;
+use crate::transport::path::types::TransportPathClass;
 use crate::transport::stage::config::StagePipelineConfig;
 use crate::transport::stage::plan::plan_stage_pipeline;
 use crate::transport::stage::summary::{StagePipelineStatus, StagePipelineSummary};
@@ -7,7 +7,7 @@ use nerva_core::types::error::Result;
 use nerva_core::types::id::DeviceOrdinal;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 pub fn run_stage_pipeline_probe(
     config: StagePipelineConfig,

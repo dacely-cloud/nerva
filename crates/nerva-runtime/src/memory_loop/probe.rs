@@ -3,7 +3,8 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::{LayoutId, ResidentBlockId};
 use nerva_core::types::memory::MemoryTier;
-use nerva_memory::registry::{BlockAllocationRequest, BlockRegistry};
+use nerva_memory::registry::request::BlockAllocationRequest;
+use nerva_memory::registry::table::BlockRegistry;
 
 use crate::memory_loop::plan::plan_memory_loop;
 use crate::memory_loop::run::execute_memory_loop_plan;

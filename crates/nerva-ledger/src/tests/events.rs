@@ -4,7 +4,7 @@ use nerva_core::types::memory::MemoryTier;
 use crate::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
 use crate::types::metric::MetricSource;
 use crate::types::sync::SyncClass;
-use crate::types::token::TokenLedger;
+use crate::types::token::ledger::TokenLedger;
 
 #[test]
 fn allocation_events_increment_hot_path_count() {

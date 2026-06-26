@@ -1,6 +1,6 @@
 use nerva_core::types::error::{NervaError, Result};
-use nerva_ledger::types::token::TokenLedger;
-use nerva_memory::registry::BlockRegistry;
+use nerva_ledger::types::token::ledger::TokenLedger;
+use nerva_memory::registry::table::BlockRegistry;
 
 use crate::execution::plan::block_uses::validate_and_record_block_uses;
 use crate::execution::plan::decisions::record_execution_decision;

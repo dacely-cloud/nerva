@@ -2,12 +2,13 @@ use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::{AllocationId, ResidentBlockId};
 use nerva_core::types::memory::MemoryTier;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::arena::kind::{AllocationPhase, ArenaKind};
 use crate::arena::region::ArenaRegion;
 use crate::arena::static_arena::StaticArena;
-use crate::registry::{BlockAllocationRequest, BlockRegistry};
+use crate::registry::request::BlockAllocationRequest;
+use crate::registry::table::BlockRegistry;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StaticArenaSet {

@@ -5,7 +5,8 @@ use nerva_core::types::error::Result;
 use nerva_core::types::id::{AllocationId, LayoutId, MemoryDomainId, ResidentBlockId};
 use nerva_core::types::memory::MemoryTier;
 use nerva_core::types::ownership::ExecutionOwner;
-use nerva_memory::registry::{BlockAllocationRequest, BlockRegistry};
+use nerva_memory::registry::request::BlockAllocationRequest;
+use nerva_memory::registry::table::BlockRegistry;
 
 pub(crate) fn allocate_ready_transport_block(
     registry: &mut BlockRegistry,

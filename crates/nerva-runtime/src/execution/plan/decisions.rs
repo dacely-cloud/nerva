@@ -1,6 +1,6 @@
 use nerva_ledger::types::decision::{CandidateCost, ExecutionDecision};
 use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::execution::types::TransactionOperation;
 

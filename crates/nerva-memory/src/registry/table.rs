@@ -3,56 +3,14 @@ use std::collections::BTreeMap;
 use nerva_core::types::block::address::GlobalBlockAddress;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::block::resident::ResidentBlock;
-use nerva_core::types::block::taxonomy::BlockKind;
-use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::{AllocationId, LayoutId, MemoryDomainId, ResidentBlockId};
+use nerva_core::types::id::{AllocationId, MemoryDomainId, ResidentBlockId};
 use nerva_core::types::memory::MemoryTier;
 use nerva_core::types::shape::BlockShape;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct TierAccount {
-    pub tier: MemoryTier,
-    pub capacity_bytes: usize,
-    pub used_bytes: usize,
-}
-
-impl TierAccount {
-    pub const fn remaining_bytes(self) -> usize {
-        self.capacity_bytes.saturating_sub(self.used_bytes)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BlockAllocationRequest {
-    pub kind: BlockKind,
-    pub tier: MemoryTier,
-    pub bytes: usize,
-    pub dtype: DType,
-    pub layout: LayoutId,
-}
-
-impl BlockAllocationRequest {
-    pub const fn new(kind: BlockKind, tier: MemoryTier, bytes: usize) -> Self {
-        Self {
-            kind,
-            tier,
-            bytes,
-            dtype: DType::U8,
-            layout: LayoutId(0),
-        }
-    }
-
-    pub const fn with_dtype(mut self, dtype: DType) -> Self {
-        self.dtype = dtype;
-        self
-    }
-
-    pub const fn with_layout(mut self, layout: LayoutId) -> Self {
-        self.layout = layout;
-        self
-    }
-}
+use crate::registry::account::TierAccount;
+use crate::registry::domain::memory_tier_for_domain;
+use crate::registry::request::BlockAllocationRequest;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlockRegistry {
@@ -233,16 +191,4 @@ impl BlockRegistry {
             account.used_bytes = account.used_bytes.saturating_sub(bytes);
         }
     }
-}
-
-fn memory_tier_for_domain(domain: MemoryDomainId) -> Option<MemoryTier> {
-    Some(match domain {
-        MemoryDomainId::GPU_VRAM => MemoryTier::Vram,
-        MemoryDomainId::PINNED_DRAM => MemoryTier::PinnedDram,
-        MemoryDomainId::CPU_DRAM => MemoryTier::Dram,
-        MemoryDomainId::SHARED_HBM_OR_LPDDR => MemoryTier::SharedHbmOrLpddr,
-        MemoryDomainId::CXL => MemoryTier::Cxl,
-        MemoryDomainId::DISK => MemoryTier::Disk,
-        _ => return None,
-    })
 }

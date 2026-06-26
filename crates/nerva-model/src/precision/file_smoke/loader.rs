@@ -3,7 +3,7 @@ use std::path::Path;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::hash::hash_bytes;
-use crate::weights::layout::WeightBlockRole;
+use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::safetensors::shard::{SafetensorsShardPlan, SafetensorsShardPlanEntry};
 use crate::weights::tensor::read_safetensors_tensor_u16;
 

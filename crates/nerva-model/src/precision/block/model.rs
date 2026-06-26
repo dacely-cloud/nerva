@@ -1,11 +1,14 @@
 use nerva_core::types::dtype::DType;
-use nerva_core::types::error::{NervaError, Result};
-use nerva_ledger::types::token::TokenLedger;
+use nerva_core::types::error::Result;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::math::{silu, single_token_attention};
 use crate::common::shape::TransformerBlockShape;
 use crate::common::validate::require_len;
-use crate::precision::bits::{decode_f32_for_dtype, encode_f32_for_dtype};
+use crate::precision::block::ops::{
+    decode_vec_into, encode_vec, encode_vec_into, mat_vec_encoded_row_major, rms_norm_encoded_into,
+};
+use crate::precision::block::validate::validate_precision_block_layout;
 use crate::precision::scratch::PrecisionTransformerBlockScratch;
 
 #[derive(Clone, Debug)]
@@ -40,22 +43,20 @@ impl PrecisionTransformerBlock {
         w_down: &[f32],
         rms_eps: f32,
     ) -> Result<Self> {
-        shape.validate()?;
-        validate_dtype(dtype)?;
-        require_len("rms_attn_weight", rms_attn_weight.len(), shape.hidden)?;
-        require_len("rms_mlp_weight", rms_mlp_weight.len(), shape.hidden)?;
-        require_len("w_q", w_q.len(), shape.hidden * shape.hidden)?;
-        require_len("w_k", w_k.len(), shape.hidden * shape.hidden)?;
-        require_len("w_v", w_v.len(), shape.hidden * shape.hidden)?;
-        require_len("w_o", w_o.len(), shape.hidden * shape.hidden)?;
-        require_len("w_gate", w_gate.len(), shape.intermediate * shape.hidden)?;
-        require_len("w_up", w_up.len(), shape.intermediate * shape.hidden)?;
-        require_len("w_down", w_down.len(), shape.hidden * shape.intermediate)?;
-        if rms_eps <= 0.0 || !rms_eps.is_finite() {
-            return Err(NervaError::InvalidArgument {
-                reason: "rms epsilon must be positive and finite".to_string(),
-            });
-        }
+        validate_precision_block_layout(
+            dtype,
+            shape,
+            rms_attn_weight.len(),
+            rms_mlp_weight.len(),
+            w_q.len(),
+            w_k.len(),
+            w_v.len(),
+            w_o.len(),
+            w_gate.len(),
+            w_up.len(),
+            w_down.len(),
+            rms_eps,
+        )?;
 
         Ok(Self {
             dtype,
@@ -88,22 +89,20 @@ impl PrecisionTransformerBlock {
         w_down: Vec<u16>,
         rms_eps: f32,
     ) -> Result<Self> {
-        shape.validate()?;
-        validate_dtype(dtype)?;
-        require_len("rms_attn_weight", rms_attn_weight.len(), shape.hidden)?;
-        require_len("rms_mlp_weight", rms_mlp_weight.len(), shape.hidden)?;
-        require_len("w_q", w_q.len(), shape.hidden * shape.hidden)?;
-        require_len("w_k", w_k.len(), shape.hidden * shape.hidden)?;
-        require_len("w_v", w_v.len(), shape.hidden * shape.hidden)?;
-        require_len("w_o", w_o.len(), shape.hidden * shape.hidden)?;
-        require_len("w_gate", w_gate.len(), shape.intermediate * shape.hidden)?;
-        require_len("w_up", w_up.len(), shape.intermediate * shape.hidden)?;
-        require_len("w_down", w_down.len(), shape.hidden * shape.intermediate)?;
-        if rms_eps <= 0.0 || !rms_eps.is_finite() {
-            return Err(NervaError::InvalidArgument {
-                reason: "rms epsilon must be positive and finite".to_string(),
-            });
-        }
+        validate_precision_block_layout(
+            dtype,
+            shape,
+            rms_attn_weight.len(),
+            rms_mlp_weight.len(),
+            w_q.len(),
+            w_k.len(),
+            w_v.len(),
+            w_o.len(),
+            w_gate.len(),
+            w_up.len(),
+            w_down.len(),
+            rms_eps,
+        )?;
 
         Ok(Self {
             dtype,
@@ -198,76 +197,4 @@ impl PrecisionTransformerBlock {
 
         Ok(())
     }
-}
-
-fn validate_dtype(dtype: DType) -> Result<()> {
-    match dtype {
-        DType::F16 | DType::BF16 => Ok(()),
-        _ => Err(NervaError::InvalidArgument {
-            reason: "precision block supports only FP16 and BF16".to_string(),
-        }),
-    }
-}
-
-fn encode_vec(dtype: DType, values: &[f32]) -> Result<Vec<u16>> {
-    values
-        .iter()
-        .copied()
-        .map(|value| encode_f32_for_dtype(value, dtype))
-        .collect()
-}
-
-fn decode_vec_into(dtype: DType, values: &[u16], output: &mut [f32]) -> Result<()> {
-    require_len("precision decoded output", output.len(), values.len())?;
-    for (out, value) in output.iter_mut().zip(values.iter().copied()) {
-        *out = decode_f32_for_dtype(value, dtype)?;
-    }
-    Ok(())
-}
-
-fn encode_vec_into(dtype: DType, values: &[f32], output: &mut [u16]) -> Result<()> {
-    require_len("precision encoded output", output.len(), values.len())?;
-    for (out, value) in output.iter_mut().zip(values.iter().copied()) {
-        *out = encode_f32_for_dtype(value, dtype)?;
-    }
-    Ok(())
-}
-
-fn rms_norm_encoded_into(
-    dtype: DType,
-    input: &[f32],
-    weight: &[u16],
-    eps: f32,
-    output: &mut [f32],
-) -> Result<()> {
-    require_len("precision rms weight", weight.len(), input.len())?;
-    require_len("precision rms output", output.len(), input.len())?;
-    let mean_square = input.iter().map(|value| value * value).sum::<f32>() / input.len() as f32;
-    let scale = (mean_square + eps).sqrt().recip();
-    for ((out, value), weight) in output
-        .iter_mut()
-        .zip(input.iter().copied())
-        .zip(weight.iter().copied())
-    {
-        *out = value * scale * decode_f32_for_dtype(weight, dtype)?;
-    }
-    Ok(())
-}
-
-fn mat_vec_encoded_row_major(
-    dtype: DType,
-    matrix: &[u16],
-    input: &[f32],
-    output: &mut [f32],
-) -> Result<()> {
-    let cols = input.len();
-    require_len("precision matvec matrix", matrix.len(), cols * output.len())?;
-    for (row, out) in matrix.chunks_exact(cols).zip(output.iter_mut()) {
-        let mut sum = 0.0f32;
-        for (weight, value) in row.iter().copied().zip(input.iter().copied()) {
-            sum += decode_f32_for_dtype(weight, dtype)? * value;
-        }
-        *out = sum;
-    }
-    Ok(())
 }

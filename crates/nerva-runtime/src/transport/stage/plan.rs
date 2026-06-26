@@ -1,5 +1,7 @@
 use crate::capabilities::snapshot::CapabilitySnapshot;
-use crate::transport::path::{TransportPathDecision, TransportPathRequest, plan_transport_path};
+use crate::transport::path::decision::TransportPathDecision;
+use crate::transport::path::planner::plan_transport_path;
+use crate::transport::path::request::TransportPathRequest;
 use crate::transport::stage::config::StagePipelineConfig;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::DeviceOrdinal;

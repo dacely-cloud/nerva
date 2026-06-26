@@ -1,6 +1,6 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::id::TokenId;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::precision::bits::dtype_label;
 

@@ -3,7 +3,7 @@ use nerva_core::types::ownership::ExecutionOwner;
 use nerva_ledger::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::execution::types::{TransactionOperation, TransactionOperationKind};
 

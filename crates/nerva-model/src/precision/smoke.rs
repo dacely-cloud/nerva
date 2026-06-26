@@ -1,10 +1,10 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::shape::TransformerBlockShape;
 use crate::precision::bits::{decode_f32_for_dtype, dtype_label, encode_f32_for_dtype, hash_u16s};
-use crate::precision::block::PrecisionTransformerBlock;
+use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::precision::scratch::PrecisionTransformerBlockScratch;
 use crate::reference::block::ReferenceTransformerBlock;
 use crate::reference::scratch::TransformerBlockScratch;

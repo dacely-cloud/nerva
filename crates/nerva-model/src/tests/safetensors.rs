@@ -4,7 +4,7 @@ use crate::tests::support::{
     tiny_llama_manifest,
 };
 use crate::weights::file::{read_safetensors_header_file, read_safetensors_header_file_with_limit};
-use crate::weights::layout::plan_hf_weight_layout;
+use crate::weights::layout::plan::plan_hf_weight_layout;
 use crate::weights::manifest::build_hf_tensor_manifest;
 use crate::weights::safetensors::header::{
     safetensors_header_from_bytes, synthetic_safetensors_header_for_manifest,

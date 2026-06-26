@@ -2,24 +2,20 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::{
     DeviceOrdinal, RequestId, ResidentBlockId, SequenceId, TokenId, TransactionId,
 };
-use nerva_core::types::memory::MemoryTier;
-use nerva_ledger::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
-use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
 
 use crate::graph::layout::GraphLayout;
 use crate::graph::pool::GraphPool;
+use crate::token::engine::pending::PendingSyntheticStep;
 use crate::token::ring::{DeviceTokenRing, TokenInputSource};
-use crate::token::step::{StepOutput, SyntheticStepPlan};
+use crate::token::step::SyntheticStepPlan;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyntheticEngine {
-    graph_pool: GraphPool,
-    token_ring: DeviceTokenRing,
+    pub(crate) graph_pool: GraphPool,
+    pub(crate) token_ring: DeviceTokenRing,
     next_transaction_id: u64,
-    layout: GraphLayout,
-    device: DeviceOrdinal,
+    pub(crate) layout: GraphLayout,
+    pub(crate) device: DeviceOrdinal,
 }
 
 impl SyntheticEngine {
@@ -159,123 +155,5 @@ impl SyntheticEngine {
                 layout,
             }),
         })
-    }
-}
-
-#[must_use = "PendingSyntheticStep must be collect()-ed; dropping it loses the launched transaction"]
-#[derive(Debug)]
-pub struct PendingSyntheticStep<'engine> {
-    engine: &'engine mut SyntheticEngine,
-    plan: Option<SyntheticStepPlan>,
-}
-
-impl<'engine> PendingSyntheticStep<'engine> {
-    pub fn plan(&self) -> Option<&SyntheticStepPlan> {
-        self.plan.as_ref()
-    }
-
-    pub fn collect(mut self) -> Result<StepOutput> {
-        let plan = self
-            .plan
-            .take()
-            .expect("PendingSyntheticStep::collect called twice");
-        self.engine.graph_pool.replay(plan.layout)?;
-
-        let token = TokenId(plan.input_token.0.wrapping_add(1));
-        let device_token_ref = self.engine.token_ring.publish(
-            plan.request_id,
-            plan.sequence_id,
-            plan.token_index,
-            token,
-        )?;
-
-        let host_visible_token = self.engine.token_ring.host_observe(
-            plan.request_id,
-            plan.sequence_id,
-            plan.token_index,
-        )?;
-        let mut ledger = TokenLedger::new(plan.token_index);
-        ledger.record(LedgerEvent {
-            kind: LedgerEventKind::GraphReplay,
-            sync_class: None,
-            metric_source: MetricSource::EstimatedModel,
-            block_id: None,
-            from_tier: None,
-            to_tier: Some(MemoryTier::Vram),
-            bytes: 0,
-            latency_ns: 1,
-            label: "synthetic_graph_replay",
-        });
-        ledger.record(LedgerEvent {
-            kind: LedgerEventKind::DeviceActivity,
-            sync_class: None,
-            metric_source: MetricSource::EstimatedModel,
-            block_id: None,
-            from_tier: None,
-            to_tier: Some(MemoryTier::Vram),
-            bytes: 0,
-            latency_ns: 3,
-            label: "synthetic_decode_kernel",
-        });
-        ledger.record_device_span(DeviceTimelineSpan::new(
-            self.engine.device,
-            0,
-            3,
-            MetricSource::EstimatedModel,
-            "synthetic_decode_device_active",
-        ))?;
-        ledger.record(LedgerEvent {
-            kind: LedgerEventKind::Copy,
-            sync_class: None,
-            metric_source: MetricSource::EstimatedModel,
-            block_id: None,
-            from_tier: Some(MemoryTier::Vram),
-            to_tier: Some(MemoryTier::PinnedDram),
-            bytes: core::mem::size_of::<TokenId>(),
-            latency_ns: 1,
-            label: "async_host_token_observation",
-        });
-        ledger.record_sync(
-            SyncClass::SoftVisibilitySync,
-            None,
-            Some(MemoryTier::Vram),
-            Some(MemoryTier::PinnedDram),
-            0,
-            1,
-            MetricSource::EstimatedModel,
-            "soft_visibility_host_wait",
-        );
-        if plan.input_source == TokenInputSource::HostObservation {
-            ledger.record_sync(
-                SyncClass::PolicySync,
-                None,
-                Some(MemoryTier::PinnedDram),
-                Some(MemoryTier::Vram),
-                0,
-                1,
-                MetricSource::EstimatedModel,
-                "host_policy_barrier",
-            );
-        }
-
-        Ok(StepOutput {
-            request_id: plan.request_id,
-            sequence_id: plan.sequence_id,
-            token_index: plan.token_index,
-            input_source: plan.input_source,
-            device_token_ref,
-            token: host_visible_token,
-            finished: false,
-            ledger,
-        })
-    }
-}
-
-impl Drop for PendingSyntheticStep<'_> {
-    fn drop(&mut self) {
-        debug_assert!(
-            self.plan.is_none(),
-            "PendingSyntheticStep dropped without collect(); transaction output leaked"
-        );
     }
 }

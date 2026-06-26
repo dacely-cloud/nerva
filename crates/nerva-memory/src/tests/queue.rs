@@ -3,10 +3,11 @@ use nerva_core::types::id::{DeviceOrdinal, ResidentBlockId};
 use nerva_core::types::memory::MemoryTier;
 use nerva_core::types::ownership::{CoherencePolicy, ExecutionOwner, MutationSemantics};
 
-use crate::queue::probe::run_shared_work_queue_probe;
+use crate::queue::probe::run::run_shared_work_queue_probe;
 use crate::queue::ring::SharedWorkQueue;
 use crate::queue::types::{SharedQueueDescriptor, SharedQueueRejectionKind, SharedWorkQueueSpec};
-use crate::registry::{BlockAllocationRequest, BlockRegistry};
+use crate::registry::request::BlockAllocationRequest;
+use crate::registry::table::BlockRegistry;
 
 #[test]
 fn shared_queue_probe_reports_bounded_handle_queue() {

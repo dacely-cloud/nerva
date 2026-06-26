@@ -1,5 +1,5 @@
 use crate::capabilities::snapshot::CapabilityState;
-use crate::transport::path::{TransferMode, TransportPathClass, TransportPathKind};
+use crate::transport::path::types::{TransferMode, TransportPathClass, TransportPathKind};
 use nerva_core::types::memory::MemoryTier;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

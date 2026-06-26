@@ -1,4 +1,4 @@
-use nerva_runtime::engine::kv_probe::KvResidencyProbeConfig;
+use nerva_runtime::engine::kv_probe::config::KvResidencyProbeConfig;
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 pub(crate) fn run_kv_probe() -> Result<String, String> {

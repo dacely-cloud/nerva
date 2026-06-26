@@ -3,11 +3,12 @@ use nerva_core::types::id::{DeviceOrdinal, TransportDeviceId};
 use nerva_core::types::memory::MemoryTier;
 use nerva_core::types::ownership::ExecutionOwner;
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::phase::probe::run_phase_handoff_probe;
 use crate::phase::types::{PhaseHandoffPlanner, PhaseHandoffRejectionKind, PhaseHandoffRequest};
-use crate::registry::{BlockAllocationRequest, BlockRegistry};
+use crate::registry::request::BlockAllocationRequest;
+use crate::registry::table::BlockRegistry;
 
 #[test]
 fn phase_handoff_probe_records_handoffs_and_rejections() {

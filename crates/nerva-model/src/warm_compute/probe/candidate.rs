@@ -2,7 +2,7 @@ use nerva_core::types::error::Result;
 use nerva_core::types::memory::MemoryTier;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::hash::hash_f32s;
 use crate::common::math::{mat_vec_row_major, mat_vec_row_range};

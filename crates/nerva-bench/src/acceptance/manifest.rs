@@ -3,7 +3,7 @@ use nerva_core::types::dtype::DType;
 pub(crate) fn model_manifest_acceptance() -> Result<(bool, String), String> {
     let metadata = nerva_model::hf::probe::hf_metadata_probe()
         .map_err(|err| format!("HF metadata probe failed: {err:?}"))?;
-    let layout = nerva_model::weights::layout::hf_weight_layout_probe()
+    let layout = nerva_model::weights::layout::probe::hf_weight_layout_probe()
         .map_err(|err| format!("HF layout probe failed: {err:?}"))?;
     let manifest = nerva_model::weights::manifest::hf_tensor_manifest_probe()
         .map_err(|err| format!("HF manifest probe failed: {err:?}"))?;

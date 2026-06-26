@@ -3,7 +3,7 @@ use crate::common::math::dot;
 use crate::common::shape::TransformerBlockShape;
 use crate::hf::architecture::HfArchitectureKind;
 use crate::hf::parser::parse_hf_config_metadata;
-use crate::weights::layout::plan_hf_weight_layout;
+use crate::weights::layout::plan::plan_hf_weight_layout;
 use crate::weights::manifest::{HfTensorManifest, HfTensorManifestEntry, build_hf_tensor_manifest};
 use crate::weights::safetensors::header::synthetic_safetensors_header_for_manifest;
 

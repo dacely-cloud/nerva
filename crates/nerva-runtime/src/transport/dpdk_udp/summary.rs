@@ -1,7 +1,7 @@
 use crate::capabilities::snapshot::CapabilityState;
 use crate::transport::dpdk_udp::protocol::DpdkUdpMemoryPath;
 use crate::transport::json::json_opt_static_str;
-use crate::transport::path::TransferMode;
+use crate::transport::path::types::TransferMode;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum DpdkUdpProtocolStatus {

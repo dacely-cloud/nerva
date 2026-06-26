@@ -1,4 +1,5 @@
-use crate::registry::{BlockAllocationRequest, BlockRegistry};
+use crate::registry::request::BlockAllocationRequest;
+use crate::registry::table::BlockRegistry;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::NervaError;

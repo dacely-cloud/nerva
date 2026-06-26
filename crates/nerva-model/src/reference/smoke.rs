@@ -1,5 +1,5 @@
 use nerva_core::types::error::Result;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::hash::hash_f32s;
 use crate::common::shape::TransformerBlockShape;

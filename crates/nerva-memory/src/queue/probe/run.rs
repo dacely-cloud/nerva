@@ -1,16 +1,20 @@
-use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::Result;
-use nerva_core::types::id::{DeviceOrdinal, ResidentBlockId};
+use nerva_core::types::id::DeviceOrdinal;
 use nerva_core::types::memory::MemoryTier;
-use nerva_core::types::ownership::{CoherencePolicy, ExecutionOwner, MutationSemantics};
+use nerva_core::types::ownership::{CoherencePolicy, ExecutionOwner};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
+use crate::queue::probe::counters::SharedQueueCounters;
+use crate::queue::probe::fixtures::{
+    allocate_queue_block, allocate_tensor_block, count_atomic_control_blocks, count_queue_blocks,
+    descriptor,
+};
 use crate::queue::ring::SharedWorkQueue;
 use crate::queue::summary::{SharedQueueProbeStatus, SharedQueueProbeSummary};
-use crate::queue::types::{SharedQueueDescriptor, SharedQueueRejectionKind, SharedWorkQueueSpec};
-use crate::registry::{BlockAllocationRequest, BlockRegistry};
+use crate::queue::types::SharedWorkQueueSpec;
+use crate::registry::table::BlockRegistry;
 
 pub fn run_shared_work_queue_probe() -> Result<SharedQueueProbeSummary> {
     let mut registry = BlockRegistry::new([
@@ -110,118 +114,4 @@ pub fn run_shared_work_queue_probe() -> Result<SharedQueueProbeSummary> {
         hot_path_allocations: ledger.hot_path_allocations,
         error: None,
     })
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct SharedQueueCounters {
-    descriptors_posted: u64,
-    descriptors_completed: u64,
-    queue_full_rejections: u64,
-    wrong_producer_rejections: u64,
-    wrong_consumer_rejections: u64,
-    bulk_payload_rejections: u64,
-    payload_bytes_in_queue: u64,
-    referenced_block_bytes: u64,
-}
-
-impl SharedQueueCounters {
-    const fn new() -> Self {
-        Self {
-            descriptors_posted: 0,
-            descriptors_completed: 0,
-            queue_full_rejections: 0,
-            wrong_producer_rejections: 0,
-            wrong_consumer_rejections: 0,
-            bulk_payload_rejections: 0,
-            payload_bytes_in_queue: 0,
-            referenced_block_bytes: 0,
-        }
-    }
-
-    fn record_rejection(&mut self, kind: SharedQueueRejectionKind) {
-        match kind {
-            SharedQueueRejectionKind::QueueFull => self.queue_full_rejections += 1,
-            SharedQueueRejectionKind::WrongProducer => self.wrong_producer_rejections += 1,
-            SharedQueueRejectionKind::WrongConsumer => self.wrong_consumer_rejections += 1,
-            SharedQueueRejectionKind::BulkPayloadInDescriptor => self.bulk_payload_rejections += 1,
-            SharedQueueRejectionKind::QueueEmpty | SharedQueueRejectionKind::InvalidQueueBlocks => {
-            }
-        }
-    }
-}
-
-fn allocate_queue_block(registry: &mut BlockRegistry) -> Result<ResidentBlockId> {
-    let block_id = registry.allocate(BlockAllocationRequest::new(
-        BlockKind::Queue,
-        MemoryTier::SharedHbmOrLpddr,
-        4096,
-    ))?;
-    {
-        let block = registry
-            .block_mut(block_id)
-            .expect("allocated block exists");
-        block.coherence = CoherencePolicy::AtomicControlOnly;
-        block.semantics = MutationSemantics::AtomicControl;
-        block.owner = ExecutionOwner::PhaseTransition;
-    }
-    registry.mark_ready(block_id)?;
-    Ok(block_id)
-}
-
-fn allocate_tensor_block(registry: &mut BlockRegistry, bytes: usize) -> Result<ResidentBlockId> {
-    let block_id = registry.allocate(BlockAllocationRequest::new(
-        BlockKind::Activation,
-        MemoryTier::Vram,
-        bytes,
-    ))?;
-    {
-        let block = registry
-            .block_mut(block_id)
-            .expect("allocated block exists");
-        block.owner = ExecutionOwner::Gpu(DeviceOrdinal(0));
-        block.version = 1;
-    }
-    registry.mark_ready(block_id)?;
-    Ok(block_id)
-}
-
-fn descriptor(
-    descriptor_id: u64,
-    block_id: ResidentBlockId,
-    block_version: u64,
-    referenced_bytes: usize,
-    payload_bytes_in_queue: usize,
-) -> SharedQueueDescriptor {
-    SharedQueueDescriptor {
-        descriptor_id,
-        block_id,
-        block_version,
-        referenced_bytes,
-        metadata_bytes: core::mem::size_of::<SharedQueueDescriptor>(),
-        payload_bytes_in_queue,
-        label: "shared_queue_block_handle",
-    }
-}
-
-fn count_queue_blocks(registry: &BlockRegistry, block_ids: [ResidentBlockId; 2]) -> u64 {
-    block_ids
-        .iter()
-        .filter(|block_id| {
-            registry
-                .block(**block_id)
-                .is_some_and(|block| block.kind == BlockKind::Queue)
-        })
-        .count() as u64
-}
-
-fn count_atomic_control_blocks(registry: &BlockRegistry, block_ids: [ResidentBlockId; 2]) -> u64 {
-    block_ids
-        .iter()
-        .filter(|block_id| {
-            registry.block(**block_id).is_some_and(|block| {
-                block.coherence == CoherencePolicy::AtomicControlOnly
-                    && block.semantics == MutationSemantics::AtomicControl
-            })
-        })
-        .count() as u64
 }

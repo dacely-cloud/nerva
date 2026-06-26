@@ -4,7 +4,7 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::memory::MemoryTier;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::engine::runtime::Runtime;
 use crate::weights::block::ResidentWeightTable;

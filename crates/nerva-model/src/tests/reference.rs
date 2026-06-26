@@ -3,7 +3,7 @@ use crate::common::shape::TransformerBlockShape;
 use crate::reference::block::ReferenceTransformerBlock;
 use crate::reference::scratch::TransformerBlockScratch;
 use crate::reference::smoke::{ReferenceBlockSmokeStatus, reference_block_smoke};
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 #[test]
 fn zero_block_preserves_residual() {

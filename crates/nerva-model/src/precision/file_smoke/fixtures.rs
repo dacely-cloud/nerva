@@ -4,7 +4,7 @@ use crate::common::shape::TransformerBlockShape;
 use crate::precision::bits::f32_to_f16_bits;
 use crate::precision::file_smoke::constants::SHARD_NAME;
 use crate::reference::block::ReferenceTransformerBlock;
-use crate::weights::layout::WeightBlockRole;
+use crate::weights::layout::entry::WeightBlockRole;
 
 pub(crate) fn tiny_file_block_manifest() -> Result<crate::weights::manifest::HfTensorManifest> {
     let metadata = crate::hf::parser::parse_hf_config_metadata(
@@ -19,7 +19,7 @@ pub(crate) fn tiny_file_block_manifest() -> Result<crate::weights::manifest::HfT
                 "torch_dtype": "float16"
             }"#,
     )?;
-    let layout = crate::weights::layout::plan_hf_weight_layout(&metadata)?;
+    let layout = crate::weights::layout::plan::plan_hf_weight_layout(&metadata)?;
     crate::weights::manifest::build_hf_tensor_manifest(&layout)
 }
 

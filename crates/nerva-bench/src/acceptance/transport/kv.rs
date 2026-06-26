@@ -1,4 +1,5 @@
-use nerva_runtime::engine::kv_probe::{KvResidencyProbeConfig, KvResidencyProbeStatus};
+use nerva_runtime::engine::kv_probe::config::KvResidencyProbeConfig;
+use nerva_runtime::engine::kv_probe::summary::KvResidencyProbeStatus;
 use nerva_runtime::engine::runtime::Runtime;
 
 use crate::acceptance::report::AcceptanceReport;

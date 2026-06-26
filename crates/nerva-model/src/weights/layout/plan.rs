@@ -2,95 +2,10 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::memory::MemoryTier;
 
-use crate::common::dtype::{dtype_size_bytes, dtype_to_str};
+use crate::common::dtype::dtype_to_str;
 use crate::hf::metadata::HfModelMetadata;
-use crate::hf::probe::hf_metadata_probe;
 use crate::hf::validate::validate_hf_metadata;
-use crate::weights::hash::hash_weight_layout;
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum WeightBlockRole {
-    TokenEmbedding,
-    AttentionNorm,
-    QueryProjection,
-    KeyProjection,
-    ValueProjection,
-    OutputProjection,
-    MlpNorm,
-    GateProjection,
-    UpProjection,
-    DownProjection,
-    LmHead,
-}
-
-impl WeightBlockRole {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::TokenEmbedding => "token_embedding",
-            Self::AttentionNorm => "attention_norm",
-            Self::QueryProjection => "q_proj",
-            Self::KeyProjection => "k_proj",
-            Self::ValueProjection => "v_proj",
-            Self::OutputProjection => "o_proj",
-            Self::MlpNorm => "mlp_norm",
-            Self::GateProjection => "gate_proj",
-            Self::UpProjection => "up_proj",
-            Self::DownProjection => "down_proj",
-            Self::LmHead => "lm_head",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct WeightBlockSpec {
-    pub role: WeightBlockRole,
-    pub layer: Option<u32>,
-    pub rows: usize,
-    pub cols: usize,
-    pub elements: usize,
-    pub bytes: usize,
-    pub dtype: DType,
-    pub tier: MemoryTier,
-}
-
-impl WeightBlockSpec {
-    fn new(
-        role: WeightBlockRole,
-        layer: Option<u32>,
-        rows: usize,
-        cols: usize,
-        dtype: DType,
-        tier: MemoryTier,
-    ) -> Result<Self> {
-        if rows == 0 || cols == 0 {
-            return Err(NervaError::InvalidArgument {
-                reason: format!("weight block {} shape must be non-zero", role.as_str()),
-            });
-        }
-        let elements = rows
-            .checked_mul(cols)
-            .ok_or_else(|| NervaError::AllocationFailed {
-                bytes: 0,
-                reason: format!("weight block {} element count overflow", role.as_str()),
-            })?;
-        let bytes = elements
-            .checked_mul(dtype_size_bytes(dtype)?)
-            .ok_or_else(|| NervaError::AllocationFailed {
-                bytes: elements,
-                reason: format!("weight block {} byte count overflow", role.as_str()),
-            })?;
-        Ok(Self {
-            role,
-            layer,
-            rows,
-            cols,
-            elements,
-            bytes,
-            dtype,
-            tier,
-        })
-    }
-}
+use crate::weights::layout::entry::{WeightBlockRole, WeightBlockSpec};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HfWeightLayoutPlan {
@@ -117,32 +32,6 @@ impl HfWeightLayoutPlan {
             self.metadata.head_dim(),
             self.metadata.num_key_value_heads * self.metadata.head_dim(),
             self.metadata.tie_word_embeddings,
-        )
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum HfWeightLayoutProbeStatus {
-    Ok,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct HfWeightLayoutProbeSummary {
-    pub status: HfWeightLayoutProbeStatus,
-    pub plan: HfWeightLayoutPlan,
-    pub layout_hash: u64,
-}
-
-impl HfWeightLayoutProbeSummary {
-    pub fn to_json(&self) -> String {
-        let status = match self.status {
-            HfWeightLayoutProbeStatus::Ok => "ok",
-        };
-        format!(
-            "{{\"status\":\"{}\",\"plan\":{},\"layout_hash\":{}}}",
-            status,
-            self.plan.to_json(),
-            self.layout_hash,
         )
     }
 }
@@ -227,16 +116,6 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
         total_weight_bytes,
         per_layer_weight_bytes,
         static_weight_bytes,
-    })
-}
-
-pub fn hf_weight_layout_probe() -> Result<HfWeightLayoutProbeSummary> {
-    let metadata = hf_metadata_probe()?.metadata;
-    let plan = plan_hf_weight_layout(&metadata)?;
-    Ok(HfWeightLayoutProbeSummary {
-        layout_hash: hash_weight_layout(&plan),
-        status: HfWeightLayoutProbeStatus::Ok,
-        plan,
     })
 }
 

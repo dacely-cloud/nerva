@@ -7,7 +7,7 @@ use crate::queue::types::{
     SharedQueueCompletion, SharedQueueDescriptor, SharedQueueRejection, SharedQueueRejectionKind,
     SharedWorkQueueSpec,
 };
-use crate::registry::BlockRegistry;
+use crate::registry::table::BlockRegistry;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SharedWorkQueue {

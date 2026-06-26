@@ -20,11 +20,11 @@ pub(crate) fn run_layout_probe(config_path: Option<String>) -> Result<String, St
                 .map_err(|err| format!("failed to read {path}: {err}"))?;
             let metadata = nerva_model::hf::parser::parse_hf_config_metadata(&config)
                 .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
-            let plan = nerva_model::weights::layout::plan_hf_weight_layout(&metadata)
+            let plan = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata)
                 .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
             Ok(plan.to_json())
         }
-        None => nerva_model::weights::layout::hf_weight_layout_probe()
+        None => nerva_model::weights::layout::probe::hf_weight_layout_probe()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("HF weight layout probe failed: {err:?}")),
     }
@@ -64,7 +64,7 @@ pub(crate) fn load_manifest_from_config(
 ) -> Result<nerva_model::weights::manifest::HfTensorManifest, String> {
     let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config)
         .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
-    let plan = nerva_model::weights::layout::plan_hf_weight_layout(&metadata)
+    let plan = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata)
         .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
     nerva_model::weights::manifest::build_hf_tensor_manifest(&plan)
         .map_err(|err| format!("HF tensor manifest failed: {err:?}"))

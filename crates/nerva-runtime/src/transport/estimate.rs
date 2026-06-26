@@ -1,4 +1,5 @@
-use crate::transport::path::{TransferMode, TransportPathDecision, TransportPathKind};
+use crate::transport::path::decision::TransportPathDecision;
+use crate::transport::path::types::{TransferMode, TransportPathKind};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TransportResourceEstimate {

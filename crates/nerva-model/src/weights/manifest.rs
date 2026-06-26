@@ -5,9 +5,9 @@ use nerva_core::types::memory::MemoryTier;
 use crate::common::json::format::json_opt_str;
 use crate::hf::architecture::HfArchitectureKind;
 use crate::weights::hash::hash_tensor_manifest;
-use crate::weights::layout::{
-    HfWeightLayoutPlan, WeightBlockRole, WeightBlockSpec, hf_weight_layout_probe,
-};
+use crate::weights::layout::entry::{WeightBlockRole, WeightBlockSpec};
+use crate::weights::layout::plan::HfWeightLayoutPlan;
+use crate::weights::layout::probe::hf_weight_layout_probe;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HfTensorManifestEntry {

@@ -3,7 +3,7 @@ use nerva_core::types::error::Result;
 use nerva_core::types::memory::MemoryTier;
 use nerva_memory::arena::kind::ArenaKind;
 use nerva_memory::arena::set::{StaticArenaBootstrapSpec, StaticArenaSet};
-use nerva_memory::registry::BlockRegistry;
+use nerva_memory::registry::table::BlockRegistry;
 
 use crate::engine::residency::ResidencyBudget;
 use crate::engine::runtime::Runtime;

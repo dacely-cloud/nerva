@@ -1,6 +1,6 @@
 use crate::common::dtype::dtype_to_str;
 use crate::hf::hash::hash_metadata;
-use crate::weights::layout::HfWeightLayoutPlan;
+use crate::weights::layout::plan::HfWeightLayoutPlan;
 use crate::weights::manifest::HfTensorManifest;
 use crate::weights::safetensors::shard::SafetensorsShardPlan;
 

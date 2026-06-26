@@ -1,7 +1,7 @@
 use nerva_core::types::id::ResidentBlockId;
 
 use crate::types::decision::BlockVersionDependency;
-use crate::types::token::TokenLedger;
+use crate::types::token::ledger::TokenLedger;
 
 #[test]
 fn block_version_dependencies_validate_observed_versions() {

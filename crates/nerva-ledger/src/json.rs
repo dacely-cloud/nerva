@@ -9,7 +9,7 @@ use crate::types::decision::{
 use crate::types::event::{DeviceTimelineSpan, LedgerEvent};
 use crate::types::fallback::FallbackDecision;
 use crate::types::sync::SyncClass;
-use crate::types::token::TokenLedger;
+use crate::types::token::ledger::TokenLedger;
 
 impl TokenLedger {
     pub fn to_json(&self) -> String {

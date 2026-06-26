@@ -5,11 +5,12 @@ use nerva_core::types::id::{DeviceOrdinal, ResidentBlockId, TransportDeviceId};
 use nerva_core::types::memory::MemoryTier;
 use nerva_core::types::ownership::{ExecutionOwner, MutationSemantics};
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::phase::summary::{PhaseHandoffProbeStatus, PhaseHandoffProbeSummary};
 use crate::phase::types::{PhaseHandoffPlanner, PhaseHandoffRejectionKind, PhaseHandoffRequest};
-use crate::registry::{BlockAllocationRequest, BlockRegistry};
+use crate::registry::request::BlockAllocationRequest;
+use crate::registry::table::BlockRegistry;
 
 pub fn run_phase_handoff_probe() -> Result<PhaseHandoffProbeSummary> {
     let mut registry = BlockRegistry::new([

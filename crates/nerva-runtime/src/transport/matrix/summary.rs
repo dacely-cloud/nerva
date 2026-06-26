@@ -4,7 +4,7 @@ use crate::transport::matrix::types::{
     TransportCapabilityMatrixEntry, TransportCapabilityMatrixStatus,
     TransportCapabilityMatrixSummary,
 };
-use crate::transport::path::{TransferMode, TransportPathClass};
+use crate::transport::path::types::{TransferMode, TransportPathClass};
 
 pub(crate) fn transport_capability_matrix_summary(
     sizes: u64,

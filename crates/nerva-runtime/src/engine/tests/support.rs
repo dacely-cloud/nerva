@@ -14,7 +14,7 @@ pub(crate) fn tiny_llama_manifest() -> nerva_model::weights::manifest::HfTensorM
             }"#,
     )
     .unwrap();
-    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    let layout = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata).unwrap();
     nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap()
 }
 

@@ -6,7 +6,7 @@ use crate::common::shape::TransformerBlockShape;
 use crate::tests::support::dense_attention_reference;
 use nerva_core::types::memory::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 #[test]
 fn blockwise_attention_matches_dense_reference_across_tiers() {

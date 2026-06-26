@@ -5,7 +5,7 @@ use nerva_core::types::ownership::ExecutionOwner;
 use nerva_ledger::types::decision::{CandidateCost, ExecutionDecision};
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::attention::block::KvAttentionBlock;
 use crate::attention::scratch::BlockwiseAttentionScratch;

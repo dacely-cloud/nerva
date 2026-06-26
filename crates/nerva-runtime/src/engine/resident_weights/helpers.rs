@@ -1,5 +1,5 @@
 use nerva_core::types::memory::MemoryTier;
-use nerva_model::weights::layout::WeightBlockRole;
+use nerva_model::weights::layout::entry::WeightBlockRole;
 
 pub(super) fn div_ceil_u64(value: u64, divisor: u64) -> u64 {
     value / divisor + u64::from(value % divisor != 0)

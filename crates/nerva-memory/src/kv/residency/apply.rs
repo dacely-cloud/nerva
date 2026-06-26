@@ -3,7 +3,7 @@ use nerva_core::types::error::Result;
 use nerva_core::types::id::AllocationId;
 
 use crate::kv::residency::types::{KvResidencyAction, KvResidencyPlan};
-use crate::registry::BlockRegistry;
+use crate::registry::table::BlockRegistry;
 
 impl KvResidencyPlan {
     pub fn apply(&self, registry: &mut BlockRegistry) -> Result<()> {

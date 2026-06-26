@@ -6,7 +6,7 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_ledger::types::decision::{CandidateCost, ExecutionDecision};
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::warm_compute::probe::candidate::run_warm_compute_candidate;
 use crate::warm_compute::probe::fixture::WarmComputeFixture;

@@ -1,5 +1,5 @@
 use nerva_core::types::id::{RequestId, SequenceId, TokenId, TransactionId};
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::graph::layout::GraphLayout;
 use crate::token::ring::{DeviceTokenRef, TokenInputSource};

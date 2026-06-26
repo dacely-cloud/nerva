@@ -2,9 +2,10 @@ use crate::hf::architecture::HfArchitectureKind;
 use crate::hf::parser::parse_hf_config_metadata;
 use crate::hf::probe::hf_metadata_probe;
 use crate::tests::support::tiny_llama_manifest;
-use crate::weights::layout::{
-    HfWeightLayoutProbeStatus, WeightBlockRole, hf_weight_layout_probe, plan_hf_weight_layout,
-};
+use crate::weights::layout::entry::WeightBlockRole;
+use crate::weights::layout::plan::plan_hf_weight_layout;
+use crate::weights::layout::probe::hf_weight_layout_probe;
+use crate::weights::layout::summary::HfWeightLayoutProbeStatus;
 use crate::weights::manifest::{
     HfTensorManifestProbeStatus, build_hf_tensor_manifest, hf_tensor_manifest_probe,
 };

@@ -1,13 +1,13 @@
 use crate::arena::kind::ArenaKind;
 use crate::arena::set::StaticArenaSet;
 use crate::kv::page::{KvPageSpec, KvPrefixKey};
-use crate::kv::pool::KvPagePool;
+use crate::kv::pool::table::KvPagePool;
 use crate::kv::residency::types::{KvResidencyAction, KvResidencyPlanner, KvResidencyPolicy};
-use crate::registry::BlockRegistry;
+use crate::registry::table::BlockRegistry;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::memory::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 #[test]
 fn kv_page_pool_preallocates_resident_blocks() {

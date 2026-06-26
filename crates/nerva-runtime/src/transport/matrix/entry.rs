@@ -3,10 +3,10 @@ use crate::transport::estimate::{effective_payload_bandwidth_bps, transport_reso
 use crate::transport::matrix::types::{
     TransportCapabilityMatrixEntry, TransportMatrixRequestedPath,
 };
-use crate::transport::path::{
-    TransferMode, TransportPathClass, TransportPathDecision, TransportPathRequest,
-    plan_transport_path,
-};
+use crate::transport::path::decision::TransportPathDecision;
+use crate::transport::path::planner::plan_transport_path;
+use crate::transport::path::request::TransportPathRequest;
+use crate::transport::path::types::{TransferMode, TransportPathClass};
 use nerva_core::types::error::Result;
 use nerva_core::types::id::DeviceOrdinal;
 use nerva_core::types::memory::MemoryTier;

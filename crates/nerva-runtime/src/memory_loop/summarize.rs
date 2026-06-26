@@ -1,6 +1,6 @@
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::memory_loop::planned::MemoryLoopTask;
 use crate::memory_loop::summary::{MemoryLoopStatus, MemoryLoopSummary};

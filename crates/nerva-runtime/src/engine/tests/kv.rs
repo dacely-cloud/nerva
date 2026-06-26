@@ -1,6 +1,7 @@
 use nerva_core::types::error::NervaError;
 
-use crate::engine::kv_probe::{KvResidencyProbeConfig, KvResidencyProbeStatus};
+use crate::engine::kv_probe::config::KvResidencyProbeConfig;
+use crate::engine::kv_probe::summary::KvResidencyProbeStatus;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 
 #[test]

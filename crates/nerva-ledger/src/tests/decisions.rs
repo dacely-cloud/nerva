@@ -5,7 +5,7 @@ use nerva_core::types::ownership::ExecutionOwner;
 use crate::types::decision::{CandidateCost, ExecutionDecision, ResidencyDecision};
 use crate::types::fallback::{FallbackClass, FallbackDecision};
 use crate::types::metric::MetricSource;
-use crate::types::token::TokenLedger;
+use crate::types::token::ledger::TokenLedger;
 
 #[test]
 fn fallback_decisions_are_recorded_separately_from_events() {

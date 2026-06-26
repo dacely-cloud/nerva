@@ -9,7 +9,7 @@ use crate::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
 use crate::types::fallback::{FallbackClass, FallbackDecision};
 use crate::types::metric::MetricSource;
 use crate::types::sync::SyncClass;
-use crate::types::token::TokenLedger;
+use crate::types::token::ledger::TokenLedger;
 
 #[test]
 fn token_ledger_serializes_raw_events_and_decisions() {

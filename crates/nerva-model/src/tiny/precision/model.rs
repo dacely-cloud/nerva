@@ -6,12 +6,12 @@ use nerva_core::types::ownership::ExecutionOwner;
 use nerva_ledger::types::decision::{CandidateCost, ExecutionDecision};
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::shape::TransformerBlockShape;
 use crate::common::token::{greedy_argmax, require_token_in_vocab};
 use crate::common::validate::require_len;
-use crate::precision::block::PrecisionTransformerBlock;
+use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::tiny::precision::codec::{
     copy_encoded_embedding_row, decode_slice_into, encode_slice, encoded_lm_head_into,
 };

@@ -1,12 +1,12 @@
 use nerva_core::types::arch::ensure_supported_linux_host;
 use nerva_core::types::error::Result;
 use nerva_core::types::id::DeviceOrdinal;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::capabilities::discovery::discover_capabilities;
 use crate::capabilities::snapshot::{CapabilitySnapshot, TopologySnapshot};
 use crate::capabilities::topology::discover_topology_snapshot;
-use crate::token::engine::SyntheticEngine;
+use crate::token::engine::synthetic::SyntheticEngine;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeConfig {

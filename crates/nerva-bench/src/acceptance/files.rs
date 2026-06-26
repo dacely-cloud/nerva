@@ -17,7 +17,7 @@ pub(crate) fn safetensors_file_header_acceptance() -> Result<(bool, String), Str
         }"#;
     let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config)
         .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
-    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata)
+    let layout = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata)
         .map_err(|err| format!("HF layout probe failed: {err:?}"))?;
     let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout)
         .map_err(|err| format!("HF manifest probe failed: {err:?}"))?;
@@ -84,7 +84,7 @@ pub(crate) fn safetensors_file_prefetch_acceptance() -> Result<(bool, String), S
         }"#;
     let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config)
         .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
-    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata)
+    let layout = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata)
         .map_err(|err| format!("HF layout probe failed: {err:?}"))?;
     let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout)
         .map_err(|err| format!("HF manifest probe failed: {err:?}"))?;

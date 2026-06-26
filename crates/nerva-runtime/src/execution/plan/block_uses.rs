@@ -2,8 +2,8 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_ledger::types::decision::BlockVersionDependency;
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
-use nerva_memory::registry::BlockRegistry;
+use nerva_ledger::types::token::ledger::TokenLedger;
+use nerva_memory::registry::table::BlockRegistry;
 
 use crate::execution::types::TransactionOperation;
 

@@ -3,7 +3,7 @@ use nerva_ledger::types::decision::{CandidateCost, ResidencyDecision};
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::memory_loop::types::{MemoryLoopTaskKind, MemoryLoopTaskSpec};
 

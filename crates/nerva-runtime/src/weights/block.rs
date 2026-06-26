@@ -1,8 +1,8 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::id::ResidentBlockId;
 use nerva_core::types::memory::MemoryTier;
-use nerva_ledger::types::token::TokenLedger;
-use nerva_memory::registry::BlockRegistry;
+use nerva_ledger::types::token::ledger::TokenLedger;
+use nerva_memory::registry::table::BlockRegistry;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResidentWeightBlockRef {

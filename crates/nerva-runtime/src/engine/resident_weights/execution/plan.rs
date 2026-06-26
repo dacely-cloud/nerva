@@ -10,7 +10,7 @@ use nerva_kernel_contracts::registry::types::{
 use nerva_ledger::types::decision::{BlockVersionDependency, CandidateCost, ExecutionDecision};
 use nerva_ledger::types::fallback::{FallbackClass, FallbackDecision};
 use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::engine::resident_weights::helpers::{
     estimate_cpu_dram_weight_ns, estimate_cpu_fallback_weight_ns, estimate_gpu_resident_weight_ns,

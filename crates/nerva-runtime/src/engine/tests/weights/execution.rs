@@ -80,7 +80,7 @@ fn resident_weight_execution_uses_exact_cpu_fallback_for_f32_cuda() {
             }"#,
     )
     .unwrap();
-    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    let layout = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata).unwrap();
     let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap();
     let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
     let plan = runtime
@@ -167,7 +167,7 @@ fn resident_weight_execution_run_ledgers_exact_cpu_fallback() {
             }"#,
     )
     .unwrap();
-    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    let layout = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata).unwrap();
     let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap();
     let table = runtime.materialize_hf_weight_manifest(&manifest).unwrap();
     let plan = runtime

@@ -1,7 +1,7 @@
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::TokenId;
 use nerva_ledger::types::event::LedgerEventKind;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::hash::hash_tokens;
 use crate::common::shape::TransformerBlockShape;

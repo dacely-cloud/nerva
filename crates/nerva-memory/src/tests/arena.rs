@@ -4,14 +4,15 @@ use crate::arena::region::ArenaReservation;
 use crate::arena::resident::resident_block_for_reservation;
 use crate::arena::set::{StaticArenaBootstrapSpec, StaticArenaSet};
 use crate::arena::static_arena::StaticArena;
-use crate::registry::{BlockAllocationRequest, BlockRegistry};
+use crate::registry::request::BlockAllocationRequest;
+use crate::registry::table::BlockRegistry;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::block::taxonomy::BlockKind;
 use nerva_core::types::error::NervaError;
 use nerva_core::types::id::{AllocationId, MemoryDomainId, ResidentBlockId};
 use nerva_core::types::memory::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 #[test]
 fn host_arena_respects_alignment() {

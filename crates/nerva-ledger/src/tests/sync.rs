@@ -3,7 +3,7 @@ use nerva_core::types::memory::MemoryTier;
 use crate::types::event::{LedgerEvent, LedgerEventKind};
 use crate::types::metric::MetricSource;
 use crate::types::sync::SyncClass;
-use crate::types::token::TokenLedger;
+use crate::types::token::ledger::TokenLedger;
 
 #[test]
 fn classified_sync_validation_rejects_missing_or_misplaced_classes() {

@@ -2,11 +2,11 @@ use std::path::Path;
 
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::shape::TransformerBlockShape;
 use crate::precision::bits::{encode_f32_for_dtype, f32_to_f16_bits, hash_u16s};
-use crate::precision::block::PrecisionTransformerBlock;
+use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::precision::file_smoke::constants::SHARD_NAME;
 use crate::precision::file_smoke::fixtures::{
     reference_block, single_shard_index_json, tensor_payload_for_manifest, tiny_file_block_manifest,
@@ -17,7 +17,7 @@ use crate::precision::file_smoke::summary::{
 };
 use crate::precision::scratch::PrecisionTransformerBlockScratch;
 use crate::reference::scratch::TransformerBlockScratch;
-use crate::weights::layout::WeightBlockRole;
+use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::safetensors::header::synthetic_safetensors_header_for_manifest;
 use crate::weights::safetensors::planner::plan_safetensors_shards_for_manifest;
 use crate::weights::safetensors::shard::{SafetensorsShardHeader, SafetensorsShardPlan};

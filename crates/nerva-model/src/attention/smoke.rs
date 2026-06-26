@@ -1,7 +1,7 @@
 use nerva_core::types::error::Result;
 use nerva_core::types::memory::MemoryTier;
 use nerva_ledger::types::event::LedgerEventKind;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::attention::block::KvAttentionBlock;
 use crate::attention::exact::exact_blockwise_attention_into;

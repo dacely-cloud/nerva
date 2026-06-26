@@ -1,5 +1,5 @@
 use nerva_core::types::id::TokenId;
-use nerva_ledger::types::token::TokenLedger;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::token::token_ids_to_json;
 

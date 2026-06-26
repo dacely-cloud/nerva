@@ -25,7 +25,7 @@ fn safetensors_probe_reads_file_header_and_validates_manifest() {
         }"#;
     std::fs::write(&config_path, config).unwrap();
     let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config).unwrap();
-    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    let layout = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata).unwrap();
     let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap();
     let header = synthetic_header_for_entries(manifest.architecture, &manifest.entries);
     let mut bytes = Vec::new();
@@ -70,7 +70,7 @@ fn safetensors_shard_probe_reads_index_and_headers() {
     std::fs::write(&config_path, config).unwrap();
 
     let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config).unwrap();
-    let layout = nerva_model::weights::layout::plan_hf_weight_layout(&metadata).unwrap();
+    let layout = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata).unwrap();
     let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap();
     let index = synthetic_index_json(&manifest, 10);
     std::fs::write(&index_path, index).unwrap();

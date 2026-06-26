@@ -1,4 +1,4 @@
-use crate::transport::path::TransferMode;
+use crate::transport::path::types::TransferMode;
 use nerva_core::types::error::{NervaError, Result};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
