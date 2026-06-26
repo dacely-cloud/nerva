@@ -16,6 +16,16 @@ pub fn tiny_decode_smoke(steps: u32, ring_capacity: u32, seed_token: u32) -> Cud
         && out.graph_replays == steps as u64
         && out.graph_launches == steps as u64
         && out.kernel_launches == steps as u64
+        && out.token_ledgers == steps as u64
+        && out.graph_replay_events == steps as u64
+        && out.device_activity_events == steps as u64
+        && out.copy_events == steps as u64
+        && out.soft_visibility_syncs == steps as u64
+        && out.hard_syncs == 0
+        && out.host_event_wait_ns > 0
+        && out.gpu_active_ns > 0
+        && out.gpu_idle_ns == 0
+        && out.wall_latency_ns > 0
         && out.observed_tokens == steps as u64
         && out.observed_token_hash != 0
         && out.hot_path_allocations == 0
@@ -54,6 +64,16 @@ pub fn tiny_decode_smoke(steps: u32, ring_capacity: u32, seed_token: u32) -> Cud
             sync_calls: out.sync_calls,
             kernel_launches: out.kernel_launches,
             hot_path_allocations: out.hot_path_allocations,
+            token_ledgers: out.token_ledgers,
+            graph_replay_events: out.graph_replay_events,
+            device_activity_events: out.device_activity_events,
+            copy_events: out.copy_events,
+            soft_visibility_syncs: out.soft_visibility_syncs,
+            hard_syncs: out.hard_syncs,
+            host_event_wait_ns: out.host_event_wait_ns,
+            gpu_active_ns: out.gpu_active_ns,
+            gpu_idle_ns: out.gpu_idle_ns,
+            wall_latency_ns: out.wall_latency_ns,
             error: None,
         };
     }

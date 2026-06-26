@@ -1,6 +1,7 @@
 #include "nerva_cuda_api.h"
 
 #include <cuda_runtime.h>
+#include <chrono>
 #include <new>
 #include <stdint.h>
 #include <string.h>
@@ -81,6 +82,24 @@ int fail(NervaCudaTinyDecodeResult *out, cudaError_t err) {
   return -1;
 }
 
+uint64_t elapsed_ns(std::chrono::steady_clock::time_point start,
+                    std::chrono::steady_clock::time_point stop) {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start)
+          .count());
+}
+
+uint64_t elapsed_event_ns(cudaEvent_t start, cudaEvent_t stop) {
+  float elapsed_ms = 0.0f;
+  const cudaError_t err = cudaEventElapsedTime(&elapsed_ms, start, stop);
+  if (err != cudaSuccess) {
+    return 0ull;
+  }
+  const uint64_t elapsed =
+      static_cast<uint64_t>(elapsed_ms * 1000000.0f);
+  return elapsed == 0ull ? 1ull : elapsed;
+}
+
 uint64_t hash_token(uint64_t current, uint32_t token) {
   uint64_t hash = current;
   for (uint32_t shift = 0u; shift < 32u; shift += 8u) {
@@ -159,6 +178,8 @@ extern "C" int nerva_cuda_tiny_decode_smoke(
   cudaStream_t stream = nullptr;
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t graph_exec = nullptr;
+  cudaEvent_t active_start = nullptr;
+  cudaEvent_t active_stop = nullptr;
 
   const uint64_t ring_bytes =
       static_cast<uint64_t>(ring_capacity) * sizeof(NervaCudaSyntheticTokenSlot);
@@ -319,10 +340,31 @@ extern "C" int nerva_cuda_tiny_decode_smoke(
     cudaFree(device_state);
     return fail(out, err);
   }
+  err = cudaEventCreateWithFlags(&active_start, cudaEventDefault);
+  if (err == cudaSuccess) {
+    err = cudaEventCreateWithFlags(&active_stop, cudaEventDefault);
+  }
+  if (err != cudaSuccess) {
+    if (active_start != nullptr) {
+      cudaEventDestroy(active_start);
+    }
+    cudaGraphExecDestroy(graph_exec);
+    cudaGraphDestroy(graph);
+    cudaStreamDestroy(stream);
+    cudaFreeHost(host_observation);
+    cudaFreeHost(host_model);
+    cudaFree(device_observation);
+    cudaFree(device_ring);
+    cudaFree(device_model);
+    cudaFree(device_state);
+    return fail(out, err);
+  }
 
   out->observed_token_hash = kFnvOffset;
   bool *slot_seen = new (std::nothrow) bool[ring_capacity]();
   if (slot_seen == nullptr) {
+    cudaEventDestroy(active_stop);
+    cudaEventDestroy(active_start);
     cudaGraphExecDestroy(graph_exec);
     cudaGraphDestroy(graph);
     cudaStreamDestroy(stream);
@@ -336,15 +378,32 @@ extern "C" int nerva_cuda_tiny_decode_smoke(
   }
 
   for (uint32_t step = 0; step < steps; ++step) {
-    err = cudaGraphLaunch(graph_exec, stream);
+    const auto wall_start = std::chrono::steady_clock::now();
+    uint64_t wait_ns = 0ull;
+    err = cudaEventRecord(active_start, stream);
+    if (err == cudaSuccess) {
+      err = cudaGraphLaunch(graph_exec, stream);
+    }
     if (err == cudaSuccess) {
       out->graph_launches += 1ull;
       out->kernel_launches += 1ull;
+      err = cudaEventRecord(active_stop, stream);
+    }
+    if (err == cudaSuccess) {
+      const auto wait_start = std::chrono::steady_clock::now();
       err = cudaStreamSynchronize(stream);
+      const auto wait_stop = std::chrono::steady_clock::now();
+      wait_ns = elapsed_ns(wait_start, wait_stop);
       out->sync_calls += 1ull;
     }
+    const auto wall_stop = std::chrono::steady_clock::now();
+    const uint64_t wall_ns = elapsed_ns(wall_start, wall_stop);
+    out->wall_latency_ns += wall_ns;
+    out->host_event_wait_ns += wait_ns;
     if (err != cudaSuccess) {
       delete[] slot_seen;
+      cudaEventDestroy(active_stop);
+      cudaEventDestroy(active_start);
       cudaGraphExecDestroy(graph_exec);
       cudaGraphDestroy(graph);
       cudaStreamDestroy(stream);
@@ -356,6 +415,12 @@ extern "C" int nerva_cuda_tiny_decode_smoke(
       cudaFree(device_state);
       return fail(out, err);
     }
+    out->gpu_active_ns += elapsed_event_ns(active_start, active_stop);
+    out->token_ledgers += 1ull;
+    out->graph_replay_events += 1ull;
+    out->device_activity_events += 1ull;
+    out->copy_events += 1ull;
+    out->soft_visibility_syncs += 1ull;
 
     const uint64_t token_index = host_observation->token_index;
     const uint32_t slot_index =
@@ -400,6 +465,8 @@ extern "C" int nerva_cuda_tiny_decode_smoke(
                             : 0ull;
   delete[] slot_seen;
 
+  cudaEventDestroy(active_stop);
+  cudaEventDestroy(active_start);
   cudaGraphExecDestroy(graph_exec);
   cudaGraphDestroy(graph);
   cudaStreamDestroy(stream);

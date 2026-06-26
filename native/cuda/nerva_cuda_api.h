@@ -145,6 +145,16 @@ typedef struct NervaCudaTinyDecodeResult {
   uint64_t sync_calls;
   uint64_t kernel_launches;
   uint64_t hot_path_allocations;
+  uint64_t token_ledgers;
+  uint64_t graph_replay_events;
+  uint64_t device_activity_events;
+  uint64_t copy_events;
+  uint64_t soft_visibility_syncs;
+  uint64_t hard_syncs;
+  uint64_t host_event_wait_ns;
+  uint64_t gpu_active_ns;
+  uint64_t gpu_idle_ns;
+  uint64_t wall_latency_ns;
 } NervaCudaTinyDecodeResult;
 
 typedef struct NervaCudaTieredAttentionResult {

@@ -32,6 +32,16 @@ fn tiny_decode_summary_serializes_device_first_fields() {
         sync_calls: 8,
         kernel_launches: 8,
         hot_path_allocations: 0,
+        token_ledgers: 8,
+        graph_replay_events: 8,
+        device_activity_events: 8,
+        copy_events: 8,
+        soft_visibility_syncs: 8,
+        hard_syncs: 0,
+        host_event_wait_ns: 1200,
+        gpu_active_ns: 800,
+        gpu_idle_ns: 0,
+        wall_latency_ns: 1600,
         error: None,
     };
     let json = summary.to_json();
@@ -45,5 +55,11 @@ fn tiny_decode_summary_serializes_device_first_fields() {
     assert!(json.contains("\"H2D_bytes\":80"));
     assert!(json.contains("\"D2H_bytes\":320"));
     assert!(json.contains("\"kernel_launches\":8"));
+    assert!(json.contains("\"token_ledgers\":8"));
+    assert!(json.contains("\"device_activity_events\":8"));
+    assert!(json.contains("\"soft_visibility_syncs\":8"));
+    assert!(json.contains("\"host_event_wait_ns\":1200"));
+    assert!(json.contains("\"gpu_idle_ns\":0"));
+    assert!(json.contains("\"host_wait_gpu_idle_separated\":true"));
     assert!(json.contains("\"hot_path_allocations\":0"));
 }

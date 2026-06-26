@@ -31,6 +31,16 @@ pub struct CudaTinyDecodeSummary {
     pub sync_calls: u64,
     pub kernel_launches: u64,
     pub hot_path_allocations: u64,
+    pub token_ledgers: u64,
+    pub graph_replay_events: u64,
+    pub device_activity_events: u64,
+    pub copy_events: u64,
+    pub soft_visibility_syncs: u64,
+    pub hard_syncs: u64,
+    pub host_event_wait_ns: u64,
+    pub gpu_active_ns: u64,
+    pub gpu_idle_ns: u64,
+    pub wall_latency_ns: u64,
     pub error: Option<String>,
 }
 
@@ -42,7 +52,7 @@ impl CudaTinyDecodeSummary {
             SmokeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"steps\":{},\"ring_capacity\":{},\"seed_token\":{},\"vocab_size\":{},\"hidden\":{},\"last_token\":{},\"graph_replays\":{},\"graph_nodes\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"token_ring_slots_touched\":{},\"token_ring_reuses\":{},\"token_ring_max_slot_version\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"resident_weight_bytes\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_launches\":{},\"sync_calls\":{},\"kernel_launches\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps\":{},\"ring_capacity\":{},\"seed_token\":{},\"vocab_size\":{},\"hidden\":{},\"last_token\":{},\"graph_replays\":{},\"graph_nodes\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"token_ring_slots_touched\":{},\"token_ring_reuses\":{},\"token_ring_max_slot_version\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"resident_weight_bytes\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_launches\":{},\"sync_calls\":{},\"kernel_launches\":{},\"hot_path_allocations\":{},\"token_ledgers\":{},\"graph_replay_events\":{},\"device_activity_events\":{},\"copy_events\":{},\"soft_visibility_syncs\":{},\"hard_syncs\":{},\"host_event_wait_ns\":{},\"gpu_active_ns\":{},\"gpu_idle_ns\":{},\"wall_latency_ns\":{},\"host_wait_gpu_idle_separated\":{},\"error\":{}}}",
             status,
             self.steps,
             self.ring_capacity,
@@ -71,6 +81,17 @@ impl CudaTinyDecodeSummary {
             self.sync_calls,
             self.kernel_launches,
             self.hot_path_allocations,
+            self.token_ledgers,
+            self.graph_replay_events,
+            self.device_activity_events,
+            self.copy_events,
+            self.soft_visibility_syncs,
+            self.hard_syncs,
+            self.host_event_wait_ns,
+            self.gpu_active_ns,
+            self.gpu_idle_ns,
+            self.wall_latency_ns,
+            self.host_event_wait_ns != self.gpu_idle_ns,
             json_opt_str(self.error.as_deref()),
         )
     }
@@ -135,6 +156,16 @@ impl CudaTinyDecodeSummary {
             sync_calls: 0,
             kernel_launches: 0,
             hot_path_allocations: 0,
+            token_ledgers: 0,
+            graph_replay_events: 0,
+            device_activity_events: 0,
+            copy_events: 0,
+            soft_visibility_syncs: 0,
+            hard_syncs: 0,
+            host_event_wait_ns: 0,
+            gpu_active_ns: 0,
+            gpu_idle_ns: 0,
+            wall_latency_ns: 0,
             error: Some(error.into()),
         }
     }

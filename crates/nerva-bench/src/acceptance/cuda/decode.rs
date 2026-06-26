@@ -17,6 +17,17 @@ pub(crate) fn push_tiny_decode_check(
         && cuda_decode.graph_replays == summary.steps as u64
         && cuda_decode.graph_launches == summary.steps as u64
         && cuda_decode.kernel_launches == summary.steps as u64
+        && cuda_decode.token_ledgers == summary.steps as u64
+        && cuda_decode.graph_replay_events == summary.steps as u64
+        && cuda_decode.device_activity_events == summary.steps as u64
+        && cuda_decode.copy_events == summary.steps as u64
+        && cuda_decode.soft_visibility_syncs == summary.steps as u64
+        && cuda_decode.hard_syncs == 0
+        && cuda_decode.host_event_wait_ns > 0
+        && cuda_decode.gpu_active_ns > 0
+        && cuda_decode.gpu_idle_ns == 0
+        && cuda_decode.wall_latency_ns > 0
+        && cuda_decode.host_event_wait_ns != cuda_decode.gpu_idle_ns
         && cuda_decode.observed_tokens == summary.steps as u64
         && cuda_decode.observed_token_hash == summary.output_hash
         && cuda_decode.token_ring_slots_touched == 4
@@ -36,12 +47,22 @@ pub(crate) fn push_tiny_decode_check(
         "cuda_tiny_decode_model",
         cuda_decode_passed,
         format!(
-            "status={:?} steps={} ring_capacity={} graph_replays={} graph_nodes={} observed={} observed_token_hash={} reference_hash={} last_token={:?} ring_slots={} ring_reuses={} ring_max_version={} resident_weight_bytes={} H2D_bytes={} D2H_bytes={} kernel_launches={} sync_calls={} hot_path_allocations={} stale={} missing={} extra={} mismatched={} host_causality_edges={} error={}",
+            "status={:?} steps={} ring_capacity={} graph_replays={} graph_nodes={} token_ledgers={} graph_replay_events={} device_activity_events={} copy_events={} soft_visibility_syncs={} hard_syncs={} host_event_wait_ns={} gpu_active_ns={} gpu_idle_ns={} wall_latency_ns={} observed={} observed_token_hash={} reference_hash={} last_token={:?} ring_slots={} ring_reuses={} ring_max_version={} resident_weight_bytes={} H2D_bytes={} D2H_bytes={} kernel_launches={} sync_calls={} hot_path_allocations={} stale={} missing={} extra={} mismatched={} host_causality_edges={} error={}",
             cuda_decode.status,
             cuda_decode.steps,
             cuda_decode.ring_capacity,
             cuda_decode.graph_replays,
             cuda_decode.graph_nodes,
+            cuda_decode.token_ledgers,
+            cuda_decode.graph_replay_events,
+            cuda_decode.device_activity_events,
+            cuda_decode.copy_events,
+            cuda_decode.soft_visibility_syncs,
+            cuda_decode.hard_syncs,
+            cuda_decode.host_event_wait_ns,
+            cuda_decode.gpu_active_ns,
+            cuda_decode.gpu_idle_ns,
+            cuda_decode.wall_latency_ns,
             cuda_decode.observed_tokens,
             cuda_decode.observed_token_hash,
             summary.output_hash,

@@ -35,6 +35,16 @@ pub(crate) struct NervaCudaTinyDecodeResult {
     pub(crate) sync_calls: u64,
     pub(crate) kernel_launches: u64,
     pub(crate) hot_path_allocations: u64,
+    pub(crate) token_ledgers: u64,
+    pub(crate) graph_replay_events: u64,
+    pub(crate) device_activity_events: u64,
+    pub(crate) copy_events: u64,
+    pub(crate) soft_visibility_syncs: u64,
+    pub(crate) hard_syncs: u64,
+    pub(crate) host_event_wait_ns: u64,
+    pub(crate) gpu_active_ns: u64,
+    pub(crate) gpu_idle_ns: u64,
+    pub(crate) wall_latency_ns: u64,
 }
 
 unsafe extern "C" {
