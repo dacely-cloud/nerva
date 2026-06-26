@@ -6,7 +6,8 @@ use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::precision::file_smoke::run::precision_block_from_safetensors_smoke;
 use crate::precision::file_smoke::summary::PrecisionSafetensorsBlockSmokeStatus;
 use crate::precision::scratch::PrecisionTransformerBlockScratch;
-use crate::precision::smoke::{PrecisionBlockSmokeStatus, precision_block_smoke};
+use crate::precision::smoke::run::precision_block_smoke;
+use crate::precision::smoke::status::PrecisionBlockSmokeStatus;
 use nerva_core::types::dtype::DType;
 use nerva_ledger::types::token::ledger::TokenLedger;
 

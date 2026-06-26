@@ -11,7 +11,7 @@ use nerva_memory::kv::page::KvPageSpec;
 use nerva_memory::kv::pool::table::KvPagePool;
 use nerva_memory::registry::table::BlockRegistry;
 use nerva_model::attention::block::KvAttentionBlock;
-use nerva_model::attention::exact::exact_blockwise_attention_into;
+use nerva_model::attention::exact::run::exact_blockwise_attention_into;
 use nerva_model::attention::scratch::BlockwiseAttentionScratch;
 use nerva_model::common::shape::TransformerBlockShape;
 

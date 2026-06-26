@@ -3,7 +3,7 @@ use nerva_core::types::error::{NervaError, Result};
 use crate::common::shape::TransformerBlockShape;
 use crate::precision::bits::f32_to_f16_bits;
 use crate::precision::file_smoke::constants::SHARD_NAME;
-use crate::reference::block::ReferenceTransformerBlock;
+use crate::reference::block::types::ReferenceTransformerBlock;
 use crate::weights::layout::entry::WeightBlockRole;
 
 pub(crate) fn tiny_file_block_manifest() -> Result<crate::weights::manifest::HfTensorManifest> {

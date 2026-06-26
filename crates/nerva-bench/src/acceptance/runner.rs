@@ -34,13 +34,13 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     measurements::push_measured_planner(&mut report, &runtime);
     memory_loop::push_memory_fabric_loop(&mut report, &runtime);
 
-    model::push_reference_block(&mut report);
-    model::push_precision_and_cuda_blocks(&mut report);
-    model::push_tiny_model_and_cuda_decode(&mut report);
-    model::push_manifest_and_file_checks(&mut report);
-    model::push_tiered_attention_and_cuda(&mut report);
-    model::push_warm_compute(&mut report);
-    model::push_kernel_contracts(&mut report);
+    model::reference::push_reference_block(&mut report);
+    model::precision::push_precision_and_cuda_blocks(&mut report);
+    model::tiny::push_tiny_model_and_cuda_decode(&mut report);
+    model::file_checks::push_manifest_and_file_checks(&mut report);
+    model::attention::push_tiered_attention_and_cuda(&mut report);
+    model::warm::push_warm_compute(&mut report);
+    model::contracts::push_kernel_contracts(&mut report);
 
     transport::kv::push_kv_residency(&mut report, &runtime);
     transport::kv::push_tiered_kv_attention(&mut report, &runtime);

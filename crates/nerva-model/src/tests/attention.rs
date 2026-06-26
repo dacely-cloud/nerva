@@ -1,5 +1,5 @@
 use crate::attention::block::KvAttentionBlock;
-use crate::attention::exact::exact_blockwise_attention_into;
+use crate::attention::exact::run::exact_blockwise_attention_into;
 use crate::attention::scratch::BlockwiseAttentionScratch;
 use crate::attention::smoke::{BlockwiseAttentionSmokeStatus, blockwise_attention_smoke};
 use crate::common::shape::TransformerBlockShape;

@@ -6,8 +6,8 @@ use nerva_ledger::types::token::ledger::TokenLedger;
 use crate::common::hash::hash_tokens;
 use crate::common::shape::TransformerBlockShape;
 use crate::common::token::expected_cycle;
-use crate::reference::block::ReferenceTransformerBlock;
-use crate::tiny::model::TinyGreedyModel;
+use crate::reference::block::types::ReferenceTransformerBlock;
+use crate::tiny::model::types::TinyGreedyModel;
 use crate::tiny::output::{TinyGreedyDecodeStatus, TinyGreedyDecodeSummary};
 use crate::tiny::scratch::TinyGreedyDecodeScratch;
 

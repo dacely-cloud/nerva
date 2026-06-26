@@ -16,7 +16,7 @@ use crate::precision::file_smoke::summary::{
     PrecisionSafetensorsBlockSmokeStatus, PrecisionSafetensorsBlockSmokeSummary,
 };
 use crate::precision::scratch::PrecisionTransformerBlockScratch;
-use crate::reference::scratch::TransformerBlockScratch;
+use crate::reference::scratch::types::TransformerBlockScratch;
 use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::safetensors::header::synthetic_safetensors_header_for_manifest;
 use crate::weights::safetensors::planner::plan_safetensors_shards_for_manifest;

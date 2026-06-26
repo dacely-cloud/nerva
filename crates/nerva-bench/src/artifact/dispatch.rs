@@ -1,6 +1,6 @@
 use crate::{
     acceptance::runner::run_acceptance_probe,
-    cli::model::precision_model_pair_json,
+    cli::model::precision::precision_model_pair_json,
     model_io::{
         config::{run_layout_probe, run_manifest_probe, run_metadata_probe},
         resident::{
@@ -80,10 +80,10 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "measurements" => measurements::run_measurement_table_probe(),
         "measured-planner" => measurements::run_measured_planner_probe(),
         "memory-loop" => memory_loop::run_memory_loop_probe(),
-        "block" => nerva_model::reference::smoke::reference_block_smoke()
+        "block" => nerva_model::reference::smoke::run::reference_block_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("reference block failed: {err:?}")),
-        "precision" => nerva_model::precision::smoke::precision_block_smoke()
+        "precision" => nerva_model::precision::smoke::run::precision_block_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("precision block failed: {err:?}")),
         "safetensors-block" => {

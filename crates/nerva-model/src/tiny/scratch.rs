@@ -1,7 +1,7 @@
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::shape::TransformerBlockShape;
-use crate::reference::scratch::TransformerBlockScratch;
+use crate::reference::scratch::types::TransformerBlockScratch;
 
 #[derive(Clone, Debug)]
 pub struct TinyGreedyDecodeScratch {

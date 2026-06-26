@@ -14,7 +14,7 @@ pub(crate) fn run() -> ExitCode {
     if let Some(exit_code) = probes::dispatch(command.as_deref(), &mut args) {
         return exit_code;
     }
-    if let Some(exit_code) = model::dispatch(command.as_deref(), &mut args) {
+    if let Some(exit_code) = model::dispatch::dispatch(command.as_deref(), &mut args) {
         return exit_code;
     }
     if let Some(exit_code) = weights_io::dispatch(command.as_deref(), &mut args) {

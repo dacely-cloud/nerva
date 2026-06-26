@@ -1,8 +1,9 @@
 use crate::common::math::silu;
 use crate::common::shape::TransformerBlockShape;
-use crate::reference::block::ReferenceTransformerBlock;
-use crate::reference::scratch::TransformerBlockScratch;
-use crate::reference::smoke::{ReferenceBlockSmokeStatus, reference_block_smoke};
+use crate::reference::block::types::ReferenceTransformerBlock;
+use crate::reference::scratch::types::TransformerBlockScratch;
+use crate::reference::smoke::run::reference_block_smoke;
+use crate::reference::smoke::status::ReferenceBlockSmokeStatus;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 #[test]

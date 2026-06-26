@@ -4,7 +4,7 @@ use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::attention::block::KvAttentionBlock;
-use crate::attention::exact::exact_blockwise_attention_into;
+use crate::attention::exact::run::exact_blockwise_attention_into;
 use crate::attention::scratch::BlockwiseAttentionScratch;
 use crate::common::hash::hash_f32s;
 use crate::common::shape::TransformerBlockShape;
