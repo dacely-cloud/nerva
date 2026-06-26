@@ -2,9 +2,11 @@
 
 Date: 2026-06-25
 Host: RTX 5090, 32 GB VRAM
-Repo measured: `/root/vllm`
+Repo measured: `$VLLM_DIR`
 Model: `Qwen/Qwen3-0.6B`
 Scope: post-load, post-init, post-warmup inference latency only.
+
+Set `$VLLM_DIR` to the local vLLM checkout used for reproducing these commands.
 
 This report intentionally ignores model loading, weight download, torch compile,
 CUDA graph capture, KV-cache allocation, and engine startup. Those can be slow,
@@ -136,8 +138,8 @@ FlashAttentionBackendImpl.write_to_kv_cache()
 Environment setup:
 
 ```bash
-UV_CACHE_DIR=/root/vllm/.uv-cache uv venv --python 3.12
-UV_CACHE_DIR=/root/vllm/.uv-cache \
+UV_CACHE_DIR=$VLLM_DIR/.uv-cache uv venv --python 3.12
+UV_CACHE_DIR=$VLLM_DIR/.uv-cache \
   VLLM_TARGET_DEVICE=cuda \
   VLLM_USE_PRECOMPILED=1 \
   VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/a2e8ec3d52ab4e163501c8c7bee8c03ca8359a7a/vllm-0.23.1rc1.dev454%2Bga2e8ec3d5-cp38-abi3-manylinux_2_28_x86_64.whl \
@@ -147,8 +149,8 @@ UV_CACHE_DIR=/root/vllm/.uv-cache \
 Single-prompt first-token benchmark:
 
 ```bash
-HF_HOME=/root/vllm/.hf-cache \
-UV_CACHE_DIR=/root/vllm/.uv-cache \
+HF_HOME=$VLLM_DIR/.hf-cache \
+UV_CACHE_DIR=$VLLM_DIR/.uv-cache \
 VLLM_TARGET_DEVICE=cuda \
 CUDA_VISIBLE_DEVICES=0 \
 .venv/bin/python -m vllm.entrypoints.cli.main bench latency \
@@ -160,14 +162,14 @@ CUDA_VISIBLE_DEVICES=0 \
   --num-iters 10 \
   --max-model-len 1024 \
   --disable-detokenize \
-  --output-json /root/vllm/.bench/single_bs1_i128_o1.json
+  --output-json $VLLM_DIR/.bench/single_bs1_i128_o1.json
 ```
 
 Single-prompt 64-token benchmark:
 
 ```bash
-HF_HOME=/root/vllm/.hf-cache \
-UV_CACHE_DIR=/root/vllm/.uv-cache \
+HF_HOME=$VLLM_DIR/.hf-cache \
+UV_CACHE_DIR=$VLLM_DIR/.uv-cache \
 VLLM_TARGET_DEVICE=cuda \
 CUDA_VISIBLE_DEVICES=0 \
 .venv/bin/python -m vllm.entrypoints.cli.main bench latency \
@@ -179,14 +181,14 @@ CUDA_VISIBLE_DEVICES=0 \
   --num-iters 10 \
   --max-model-len 1024 \
   --disable-detokenize \
-  --output-json /root/vllm/.bench/single_bs1_i128_o64.json
+  --output-json $VLLM_DIR/.bench/single_bs1_i128_o64.json
 ```
 
 Single-prompt profiler:
 
 ```bash
-HF_HOME=/root/vllm/.hf-cache \
-UV_CACHE_DIR=/root/vllm/.uv-cache \
+HF_HOME=$VLLM_DIR/.hf-cache \
+UV_CACHE_DIR=$VLLM_DIR/.uv-cache \
 VLLM_TARGET_DEVICE=cuda \
 CUDA_VISIBLE_DEVICES=0 \
 .venv/bin/python -m vllm.entrypoints.cli.main bench latency \
@@ -200,7 +202,7 @@ CUDA_VISIBLE_DEVICES=0 \
   --disable-detokenize \
   --profile \
   --profiler-config.profiler torch \
-  --profiler-config.torch_profiler_dir /root/vllm/.bench/profile_single_bs1_i128_o64 \
+  --profiler-config.torch_profiler_dir $VLLM_DIR/.bench/profile_single_bs1_i128_o64 \
   --profiler-config.torch_profiler_with_stack false \
   --profiler-config.torch_profiler_use_gzip false
 ```
@@ -208,16 +210,16 @@ CUDA_VISIBLE_DEVICES=0 \
 ## Local Artifacts
 
 ```text
-/root/vllm/.bench/single_bs1_i128_o1.json
-/root/vllm/.bench/single_bs1_i128_o64.json
-/root/vllm/.bench/decode_bs8_i128_o64.json
-/root/vllm/.bench/prefill_ttft_bs8_i128_o1.json
-/root/vllm/.bench/decode_bs8_i1_o64.json
-/root/vllm/.bench/decode_bs8_i128_o64_detok.json
-/root/vllm/.bench/profile_single_bs1_i128_o64/profiler_out_0.txt
-/root/vllm/.bench/profile_single_bs1_i128_o64/rank0.*.pt.trace.json
-/root/vllm/.bench/profile_decode_bs8_i128_o64/profiler_out_0.txt
-/root/vllm/.bench/profile_decode_bs8_i128_o64/rank0.*.pt.trace.json
+$VLLM_DIR/.bench/single_bs1_i128_o1.json
+$VLLM_DIR/.bench/single_bs1_i128_o64.json
+$VLLM_DIR/.bench/decode_bs8_i128_o64.json
+$VLLM_DIR/.bench/prefill_ttft_bs8_i128_o1.json
+$VLLM_DIR/.bench/decode_bs8_i1_o64.json
+$VLLM_DIR/.bench/decode_bs8_i128_o64_detok.json
+$VLLM_DIR/.bench/profile_single_bs1_i128_o64/profiler_out_0.txt
+$VLLM_DIR/.bench/profile_single_bs1_i128_o64/rank0.*.pt.trace.json
+$VLLM_DIR/.bench/profile_decode_bs8_i128_o64/profiler_out_0.txt
+$VLLM_DIR/.bench/profile_decode_bs8_i128_o64/rank0.*.pt.trace.json
 ```
 
 ## Practical Conclusion

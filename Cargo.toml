@@ -1,0 +1,34 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/nerva-core",
+    "crates/nerva-ledger",
+    "crates/nerva-memory",
+    "crates/nerva-cuda",
+    "crates/nerva-runtime",
+    "crates/nerva-bench",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93.1"
+license = "Apache-2.0"
+repository = "https://github.com/dacely-cloud/nerva"
+publish = false
+
+[workspace.dependencies]
+nerva-core = { path = "crates/nerva-core" }
+nerva-ledger = { path = "crates/nerva-ledger" }
+nerva-memory = { path = "crates/nerva-memory" }
+nerva-cuda = { path = "crates/nerva-cuda" }
+nerva-runtime = { path = "crates/nerva-runtime" }
+
+[profile.release]
+strip = "symbols"
+panic = "abort"
+
+[profile.profiling]
+inherits = "release"
+strip = "none"
+debug = "line-tables-only"

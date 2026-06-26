@@ -188,24 +188,24 @@ Inference OS
 Keep three codebases locally:
 
 ```text
-/root/vllm
+vLLM checkout
     Purpose:
         production baseline
         compatibility oracle
         vLLM behavior reference
 
-/root/rvllm
+rvLLM checkout
     Purpose:
         Rust/CUDA architecture reference
         graph/runtime reference
         memory ownership reference
 
-/root/nerva
+NERVA repo
     Purpose:
         actual new runtime
 ```
 
-Do **not** make `/root/nerva` a fork.
+Do **not** make `NERVA repo` a fork.
 
 NERVA is new architecture.
 
@@ -234,7 +234,7 @@ The goal is to understand:
 
 Produce one report:
 
-/root/llms/nerva/AUDIT_VLLM_RVLLM_20260626.md
+docs/audits/VLLM_RVLLM_ARCHITECTURE_AUDIT.md
 
 The report must be technical, code-path-based, and include exact file paths, function names, call graphs, and conclusions.
 ```
@@ -271,7 +271,7 @@ Tell the agent:
 Audit vLLM as the production ecosystem/reference engine.
 
 Repo:
-    /root/vllm
+    vLLM checkout
 
 Branch/commit:
     record current git commit
@@ -532,7 +532,7 @@ Tell the agent:
 Audit rvLLM as the Rust/CUDA architecture reference.
 
 Repo:
-    /root/rvllm or clone https://github.com/m0at/rvllm
+    rvLLM checkout or clone https://github.com/m0at/rvllm
 
 Branch/commit:
     record current git commit
@@ -899,7 +899,7 @@ Once the audit is done, the coding agent starts NERVA.
 Use this final bootstrap instruction.
 
 ```text
-Create /root/nerva.
+Create NERVA repo.
 
 NERVA means Neural Execution & Residency Virtual Architecture.
 

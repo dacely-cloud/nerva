@@ -1,0 +1,9 @@
+# NERVA is Linux-only for M0. Ubuntu x86_64 and aarch64 are the supported
+# host targets; macOS, Windows, and other OS support are future work.
+#
+# Keep the DPDK/bindgen environment shape from toil-backend so future transport
+# shims do not rediscover the libclang/LLVM setup. The current workspace does
+# not build DPDK by default.
+[env]
+LIBCLANG_PATH = "/usr/lib/llvm-18/lib"
+LLVM_SYS_220_PREFIX = "/usr/lib/llvm-22"

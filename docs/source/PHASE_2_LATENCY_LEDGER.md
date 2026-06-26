@@ -296,9 +296,9 @@ Without this ledger, runtime design is guessing.
 The active single-GPU workspace is:
 
 ```text
-/root/llms/single-gpu-ledger
+single-gpu-ledger workspace
 ```
 
-The prior `/root/llms/latency-ledger` RDMA/network workspace is historical and
+The prior `latency-ledger workspace` RDMA/network workspace is historical and
 not part of the active Phase 2 scope.
 
