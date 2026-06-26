@@ -22,6 +22,9 @@ pub(crate) fn dispatch(
         Some("security-isolation") => Some(exit::print_json_result(
             runtime::run_security_isolation_probe(),
         )),
+        Some("correctness") => Some(exit::print_json_result(
+            runtime::run_correctness_validation_probe(),
+        )),
         Some("topology") => Some(exit::print_json_result(runtime::run_topology_probe())),
         Some("synthetic") => Some(run_synthetic_command(args)),
         Some("ledger") => Some(exit::print_json_result(

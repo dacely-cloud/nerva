@@ -30,3 +30,12 @@ pub(crate) fn run_security_isolation_probe() -> Result<String, String> {
         .map(|summary| summary.to_json())
         .map_err(|err| format!("security isolation probe failed: {err:?}"))
 }
+
+pub(crate) fn run_correctness_validation_probe() -> Result<String, String> {
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    runtime
+        .run_correctness_validation_probe()
+        .map(|summary| summary.to_json())
+        .map_err(|err| format!("correctness validation probe failed: {err:?}"))
+}

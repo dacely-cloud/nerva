@@ -1,4 +1,5 @@
 pub mod compute_near_data;
+pub mod correctness;
 pub mod critical_path;
 pub mod cuda;
 pub mod hot_path;

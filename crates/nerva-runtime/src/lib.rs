@@ -5,6 +5,7 @@ compile_error!("NERVA currently supports Linux only.");
 
 pub mod backend;
 pub mod capabilities;
+pub mod correctness;
 pub mod engine;
 pub mod execution;
 pub mod graph;

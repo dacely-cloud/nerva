@@ -2,6 +2,7 @@ mod arenas;
 mod basic;
 mod capabilities;
 mod compute_near_data;
+mod correctness;
 mod critical_path;
 mod graph;
 mod hot_path;
