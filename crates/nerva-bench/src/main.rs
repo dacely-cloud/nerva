@@ -1,7 +1,12 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("NERVA currently supports Linux only.");
 
-use std::{io::Read, path::Path, path::PathBuf, process::ExitCode};
+use std::{
+    io::Read,
+    path::Path,
+    path::PathBuf,
+    process::{Command, ExitCode},
+};
 
 use nerva_core::TokenId;
 use nerva_runtime::{
@@ -296,9 +301,19 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("artifact") => match run_artifact(args.next(), args.collect()) {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("{reason}");
+                ExitCode::from(1)
+            }
+        },
         _ => {
             eprintln!(
-                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport"
+                "usage: cargo run -p nerva-bench -- smoke\n       cargo run -p nerva-bench -- capabilities\n       cargo run -p nerva-bench -- synthetic [steps] [ring_capacity]\n       cargo run -p nerva-bench -- block\n       cargo run -p nerva-bench -- model [steps]\n       cargo run -p nerva-bench -- metadata [config.json]\n       cargo run -p nerva-bench -- layout [config.json]\n       cargo run -p nerva-bench -- manifest [config.json]\n       cargo run -p nerva-bench -- safetensors [config.json model.safetensors]\n       cargo run -p nerva-bench -- safetensors-shards config.json model.safetensors.index.json checkpoint_dir\n       cargo run -p nerva-bench -- resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]\n       cargo run -p nerva-bench -- resident-weights [config.json]\n       cargo run -p nerva-bench -- hotset [config.json] [vram_bytes] [max_promote_bytes]\n       cargo run -p nerva-bench -- weight-exec [config.json] [vram_bytes] [max_promote_bytes] [max_steps] [compute_capability]\n       cargo run -p nerva-bench -- attention\n       cargo run -p nerva-bench -- warm\n       cargo run -p nerva-bench -- contracts\n       cargo run -p nerva-bench -- kv\n       cargo run -p nerva-bench -- transport\n       cargo run -p nerva-bench -- artifact <probe> [probe args...]"
             );
             ExitCode::from(2)
         }
@@ -336,6 +351,165 @@ fn run_transport_probe() -> Result<String, String> {
         .run_transport_path_probe()
         .map_err(|err| format!("transport path probe failed: {err:?}"))?;
     Ok(summary.to_json())
+}
+
+fn run_artifact(command: Option<String>, args: Vec<String>) -> Result<String, String> {
+    let command = command.ok_or_else(|| "artifact requires a probe name".to_string())?;
+    let summary = run_artifact_probe(&command, &args)?;
+    Ok(format!(
+        "{{\"status\":\"ok\",\"artifact_schema\":\"nerva-bench-v1\",\"metadata\":{},\"summary\":{}}}",
+        artifact_metadata_json(&command, &args),
+        summary
+    ))
+}
+
+fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
+    match command {
+        "smoke" => Ok(nerva_runtime::cuda_smoke().to_json()),
+        "capabilities" => run_capabilities(),
+        "synthetic" => {
+            let steps = parse_optional_u64(args.first().cloned(), 1024, "steps")?;
+            let ring_capacity = parse_optional_usize(args.get(1).cloned(), 64, "ring_capacity")?;
+            run_synthetic(steps, ring_capacity)
+        }
+        "block" => nerva_model::reference_block_smoke()
+            .map(|summary| summary.to_json())
+            .map_err(|err| format!("reference block failed: {err:?}")),
+        "model" => {
+            let steps = parse_optional_usize(args.first().cloned(), 8, "steps")?;
+            nerva_model::tiny_greedy_decode_smoke(steps)
+                .map(|summary| summary.to_json())
+                .map_err(|err| format!("tiny greedy model failed: {err:?}"))
+        }
+        "metadata" => run_metadata_probe(args.first().cloned()),
+        "layout" => run_layout_probe(args.first().cloned()),
+        "manifest" => run_manifest_probe(args.first().cloned()),
+        "safetensors" => run_safetensors_probe(args.first().cloned(), args.get(1).cloned()),
+        "safetensors-shards" => run_safetensors_shard_probe(
+            args.first().cloned(),
+            args.get(1).cloned(),
+            args.get(2).cloned(),
+        ),
+        "resident-shards" => {
+            let max_task_bytes =
+                parse_optional_usize(args.get(3).cloned(), 16 * 1024 * 1024, "max_task_bytes")?;
+            run_resident_shard_probe(
+                args.first().cloned(),
+                args.get(1).cloned(),
+                args.get(2).cloned(),
+                max_task_bytes,
+            )
+        }
+        "resident-weights" => run_resident_weight_probe(args.first().cloned()),
+        "hotset" => {
+            let vram_bytes =
+                parse_optional_usize(args.get(1).cloned(), 512 * 1024 * 1024, "vram_bytes")?;
+            let max_promote_bytes =
+                parse_optional_usize(args.get(2).cloned(), vram_bytes, "max_promote_bytes")?;
+            run_hotset_probe(args.first().cloned(), vram_bytes, max_promote_bytes)
+        }
+        "weight-exec" => {
+            let vram_bytes =
+                parse_optional_usize(args.get(1).cloned(), 512 * 1024 * 1024, "vram_bytes")?;
+            let max_promote_bytes =
+                parse_optional_usize(args.get(2).cloned(), vram_bytes, "max_promote_bytes")?;
+            let max_steps = parse_optional_usize(args.get(3).cloned(), 32, "max_steps")?;
+            let compute_capability =
+                parse_optional_u64(args.get(4).cloned(), 89, "compute_capability")?;
+            run_weight_execution_probe(
+                args.first().cloned(),
+                vram_bytes,
+                max_promote_bytes,
+                max_steps,
+                Some(compute_capability as u32),
+            )
+        }
+        "attention" => nerva_model::blockwise_attention_smoke()
+            .map(|summary| summary.to_json())
+            .map_err(|err| format!("blockwise attention failed: {err:?}")),
+        "warm" => nerva_model::warm_compute_probe()
+            .map(|summary| summary.to_json())
+            .map_err(|err| format!("warm compute probe failed: {err:?}")),
+        "contracts" => nerva_kernel_contracts::kernel_registry_probe()
+            .map(|summary| summary.to_json())
+            .map_err(|err| format!("kernel contract probe failed: {err:?}")),
+        "kv" => run_kv_probe(),
+        "transport" => run_transport_probe(),
+        _ => Err(format!("unknown artifact probe '{command}'")),
+    }
+}
+
+fn artifact_metadata_json(command: &str, args: &[String]) -> String {
+    let capabilities = run_capabilities().unwrap_or_else(|reason| {
+        format!(
+            "{{\"status\":\"failed\",\"error\":\"{}\"}}",
+            json_escape(&reason)
+        )
+    });
+    format!(
+        "{{\"command\":\"{}\",\"args\":{},\"git_commit\":\"{}\",\"package_version\":\"{}\",\"profile\":\"{}\",\"target\":\"{}-{}\",\"capabilities\":{}}}",
+        json_escape(command),
+        json_string_array(args),
+        json_escape(&current_git_commit()),
+        env!("CARGO_PKG_VERSION"),
+        build_profile(),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        capabilities,
+    )
+}
+
+fn current_git_commit() -> String {
+    if let Some(commit) = option_env!("NERVA_GIT_COMMIT") {
+        return commit.to_string();
+    }
+    let Ok(output) = Command::new("git").args(["rev-parse", "HEAD"]).output() else {
+        return "unknown".to_string();
+    };
+    if !output.status.success() {
+        return "unknown".to_string();
+    }
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+fn build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
+
+fn json_string_array(values: &[String]) -> String {
+    let mut out = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(&json_escape(value));
+        out.push('"');
+    }
+    out.push(']');
+    out
+}
+
+fn json_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => escaped.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn run_metadata_probe(config_path: Option<String>) -> Result<String, String> {
@@ -784,6 +958,30 @@ mod tests {
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_file(index_path);
         let _ = std::fs::remove_dir(dir);
+    }
+
+    #[test]
+    fn artifact_wraps_probe_with_reproducibility_metadata() {
+        let json = run_artifact(
+            Some("synthetic".to_string()),
+            vec!["2".to_string(), "4".to_string()],
+        )
+        .unwrap();
+
+        assert!(json.contains("\"artifact_schema\":\"nerva-bench-v1\""));
+        assert!(json.contains("\"command\":\"synthetic\""));
+        assert!(json.contains("\"args\":[\"2\",\"4\"]"));
+        assert!(json.contains("\"git_commit\""));
+        assert!(json.contains("\"package_version\""));
+        assert!(json.contains("\"capabilities\""));
+        assert!(json.contains("\"summary\""));
+        assert!(json.contains("\"device_timeline_idle_ns\":0"));
+    }
+
+    #[test]
+    fn json_string_array_escapes_probe_args() {
+        let args = vec!["quote\"".to_string(), "line\nbreak".to_string()];
+        assert_eq!(json_string_array(&args), "[\"quote\\\"\",\"line\\nbreak\"]");
     }
 
     fn synthetic_header_for_entries(
