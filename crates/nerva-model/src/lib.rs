@@ -78,6 +78,7 @@ pub struct HfModelMetadata {
     pub max_position_embeddings: Option<usize>,
     pub rope_theta: Option<f32>,
     pub rms_norm_eps: Option<f32>,
+    pub tie_word_embeddings: bool,
     pub torch_dtype: Option<DType>,
 }
 
@@ -100,7 +101,7 @@ impl HfModelMetadata {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"architecture\":\"{}\",\"hidden_size\":{},\"num_hidden_layers\":{},\"num_attention_heads\":{},\"num_key_value_heads\":{},\"head_dim\":{},\"kv_groups\":{},\"intermediate_size\":{},\"vocab_size\":{},\"max_position_embeddings\":{},\"rope_theta\":{},\"rms_norm_eps\":{},\"torch_dtype\":{}}}",
+            "{{\"architecture\":\"{}\",\"hidden_size\":{},\"num_hidden_layers\":{},\"num_attention_heads\":{},\"num_key_value_heads\":{},\"head_dim\":{},\"kv_groups\":{},\"intermediate_size\":{},\"vocab_size\":{},\"max_position_embeddings\":{},\"rope_theta\":{},\"rms_norm_eps\":{},\"tie_word_embeddings\":{},\"torch_dtype\":{}}}",
             self.architecture.as_str(),
             self.hidden_size,
             self.num_hidden_layers,
@@ -113,6 +114,7 @@ impl HfModelMetadata {
             json_opt_usize(self.max_position_embeddings),
             json_opt_f32(self.rope_theta),
             json_opt_f32(self.rms_norm_eps),
+            self.tie_word_embeddings,
             json_opt_dtype(self.torch_dtype),
         )
     }
@@ -133,6 +135,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         Some(value) => Some(value),
         None => optional_f32(config_json, "layer_norm_eps")?,
     };
+    let tie_word_embeddings = optional_bool(config_json, "tie_word_embeddings")?.unwrap_or(false);
     let torch_dtype = optional_string(config_json, "torch_dtype")?
         .as_deref()
         .map(dtype_from_hf_string)
@@ -158,6 +161,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         max_position_embeddings,
         rope_theta,
         rms_norm_eps,
+        tie_word_embeddings,
         torch_dtype,
     })
 }
@@ -201,6 +205,7 @@ pub fn hf_metadata_probe() -> Result<HfMetadataProbeSummary> {
         "max_position_embeddings": 4096,
         "rms_norm_eps": 0.000001,
         "rope_theta": 10000.0,
+        "tie_word_embeddings": false,
         "torch_dtype": "bfloat16"
     }"#;
     let metadata = parse_hf_config_metadata(config)?;
@@ -308,7 +313,7 @@ pub struct HfWeightLayoutPlan {
 impl HfWeightLayoutPlan {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"architecture\":\"{}\",\"dtype\":\"{}\",\"blocks\":{},\"layers\":{},\"total_weight_bytes\":{},\"per_layer_weight_bytes\":{},\"static_weight_bytes\":{},\"hidden_size\":{},\"head_dim\":{},\"kv_hidden_size\":{}}}",
+            "{{\"architecture\":\"{}\",\"dtype\":\"{}\",\"blocks\":{},\"layers\":{},\"total_weight_bytes\":{},\"per_layer_weight_bytes\":{},\"static_weight_bytes\":{},\"hidden_size\":{},\"head_dim\":{},\"kv_hidden_size\":{},\"tie_word_embeddings\":{}}}",
             self.metadata.architecture.as_str(),
             dtype_to_str(self.dtype),
             self.blocks.len(),
@@ -319,6 +324,7 @@ impl HfWeightLayoutPlan {
             self.metadata.hidden_size,
             self.metadata.head_dim(),
             self.metadata.num_key_value_heads * self.metadata.head_dim(),
+            self.metadata.tie_word_embeddings,
         )
     }
 }
@@ -372,7 +378,9 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
             reason: "KV hidden size overflow".to_string(),
         })?;
 
-    let mut blocks = Vec::with_capacity(metadata.num_hidden_layers.saturating_mul(9) + 2);
+    let static_block_count = if metadata.tie_word_embeddings { 1 } else { 2 };
+    let mut blocks =
+        Vec::with_capacity(metadata.num_hidden_layers.saturating_mul(9) + static_block_count);
     blocks.push(WeightBlockSpec::new(
         WeightBlockRole::TokenEmbedding,
         None,
@@ -389,14 +397,16 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
         push_layer_weight_blocks(&mut blocks, metadata, kv_hidden, dtype, layer)?;
     }
 
-    blocks.push(WeightBlockSpec::new(
-        WeightBlockRole::LmHead,
-        None,
-        metadata.vocab_size,
-        metadata.hidden_size,
-        dtype,
-        MemoryTier::Dram,
-    )?);
+    if !metadata.tie_word_embeddings {
+        blocks.push(WeightBlockSpec::new(
+            WeightBlockRole::LmHead,
+            None,
+            metadata.vocab_size,
+            metadata.hidden_size,
+            dtype,
+            MemoryTier::Dram,
+        )?);
+    }
 
     let total_weight_bytes = sum_weight_bytes(&blocks)?;
     let static_weight_bytes = blocks
@@ -1788,6 +1798,19 @@ fn optional_string(config_json: &str, key: &'static str) -> Result<Option<String
     parse_json_string_value(value).map(Some)
 }
 
+fn optional_bool(config_json: &str, key: &'static str) -> Result<Option<bool>> {
+    let Some(value) = find_top_level_json_value(config_json, key)? else {
+        return Ok(None);
+    };
+    match value.trim() {
+        "true" => Ok(Some(true)),
+        "false" => Ok(Some(false)),
+        _ => Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be a boolean"),
+        }),
+    }
+}
+
 fn optional_first_string(config_json: &str, key: &'static str) -> Result<Option<String>> {
     let Some(value) = find_top_level_json_value(config_json, key)? else {
         return Ok(None);
@@ -2637,6 +2660,7 @@ fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         metadata.max_position_embeddings.unwrap_or_default() as u64,
         metadata.head_dim() as u64,
         metadata.kv_groups() as u64,
+        u64::from(metadata.tie_word_embeddings),
     ] {
         for byte in value.to_le_bytes() {
             hash ^= u64::from(byte);
@@ -2819,6 +2843,7 @@ mod tests {
         assert_eq!(metadata.head_dim(), 128);
         assert_eq!(metadata.kv_groups(), 4);
         assert_eq!(metadata.torch_dtype, Some(DType::BF16));
+        assert!(!metadata.tie_word_embeddings);
         assert!(metadata.to_json().contains("\"architecture\":\"llama\""));
     }
 
@@ -2841,6 +2866,28 @@ mod tests {
         assert_eq!(metadata.num_key_value_heads, 32);
         assert_eq!(metadata.kv_groups(), 1);
         assert_eq!(metadata.torch_dtype, Some(DType::F16));
+    }
+
+    #[test]
+    fn parses_tied_word_embedding_config() {
+        let metadata = parse_hf_config_metadata(
+            r#"{
+                "model_type": "qwen2",
+                "hidden_size": 8,
+                "intermediate_size": 16,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 12,
+                "tie_word_embeddings": true,
+                "torch_dtype": "bfloat16"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(metadata.architecture, HfArchitectureKind::Qwen2);
+        assert!(metadata.tie_word_embeddings);
+        assert!(metadata.to_json().contains("\"tie_word_embeddings\":true"));
     }
 
     #[test]
@@ -2868,9 +2915,22 @@ mod tests {
                 "torch_dtype": "int4"
             }"#,
         );
+        let bad_tie_word_embeddings = parse_hf_config_metadata(
+            r#"{
+                "model_type": "llama",
+                "hidden_size": 4096,
+                "intermediate_size": 11008,
+                "num_hidden_layers": 32,
+                "num_attention_heads": 32,
+                "num_key_value_heads": 8,
+                "vocab_size": 32000,
+                "tie_word_embeddings": "yes"
+            }"#,
+        );
 
         assert!(bad_heads.is_err());
         assert!(bad_dtype.is_err());
+        assert!(bad_tie_word_embeddings.is_err());
     }
 
     #[test]
@@ -2916,6 +2976,36 @@ mod tests {
         assert_eq!(plan.blocks[3].role, WeightBlockRole::KeyProjection);
         assert_eq!(plan.blocks[3].rows, 2);
         assert_eq!(plan.blocks[3].cols, 4);
+    }
+
+    #[test]
+    fn tied_word_embedding_layout_omits_lm_head_block() {
+        let metadata = parse_hf_config_metadata(
+            r#"{
+                "model_type": "llama",
+                "hidden_size": 4,
+                "intermediate_size": 8,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 10,
+                "tie_word_embeddings": true,
+                "torch_dtype": "float16"
+            }"#,
+        )
+        .unwrap();
+        let plan = plan_hf_weight_layout(&metadata).unwrap();
+
+        assert_eq!(plan.blocks.len(), 19);
+        assert_eq!(plan.static_weight_bytes, 80);
+        assert_eq!(plan.per_layer_weight_bytes, 304);
+        assert_eq!(plan.total_weight_bytes, 688);
+        assert_eq!(plan.blocks[0].role, WeightBlockRole::TokenEmbedding);
+        assert_eq!(
+            plan.blocks.last().unwrap().role,
+            WeightBlockRole::DownProjection
+        );
+        assert!(plan.to_json().contains("\"tie_word_embeddings\":true"));
     }
 
     #[test]
@@ -2983,6 +3073,45 @@ mod tests {
         );
         assert_eq!(manifest.entries.last().unwrap().name, "lm_head.weight");
         assert_ne!(manifest.manifest_hash, 0);
+    }
+
+    #[test]
+    fn tied_word_embedding_manifest_omits_lm_head_tensor() {
+        let metadata = parse_hf_config_metadata(
+            r#"{
+                "model_type": "llama",
+                "hidden_size": 4,
+                "intermediate_size": 8,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 10,
+                "tie_word_embeddings": true,
+                "torch_dtype": "float16"
+            }"#,
+        )
+        .unwrap();
+        let plan = plan_hf_weight_layout(&metadata).unwrap();
+        let manifest = build_hf_tensor_manifest(&plan).unwrap();
+        let header = synthetic_safetensors_header_for_manifest(&manifest).unwrap();
+        let validation = validate_safetensors_header_for_manifest(&header, &manifest).unwrap();
+
+        assert_eq!(manifest.entries.len(), 19);
+        assert_eq!(manifest.total_weight_bytes, 688);
+        assert_eq!(manifest.entries[0].name, "model.embed_tokens.weight");
+        assert_eq!(
+            manifest.entries.last().unwrap().name,
+            "model.layers.1.mlp.down_proj.weight"
+        );
+        assert!(
+            !manifest
+                .entries
+                .iter()
+                .any(|entry| entry.name == "lm_head.weight")
+        );
+        assert!(!header.contains("lm_head.weight"));
+        assert_eq!(validation.validated_tensors, 19);
+        assert_eq!(validation.total_data_bytes, 688);
     }
 
     #[test]
