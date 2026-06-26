@@ -52,6 +52,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"transport_backend_contract\""));
     assert!(json.contains("\"transport_capability_matrix\""));
     assert!(json.contains("\"transport_registration_cache\""));
+    assert!(json.contains("\"transport_registration_lifecycle\""));
     assert!(json.contains("\"stage_pipeline_activation_only\""));
     assert!(json.contains("\"resident_weight_execution\""));
 }

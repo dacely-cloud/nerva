@@ -170,6 +170,9 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "transport-contract" => transport::run_transport_contract_probe(),
         "transport-matrix" => transport::run_transport_matrix_probe(),
         "transport-registration" => transport::run_transport_registration_probe(),
+        "transport-registration-lifecycle" => {
+            transport::run_transport_registration_lifecycle_probe()
+        }
         "stage-pipeline" => transport::run_stage_pipeline_probe(),
         "multi-gpu" => mgpu::run_multi_gpu_probe(),
         "acceptance" => run_acceptance_probe(),

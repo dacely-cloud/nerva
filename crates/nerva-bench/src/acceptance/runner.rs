@@ -55,6 +55,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     transport::contract::push_transport_contract(&mut report, &runtime);
     transport::matrix::push_transport_matrix(&mut report, &runtime);
     transport::registration::push_transport_registration(&mut report, &runtime);
+    transport::registration::push_transport_registration_lifecycle(&mut report, &runtime);
     transport::stage::push_stage_pipeline(&mut report, &runtime);
     mgpu::push_multi_gpu_node(&mut report, &runtime);
 

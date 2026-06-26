@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::block::resident::ResidentBlock;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_core::types::id::ReplicaId;
+use nerva_core::types::id::{ReplicaId, ResidentBlockId};
 use nerva_core::types::memory::MemoryTier;
 
 use crate::transport::registration::types::{
@@ -109,6 +109,29 @@ impl TransportRegistrationCache {
             return TransportRegistrationLookup::StaleVersion(registration);
         }
         TransportRegistrationLookup::Hit(registration)
+    }
+
+    pub fn revoke(&mut self, key: TransportRegistrationKey) -> Option<TransportRegistration> {
+        self.entries.remove(&key)
+    }
+
+    pub fn revoke_block(&mut self, block_id: ResidentBlockId) -> Vec<TransportRegistration> {
+        let keys = self
+            .entries
+            .keys()
+            .copied()
+            .filter(|key| key.block_id == block_id)
+            .collect::<Vec<_>>();
+        keys.into_iter()
+            .filter_map(|key| self.entries.remove(&key))
+            .collect()
+    }
+
+    pub fn revoke_all(&mut self) -> Vec<TransportRegistration> {
+        let keys = self.entries.keys().copied().collect::<Vec<_>>();
+        keys.into_iter()
+            .filter_map(|key| self.entries.remove(&key))
+            .collect()
     }
 }
 
