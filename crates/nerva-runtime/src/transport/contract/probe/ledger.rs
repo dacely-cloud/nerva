@@ -2,7 +2,6 @@ use nerva_core::types::id::ResidentBlockId;
 use nerva_core::types::memory::MemoryTier;
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
-use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::transport::contract::types::{TransferCompletion, TransferCompletionStatus, TransferId};
@@ -23,16 +22,6 @@ pub(super) fn record_completion(ledger: &mut TokenLedger, completion: TransferCo
         latency_ns: completion.bytes as u64,
         label: "transport_contract_loopback_send",
     });
-    ledger.record_sync(
-        SyncClass::PhaseHandoff,
-        Some(completion.destination_block),
-        Some(MemoryTier::PinnedDram),
-        Some(MemoryTier::PinnedDram),
-        completion.bytes,
-        1,
-        MetricSource::EstimatedModel,
-        "transport_contract_completion_visibility",
-    );
 }
 
 pub(super) fn empty_completion() -> TransferCompletion {

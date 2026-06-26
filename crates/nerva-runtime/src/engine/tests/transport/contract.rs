@@ -18,6 +18,9 @@ fn transport_contract_probe_requires_registered_preposted_transfer() {
     assert_eq!(summary.unposted_send_rejections, 1);
     assert_eq!(summary.stale_version_rejections, 1);
     assert_eq!(summary.descriptor_rejections, 1);
+    assert_eq!(summary.pre_visibility_consume_rejections, 1);
+    assert_eq!(summary.visibility_fences, 1);
+    assert_eq!(summary.visible_consumes, 1);
     assert_eq!(summary.per_transfer_registrations, 0);
     assert_eq!(summary.transport_events, 1);
     assert_eq!(summary.phase_handoff_syncs, 1);
@@ -28,4 +31,9 @@ fn transport_contract_probe_requires_registered_preposted_transfer() {
             .contains("\"per_transfer_registrations\":0")
     );
     assert!(summary.to_json().contains("\"unposted_send_rejections\":1"));
+    assert!(
+        summary
+            .to_json()
+            .contains("\"pre_visibility_consume_rejections\":1")
+    );
 }

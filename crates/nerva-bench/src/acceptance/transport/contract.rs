@@ -18,12 +18,15 @@ pub(crate) fn push_transport_contract(report: &mut AcceptanceReport, runtime: &R
                 && summary.unposted_send_rejections == 1
                 && summary.stale_version_rejections == 1
                 && summary.descriptor_rejections == 1
+                && summary.pre_visibility_consume_rejections == 1
+                && summary.visibility_fences == 1
+                && summary.visible_consumes == 1
                 && summary.per_transfer_registrations == 0
                 && summary.transport_events == 1
                 && summary.phase_handoff_syncs == 1
                 && summary.hot_path_allocations == 0,
             format!(
-                "backend={} registrations={} registered_entries={} preposted_receives={} sends={} completions={} bytes_completed={} unposted_send_rejections={} stale_version_rejections={} descriptor_rejections={} per_transfer_registrations={} transport_events={} phase_handoff_syncs={} hot_path_allocations={}",
+                "backend={} registrations={} registered_entries={} preposted_receives={} sends={} completions={} bytes_completed={} unposted_send_rejections={} stale_version_rejections={} descriptor_rejections={} pre_visibility_consume_rejections={} visibility_fences={} visible_consumes={} per_transfer_registrations={} transport_events={} phase_handoff_syncs={} hot_path_allocations={}",
                 summary.backend,
                 summary.registrations,
                 summary.registered_entries,
@@ -34,6 +37,9 @@ pub(crate) fn push_transport_contract(report: &mut AcceptanceReport, runtime: &R
                 summary.unposted_send_rejections,
                 summary.stale_version_rejections,
                 summary.descriptor_rejections,
+                summary.pre_visibility_consume_rejections,
+                summary.visibility_fences,
+                summary.visible_consumes,
                 summary.per_transfer_registrations,
                 summary.transport_events,
                 summary.phase_handoff_syncs,

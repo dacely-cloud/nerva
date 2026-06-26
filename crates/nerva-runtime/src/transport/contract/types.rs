@@ -10,7 +10,7 @@ pub struct TransportEndpoint {
     pub lane_id: u32,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TransferId(pub u64);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

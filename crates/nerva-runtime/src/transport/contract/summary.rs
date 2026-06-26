@@ -19,6 +19,9 @@ pub struct TransportContractSummary {
     pub unposted_send_rejections: u64,
     pub stale_version_rejections: u64,
     pub descriptor_rejections: u64,
+    pub pre_visibility_consume_rejections: u64,
+    pub visibility_fences: u64,
+    pub visible_consumes: u64,
     pub per_transfer_registrations: u64,
     pub transport_events: u64,
     pub phase_handoff_syncs: u64,
@@ -38,6 +41,9 @@ impl TransportContractSummary {
             && self.unposted_send_rejections == 1
             && self.stale_version_rejections == 1
             && self.descriptor_rejections == 1
+            && self.pre_visibility_consume_rejections == 1
+            && self.visibility_fences == 1
+            && self.visible_consumes == 1
             && self.per_transfer_registrations == 0
             && self.transport_events == 1
             && self.phase_handoff_syncs == 1
@@ -50,7 +56,7 @@ impl TransportContractSummary {
             TransportContractStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"backend\":\"{}\",\"registrations\":{},\"registered_entries\":{},\"preposted_receives\":{},\"sends\":{},\"completions\":{},\"bytes_completed\":{},\"unposted_send_rejections\":{},\"stale_version_rejections\":{},\"descriptor_rejections\":{},\"per_transfer_registrations\":{},\"transport_events\":{},\"phase_handoff_syncs\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"backend\":\"{}\",\"registrations\":{},\"registered_entries\":{},\"preposted_receives\":{},\"sends\":{},\"completions\":{},\"bytes_completed\":{},\"unposted_send_rejections\":{},\"stale_version_rejections\":{},\"descriptor_rejections\":{},\"pre_visibility_consume_rejections\":{},\"visibility_fences\":{},\"visible_consumes\":{},\"per_transfer_registrations\":{},\"transport_events\":{},\"phase_handoff_syncs\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             self.backend,
             self.registrations,
@@ -62,6 +68,9 @@ impl TransportContractSummary {
             self.unposted_send_rejections,
             self.stale_version_rejections,
             self.descriptor_rejections,
+            self.pre_visibility_consume_rejections,
+            self.visibility_fences,
+            self.visible_consumes,
             self.per_transfer_registrations,
             self.transport_events,
             self.phase_handoff_syncs,

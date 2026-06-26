@@ -13,6 +13,7 @@ use crate::transport::contract::probe::ledger::{empty_completion, record_complet
 use crate::transport::contract::summary::{TransportContractStatus, TransportContractSummary};
 use crate::transport::contract::traits::TensorTransportContract;
 use crate::transport::contract::types::{ReceiveDescriptor, TransferDescriptor, TransportEndpoint};
+use crate::transport::contract::visibility::TransportVisibilityTracker;
 use crate::transport::path::types::TransferMode;
 
 mod allocation;
@@ -78,6 +79,19 @@ pub fn run_transport_contract_probe() -> Result<TransportContractSummary> {
     let mut completions = [empty_completion()];
     let completion_count = transport.poll(&mut completions)?;
     record_completion(&mut ledger, completions[0]);
+    let mut visibility = TransportVisibilityTracker::default();
+    visibility.observe_completion(completions[0])?;
+    let pre_visibility_consume_rejections = u64::from(
+        visibility
+            .consume_visible(completions[0].transfer_id)
+            .is_err(),
+    );
+    visibility.publish_visibility_fence(completions[0].transfer_id, &mut ledger)?;
+    let visible_consumes = u64::from(
+        visibility
+            .consume_visible(completions[0].transfer_id)
+            .is_ok(),
+    );
 
     let unposted_send_rejections = u64::from(transport.send(&endpoint, transfer).is_err());
     let stale_transfer = TransferDescriptor {
@@ -110,6 +124,9 @@ pub fn run_transport_contract_probe() -> Result<TransportContractSummary> {
         unposted_send_rejections,
         stale_version_rejections,
         descriptor_rejections,
+        pre_visibility_consume_rejections,
+        visibility_fences: ledger.sync_count_for(SyncClass::PhaseHandoff),
+        visible_consumes,
         per_transfer_registrations: 0,
         transport_events: ledger.event_count(LedgerEventKind::Transport),
         phase_handoff_syncs: ledger.sync_count_for(SyncClass::PhaseHandoff),
