@@ -1,7 +1,7 @@
 mod clock;
 mod copy;
 mod cpu;
-mod entry;
+pub(crate) mod entry;
 mod merge;
 pub mod planner;
 pub mod probe;

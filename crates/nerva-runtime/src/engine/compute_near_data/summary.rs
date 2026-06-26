@@ -19,6 +19,9 @@ pub struct ComputeNearDataProbeSummary {
     pub max_abs_error: f32,
     pub parity: bool,
     pub execution_decisions: u64,
+    pub runtime_timestamp_decisions: u64,
+    pub measured_candidate_costs: u64,
+    pub estimated_candidate_costs: u64,
     pub block_version_dependencies: u64,
     pub cpu_events: u64,
     pub device_events: u64,
@@ -33,7 +36,7 @@ impl ComputeNearDataProbeSummary {
             ComputeNearDataProbeStatus::Ok => "ok",
         };
         format!(
-            "{{\"status\":\"{}\",\"rows\":{},\"cols\":{},\"split_row\":{},\"blocks\":{},\"dram_blocks\":{},\"vram_blocks\":{},\"output\":{},\"reference\":{},\"output_hash\":{},\"reference_hash\":{},\"max_abs_error\":{},\"parity\":{},\"execution_decisions\":{},\"block_version_dependencies\":{},\"cpu_events\":{},\"device_events\":{},\"copy_events\":{},\"merge_bytes\":{},\"hot_path_allocations\":{}}}",
+            "{{\"status\":\"{}\",\"rows\":{},\"cols\":{},\"split_row\":{},\"blocks\":{},\"dram_blocks\":{},\"vram_blocks\":{},\"output\":{},\"reference\":{},\"output_hash\":{},\"reference_hash\":{},\"max_abs_error\":{},\"parity\":{},\"execution_decisions\":{},\"runtime_timestamp_decisions\":{},\"measured_candidate_costs\":{},\"estimated_candidate_costs\":{},\"block_version_dependencies\":{},\"cpu_events\":{},\"device_events\":{},\"copy_events\":{},\"merge_bytes\":{},\"hot_path_allocations\":{}}}",
             status,
             self.rows,
             self.cols,
@@ -48,6 +51,9 @@ impl ComputeNearDataProbeSummary {
             self.max_abs_error,
             self.parity,
             self.execution_decisions,
+            self.runtime_timestamp_decisions,
+            self.measured_candidate_costs,
+            self.estimated_candidate_costs,
             self.block_version_dependencies,
             self.cpu_events,
             self.device_events,

@@ -23,6 +23,9 @@ fn compute_near_data_probe_executes_exact_resident_split_matvec() {
     assert!(summary.parity);
     assert_eq!(summary.max_abs_error, 0.0);
     assert_eq!(summary.execution_decisions, 2);
+    assert_eq!(summary.runtime_timestamp_decisions, 2);
+    assert!(summary.measured_candidate_costs > 0);
+    assert_eq!(summary.estimated_candidate_costs, 0);
     assert_eq!(summary.block_version_dependencies, 2);
     assert_eq!(summary.cpu_events, 1);
     assert_eq!(summary.device_events, 1);
@@ -34,6 +37,11 @@ fn compute_near_data_probe_executes_exact_resident_split_matvec() {
         summary
             .to_json()
             .contains("\"block_version_dependencies\":2")
+    );
+    assert!(
+        summary
+            .to_json()
+            .contains("\"estimated_candidate_costs\":0")
     );
 }
 

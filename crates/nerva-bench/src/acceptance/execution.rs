@@ -51,6 +51,9 @@ pub(crate) fn push_compute_near_data(report: &mut AcceptanceReport, runtime: &Ru
                 && summary.dram_blocks == 1
                 && summary.vram_blocks == 1
                 && summary.execution_decisions == 2
+                && summary.runtime_timestamp_decisions == summary.execution_decisions
+                && summary.measured_candidate_costs > 0
+                && summary.estimated_candidate_costs == 0
                 && summary.block_version_dependencies == 2
                 && summary.cpu_events == 1
                 && summary.device_events == 1
@@ -58,7 +61,7 @@ pub(crate) fn push_compute_near_data(report: &mut AcceptanceReport, runtime: &Ru
                 && summary.merge_bytes == 8
                 && summary.hot_path_allocations == 0,
             format!(
-                "rows={} cols={} split_row={} blocks={} dram_blocks={} vram_blocks={} parity={} max_abs_error={} execution_decisions={} block_version_dependencies={} cpu_events={} device_events={} copy_events={} merge_bytes={} hot_path_allocations={}",
+                "rows={} cols={} split_row={} blocks={} dram_blocks={} vram_blocks={} parity={} max_abs_error={} execution_decisions={} runtime_timestamp_decisions={} measured_candidate_costs={} estimated_candidate_costs={} block_version_dependencies={} cpu_events={} device_events={} copy_events={} merge_bytes={} hot_path_allocations={}",
                 summary.rows,
                 summary.cols,
                 summary.split_row,
@@ -68,6 +71,9 @@ pub(crate) fn push_compute_near_data(report: &mut AcceptanceReport, runtime: &Ru
                 summary.parity,
                 summary.max_abs_error,
                 summary.execution_decisions,
+                summary.runtime_timestamp_decisions,
+                summary.measured_candidate_costs,
+                summary.estimated_candidate_costs,
                 summary.block_version_dependencies,
                 summary.cpu_events,
                 summary.device_events,
