@@ -1,9 +1,9 @@
-//! Raw DPDK FFI for `toil-backend`.
+//! Raw DPDK FFI for NERVA transport experiments.
 //!
 //! The crate is intentionally thin: it exposes the bindgen-generated
 //! FFI under [`ffi`] and a few safe wrappers (EAL init, mempool,
-//! rx/tx queues, flow rule). Higher-level concepts (smoltcp
-//! integration, HTTP dispatching) live in the parent crate.
+//! rx/tx queues, flow rule). Higher-level transport protocol logic
+//! lives outside this shim.
 
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
@@ -55,7 +55,7 @@ pub use queue::{RxQueue, TxQueue};
 ///
 /// Call ONCE per worker thread, after `pin_to_core` and BEFORE the
 /// first DPDK call from that thread (in practice: before
-/// `DpdkHttpStack::run`). Idempotent: calling twice is harmless;
+/// the worker's packet loop). Idempotent: calling twice is harmless;
 /// DPDK returns 0 if already registered.
 pub fn register_thread() -> Result<()> {
     // SAFETY: rte_thread_register takes no arguments and is safe to

@@ -2,7 +2,6 @@
 
 //! Token-level observability and scheduling ledgers.
 //!
-//! This crate follows the same topic-module shape used in `toil-backend`:
 //! `types` owns the hot-path data model and validation, while `json` owns the
 //! artifact serialization surface.
 

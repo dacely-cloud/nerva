@@ -3,8 +3,8 @@
 //! Pipeline:
 //!
 //!   1. Locate DPDK via `pkg-config libdpdk`. We require it because the
-//!      shim's whole job is to wrap real DPDK; falling back to a stub
-//!      is the trap that bit us with `dpdk-stdlib-sys`.
+//!      shim's whole job is to wrap real DPDK; missing DPDK is a build
+//!      failure, not a simulated data path.
 //!   2. Compile `shim.c` with `cc`, feeding it the same CFLAGS DPDK
 //!      asked for (include paths, `-march=native -mrtm`,
 //!      `-include rte_config.h`).
