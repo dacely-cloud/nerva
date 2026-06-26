@@ -174,7 +174,7 @@ pub(crate) fn push_tiered_attention_and_cuda(report: &mut AcceptanceReport) {
 }
 
 pub(crate) fn push_warm_compute(report: &mut AcceptanceReport) {
-    match nerva_model::warm_compute::probe::warm_compute_probe() {
+    match nerva_model::warm_compute::probe::run::warm_compute_probe() {
         Ok(summary) => report.push(
             "warm_compute_selection",
             summary.parity

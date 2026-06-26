@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use crate::acceptance::runner::build_acceptance_report;
-use crate::artifact::run_artifact;
+use crate::artifact::run::run_artifact;
 use crate::cli::{cuda, exit, model, probes, usage, weights_io};
 
 pub(crate) fn run() -> ExitCode {

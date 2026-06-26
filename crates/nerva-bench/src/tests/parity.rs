@@ -1,4 +1,4 @@
-use crate::artifact::run_artifact;
+use crate::artifact::run::run_artifact;
 use crate::parity::run::run_vllm_token_identity_parity;
 
 #[test]

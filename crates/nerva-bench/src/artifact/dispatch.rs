@@ -147,7 +147,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "attention" => nerva_model::attention::smoke::blockwise_attention_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("blockwise attention failed: {err:?}")),
-        "warm" => nerva_model::warm_compute::probe::warm_compute_probe()
+        "warm" => nerva_model::warm_compute::probe::run::warm_compute_probe()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("warm compute probe failed: {err:?}")),
         "contracts" => nerva_kernel_contracts::registry::probe::kernel_registry_probe()

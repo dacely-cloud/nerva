@@ -1,4 +1,4 @@
-use crate::warm_compute::probe::warm_compute_probe;
+use crate::warm_compute::probe::run::warm_compute_probe;
 use crate::warm_compute::strategy::WarmComputeStrategy;
 use crate::warm_compute::summary::WarmComputeProbeStatus;
 

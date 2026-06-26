@@ -1,4 +1,4 @@
-use crate::artifact::run_artifact;
+use crate::artifact::run::run_artifact;
 
 #[test]
 fn artifact_wraps_probe_with_reproducibility_metadata() {
