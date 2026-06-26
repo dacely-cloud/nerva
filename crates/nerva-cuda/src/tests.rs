@@ -1,5 +1,6 @@
 use std::os::raw::c_char;
 
+use crate::block::CudaTinyBlockSummary;
 use crate::graph::CudaSyntheticGraphSummary;
 use crate::smoke::{CudaSmokeSummary, SmokeStatus, c_char_array_to_string, escape_json};
 
@@ -68,5 +69,30 @@ fn synthetic_graph_summary_serializes_token_audit_fields() {
     assert!(json.contains("\"token_ring_reuses\":960"));
     assert!(json.contains("\"host_causality_edges\":0"));
     assert!(json.contains("\"D2H_bytes\":40960"));
+    assert!(json.contains("\"hot_path_allocations\":0"));
+}
+
+#[test]
+fn tiny_block_summary_serializes_device_block_fields() {
+    let summary = CudaTinyBlockSummary {
+        status: SmokeStatus::Ok,
+        hidden: 2,
+        intermediate: 2,
+        output: [15_360, 16_384],
+        output_hash: 99,
+        device_arena_bytes: 4,
+        pinned_host_bytes: 4,
+        kernel_launches: 1,
+        sync_calls: 1,
+        d2h_bytes: 4,
+        hot_path_allocations: 0,
+        error: None,
+    };
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"hidden\":2"));
+    assert!(json.contains("\"output_bits\":[15360,16384]"));
+    assert!(json.contains("\"kernel_launches\":1"));
+    assert!(json.contains("\"D2H_bytes\":4"));
     assert!(json.contains("\"hot_path_allocations\":0"));
 }

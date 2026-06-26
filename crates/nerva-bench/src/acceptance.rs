@@ -676,21 +676,64 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     }
 
     match nerva_model::precision::file_smoke::precision_block_from_safetensors_smoke() {
-        Ok(summary) => report.push(
-            "safetensors_precision_block",
-            summary.passed(),
-            format!(
-                "tensors_loaded={} bytes_loaded={} data_hash={} output_hash={} expected_hash={} bit_parity={} hot_path_allocations={}",
-                summary.tensors_loaded,
-                summary.bytes_loaded,
-                summary.data_hash,
-                summary.output_hash,
-                summary.expected_hash,
-                summary.bit_parity,
-                summary.hot_path_allocations,
-            ),
-        ),
-        Err(err) => report.push("safetensors_precision_block", false, format!("{err:?}")),
+        Ok(summary) => {
+            report.push(
+                "safetensors_precision_block",
+                summary.passed(),
+                format!(
+                    "tensors_loaded={} bytes_loaded={} data_hash={} output_hash={} expected_hash={} bit_parity={} hot_path_allocations={}",
+                    summary.tensors_loaded,
+                    summary.bytes_loaded,
+                    summary.data_hash,
+                    summary.output_hash,
+                    summary.expected_hash,
+                    summary.bit_parity,
+                    summary.hot_path_allocations,
+                ),
+            );
+
+            let cuda_block = nerva_runtime::engine::cuda::cuda_tiny_block_smoke();
+            let cuda_block_passed = format!("{:?}", cuda_block.status) == "Ok"
+                && cuda_block.hidden == summary.hidden as u32
+                && cuda_block.intermediate == summary.intermediate as u32
+                && cuda_block.output_hash == summary.expected_hash
+                && cuda_block.kernel_launches == 1
+                && cuda_block.sync_calls == 1
+                && cuda_block.d2h_bytes == 4
+                && cuda_block.device_arena_bytes == 4
+                && cuda_block.pinned_host_bytes == 4
+                && cuda_block.hot_path_allocations == 0;
+            report.push(
+                "cuda_real_block",
+                cuda_block_passed,
+                format!(
+                    "status={:?} hidden={} intermediate={} output_hash={} expected_hash={} output_bits=[{},{}] kernel_launches={} sync_calls={} D2H_bytes={} device_arena_bytes={} pinned_host_bytes={} hot_path_allocations={} error={}",
+                    cuda_block.status,
+                    cuda_block.hidden,
+                    cuda_block.intermediate,
+                    cuda_block.output_hash,
+                    summary.expected_hash,
+                    cuda_block.output[0],
+                    cuda_block.output[1],
+                    cuda_block.kernel_launches,
+                    cuda_block.sync_calls,
+                    cuda_block.d2h_bytes,
+                    cuda_block.device_arena_bytes,
+                    cuda_block.pinned_host_bytes,
+                    cuda_block.hot_path_allocations,
+                    cuda_block.error.as_deref().unwrap_or("none"),
+                ),
+            );
+        }
+        Err(err) => {
+            let details = format!("{err:?}");
+            report.push("safetensors_precision_block", false, details.clone());
+            report.push(
+                "cuda_real_block",
+                false,
+                format!("canonical precision block prerequisite failed: {details}"),
+            );
+        }
     }
 
     match nerva_model::tiny::tiny_greedy_decode_smoke(8) {
