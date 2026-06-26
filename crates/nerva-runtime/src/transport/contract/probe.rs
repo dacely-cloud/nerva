@@ -45,7 +45,7 @@ pub fn run_transport_contract_probe() -> Result<TransportContractSummary> {
                 reason: "transport contract destination block is missing".to_string(),
             })?;
 
-    let mut transport = PinnedHostLoopbackTransport::new(4)?;
+    let mut transport = PinnedHostLoopbackTransport::new(4, 2, 2)?;
     let mut ledger = TokenLedger::new(0);
     let endpoint = TransportEndpoint {
         device: TransportDeviceId(0),
@@ -79,6 +79,19 @@ pub fn run_transport_contract_probe() -> Result<TransportContractSummary> {
     };
 
     let _posted = transport.post_receive(&endpoint, receive)?;
+    let spare_receive = ReceiveDescriptor {
+        request_id: RequestId(2),
+        sequence_id: SequenceId(2),
+        ..receive
+    };
+    let _spare_posted = transport.post_receive(&endpoint, spare_receive)?;
+    let full_receive = ReceiveDescriptor {
+        request_id: RequestId(3),
+        sequence_id: SequenceId(3),
+        ..receive
+    };
+    let receive_queue_full_rejections =
+        u64::from(transport.post_receive(&endpoint, full_receive).is_err());
     let _sent = transport.send(&endpoint, transfer)?;
     let mut completions = [empty_completion()];
     let completion_count = transport.poll(&mut completions)?;
@@ -121,10 +134,13 @@ pub fn run_transport_contract_probe() -> Result<TransportContractSummary> {
         backend: transport.registration_backend().as_str(),
         registrations: 2,
         registered_entries: transport.registered_entries() as u64,
+        receive_queue_capacity: transport.receive_queue_capacity() as u64,
+        completion_queue_capacity: transport.completion_queue_capacity() as u64,
         preposted_receives: transport.preposted_receives() as u64,
         sends: 1,
         completions: completion_count as u64,
         bytes_completed: completions[0].bytes,
+        receive_queue_full_rejections,
         unposted_send_rejections,
         stale_version_rejections,
         descriptor_rejections,

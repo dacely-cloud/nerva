@@ -22,6 +22,8 @@ pub struct PinnedHostLoopbackTransport {
     backend: TransportRegistrationBackend,
     cache: TransportRegistrationCache,
     next_transfer_id: u64,
+    receive_capacity: usize,
+    completion_capacity: usize,
     posted_receives: VecDeque<PostedReceive>,
     completions: VecDeque<TransferCompletion>,
 }
@@ -34,13 +36,24 @@ struct PostedReceive {
 }
 
 impl PinnedHostLoopbackTransport {
-    pub fn new(registration_capacity: usize) -> Result<Self> {
+    pub fn new(
+        registration_capacity: usize,
+        receive_capacity: usize,
+        completion_capacity: usize,
+    ) -> Result<Self> {
+        if receive_capacity == 0 || completion_capacity == 0 {
+            return Err(NervaError::InvalidArgument {
+                reason: "transport queues must be non-zero".to_string(),
+            });
+        }
         Ok(Self {
             backend: TransportRegistrationBackend::RdmaPinnedHost,
             cache: TransportRegistrationCache::new(registration_capacity)?,
             next_transfer_id: 1,
-            posted_receives: VecDeque::new(),
-            completions: VecDeque::new(),
+            receive_capacity,
+            completion_capacity,
+            posted_receives: VecDeque::with_capacity(receive_capacity),
+            completions: VecDeque::with_capacity(completion_capacity),
         })
     }
 
@@ -54,6 +67,14 @@ impl PinnedHostLoopbackTransport {
 
     pub fn preposted_receives(&self) -> usize {
         self.posted_receives.len()
+    }
+
+    pub const fn receive_queue_capacity(&self) -> usize {
+        self.receive_capacity
+    }
+
+    pub const fn completion_queue_capacity(&self) -> usize {
+        self.completion_capacity
     }
 
     pub fn pending_completions(&self) -> usize {
@@ -85,6 +106,12 @@ impl TensorTransportContract for PinnedHostLoopbackTransport {
         receive: ReceiveDescriptor,
     ) -> Result<TransferId> {
         validate_receive_descriptor(self.backend, receive)?;
+        if self.posted_receives.len() == self.receive_capacity {
+            return Err(NervaError::AllocationFailed {
+                bytes: 0,
+                reason: "bounded transport receive ring is full".to_string(),
+            });
+        }
         let transfer_id = self.next_id();
         self.posted_receives.push_back(PostedReceive {
             transfer_id,
@@ -96,6 +123,12 @@ impl TensorTransportContract for PinnedHostLoopbackTransport {
 
     fn send(&mut self, dst: &Self::Endpoint, transfer: TransferDescriptor) -> Result<TransferId> {
         validate_transfer_descriptor(self.backend, transfer)?;
+        if self.completions.len() == self.completion_capacity {
+            return Err(NervaError::AllocationFailed {
+                bytes: 0,
+                reason: "bounded transport completion ring is full".to_string(),
+            });
+        }
         let Some(index) = self.posted_receives.iter().position(|posted| {
             posted.endpoint == *dst
                 && posted.descriptor.request_id == transfer.request_id
