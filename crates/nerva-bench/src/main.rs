@@ -362,20 +362,24 @@ fn run_resident_shard_probe(
     let shard_plan = load_safetensors_shard_plan(config_path, index_path, checkpoint_dir)?;
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
-    let table = runtime
+    let mut table = runtime
         .materialize_safetensors_shard_plan(&shard_plan)
         .map_err(|err| format!("resident shard materialization failed: {err:?}"))?;
     let prefetch = runtime
         .plan_resident_weight_prefetch(&table, max_task_bytes)
         .map_err(|err| format!("resident weight prefetch planning failed: {err:?}"))?;
+    let execution = runtime
+        .execute_resident_weight_prefetch_plan(&mut table, &prefetch)
+        .map_err(|err| format!("resident weight prefetch execution failed: {err:?}"))?;
     Ok(format!(
-        "{{\"status\":\"ok\",\"blocks\":{},\"total_weight_bytes\":{},\"dram_used_bytes\":{},\"residency_decisions\":{},\"manifest_hash\":{},\"prefetch\":{}}}",
+        "{{\"status\":\"ok\",\"blocks\":{},\"total_weight_bytes\":{},\"dram_used_bytes\":{},\"residency_decisions\":{},\"manifest_hash\":{},\"prefetch\":{},\"execution\":{}}}",
         table.entries.len(),
         table.total_weight_bytes,
         table.registry.used_bytes(nerva_core::MemoryTier::Dram),
         table.ledger.residency_decisions.len(),
         table.manifest_hash,
         prefetch.to_json(),
+        execution.to_json(),
     ))
 }
 
@@ -589,6 +593,7 @@ mod tests {
         assert!(resident_json.contains("\"status\":\"ok\""));
         assert!(resident_json.contains("\"blocks\":20"));
         assert!(resident_json.contains("\"prefetch\""));
+        assert!(resident_json.contains("\"execution\""));
         assert!(resident_json.contains("\"tasks\":20"));
 
         let _ = std::fs::remove_file(dir.join(SHARD_ONE));

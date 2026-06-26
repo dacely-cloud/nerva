@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use nerva_core::{
     AllocationId, BlockKind, DeviceOrdinal, ExecutionOwner, HostArch, LayoutId, MemoryFabricKind,
-    MemoryTier, NervaError, RequestId, ResidentBlockId, Result, SequenceId, TokenId, TransactionId,
-    ensure_supported_linux_host, host_arch,
+    MemoryTier, NervaError, RequestId, ResidencyState, ResidentBlockId, Result, SequenceId,
+    TokenId, TransactionId, ensure_supported_linux_host, host_arch,
 };
 use nerva_ledger::{
     CandidateCost, LedgerEvent, LedgerEventKind, MetricSource, ResidencyDecision, TokenLedger,
@@ -317,6 +317,33 @@ impl ResidentWeightPrefetchPlan {
             json_opt_string(self.first_source_shard.as_deref()),
             json_opt_string(self.last_source_shard.as_deref()),
             self.ledger.hot_path_allocations,
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentWeightPrefetchExecutionSummary {
+    pub tasks: usize,
+    pub completed_blocks: usize,
+    pub total_bytes: usize,
+    pub prefetch_events: u64,
+    pub copy_events: u64,
+    pub ready_blocks: usize,
+    pub hot_path_allocations: u64,
+    pub ledger: TokenLedger,
+}
+
+impl ResidentWeightPrefetchExecutionSummary {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"tasks\":{},\"completed_blocks\":{},\"total_bytes\":{},\"prefetch_events\":{},\"copy_events\":{},\"ready_blocks\":{},\"hot_path_allocations\":{}}}",
+            self.tasks,
+            self.completed_blocks,
+            self.total_bytes,
+            self.prefetch_events,
+            self.copy_events,
+            self.ready_blocks,
+            self.hot_path_allocations,
         )
     }
 }
@@ -1710,6 +1737,136 @@ impl Runtime {
         })
     }
 
+    pub fn execute_resident_weight_prefetch_plan(
+        &self,
+        table: &mut ResidentWeightTable,
+        plan: &ResidentWeightPrefetchPlan,
+    ) -> Result<ResidentWeightPrefetchExecutionSummary> {
+        if plan.total_bytes != table.total_weight_bytes {
+            return Err(NervaError::InvalidArgument {
+                reason: "resident weight prefetch plan bytes do not match table".to_string(),
+            });
+        }
+
+        let mut ledger = TokenLedger::new(0);
+        let mut bytes_by_block = BTreeMap::new();
+        let mut total_bytes = 0usize;
+
+        for task in &plan.tasks {
+            let block =
+                table
+                    .registry
+                    .block(task.block_id)
+                    .ok_or_else(|| NervaError::InvalidArgument {
+                        reason: format!(
+                            "prefetch task references unknown block {}",
+                            task.block_id.0
+                        ),
+                    })?;
+            if block.kind != BlockKind::Weight || block.tier != task.target_tier {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!(
+                        "prefetch task block {} does not match resident weight",
+                        task.block_id.0
+                    ),
+                });
+            }
+            if task.file_offset_end < task.file_offset_begin
+                || task.file_offset_end - task.file_offset_begin != task.bytes
+            {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!("prefetch task {} has invalid file span", task.task_index),
+                });
+            }
+
+            let first_task_for_block = !bytes_by_block.contains_key(&task.block_id);
+            if first_task_for_block {
+                table
+                    .registry
+                    .transition(task.block_id, ResidencyState::Prefetching)?;
+            }
+            let block_bytes = bytes_by_block.entry(task.block_id).or_insert(0usize);
+            *block_bytes = block_bytes.checked_add(task.bytes).ok_or_else(|| {
+                NervaError::AllocationFailed {
+                    bytes: task.bytes,
+                    reason: "prefetch task byte accounting overflow".to_string(),
+                }
+            })?;
+            total_bytes = total_bytes.checked_add(task.bytes).ok_or_else(|| {
+                NervaError::AllocationFailed {
+                    bytes: task.bytes,
+                    reason: "prefetch execution byte accounting overflow".to_string(),
+                }
+            })?;
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::Prefetch,
+                block_id: Some(task.block_id),
+                from_tier: Some(MemoryTier::Disk),
+                to_tier: Some(MemoryTier::PinnedDram),
+                bytes: task.bytes,
+                latency_ns: 0,
+                label: "weight_prefetch_execute",
+            });
+            ledger.record(LedgerEvent {
+                kind: LedgerEventKind::Copy,
+                block_id: Some(task.block_id),
+                from_tier: Some(MemoryTier::PinnedDram),
+                to_tier: Some(task.target_tier),
+                bytes: task.bytes,
+                latency_ns: 0,
+                label: "weight_prefetch_commit",
+            });
+        }
+
+        for (block_id, bytes) in &bytes_by_block {
+            let block =
+                table
+                    .registry
+                    .block(*block_id)
+                    .ok_or_else(|| NervaError::InvalidArgument {
+                        reason: format!(
+                            "prefetch completion references unknown block {}",
+                            block_id.0
+                        ),
+                    })?;
+            if *bytes != block.bytes {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!("prefetch completion for block {} is incomplete", block_id.0),
+                });
+            }
+            table.registry.mark_ready(*block_id)?;
+        }
+
+        if total_bytes != table.total_weight_bytes {
+            return Err(NervaError::InvalidArgument {
+                reason: "prefetch execution bytes do not match table".to_string(),
+            });
+        }
+        ledger.require_zero_hot_path_allocations()?;
+
+        let ready_blocks = table
+            .entries
+            .iter()
+            .filter(|entry| {
+                table
+                    .registry
+                    .block(entry.block_id)
+                    .is_some_and(|block| block.state == ResidencyState::Ready)
+            })
+            .count();
+
+        Ok(ResidentWeightPrefetchExecutionSummary {
+            tasks: plan.tasks.len(),
+            completed_blocks: bytes_by_block.len(),
+            total_bytes,
+            prefetch_events: ledger.event_count(LedgerEventKind::Prefetch),
+            copy_events: ledger.event_count(LedgerEventKind::Copy),
+            ready_blocks,
+            hot_path_allocations: ledger.hot_path_allocations,
+            ledger,
+        })
+    }
+
     pub fn run_synthetic_decode(
         &self,
         config: SyntheticDecodeConfig,
@@ -2459,6 +2616,47 @@ mod tests {
 
         assert!(runtime.plan_resident_weight_prefetch(&table, 128).is_err());
         assert!(runtime.plan_resident_weight_prefetch(&table, 0).is_err());
+    }
+
+    #[test]
+    fn resident_weight_prefetch_execution_marks_blocks_ready() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let (plan, _) = tiny_shard_plan();
+        let mut table = runtime.materialize_safetensors_shard_plan(&plan).unwrap();
+        let prefetch = runtime.plan_resident_weight_prefetch(&table, 16).unwrap();
+        let summary = runtime
+            .execute_resident_weight_prefetch_plan(&mut table, &prefetch)
+            .unwrap();
+
+        assert_eq!(summary.tasks, prefetch.tasks.len());
+        assert_eq!(summary.completed_blocks, table.entries.len());
+        assert_eq!(summary.total_bytes, table.total_weight_bytes);
+        assert_eq!(summary.prefetch_events, prefetch.tasks.len() as u64);
+        assert_eq!(summary.copy_events, prefetch.tasks.len() as u64);
+        assert_eq!(summary.ready_blocks, table.entries.len());
+        assert_eq!(summary.hot_path_allocations, 0);
+        assert!(summary.to_json().contains("\"ready_blocks\":11"));
+        assert!(table.entries.iter().all(|entry| {
+            table
+                .registry
+                .block(entry.block_id)
+                .is_some_and(|block| block.state == ResidencyState::Ready)
+        }));
+    }
+
+    #[test]
+    fn resident_weight_prefetch_execution_rejects_incomplete_plan() {
+        let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+        let (plan, _) = tiny_shard_plan();
+        let mut table = runtime.materialize_safetensors_shard_plan(&plan).unwrap();
+        let mut prefetch = runtime.plan_resident_weight_prefetch(&table, 16).unwrap();
+        prefetch.tasks.pop();
+
+        assert!(
+            runtime
+                .execute_resident_weight_prefetch_plan(&mut table, &prefetch)
+                .is_err()
+        );
     }
 
     #[test]
