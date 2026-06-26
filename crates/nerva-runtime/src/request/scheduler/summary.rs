@@ -17,8 +17,20 @@ pub struct RequestSchedulerSummary {
     pub max_active_requests: usize,
     pub host_observed_tokens: u64,
     pub generated_tokens: u64,
+    pub token_ledgers: u64,
+    pub critical_path_reports: u64,
+    pub graph_replay_events: u64,
+    pub device_activity_events: u64,
+    pub copy_events: u64,
+    pub soft_visibility_syncs: u64,
+    pub host_event_wait_ns: u64,
+    pub gpu_idle_ns: u64,
+    pub estimated_events: u64,
+    pub runtime_timestamp_events: u64,
+    pub unclassified_syncs: u64,
     pub bounded_slots: bool,
     pub unbounded_queue_ops: u64,
+    pub host_wait_gpu_idle_separated: bool,
     pub hot_path_allocations: u64,
 }
 
@@ -31,8 +43,20 @@ impl RequestSchedulerSummary {
             && self.duplicate_rejections == 1
             && self.missing_request_rejections == 1
             && self.generated_tokens == self.host_observed_tokens
+            && self.token_ledgers == self.generated_tokens
+            && self.critical_path_reports == self.generated_tokens
+            && self.graph_replay_events == self.generated_tokens
+            && self.device_activity_events == self.generated_tokens
+            && self.copy_events == self.generated_tokens
+            && self.soft_visibility_syncs == self.generated_tokens
+            && self.host_event_wait_ns > 0
+            && self.gpu_idle_ns == 0
+            && self.estimated_events > 0
+            && self.runtime_timestamp_events > 0
+            && self.unclassified_syncs == 0
             && self.bounded_slots
             && self.unbounded_queue_ops == 0
+            && self.host_wait_gpu_idle_separated
             && self.hot_path_allocations == 0
     }
 
@@ -41,7 +65,7 @@ impl RequestSchedulerSummary {
             RequestSchedulerProbeStatus::Ok => "ok",
         };
         format!(
-            "{{\"status\":\"{}\",\"capacity\":{},\"admitted_requests\":{},\"active_requests\":{},\"completed_requests\":{},\"full_rejections\":{},\"duplicate_rejections\":{},\"missing_request_rejections\":{},\"scheduler_iterations\":{},\"max_active_requests\":{},\"host_observed_tokens\":{},\"generated_tokens\":{},\"bounded_slots\":{},\"unbounded_queue_ops\":{},\"hot_path_allocations\":{}}}",
+            "{{\"status\":\"{}\",\"capacity\":{},\"admitted_requests\":{},\"active_requests\":{},\"completed_requests\":{},\"full_rejections\":{},\"duplicate_rejections\":{},\"missing_request_rejections\":{},\"scheduler_iterations\":{},\"max_active_requests\":{},\"host_observed_tokens\":{},\"generated_tokens\":{},\"token_ledgers\":{},\"critical_path_reports\":{},\"graph_replay_events\":{},\"device_activity_events\":{},\"copy_events\":{},\"soft_visibility_syncs\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"estimated_events\":{},\"runtime_timestamp_events\":{},\"unclassified_syncs\":{},\"bounded_slots\":{},\"unbounded_queue_ops\":{},\"host_wait_gpu_idle_separated\":{},\"hot_path_allocations\":{}}}",
             status,
             self.capacity,
             self.admitted_requests,
@@ -54,8 +78,20 @@ impl RequestSchedulerSummary {
             self.max_active_requests,
             self.host_observed_tokens,
             self.generated_tokens,
+            self.token_ledgers,
+            self.critical_path_reports,
+            self.graph_replay_events,
+            self.device_activity_events,
+            self.copy_events,
+            self.soft_visibility_syncs,
+            self.host_event_wait_ns,
+            self.gpu_idle_ns,
+            self.estimated_events,
+            self.runtime_timestamp_events,
+            self.unclassified_syncs,
             self.bounded_slots,
             self.unbounded_queue_ops,
+            self.host_wait_gpu_idle_separated,
             self.hot_path_allocations,
         )
     }

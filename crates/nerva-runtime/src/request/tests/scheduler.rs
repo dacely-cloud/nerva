@@ -44,5 +44,18 @@ fn request_scheduler_probe_reports_bounded_admission_and_completion() {
     assert_eq!(summary.duplicate_rejections, 1);
     assert_eq!(summary.missing_request_rejections, 1);
     assert_eq!(summary.generated_tokens, summary.host_observed_tokens);
+    assert_eq!(summary.token_ledgers, summary.generated_tokens);
+    assert_eq!(summary.critical_path_reports, summary.generated_tokens);
+    assert_eq!(summary.graph_replay_events, summary.generated_tokens);
+    assert_eq!(summary.device_activity_events, summary.generated_tokens);
+    assert_eq!(summary.copy_events, summary.generated_tokens);
+    assert_eq!(summary.soft_visibility_syncs, summary.generated_tokens);
+    assert_eq!(summary.gpu_idle_ns, 0);
+    assert_eq!(summary.unclassified_syncs, 0);
+    assert!(summary.host_event_wait_ns > 0);
+    assert!(summary.estimated_events > 0);
+    assert!(summary.runtime_timestamp_events > 0);
+    assert!(summary.host_wait_gpu_idle_separated);
     assert!(summary.to_json().contains("\"bounded_slots\":true"));
+    assert!(summary.to_json().contains("\"token_ledgers\":4"));
 }
