@@ -2,7 +2,8 @@ use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 use crate::acceptance::report::AcceptanceReport;
 use crate::acceptance::{
-    audit, cuda, environment, execution, model, resident_weights, runtime_checks, transport,
+    audit, cuda, environment, execution, memory_loop, model, resident_weights, runtime_checks,
+    transport,
 };
 
 pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
@@ -21,6 +22,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     environment::push_topology_snapshot(&mut report, &runtime);
     runtime_checks::push_synthetic_decode(&mut report, &runtime);
     execution::push_transaction_planner(&mut report, &runtime);
+    memory_loop::push_memory_fabric_loop(&mut report, &runtime);
 
     model::push_reference_block(&mut report);
     model::push_precision_and_cuda_blocks(&mut report);

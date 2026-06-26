@@ -4,6 +4,7 @@ mod environment;
 mod execution;
 mod files;
 mod manifest;
+mod memory_loop;
 mod model;
 mod report;
 mod resident_weights;

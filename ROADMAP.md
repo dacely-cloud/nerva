@@ -27,6 +27,7 @@
 - KV block table.
 - Tiered KV residency.
 - Prefetch/evict decisions.
+- Bounded memory/fabric loop for disk-read, prefetch, staging, eviction, and transport-buffer preparation.
 - Ledgered stalls and copies.
 
 ## M4: Model Bring-Up
