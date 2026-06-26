@@ -1,5 +1,6 @@
 pub(crate) mod kv;
 pub(crate) mod memory_loop;
+pub(crate) mod mgpu;
 pub(crate) mod phase;
 pub(crate) mod queue;
 pub(crate) mod runtime;

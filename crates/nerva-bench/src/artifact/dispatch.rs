@@ -11,7 +11,9 @@ use crate::{
     },
     parity::run::run_vllm_token_identity_parity,
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
-    probes::{kv, memory_loop, phase, queue, runtime, synthetic, token, transaction, transport},
+    probes::{
+        kv, memory_loop, mgpu, phase, queue, runtime, synthetic, token, transaction, transport,
+    },
 };
 
 pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
@@ -144,6 +146,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "transport-matrix" => transport::run_transport_matrix_probe(),
         "transport-registration" => transport::run_transport_registration_probe(),
         "stage-pipeline" => transport::run_stage_pipeline_probe(),
+        "multi-gpu" => mgpu::run_multi_gpu_probe(),
         "acceptance" => run_acceptance_probe(),
         _ => Err(format!("unknown artifact probe '{command}'")),
     }

@@ -5,6 +5,7 @@ mod execution;
 mod files;
 mod manifest;
 mod memory_loop;
+mod mgpu;
 mod model;
 mod phase;
 mod queue;

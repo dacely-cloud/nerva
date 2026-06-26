@@ -7,6 +7,7 @@ use crate::graph::summary::CudaSyntheticGraphSummary;
 use crate::json::escape_json;
 use crate::sampler::summary::CudaGreedySamplerSummary;
 use crate::smoke::ffi::c_char_array_to_string;
+use crate::smoke::probe::smoke;
 use crate::smoke::status::SmokeStatus;
 use crate::smoke::summary::CudaSmokeSummary;
 
@@ -38,6 +39,19 @@ fn c_char_array_conversion_handles_empty_and_terminated_values() {
     value[1] = b'T' as c_char;
     value[2] = b'X' as c_char;
     assert_eq!(c_char_array_to_string(&value).as_deref(), Some("RTX"));
+}
+
+#[test]
+fn cuda_smoke_is_repeatable_when_device_is_available() {
+    let first = smoke();
+    if first.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let second = smoke();
+    assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    assert_eq!(second.kernel_value, Some(0x4e45_5256));
+    assert_eq!(second.hot_path_allocations, 0);
 }
 
 #[test]

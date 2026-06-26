@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use crate::cli::exit;
 use crate::parse::{parse_optional_u64, parse_optional_usize};
 use crate::probes::{
-    kv, memory_loop, phase, queue, runtime, synthetic, token, transaction, transport,
+    kv, memory_loop, mgpu, phase, queue, runtime, synthetic, token, transaction, transport,
 };
 
 pub(crate) fn dispatch(
@@ -39,6 +39,7 @@ pub(crate) fn dispatch(
         Some("stage-pipeline") => Some(exit::print_json_result(
             transport::run_stage_pipeline_probe(),
         )),
+        Some("multi-gpu") => Some(exit::print_json_result(mgpu::run_multi_gpu_probe())),
         _ => None,
     }
 }

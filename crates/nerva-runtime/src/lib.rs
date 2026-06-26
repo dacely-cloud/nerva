@@ -8,6 +8,7 @@ pub mod engine;
 pub mod execution;
 pub mod graph;
 pub mod memory_loop;
+pub mod mgpu;
 pub mod token;
 pub mod transport;
 pub mod weights;

@@ -2,7 +2,7 @@ use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 use crate::acceptance::report::AcceptanceReport;
 use crate::acceptance::{
-    audit, cuda, environment, execution, memory_loop, model, phase, queue, resident_weights,
+    audit, cuda, environment, execution, memory_loop, mgpu, model, phase, queue, resident_weights,
     runtime_checks, token, transport,
 };
 
@@ -42,6 +42,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     transport::matrix::push_transport_matrix(&mut report, &runtime);
     transport::registration::push_transport_registration(&mut report, &runtime);
     transport::stage::push_stage_pipeline(&mut report, &runtime);
+    mgpu::push_multi_gpu_node(&mut report, &runtime);
 
     match resident_weights::resident_weight_execution_acceptance(&runtime) {
         Ok((passed, details)) => report.push("resident_weight_execution", passed, details),

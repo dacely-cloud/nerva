@@ -4,6 +4,7 @@ mod capabilities;
 mod graph;
 mod kv;
 mod memory_loop;
+mod multi_gpu;
 mod support;
 mod synthetic;
 mod transaction;

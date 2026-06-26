@@ -60,6 +60,24 @@ fn capability_snapshot_reports_conservative_discrete_profile() {
 }
 
 #[test]
+fn cuda_probe_survives_capability_discovery_when_device_is_available() {
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let snapshot = runtime.discover_capabilities();
+    if snapshot.cuda != CapabilityState::SupportedAndVerified {
+        return;
+    }
+
+    let smoke = crate::capabilities::discovery::cuda_smoke();
+    assert_eq!(
+        smoke.status,
+        nerva_cuda::smoke::status::SmokeStatus::Ok,
+        "smoke after discovery: {smoke:?}"
+    );
+    assert_eq!(smoke.kernel_value, Some(0x4e45_5256));
+    assert_eq!(smoke.hot_path_allocations, 0);
+}
+
+#[test]
 fn capability_snapshot_json_escapes_cuda_error() {
     let snapshot = CapabilitySnapshot {
         host_arch: HostArch::X86_64,
