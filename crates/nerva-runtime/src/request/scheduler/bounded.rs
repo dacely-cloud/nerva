@@ -4,11 +4,13 @@ use nerva_core::types::id::token::TokenId;
 
 use crate::request::controller::RequestController;
 use crate::request::scheduler::admission::RequestAdmission;
+use crate::request::scheduler::selection::SchedulerSelection;
 use crate::request::types::{HostObservationBatch, RequestPhase};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BoundedRequestScheduler {
     slots: Vec<Option<RequestController>>,
+    next_selection_slot: usize,
 }
 
 impl BoundedRequestScheduler {
@@ -20,6 +22,7 @@ impl BoundedRequestScheduler {
         }
         Ok(Self {
             slots: vec![None; capacity],
+            next_selection_slot: 0,
         })
     }
 
@@ -96,6 +99,29 @@ impl BoundedRequestScheduler {
         }
         self.slots[slot] = None;
         Ok(slot)
+    }
+
+    pub fn select_next_decoding(&mut self) -> Option<SchedulerSelection> {
+        let capacity = self.slots.len();
+        let start = self.next_selection_slot.min(capacity.saturating_sub(1));
+        for offset in 0..capacity {
+            let slot = (start + offset) % capacity;
+            let Some(controller) = self.slots[slot].as_ref() else {
+                continue;
+            };
+            if controller.phase != RequestPhase::Decoding {
+                continue;
+            }
+            self.next_selection_slot = (slot + 1) % capacity;
+            return Some(SchedulerSelection {
+                slot,
+                request_id: controller.request_id,
+                scanned_slots: offset + 1,
+                skipped_slots: offset,
+                wrapped: slot < start,
+            });
+        }
+        None
     }
 
     pub fn active_count(&self) -> usize {

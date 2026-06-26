@@ -22,7 +22,10 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"request_state_machine\""));
     assert!(json.contains("\"request_scheduler_admission\""));
     assert!(json.contains("token_ledgers=5"));
+    assert!(json.contains("released_slots=3"));
     assert!(json.contains("reused_slots=1"));
+    assert!(json.contains("selection_decisions=5"));
+    assert!(json.contains("no_ready_selection_rejections=1"));
     assert!(json.contains("\"topology_snapshot\""));
     assert!(json.contains("\"synthetic_transaction\""));
     assert!(json.contains("\"synthetic_device_token\""));

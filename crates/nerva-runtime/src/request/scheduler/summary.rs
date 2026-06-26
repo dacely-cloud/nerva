@@ -17,6 +17,11 @@ pub struct RequestSchedulerSummary {
     pub released_slots: u64,
     pub reused_slots: u64,
     pub scheduler_iterations: u64,
+    pub selection_decisions: u64,
+    pub selection_scanned_slots: u64,
+    pub selection_skipped_slots: u64,
+    pub selection_wraps: u64,
+    pub no_ready_selection_rejections: u64,
     pub max_active_requests: usize,
     pub host_observed_tokens: u64,
     pub generated_tokens: u64,
@@ -46,8 +51,12 @@ impl RequestSchedulerSummary {
             && self.duplicate_rejections == 1
             && self.missing_request_rejections == 1
             && self.premature_release_rejections == 1
-            && self.released_slots == 2
+            && self.released_slots == 3
             && self.reused_slots == 1
+            && self.selection_decisions == self.generated_tokens
+            && self.selection_scanned_slots >= self.selection_decisions
+            && self.selection_skipped_slots > 0
+            && self.no_ready_selection_rejections == 1
             && self.generated_tokens == self.host_observed_tokens
             && self.token_ledgers == self.generated_tokens
             && self.critical_path_reports == self.generated_tokens
@@ -71,7 +80,7 @@ impl RequestSchedulerSummary {
             RequestSchedulerProbeStatus::Ok => "ok",
         };
         format!(
-            "{{\"status\":\"{}\",\"capacity\":{},\"admitted_requests\":{},\"active_requests\":{},\"completed_requests\":{},\"full_rejections\":{},\"duplicate_rejections\":{},\"missing_request_rejections\":{},\"premature_release_rejections\":{},\"released_slots\":{},\"reused_slots\":{},\"scheduler_iterations\":{},\"max_active_requests\":{},\"host_observed_tokens\":{},\"generated_tokens\":{},\"token_ledgers\":{},\"critical_path_reports\":{},\"graph_replay_events\":{},\"device_activity_events\":{},\"copy_events\":{},\"soft_visibility_syncs\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"estimated_events\":{},\"runtime_timestamp_events\":{},\"unclassified_syncs\":{},\"bounded_slots\":{},\"unbounded_queue_ops\":{},\"host_wait_gpu_idle_separated\":{},\"hot_path_allocations\":{}}}",
+            "{{\"status\":\"{}\",\"capacity\":{},\"admitted_requests\":{},\"active_requests\":{},\"completed_requests\":{},\"full_rejections\":{},\"duplicate_rejections\":{},\"missing_request_rejections\":{},\"premature_release_rejections\":{},\"released_slots\":{},\"reused_slots\":{},\"scheduler_iterations\":{},\"selection_decisions\":{},\"selection_scanned_slots\":{},\"selection_skipped_slots\":{},\"selection_wraps\":{},\"no_ready_selection_rejections\":{},\"max_active_requests\":{},\"host_observed_tokens\":{},\"generated_tokens\":{},\"token_ledgers\":{},\"critical_path_reports\":{},\"graph_replay_events\":{},\"device_activity_events\":{},\"copy_events\":{},\"soft_visibility_syncs\":{},\"host_event_wait_ns\":{},\"gpu_idle_ns\":{},\"estimated_events\":{},\"runtime_timestamp_events\":{},\"unclassified_syncs\":{},\"bounded_slots\":{},\"unbounded_queue_ops\":{},\"host_wait_gpu_idle_separated\":{},\"hot_path_allocations\":{}}}",
             status,
             self.capacity,
             self.admitted_requests,
@@ -84,6 +93,11 @@ impl RequestSchedulerSummary {
             self.released_slots,
             self.reused_slots,
             self.scheduler_iterations,
+            self.selection_decisions,
+            self.selection_scanned_slots,
+            self.selection_skipped_slots,
+            self.selection_wraps,
+            self.no_ready_selection_rejections,
             self.max_active_requests,
             self.host_observed_tokens,
             self.generated_tokens,

@@ -8,6 +8,7 @@ use crate::request::probe::next_cycle_token;
 use crate::request::scheduler::admission::RequestAdmission;
 use crate::request::scheduler::bounded::BoundedRequestScheduler;
 use crate::request::scheduler::ledger::scheduler_token_ledger;
+use crate::request::scheduler::selection_totals::SchedulerSelectionTotals;
 use crate::request::scheduler::summary::{RequestSchedulerProbeStatus, RequestSchedulerSummary};
 use crate::request::scheduler::totals::SchedulerLedgerTotals;
 
@@ -15,6 +16,7 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
     let device = DeviceOrdinal(0);
     let mut scheduler = BoundedRequestScheduler::new(2)?;
     let mut ledger_totals = SchedulerLedgerTotals::default();
+    let mut selection_totals = SchedulerSelectionTotals::default();
     let mut released_slots = 0;
     let mut reused_slots = 0;
     let mut host_observed_tokens = 0;
@@ -30,18 +32,11 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
     scheduler.begin_decode(RequestId(2))?;
     let mut max_active = scheduler.active_count();
     let mut iterations = 0;
-    drive_one_step(
+    drive_selected_step(
         &mut scheduler,
-        RequestId(1),
         device,
         &mut ledger_totals,
-        &mut iterations,
-    )?;
-    drive_one_step(
-        &mut scheduler,
-        RequestId(2),
-        device,
-        &mut ledger_totals,
+        &mut selection_totals,
         &mut iterations,
     )?;
     let premature_release_rejections = scheduler.release_completed(RequestId(2)).is_err() as u64;
@@ -52,34 +47,45 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
     reused_slots += (reused_slot == released_slot && reused_slot == slot_b) as u64;
     scheduler.begin_decode(RequestId(3))?;
     max_active = max_active.max(scheduler.active_count());
-    drive_one_step(
+    drive_selected_step(
         &mut scheduler,
-        RequestId(3),
         device,
         &mut ledger_totals,
+        &mut selection_totals,
+        &mut iterations,
+    )?;
+    host_observed_tokens += observe_and_count(&mut scheduler, RequestId(1), 1)?;
+    drive_selected_step(
+        &mut scheduler,
+        device,
+        &mut ledger_totals,
+        &mut selection_totals,
         &mut iterations,
     )?;
     host_observed_tokens += observe_and_count(&mut scheduler, RequestId(3), usize::MAX)?;
     scheduler.release_completed(RequestId(3))?;
     released_slots += 1;
     max_active = max_active.max(scheduler.active_count());
-    drive_one_step(
+    drive_selected_step(
         &mut scheduler,
-        RequestId(1),
         device,
         &mut ledger_totals,
+        &mut selection_totals,
         &mut iterations,
     )?;
-    host_observed_tokens += observe_and_count(&mut scheduler, RequestId(1), 1)?;
-    max_active = max_active.max(scheduler.active_count());
-    drive_one_step(
+    drive_selected_step(
         &mut scheduler,
-        RequestId(1),
         device,
         &mut ledger_totals,
+        &mut selection_totals,
         &mut iterations,
     )?;
     host_observed_tokens += observe_and_count(&mut scheduler, RequestId(1), usize::MAX)?;
+    scheduler.release_completed(RequestId(1))?;
+    released_slots += 1;
+    if scheduler.select_next_decoding().is_none() {
+        selection_totals.record_no_ready();
+    }
 
     let missing_request_rejections = scheduler.next_device_input(RequestId(99)).is_err() as u64;
     let generated_tokens = ledger_totals.token_ledgers;
@@ -97,6 +103,11 @@ pub fn run_request_scheduler_probe() -> Result<RequestSchedulerSummary> {
         released_slots,
         reused_slots,
         scheduler_iterations: iterations,
+        selection_decisions: selection_totals.decisions,
+        selection_scanned_slots: selection_totals.scanned_slots,
+        selection_skipped_slots: selection_totals.skipped_slots,
+        selection_wraps: selection_totals.wraps,
+        no_ready_selection_rejections: selection_totals.no_ready_rejections,
         max_active_requests: max_active,
         host_observed_tokens: host_observed_tokens as u64,
         generated_tokens,
@@ -134,13 +145,20 @@ fn admission(
     }
 }
 
-fn drive_one_step(
+fn drive_selected_step(
     scheduler: &mut BoundedRequestScheduler,
-    request_id: RequestId,
     device: DeviceOrdinal,
     ledger_totals: &mut SchedulerLedgerTotals,
+    selection_totals: &mut SchedulerSelectionTotals,
     iterations: &mut u64,
 ) -> Result<()> {
+    let selection = scheduler.select_next_decoding().ok_or_else(|| {
+        nerva_core::types::error::NervaError::InvalidArgument {
+            reason: "scheduler has no decodable request".to_string(),
+        }
+    })?;
+    selection_totals.record(selection);
+    let request_id = selection.request_id;
     let seed = scheduler.next_device_input(request_id)?;
     let token = next_cycle_token(seed);
     let token_index = scheduler.controller(request_id)?.generated_tokens.len();
