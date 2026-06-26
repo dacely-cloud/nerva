@@ -217,6 +217,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"topology_snapshot\""));
     assert!(json.contains("\"synthetic_transaction\""));
     assert!(json.contains("\"synthetic_device_token\""));
+    assert!(json.contains("\"fp16_bf16_precision_block\""));
     assert!(json.contains("\"hf_model_manifest\""));
     assert!(json.contains("\"vllm_token_identity_parity\""));
     assert!(json.contains("\"kv_residency_tiering\""));

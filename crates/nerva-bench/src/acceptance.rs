@@ -486,6 +486,25 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
         Err(err) => report.push("reference_block", false, format!("{err:?}")),
     }
 
+    match nerva_model::precision::smoke::precision_block_smoke() {
+        Ok(summary) => report.push(
+            "fp16_bf16_precision_block",
+            summary.passed(),
+            format!(
+                "f16_hash={} bf16_hash={} f16_expected_hash={} bf16_expected_hash={} f16_max_abs_error={} bf16_max_abs_error={} f16_hot_path_allocations={} bf16_hot_path_allocations={}",
+                summary.f16.output_hash,
+                summary.bf16.output_hash,
+                summary.f16.expected_hash,
+                summary.bf16.expected_hash,
+                summary.f16.max_abs_error,
+                summary.bf16.max_abs_error,
+                summary.f16.hot_path_allocations,
+                summary.bf16.hot_path_allocations,
+            ),
+        ),
+        Err(err) => report.push("fp16_bf16_precision_block", false, format!("{err:?}")),
+    }
+
     match nerva_model::tiny::tiny_greedy_decode_smoke(8) {
         Ok(summary) => report.push(
             "tiny_model_greedy_parity",

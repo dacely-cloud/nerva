@@ -49,6 +49,9 @@ fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> 
         "block" => nerva_model::reference::smoke::reference_block_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("reference block failed: {err:?}")),
+        "precision" => nerva_model::precision::smoke::precision_block_smoke()
+            .map(|summary| summary.to_json())
+            .map_err(|err| format!("precision block failed: {err:?}")),
         "model" => {
             let steps = parse_optional_usize(args.first().cloned(), 8, "steps")?;
             nerva_model::tiny::tiny_greedy_decode_smoke(steps)

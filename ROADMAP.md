@@ -31,7 +31,7 @@
 
 ## M4: Model Bring-Up
 
-- FP16/BF16 exact path.
+- FP16/BF16 exact block path.
 - HF metadata parser.
 - vLLM-style token identity parity harness.
 
