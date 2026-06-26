@@ -7,7 +7,9 @@ use nerva_core::{CostSource, ExecutionOwner, MemoryTier, NervaError, ResidentBlo
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum LedgerEventKind {
+    GraphReplay,
     KernelLaunch,
+    DeviceActivity,
     Copy,
     Sync,
     Allocation,
@@ -134,6 +136,21 @@ impl TokenLedger {
         self.events.iter().map(|event| event.latency_ns).sum()
     }
 
+    pub fn event_count(&self, kind: LedgerEventKind) -> u64 {
+        self.events
+            .iter()
+            .filter(|event| event.kind == kind)
+            .count() as u64
+    }
+
+    pub fn latency_ns_for(&self, kind: LedgerEventKind) -> u64 {
+        self.events
+            .iter()
+            .filter(|event| event.kind == kind)
+            .map(|event| event.latency_ns)
+            .sum()
+    }
+
     pub fn require_zero_hot_path_allocations(&self) -> Result<()> {
         if self.hot_path_allocations == 0 {
             Ok(())
@@ -158,7 +175,47 @@ mod tests {
         ledger.record_hot_path_allocation_attempt("test", 64, MemoryTier::Vram);
         assert_eq!(ledger.hot_path_allocations, 1);
         assert_eq!(ledger.total_latency_ns(), 0);
+        assert_eq!(ledger.event_count(LedgerEventKind::Allocation), 1);
         assert!(ledger.require_zero_hot_path_allocations().is_err());
+    }
+
+    #[test]
+    fn ledger_keeps_host_wait_and_device_activity_separate() {
+        let mut ledger = TokenLedger::new(5);
+        ledger.record(LedgerEvent {
+            kind: LedgerEventKind::GraphReplay,
+            block_id: None,
+            from_tier: None,
+            to_tier: Some(MemoryTier::Vram),
+            bytes: 0,
+            latency_ns: 2,
+            label: "graph",
+        });
+        ledger.record(LedgerEvent {
+            kind: LedgerEventKind::DeviceActivity,
+            block_id: None,
+            from_tier: None,
+            to_tier: Some(MemoryTier::Vram),
+            bytes: 0,
+            latency_ns: 7,
+            label: "device",
+        });
+        ledger.record(LedgerEvent {
+            kind: LedgerEventKind::Sync,
+            block_id: None,
+            from_tier: Some(MemoryTier::Vram),
+            to_tier: Some(MemoryTier::PinnedDram),
+            bytes: 0,
+            latency_ns: 3,
+            label: "soft_visibility_host_wait",
+        });
+
+        assert_eq!(ledger.event_count(LedgerEventKind::GraphReplay), 1);
+        assert_eq!(ledger.event_count(LedgerEventKind::DeviceActivity), 1);
+        assert_eq!(ledger.event_count(LedgerEventKind::Sync), 1);
+        assert_eq!(ledger.latency_ns_for(LedgerEventKind::DeviceActivity), 7);
+        assert_eq!(ledger.latency_ns_for(LedgerEventKind::Sync), 3);
+        assert_eq!(ledger.total_latency_ns(), 12);
     }
 
     #[test]

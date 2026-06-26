@@ -31,6 +31,7 @@ name = "nerva-memory"
 version = "0.1.0"
 dependencies = [
  "nerva-core",
+ "nerva-ledger",
 ]
 
 [[package]]

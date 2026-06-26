@@ -6,9 +6,11 @@ compile_error!("NERVA currently supports Linux only.");
 use std::collections::{BTreeMap, VecDeque};
 
 use nerva_core::{
-    AllocationId, BlockKind, DType, GlobalBlockAddress, LayoutId, MemoryDomainId, MemoryTier,
-    NervaError, ResidencyState, ResidentBlock, ResidentBlockId, ResidentBlockKind, Result,
+    AllocationId, BlockKind, DType, ExecutionOwner, GlobalBlockAddress, LayoutId, MemoryDomainId,
+    MemoryTier, NervaError, ResidencyState, ResidentBlock, ResidentBlockId, ResidentBlockKind,
+    Result,
 };
+use nerva_ledger::{CandidateCost, MetricSource, ResidencyDecision, TokenLedger};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ArenaKind {
@@ -227,6 +229,32 @@ pub struct StaticArenaSet {
     host: StaticArena,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct StaticArenaBootstrapSpec {
+    pub device_token_state_bytes: usize,
+    pub pinned_observation_bytes: usize,
+    pub host_metadata_bytes: usize,
+    pub align: usize,
+}
+
+impl Default for StaticArenaBootstrapSpec {
+    fn default() -> Self {
+        Self {
+            device_token_state_bytes: 256,
+            pinned_observation_bytes: 256,
+            host_metadata_bytes: 512,
+            align: 64,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct StaticArenaBootstrap {
+    pub device_token_state: ResidentBlockId,
+    pub pinned_observation: ResidentBlockId,
+    pub host_metadata: ResidentBlockId,
+}
+
 impl StaticArenaSet {
     pub const fn new(device_bytes: usize, pinned_host_bytes: usize, host_bytes: usize) -> Self {
         Self {
@@ -269,6 +297,82 @@ impl StaticArenaSet {
         phase: AllocationPhase,
     ) -> Result<ArenaRegion> {
         self.arena_mut(kind).reserve(name, bytes, align, phase)
+    }
+
+    pub fn reject_hot_path_reservation_with_ledger(
+        &mut self,
+        kind: ArenaKind,
+        name: &'static str,
+        bytes: usize,
+        align: usize,
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
+        let before = self.arena_mut(kind).used();
+        match self.reserve(kind, name, bytes, align, AllocationPhase::HotPath) {
+            Ok(_) => Err(NervaError::InvalidArgument {
+                reason: "static arena accepted forbidden hot-path reservation".to_string(),
+            }),
+            Err(err) => {
+                debug_assert_eq!(self.arena_mut(kind).used(), before);
+                ledger.record_hot_path_allocation_attempt(name, bytes, kind.tier());
+                Err(err)
+            }
+        }
+    }
+
+    pub fn preallocate_decode_bootstrap(
+        &mut self,
+        registry: &mut BlockRegistry,
+        spec: StaticArenaBootstrapSpec,
+    ) -> Result<StaticArenaBootstrap> {
+        let align = spec.align.max(1);
+        let device_token_state = self.reserve_resident_block(
+            registry,
+            ArenaKind::Device,
+            "device-token-ring",
+            BlockAllocationRequest::new(
+                BlockKind::TokenState,
+                MemoryTier::Vram,
+                spec.device_token_state_bytes,
+            ),
+            align,
+            AllocationPhase::Initialization,
+        )?;
+        registry.mark_ready(device_token_state)?;
+
+        let pinned_observation = self.reserve_resident_block(
+            registry,
+            ArenaKind::PinnedHost,
+            "host-token-observation",
+            BlockAllocationRequest::new(
+                BlockKind::TokenState,
+                MemoryTier::PinnedDram,
+                spec.pinned_observation_bytes,
+            ),
+            align,
+            AllocationPhase::Initialization,
+        )?;
+        registry.mark_ready(pinned_observation)?;
+
+        let host_metadata = self.reserve_resident_block(
+            registry,
+            ArenaKind::Host,
+            "runtime-metadata",
+            BlockAllocationRequest::new(
+                BlockKind::Metadata,
+                MemoryTier::Dram,
+                spec.host_metadata_bytes,
+            ),
+            align,
+            AllocationPhase::Initialization,
+        )?;
+        registry.mark_ready(host_metadata)?;
+
+        Ok(StaticArenaBootstrap {
+            device_token_state,
+            pinned_observation,
+            host_metadata,
+        })
     }
 
     pub fn reserve_resident_block(
@@ -358,6 +462,7 @@ pub struct KvPageDescriptor {
     pub token_start: u32,
     pub token_count: u32,
     pub block_size_tokens: u32,
+    pub page_bytes: usize,
     pub ref_count: u32,
     pub prefix_key: Option<KvPrefixKey>,
     pub prefix_tokens: Option<u32>,
@@ -411,6 +516,7 @@ impl KvPagePool {
                 token_start: 0,
                 token_count: 0,
                 block_size_tokens: spec.block_size_tokens,
+                page_bytes: spec.page_bytes,
                 ref_count: 0,
                 prefix_key: None,
                 prefix_tokens: None,
@@ -450,6 +556,10 @@ impl KvPagePool {
 
     pub fn page(&self, page_index: u32) -> Option<&KvPageDescriptor> {
         self.pages.get(page_index as usize)
+    }
+
+    pub fn pages(&self) -> &[KvPageDescriptor] {
+        &self.pages
     }
 
     pub fn lookup_cached(&self, key: KvPrefixKey) -> Option<KvPageHandle> {
@@ -536,9 +646,17 @@ impl KvPagePool {
         page.last_use = step;
         if page.ref_count == 0 && !page.is_free {
             page.is_free = true;
-            page.token_count = 0;
+            if page.prefix_key.is_none() {
+                page.token_count = 0;
+            }
             self.free_pages.push_back(page_index);
         }
+        Ok(())
+    }
+
+    pub fn set_next_use(&mut self, page_index: u32, next_use: Option<u64>) -> Result<()> {
+        let page = self.page_mut(page_index)?;
+        page.next_use = next_use;
         Ok(())
     }
 
@@ -586,6 +704,258 @@ impl KvPagePool {
             .ok_or_else(|| NervaError::InvalidArgument {
                 reason: format!("unknown KV page index {page_index}"),
             })
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct KvResidencyPolicy {
+    pub hot_page_limit: usize,
+    pub prefetch_distance: u64,
+    pub evict_after_idle: u64,
+}
+
+impl KvResidencyPolicy {
+    pub const fn new(hot_page_limit: usize, prefetch_distance: u64, evict_after_idle: u64) -> Self {
+        Self {
+            hot_page_limit,
+            prefetch_distance,
+            evict_after_idle,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum KvResidencyAction {
+    KeepHot,
+    PrefetchToHot,
+    KeepWarm,
+    DemoteToWarm,
+    EvictCold,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct KvResidencyPlanEntry {
+    pub page_index: u32,
+    pub block_id: ResidentBlockId,
+    pub old_tier: MemoryTier,
+    pub new_tier: MemoryTier,
+    pub action: KvResidencyAction,
+    pub reason: &'static str,
+    pub predicted_visible_ns: u64,
+}
+
+impl KvResidencyPlanEntry {
+    pub fn changes_tier(self) -> bool {
+        self.old_tier != self.new_tier
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct KvResidencyPlan {
+    pub entries: Vec<KvResidencyPlanEntry>,
+}
+
+impl KvResidencyPlan {
+    pub fn record_to_ledger(&self, ledger: &mut TokenLedger) {
+        for entry in &self.entries {
+            ledger.record_residency_decision(ResidencyDecision {
+                block_id: entry.block_id,
+                old_tier: entry.old_tier,
+                new_tier: entry.new_tier,
+                executor_selected: ExecutionOwner::Gpu(nerva_core::DeviceOrdinal(0)),
+                candidate_costs: vec![
+                    CandidateCost::estimated("keep-current-tier", 0),
+                    CandidateCost::estimated("planned-tier", entry.predicted_visible_ns),
+                ],
+                reason: entry.reason,
+                predicted_overlap_ns: 0,
+                actual_visible_ns: None,
+                metric_source: MetricSource::EstimatedModel,
+            });
+        }
+    }
+
+    pub fn apply(&self, registry: &mut BlockRegistry) -> Result<()> {
+        for entry in &self.entries {
+            if entry.changes_tier() {
+                registry.move_block(
+                    entry.block_id,
+                    entry.new_tier,
+                    AllocationId(entry.block_id.0),
+                    0,
+                )?;
+            }
+            match entry.action {
+                KvResidencyAction::KeepHot
+                | KvResidencyAction::PrefetchToHot
+                | KvResidencyAction::KeepWarm => registry.mark_ready(entry.block_id)?,
+                KvResidencyAction::DemoteToWarm => {
+                    registry.transition(entry.block_id, ResidencyState::Draining)?
+                }
+                KvResidencyAction::EvictCold => {
+                    registry.transition(entry.block_id, ResidencyState::Evicting)?
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct KvPagePriority {
+    page_index: u32,
+    pinned: bool,
+    distance: u64,
+    last_use: u64,
+}
+
+pub struct KvResidencyPlanner;
+
+impl KvResidencyPlanner {
+    pub fn plan(
+        pool: &KvPagePool,
+        registry: &BlockRegistry,
+        current_step: u64,
+        policy: KvResidencyPolicy,
+    ) -> Result<KvResidencyPlan> {
+        let mut hot_candidates = Vec::new();
+        for page in pool.pages() {
+            if page.is_free && page.prefix_key.is_none() {
+                continue;
+            }
+            let pinned = page.ref_count > 0;
+            let distance = page
+                .next_use
+                .map(|next_use| next_use.saturating_sub(current_step))
+                .unwrap_or(u64::MAX);
+            if pinned || distance <= policy.prefetch_distance {
+                hot_candidates.push(KvPagePriority {
+                    page_index: page.page_index,
+                    pinned,
+                    distance,
+                    last_use: page.last_use,
+                });
+            }
+        }
+        hot_candidates.sort_by_key(|candidate| {
+            (
+                !candidate.pinned,
+                candidate.distance,
+                core::cmp::Reverse(candidate.last_use),
+                candidate.page_index,
+            )
+        });
+        let pinned_count = hot_candidates
+            .iter()
+            .filter(|candidate| candidate.pinned)
+            .count();
+        let speculative_budget = policy.hot_page_limit.saturating_sub(pinned_count);
+        let mut speculative_taken = 0usize;
+        let hot_pages = hot_candidates
+            .into_iter()
+            .filter_map(|candidate| {
+                if candidate.pinned {
+                    Some(candidate.page_index)
+                } else if speculative_taken < speculative_budget {
+                    speculative_taken += 1;
+                    Some(candidate.page_index)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut entries = Vec::new();
+        for page in pool.pages() {
+            if page.is_free && page.prefix_key.is_none() {
+                continue;
+            }
+            let old_tier = registry
+                .block(page.block_id)
+                .ok_or_else(|| NervaError::InvalidArgument {
+                    reason: format!("KV page {} references missing block", page.page_index),
+                })?
+                .tier;
+            let wants_hot = hot_pages.contains(&page.page_index);
+            let idle = current_step.saturating_sub(page.last_use);
+            let entry = if wants_hot && old_tier == MemoryTier::Vram {
+                KvResidencyPlanEntry {
+                    page_index: page.page_index,
+                    block_id: page.block_id,
+                    old_tier,
+                    new_tier: MemoryTier::Vram,
+                    action: KvResidencyAction::KeepHot,
+                    reason: "KV page is already hot and needed soon",
+                    predicted_visible_ns: 0,
+                }
+            } else if wants_hot {
+                KvResidencyPlanEntry {
+                    page_index: page.page_index,
+                    block_id: page.block_id,
+                    old_tier,
+                    new_tier: MemoryTier::Vram,
+                    action: KvResidencyAction::PrefetchToHot,
+                    reason: "KV page next use is within prefetch window",
+                    predicted_visible_ns: transfer_cost_ns(
+                        page_token_bytes(page),
+                        old_tier,
+                        MemoryTier::Vram,
+                    ),
+                }
+            } else if page.ref_count == 0 && idle >= policy.evict_after_idle {
+                KvResidencyPlanEntry {
+                    page_index: page.page_index,
+                    block_id: page.block_id,
+                    old_tier,
+                    new_tier: MemoryTier::Dram,
+                    action: KvResidencyAction::EvictCold,
+                    reason: "KV page is idle beyond eviction threshold",
+                    predicted_visible_ns: transfer_cost_ns(
+                        page_token_bytes(page),
+                        old_tier,
+                        MemoryTier::Dram,
+                    ),
+                }
+            } else if old_tier == MemoryTier::Vram {
+                KvResidencyPlanEntry {
+                    page_index: page.page_index,
+                    block_id: page.block_id,
+                    old_tier,
+                    new_tier: MemoryTier::Dram,
+                    action: KvResidencyAction::DemoteToWarm,
+                    reason: "KV page is outside hot budget",
+                    predicted_visible_ns: transfer_cost_ns(
+                        page_token_bytes(page),
+                        old_tier,
+                        MemoryTier::Dram,
+                    ),
+                }
+            } else {
+                KvResidencyPlanEntry {
+                    page_index: page.page_index,
+                    block_id: page.block_id,
+                    old_tier,
+                    new_tier: old_tier,
+                    action: KvResidencyAction::KeepWarm,
+                    reason: "KV page remains warm",
+                    predicted_visible_ns: 0,
+                }
+            };
+            entries.push(entry);
+        }
+        Ok(KvResidencyPlan { entries })
+    }
+}
+
+fn page_token_bytes(page: &KvPageDescriptor) -> usize {
+    page.page_bytes
+}
+
+fn transfer_cost_ns(bytes: usize, old_tier: MemoryTier, new_tier: MemoryTier) -> u64 {
+    if old_tier == new_tier {
+        0
+    } else {
+        100 + bytes as u64
     }
 }
 
@@ -989,6 +1359,74 @@ mod tests {
     }
 
     #[test]
+    fn static_arena_bootstrap_preallocates_cpu_pinned_and_gpu_regions() {
+        let mut arenas = StaticArenaSet::new(1024, 1024, 2048);
+        let mut registry = BlockRegistry::new([
+            (MemoryTier::Vram, 1024),
+            (MemoryTier::PinnedDram, 1024),
+            (MemoryTier::Dram, 2048),
+        ]);
+
+        let bootstrap = arenas
+            .preallocate_decode_bootstrap(
+                &mut registry,
+                StaticArenaBootstrapSpec {
+                    device_token_state_bytes: 256,
+                    pinned_observation_bytes: 128,
+                    host_metadata_bytes: 512,
+                    align: 64,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(arenas.device().used(), 256);
+        assert_eq!(arenas.pinned_host().used(), 128);
+        assert_eq!(arenas.host().used(), 512);
+
+        let device = registry.block(bootstrap.device_token_state).unwrap();
+        let pinned = registry.block(bootstrap.pinned_observation).unwrap();
+        let host = registry.block(bootstrap.host_metadata).unwrap();
+        assert_eq!(device.tier, MemoryTier::Vram);
+        assert_eq!(device.address.domain, MemoryDomainId::GPU_VRAM);
+        assert_eq!(device.state, ResidencyState::Ready);
+        assert_eq!(pinned.tier, MemoryTier::PinnedDram);
+        assert_eq!(pinned.address.domain, MemoryDomainId::PINNED_DRAM);
+        assert_eq!(pinned.state, ResidencyState::Ready);
+        assert_eq!(host.tier, MemoryTier::Dram);
+        assert_eq!(host.address.domain, MemoryDomainId::CPU_DRAM);
+        assert_eq!(host.state, ResidencyState::Ready);
+    }
+
+    #[test]
+    fn hot_path_arena_attempts_are_rejected_and_ledgered() {
+        let mut arenas = StaticArenaSet::new(256, 256, 256);
+        let mut ledger = TokenLedger::new(10);
+
+        for kind in [ArenaKind::Device, ArenaKind::PinnedHost, ArenaKind::Host] {
+            let before = arenas.arena_mut(kind).used();
+            let err = arenas
+                .reject_hot_path_reservation_with_ledger(
+                    kind,
+                    "forbidden-hot-path-reservation",
+                    64,
+                    64,
+                    &mut ledger,
+                )
+                .unwrap_err();
+            assert!(matches!(err, NervaError::AllocationFailed { .. }));
+            assert_eq!(arenas.arena_mut(kind).used(), before);
+        }
+
+        assert_eq!(ledger.hot_path_allocations, 3);
+        assert_eq!(ledger.events.len(), 3);
+        assert_eq!(
+            ledger.event_count(nerva_ledger::LedgerEventKind::Allocation),
+            3
+        );
+        assert!(ledger.require_zero_hot_path_allocations().is_err());
+    }
+
+    #[test]
     fn arena_set_rewinds_if_registry_rejects_block() {
         let mut arenas = StaticArenaSet::new(512, 0, 0);
         let mut registry = BlockRegistry::new([(MemoryTier::Vram, 64)]);
@@ -1088,5 +1526,105 @@ mod tests {
             Some(key)
         );
         assert_eq!(pool.lookup_cached(key), None);
+    }
+
+    #[test]
+    fn kv_residency_planner_prefetches_hot_and_evicts_cold_cached_pages() {
+        let mut arenas = StaticArenaSet::new(0, 0, 1024);
+        let mut registry = BlockRegistry::new([(MemoryTier::Dram, 1024), (MemoryTier::Vram, 1024)]);
+        let mut pool = KvPagePool::preallocate(
+            &mut arenas,
+            &mut registry,
+            3,
+            KvPageSpec::new(0, 0, 16, 128, MemoryTier::Dram, ArenaKind::Host, 64),
+        )
+        .unwrap();
+
+        let hot = pool.allocate_page(0, 16, 10).unwrap();
+        pool.set_next_use(hot.page_index, Some(12)).unwrap();
+
+        let cold_key = KvPrefixKey {
+            hash: [4; 32],
+            group_id: 0,
+        };
+        let cold = pool.allocate_page(16, 16, 1).unwrap();
+        pool.cache_page(cold.page_index, cold_key, 16).unwrap();
+        pool.release_page(cold.page_index, 1).unwrap();
+
+        let plan = KvResidencyPlanner::plan(&pool, &registry, 20, KvResidencyPolicy::new(1, 4, 8))
+            .unwrap();
+
+        assert_eq!(plan.entries.len(), 2);
+        assert!(plan.entries.iter().any(|entry| {
+            entry.page_index == hot.page_index
+                && entry.action == KvResidencyAction::PrefetchToHot
+                && entry.old_tier == MemoryTier::Dram
+                && entry.new_tier == MemoryTier::Vram
+        }));
+        assert!(plan.entries.iter().any(|entry| {
+            entry.page_index == cold.page_index
+                && entry.action == KvResidencyAction::EvictCold
+                && entry.new_tier == MemoryTier::Dram
+        }));
+    }
+
+    #[test]
+    fn kv_residency_plan_applies_tier_changes_to_registry() {
+        let mut arenas = StaticArenaSet::new(512, 0, 0);
+        let mut registry = BlockRegistry::new([(MemoryTier::Vram, 512), (MemoryTier::Dram, 512)]);
+        let mut pool = KvPagePool::preallocate(
+            &mut arenas,
+            &mut registry,
+            1,
+            KvPageSpec::new(0, 0, 16, 128, MemoryTier::Vram, ArenaKind::Device, 64),
+        )
+        .unwrap();
+        let key = KvPrefixKey {
+            hash: [9; 32],
+            group_id: 0,
+        };
+        let page = pool.allocate_page(0, 16, 1).unwrap();
+        pool.cache_page(page.page_index, key, 16).unwrap();
+        pool.release_page(page.page_index, 2).unwrap();
+
+        let plan =
+            KvResidencyPlanner::plan(&pool, &registry, 10, KvResidencyPolicy::new(0, 0, 100))
+                .unwrap();
+        assert_eq!(plan.entries[0].action, KvResidencyAction::DemoteToWarm);
+        plan.apply(&mut registry).unwrap();
+
+        let block = registry.block(page.block_id).unwrap();
+        assert_eq!(block.tier, MemoryTier::Dram);
+        assert_eq!(block.state, ResidencyState::Draining);
+    }
+
+    #[test]
+    fn kv_residency_plan_records_ledger_decisions() {
+        let mut arenas = StaticArenaSet::new(0, 0, 512);
+        let mut registry = BlockRegistry::new([(MemoryTier::Dram, 512), (MemoryTier::Vram, 512)]);
+        let mut pool = KvPagePool::preallocate(
+            &mut arenas,
+            &mut registry,
+            1,
+            KvPageSpec::new(0, 0, 16, 128, MemoryTier::Dram, ArenaKind::Host, 64),
+        )
+        .unwrap();
+        let page = pool.allocate_page(0, 16, 5).unwrap();
+        pool.set_next_use(page.page_index, Some(6)).unwrap();
+
+        let plan = KvResidencyPlanner::plan(&pool, &registry, 5, KvResidencyPolicy::new(1, 2, 100))
+            .unwrap();
+        let mut ledger = TokenLedger::new(5);
+        plan.record_to_ledger(&mut ledger);
+
+        assert_eq!(ledger.residency_decisions.len(), 1);
+        let decision = &ledger.residency_decisions[0];
+        assert_eq!(decision.block_id, page.block_id);
+        assert_eq!(decision.old_tier, MemoryTier::Dram);
+        assert_eq!(decision.new_tier, MemoryTier::Vram);
+        assert_eq!(
+            decision.reason,
+            "KV page next use is within prefetch window"
+        );
     }
 }

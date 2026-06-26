@@ -164,6 +164,19 @@ pub struct DeviceTokenRef {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct DeviceTokenInput {
+    pub token: TokenId,
+    pub token_ref: DeviceTokenRef,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum TokenInputSource {
+    Seed,
+    DeviceRing(DeviceTokenRef),
+    HostObservation,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct DeviceTokenSlot {
     pub request_id: Option<RequestId>,
     pub sequence_id: Option<SequenceId>,
@@ -251,7 +264,18 @@ impl DeviceTokenRing {
         sequence_id: SequenceId,
         previous_token_index: u64,
     ) -> Result<TokenId> {
-        let slot = &self.slots[self.slot_index(previous_token_index)];
+        self.consume_device_input_ref(request_id, sequence_id, previous_token_index)
+            .map(|input| input.token)
+    }
+
+    pub fn consume_device_input_ref(
+        &self,
+        request_id: RequestId,
+        sequence_id: SequenceId,
+        previous_token_index: u64,
+    ) -> Result<DeviceTokenInput> {
+        let slot_index = self.slot_index(previous_token_index);
+        let slot = &self.slots[slot_index];
         if slot.request_id != Some(request_id)
             || slot.sequence_id != Some(sequence_id)
             || slot.token_index != previous_token_index
@@ -262,9 +286,17 @@ impl DeviceTokenRing {
                 reason: "device token ring read was stale or incomplete".to_string(),
             });
         }
-        slot.token.ok_or_else(|| NervaError::ResidencyViolation {
+        let token = slot.token.ok_or_else(|| NervaError::ResidencyViolation {
             block_id: nerva_core::ResidentBlockId(0),
             reason: "device token ring slot has no token".to_string(),
+        })?;
+        Ok(DeviceTokenInput {
+            token,
+            token_ref: DeviceTokenRef {
+                slot_index,
+                token_index: previous_token_index,
+                version: slot.version,
+            },
         })
     }
 
@@ -305,6 +337,7 @@ pub struct SyntheticStepPlan {
     pub sequence_id: SequenceId,
     pub token_index: u64,
     pub input_token: TokenId,
+    pub input_source: TokenInputSource,
     pub layout: GraphLayout,
 }
 
@@ -313,6 +346,8 @@ pub struct StepOutput {
     pub request_id: RequestId,
     pub sequence_id: SequenceId,
     pub token_index: u64,
+    pub input_source: TokenInputSource,
+    pub device_token_ref: DeviceTokenRef,
     pub token: TokenId,
     pub finished: bool,
     pub ledger: TokenLedger,
@@ -354,19 +389,68 @@ impl SyntheticEngine {
         token_index: u64,
         input_token: TokenId,
     ) -> Result<PendingSyntheticStep<'_>> {
-        if token_index > 0 {
-            let device_token =
-                self.token_ring
-                    .consume_device_input(request_id, sequence_id, token_index - 1)?;
-            if device_token != input_token {
+        let input_source = if token_index == 0 {
+            TokenInputSource::Seed
+        } else {
+            let device_input = self.token_ring.consume_device_input_ref(
+                request_id,
+                sequence_id,
+                token_index - 1,
+            )?;
+            if device_input.token != input_token {
                 return Err(NervaError::ResidencyViolation {
                     block_id: nerva_core::ResidentBlockId(0),
                     reason: "next input token does not match prior sampled device token"
                         .to_string(),
                 });
             }
-        }
+            TokenInputSource::DeviceRing(device_input.token_ref)
+        };
 
+        self.launch_with_source(
+            request_id,
+            sequence_id,
+            token_index,
+            input_token,
+            input_source,
+        )
+    }
+
+    pub fn launch_device_next(
+        &mut self,
+        request_id: RequestId,
+        sequence_id: SequenceId,
+        token_index: u64,
+        seed_token: TokenId,
+    ) -> Result<PendingSyntheticStep<'_>> {
+        let (input_token, input_source) = if token_index == 0 {
+            (seed_token, TokenInputSource::Seed)
+        } else {
+            let input = self.token_ring.consume_device_input_ref(
+                request_id,
+                sequence_id,
+                token_index - 1,
+            )?;
+            (input.token, TokenInputSource::DeviceRing(input.token_ref))
+        };
+
+        self.launch_with_source(
+            request_id,
+            sequence_id,
+            token_index,
+            input_token,
+            input_source,
+        )
+    }
+
+    fn launch_with_source(
+        &mut self,
+        request_id: RequestId,
+        sequence_id: SequenceId,
+        token_index: u64,
+        input_token: TokenId,
+        input_source: TokenInputSource,
+    ) -> Result<PendingSyntheticStep<'_>> {
         self.graph_pool.check_before_replay(self.layout)?;
         let transaction_id = TransactionId(self.next_transaction_id);
         self.next_transaction_id = self.next_transaction_id.saturating_add(1);
@@ -379,6 +463,7 @@ impl SyntheticEngine {
                 sequence_id,
                 token_index,
                 input_token,
+                input_source,
                 layout,
             }),
         })
@@ -405,7 +490,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
         self.engine.graph_pool.replay(plan.layout)?;
 
         let token = TokenId(plan.input_token.0.wrapping_add(1));
-        self.engine.token_ring.publish(
+        let device_token_ref = self.engine.token_ring.publish(
             plan.request_id,
             plan.sequence_id,
             plan.token_index,
@@ -419,7 +504,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
         )?;
         let mut ledger = TokenLedger::new(plan.token_index);
         ledger.record(LedgerEvent {
-            kind: LedgerEventKind::KernelLaunch,
+            kind: LedgerEventKind::GraphReplay,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -428,7 +513,7 @@ impl<'engine> PendingSyntheticStep<'engine> {
             label: "synthetic_graph_replay",
         });
         ledger.record(LedgerEvent {
-            kind: LedgerEventKind::KernelLaunch,
+            kind: LedgerEventKind::DeviceActivity,
             block_id: None,
             from_tier: None,
             to_tier: Some(MemoryTier::Vram),
@@ -445,11 +530,22 @@ impl<'engine> PendingSyntheticStep<'engine> {
             latency_ns: 1,
             label: "async_host_token_observation",
         });
+        ledger.record(LedgerEvent {
+            kind: LedgerEventKind::Sync,
+            block_id: None,
+            from_tier: Some(MemoryTier::Vram),
+            to_tier: Some(MemoryTier::PinnedDram),
+            bytes: 0,
+            latency_ns: 1,
+            label: "soft_visibility_host_wait",
+        });
 
         Ok(StepOutput {
             request_id: plan.request_id,
             sequence_id: plan.sequence_id,
             token_index: plan.token_index,
+            input_source: plan.input_source,
+            device_token_ref,
             token: host_visible_token,
             finished: false,
             ledger,
@@ -496,10 +592,23 @@ pub struct SyntheticDecodeSummary {
     pub seed_token: TokenId,
     pub last_token: Option<TokenId>,
     pub graph_replays: u64,
+    pub graph_replay_events: u64,
     pub kernel_events: u64,
+    pub device_events: u64,
     pub copy_events: u64,
+    pub host_wait_events: u64,
+    pub graph_replay_latency_ns: u64,
+    pub device_latency_ns: u64,
+    pub copy_latency_ns: u64,
+    pub host_wait_latency_ns: u64,
     pub total_latency_ns: u64,
     pub hot_path_allocations: u64,
+    pub observed_tokens: u64,
+    pub stale_tokens: u64,
+    pub missing_tokens: u64,
+    pub extra_tokens: u64,
+    pub mismatched_tokens: u64,
+    pub host_causality_edges: u64,
     pub error: Option<&'static str>,
 }
 
@@ -516,17 +625,30 @@ impl SyntheticDecodeSummary {
             SyntheticDecodeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"kernel_events\":{},\"copy_events\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps\":{},\"token_ring_capacity\":{},\"seed_token\":{},\"last_token\":{},\"graph_replays\":{},\"graph_replay_events\":{},\"kernel_events\":{},\"device_events\":{},\"copy_events\":{},\"host_wait_events\":{},\"graph_replay_latency_ns\":{},\"device_latency_ns\":{},\"copy_latency_ns\":{},\"host_wait_latency_ns\":{},\"total_latency_ns\":{},\"hot_path_allocations\":{},\"observed_tokens\":{},\"stale_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"mismatched_tokens\":{},\"host_causality_edges\":{},\"error\":{}}}",
             status,
             self.steps,
             self.token_ring_capacity,
             self.seed_token.0,
             json_opt_token(self.last_token),
             self.graph_replays,
+            self.graph_replay_events,
             self.kernel_events,
+            self.device_events,
             self.copy_events,
+            self.host_wait_events,
+            self.graph_replay_latency_ns,
+            self.device_latency_ns,
+            self.copy_latency_ns,
+            self.host_wait_latency_ns,
             self.total_latency_ns,
             self.hot_path_allocations,
+            self.observed_tokens,
+            self.stale_tokens,
+            self.missing_tokens,
+            self.extra_tokens,
+            self.mismatched_tokens,
+            self.host_causality_edges,
             json_opt_static_str(self.error),
         )
     }
@@ -581,35 +703,87 @@ impl Runtime {
         }
 
         let mut engine = self.synthetic_engine(config.token_ring_capacity)?;
-        let mut input_token = config.seed_token;
         let mut last_token = None;
+        let mut graph_replay_events: u64 = 0;
         let mut kernel_events: u64 = 0;
+        let mut device_events: u64 = 0;
         let mut copy_events: u64 = 0;
+        let mut host_wait_events: u64 = 0;
+        let mut graph_replay_latency_ns: u64 = 0;
+        let mut device_latency_ns: u64 = 0;
+        let mut copy_latency_ns: u64 = 0;
+        let mut host_wait_latency_ns: u64 = 0;
         let mut total_latency_ns: u64 = 0;
         let mut hot_path_allocations: u64 = 0;
+        let mut observed_tokens: u64 = 0;
+        let mut stale_tokens: u64 = 0;
+        let mut extra_tokens: u64 = 0;
+        let mut mismatched_tokens: u64 = 0;
+        let mut host_causality_edges: u64 = 0;
 
         for token_index in 0..config.steps {
             let output = engine
-                .launch(RequestId(1), SequenceId(1), token_index, input_token)?
+                .launch_device_next(RequestId(1), SequenceId(1), token_index, config.seed_token)?
                 .collect()?;
             output.ledger.require_zero_hot_path_allocations()?;
-            kernel_events += output
-                .ledger
-                .events
-                .iter()
-                .filter(|event| event.kind == LedgerEventKind::KernelLaunch)
-                .count() as u64;
-            copy_events += output
-                .ledger
-                .events
-                .iter()
-                .filter(|event| event.kind == LedgerEventKind::Copy)
-                .count() as u64;
+            let token_graph_events = output.ledger.event_count(LedgerEventKind::GraphReplay);
+            let token_device_events = output.ledger.event_count(LedgerEventKind::DeviceActivity);
+            let token_kernel_events = output.ledger.event_count(LedgerEventKind::KernelLaunch)
+                + token_graph_events
+                + token_device_events;
+            let token_copy_events = output.ledger.event_count(LedgerEventKind::Copy);
+            let token_host_wait_events = output.ledger.event_count(LedgerEventKind::Sync);
+
+            graph_replay_events += token_graph_events;
+            kernel_events += token_kernel_events;
+            device_events += token_device_events;
+            copy_events += token_copy_events;
+            host_wait_events += token_host_wait_events;
+            graph_replay_latency_ns = graph_replay_latency_ns
+                .saturating_add(output.ledger.latency_ns_for(LedgerEventKind::GraphReplay));
+            device_latency_ns = device_latency_ns.saturating_add(
+                output
+                    .ledger
+                    .latency_ns_for(LedgerEventKind::DeviceActivity),
+            );
+            copy_latency_ns =
+                copy_latency_ns.saturating_add(output.ledger.latency_ns_for(LedgerEventKind::Copy));
+            host_wait_latency_ns = host_wait_latency_ns
+                .saturating_add(output.ledger.latency_ns_for(LedgerEventKind::Sync));
             total_latency_ns = total_latency_ns.saturating_add(output.ledger.total_latency_ns());
             hot_path_allocations =
                 hot_path_allocations.saturating_add(output.ledger.hot_path_allocations);
-            input_token = output.token;
+            observed_tokens = observed_tokens.saturating_add(1);
+            if output.token_index < token_index {
+                stale_tokens = stale_tokens.saturating_add(1);
+            } else if output.token_index > token_index {
+                extra_tokens = extra_tokens.saturating_add(1);
+            }
+            let expected_token = TokenId(
+                config
+                    .seed_token
+                    .0
+                    .wrapping_add((token_index as u32).wrapping_add(1)),
+            );
+            if output.token != expected_token {
+                mismatched_tokens = mismatched_tokens.saturating_add(1);
+            }
+            if output.input_source == TokenInputSource::HostObservation {
+                host_causality_edges = host_causality_edges.saturating_add(1);
+            }
             last_token = Some(output.token);
+        }
+        let missing_tokens = config.steps.saturating_sub(observed_tokens);
+        if stale_tokens != 0
+            || missing_tokens != 0
+            || extra_tokens != 0
+            || mismatched_tokens != 0
+            || host_causality_edges != 0
+        {
+            return Err(NervaError::ResidencyViolation {
+                block_id: nerva_core::ResidentBlockId(0),
+                reason: "synthetic device token audit failed".to_string(),
+            });
         }
 
         Ok(SyntheticDecodeSummary {
@@ -625,10 +799,23 @@ impl Runtime {
                     max_blocks: 1,
                 })
                 .unwrap_or(0),
+            graph_replay_events,
             kernel_events,
+            device_events,
             copy_events,
+            host_wait_events,
+            graph_replay_latency_ns,
+            device_latency_ns,
+            copy_latency_ns,
+            host_wait_latency_ns,
             total_latency_ns,
             hot_path_allocations,
+            observed_tokens,
+            stale_tokens,
+            missing_tokens,
+            extra_tokens,
+            mismatched_tokens,
+            host_causality_edges,
             error: None,
         })
     }
@@ -705,8 +892,17 @@ mod tests {
         let output = step.collect().unwrap();
 
         assert_eq!(output.token, TokenId(42));
+        assert_eq!(output.input_source, TokenInputSource::Seed);
+        assert_eq!(output.device_token_ref.token_index, 0);
         assert_eq!(output.ledger.hot_path_allocations, 0);
-        assert_eq!(output.ledger.events.len(), 3);
+        assert_eq!(output.ledger.events.len(), 4);
+        assert_eq!(output.ledger.event_count(LedgerEventKind::GraphReplay), 1);
+        assert_eq!(
+            output.ledger.event_count(LedgerEventKind::DeviceActivity),
+            1
+        );
+        assert_eq!(output.ledger.event_count(LedgerEventKind::Copy), 1);
+        assert_eq!(output.ledger.event_count(LedgerEventKind::Sync), 1);
         assert_eq!(
             engine
                 .token_ring()
@@ -744,11 +940,15 @@ mod tests {
         assert!(matches!(err, NervaError::ResidencyViolation { .. }));
 
         let output = engine
-            .launch(RequestId(2), SequenceId(9), 1, TokenId(11))
+            .launch_device_next(RequestId(2), SequenceId(9), 1, TokenId(10))
             .unwrap()
             .collect()
             .unwrap();
         assert_eq!(output.token, TokenId(12));
+        assert!(matches!(
+            output.input_source,
+            TokenInputSource::DeviceRing(DeviceTokenRef { token_index: 0, .. })
+        ));
     }
 
     #[test]
@@ -778,10 +978,25 @@ mod tests {
         assert_eq!(summary.steps, 1024);
         assert_eq!(summary.last_token, Some(TokenId(1025)));
         assert_eq!(summary.graph_replays, 1024);
+        assert_eq!(summary.graph_replay_events, 1024);
         assert_eq!(summary.kernel_events, 2048);
+        assert_eq!(summary.device_events, 1024);
         assert_eq!(summary.copy_events, 1024);
+        assert_eq!(summary.host_wait_events, 1024);
+        assert_eq!(summary.graph_replay_latency_ns, 1024);
+        assert_eq!(summary.device_latency_ns, 3072);
+        assert_eq!(summary.copy_latency_ns, 1024);
+        assert_eq!(summary.host_wait_latency_ns, 1024);
+        assert_eq!(summary.total_latency_ns, 6144);
         assert_eq!(summary.hot_path_allocations, 0);
+        assert_eq!(summary.observed_tokens, 1024);
+        assert_eq!(summary.stale_tokens, 0);
+        assert_eq!(summary.missing_tokens, 0);
+        assert_eq!(summary.extra_tokens, 0);
+        assert_eq!(summary.mismatched_tokens, 0);
+        assert_eq!(summary.host_causality_edges, 0);
         assert!(summary.to_json().contains("\"steps\":1024"));
+        assert!(summary.to_json().contains("\"host_causality_edges\":0"));
     }
 
     #[test]
