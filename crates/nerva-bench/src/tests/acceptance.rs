@@ -15,6 +15,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"topology_snapshot\""));
     assert!(json.contains("\"synthetic_transaction\""));
     assert!(json.contains("\"synthetic_device_token\""));
+    assert!(json.contains("\"token_policy_paths\""));
     assert!(json.contains("\"execution_transaction_planner\""));
     assert!(json.contains("\"memory_fabric_loop\""));
     assert!(json.contains("\"fp16_bf16_precision_block\""));

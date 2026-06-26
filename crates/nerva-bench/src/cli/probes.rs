@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use crate::cli::exit;
 use crate::parse::{parse_optional_u64, parse_optional_usize};
-use crate::probes::{kv, memory_loop, runtime, synthetic, transaction, transport};
+use crate::probes::{kv, memory_loop, runtime, synthetic, token, transaction, transport};
 
 pub(crate) fn dispatch(
     command: Option<&str>,
@@ -15,6 +15,7 @@ pub(crate) fn dispatch(
         Some("ledger") => Some(exit::print_json_result(
             synthetic::run_synthetic_ledger_probe(),
         )),
+        Some("token-policy") => Some(exit::print_json_result(token::run_token_policy_probe())),
         Some("transaction") => Some(exit::print_json_result(transaction::run_transaction_probe())),
         Some("memory-loop") => Some(exit::print_json_result(memory_loop::run_memory_loop_probe())),
         Some("kv") => Some(exit::print_json_result(kv::run_kv_probe())),

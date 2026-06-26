@@ -105,6 +105,36 @@ impl SyntheticEngine {
         )
     }
 
+    pub fn launch_host_policy_next(
+        &mut self,
+        request_id: RequestId,
+        sequence_id: SequenceId,
+        token_index: u64,
+        host_visible_previous_token: TokenId,
+    ) -> Result<PendingSyntheticStep<'_>> {
+        if token_index == 0 {
+            return Err(NervaError::InvalidArgument {
+                reason: "host policy path requires a prior sampled token".to_string(),
+            });
+        }
+        let device_input =
+            self.token_ring
+                .consume_device_input_ref(request_id, sequence_id, token_index - 1)?;
+        if device_input.token != host_visible_previous_token {
+            return Err(NervaError::ResidencyViolation {
+                block_id: ResidentBlockId(0),
+                reason: "host policy token does not match authoritative device token".to_string(),
+            });
+        }
+        self.launch_with_source(
+            request_id,
+            sequence_id,
+            token_index,
+            host_visible_previous_token,
+            TokenInputSource::HostObservation,
+        )
+    }
+
     fn launch_with_source(
         &mut self,
         request_id: RequestId,
@@ -215,6 +245,18 @@ impl<'engine> PendingSyntheticStep<'engine> {
             MetricSource::EstimatedModel,
             "soft_visibility_host_wait",
         );
+        if plan.input_source == TokenInputSource::HostObservation {
+            ledger.record_sync(
+                SyncClass::PolicySync,
+                None,
+                Some(MemoryTier::PinnedDram),
+                Some(MemoryTier::Vram),
+                0,
+                1,
+                MetricSource::EstimatedModel,
+                "host_policy_barrier",
+            );
+        }
 
         Ok(StepOutput {
             request_id: plan.request_id,

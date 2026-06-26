@@ -11,7 +11,7 @@ use crate::{
     },
     parity::run::run_vllm_token_identity_parity,
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
-    probes::{kv, memory_loop, runtime, synthetic, transaction, transport},
+    probes::{kv, memory_loop, runtime, synthetic, token, transaction, transport},
 };
 
 pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
@@ -55,6 +55,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
             synthetic::run_synthetic(steps, ring_capacity)
         }
         "ledger" => synthetic::run_synthetic_ledger_probe(),
+        "token-policy" => token::run_token_policy_probe(),
         "transaction" => transaction::run_transaction_probe(),
         "memory-loop" => memory_loop::run_memory_loop_probe(),
         "block" => nerva_model::reference::smoke::reference_block_smoke()
