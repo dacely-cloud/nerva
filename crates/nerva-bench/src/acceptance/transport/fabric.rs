@@ -1,4 +1,6 @@
+use nerva_runtime::capabilities::snapshot::CapabilityState;
 use nerva_runtime::engine::runtime::Runtime;
+use nerva_runtime::transport::fabric::backend::FabricBackendStatus;
 use nerva_runtime::transport::fabric::summary::FabricTopologyStatus;
 
 use crate::acceptance::report::AcceptanceReport;
@@ -36,6 +38,48 @@ pub(crate) fn push_fabric_topology(report: &mut AcceptanceReport, runtime: &Runt
             summary.gpu_direct_verified,
             summary.degraded_to_pinned_host,
             summary.topology_affinity_known,
+            summary.false_direct_claims,
+        ),
+    );
+}
+
+pub(crate) fn push_fabric_backends(report: &mut AcceptanceReport, runtime: &Runtime) {
+    let summary = runtime.run_fabric_backend_probe();
+    report.push(
+        "fabric_backend_capabilities",
+        matches!(summary.status, FabricBackendStatus::Ok)
+            && summary.passed()
+            && summary.evidence_source == "linux_sysfs_pkg_config"
+            && summary.false_direct_claims == 0
+            && summary.backend_readiness.len() >= 6
+            && summary.kernel_udp_test != CapabilityState::Unsupported
+            && summary.tcp_control_only != CapabilityState::Unsupported,
+        format!(
+            "evidence={} rdma_devices={} rdma_core_loaded={} mlx5_core_loaded={} peer_memory_module={} dpdk_shim_sources_present={} dpdk_pkg_config={:?} dpdk_version={} dpdk_mlx5_pmd_linked={} dpdk_gpudev_linked={} vfio_pci_loaded={} uio_pci_generic_loaded={} igb_uio_loaded={} hugepages_total={} rdma_gpu_direct={:?} rdma_pinned_host={:?} dpdk_udp_gpu={:?} dpdk_udp_pinned_host={:?} verified_direct_backends={} host_staged_backends={} unsupported_backends={} explicit_degradations={} false_direct_claims={}",
+            summary.evidence_source,
+            summary.rdma_devices,
+            summary.rdma_core_loaded,
+            summary.mlx5_core_loaded,
+            summary.peer_memory_module.as_deref().unwrap_or("none"),
+            summary.dpdk_shim_sources_present,
+            summary.dpdk_pkg_config,
+            summary.dpdk_pkg_config_version.as_deref().unwrap_or("none"),
+            summary.dpdk_mlx5_pmd_linked,
+            summary.dpdk_gpudev_linked,
+            summary.vfio_pci_loaded,
+            summary.uio_pci_generic_loaded,
+            summary.igb_uio_loaded,
+            summary
+                .hugepages_total
+                .map_or_else(|| "none".to_string(), |value| value.to_string()),
+            summary.rdma_gpu_direct,
+            summary.rdma_pinned_host,
+            summary.dpdk_udp_gpu,
+            summary.dpdk_udp_pinned_host,
+            summary.verified_direct_backends,
+            summary.host_staged_backends,
+            summary.unsupported_backends,
+            summary.explicit_degradations,
             summary.false_direct_claims,
         ),
     );

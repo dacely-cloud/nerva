@@ -40,6 +40,6 @@
 
 ## Future
 
-- DPDK/RDMA transport with real topology and capability evidence.
+- DPDK/RDMA transport data plane.
 - AMD/HIP backend.
 - Non-Linux host support.

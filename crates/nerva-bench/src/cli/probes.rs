@@ -21,6 +21,9 @@ pub(crate) fn dispatch(
         Some("fabric-topology") => Some(exit::print_json_result(
             transport::run_fabric_topology_probe(),
         )),
+        Some("fabric-backends") => Some(exit::print_json_result(
+            transport::run_fabric_backend_probe(),
+        )),
         Some("transport") => Some(exit::print_json_result(transport::run_transport_probe())),
         Some("transport-matrix") => Some(exit::print_json_result(
             transport::run_transport_matrix_probe(),

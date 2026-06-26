@@ -4,6 +4,7 @@ use nerva_core::types::ownership::ExecutionOwner;
 
 use crate::capabilities::snapshot::CapabilityState;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
+use crate::transport::fabric::backend::FabricBackendStatus;
 use crate::transport::fabric::summary::FabricTopologyStatus;
 use crate::transport::matrix::types::TransportCapabilityMatrixStatus;
 use crate::transport::path::{
@@ -132,6 +133,50 @@ fn fabric_topology_probe_reports_sysfs_affinity_without_false_direct_claims() {
     let json = summary.to_json();
     assert!(json.contains("\"evidence_source\":\"linux_sysfs\""));
     assert!(json.contains("\"rdma_affinity\""));
+    assert!(json.contains("\"false_direct_claims\":0"));
+}
+
+#[test]
+fn fabric_backend_probe_reports_explicit_rdma_dpdk_readiness() {
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let summary = runtime.run_fabric_backend_probe();
+
+    assert_eq!(summary.status, FabricBackendStatus::Ok);
+    assert_eq!(summary.evidence_source, "linux_sysfs_pkg_config");
+    assert!(summary.dpdk_shim_sources_present);
+    assert_eq!(summary.false_direct_claims, 0);
+    assert!(summary.backend_readiness.len() >= 6);
+    assert_ne!(summary.kernel_udp_test, CapabilityState::Unsupported);
+    assert_ne!(summary.tcp_control_only, CapabilityState::Unsupported);
+    assert_eq!(
+        summary.verified_direct_backends,
+        summary
+            .backend_readiness
+            .iter()
+            .filter(|entry| entry.direct_gpu_memory)
+            .count() as u64
+    );
+    assert_eq!(
+        summary.host_staged_backends,
+        summary
+            .backend_readiness
+            .iter()
+            .filter(|entry| entry.pinned_host_required)
+            .count() as u64
+    );
+    assert_eq!(
+        summary.unsupported_backends,
+        summary
+            .backend_readiness
+            .iter()
+            .filter(|entry| entry.capability == CapabilityState::Unsupported)
+            .count() as u64
+    );
+    assert!(summary.passed());
+    let json = summary.to_json();
+    assert!(json.contains("\"evidence_source\":\"linux_sysfs_pkg_config\""));
+    assert!(json.contains("\"backend\":\"rdma_pinned_host\""));
+    assert!(json.contains("\"backend\":\"dpdk_udp_pinned_host\""));
     assert!(json.contains("\"false_direct_claims\":0"));
 }
 
