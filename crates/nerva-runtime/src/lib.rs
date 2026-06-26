@@ -1341,17 +1341,25 @@ pub struct TransportCapabilityMatrixEntry {
     pub capability_result: CapabilityState,
     pub estimated_visible_ns: u64,
     pub effective_payload_bandwidth_bps: u64,
+    pub estimated_cpu_core_ns: u64,
+    pub dram_read_bytes: usize,
+    pub dram_write_bytes: usize,
+    pub pcie_tx_bytes: usize,
+    pub pcie_rx_bytes: usize,
     pub explicit_copy_bytes: usize,
     pub nic_tx_bytes: usize,
     pub nic_rx_bytes: usize,
     pub pageable_copy: bool,
     pub per_token_registration: bool,
+    pub registration_cache_hit: bool,
+    pub queue_depth: u32,
+    pub credit_stall_ns: u64,
 }
 
 impl TransportCapabilityMatrixEntry {
     pub fn to_json(self) -> String {
         format!(
-            "{{\"requested_path\":\"{}\",\"size_bytes\":{},\"mode\":\"{}\",\"source_tier\":\"{}\",\"destination_tier\":\"{}\",\"selected_path\":\"{}\",\"class\":\"{}\",\"capability_result\":\"{}\",\"estimated_visible_ns\":{},\"metric_source\":\"estimated_model\",\"effective_payload_bandwidth_bps\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copy\":{},\"per_token_registration\":{}}}",
+            "{{\"requested_path\":\"{}\",\"size_bytes\":{},\"mode\":\"{}\",\"source_tier\":\"{}\",\"destination_tier\":\"{}\",\"selected_path\":\"{}\",\"class\":\"{}\",\"capability_result\":\"{}\",\"estimated_visible_ns\":{},\"metric_source\":\"estimated_model\",\"effective_payload_bandwidth_bps\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copy\":{},\"per_token_registration\":{},\"registration_cache_hit\":{},\"queue_depth\":{},\"credit_stall_ns\":{}}}",
             self.requested_path.as_str(),
             self.size_bytes,
             self.mode.as_str(),
@@ -1362,11 +1370,19 @@ impl TransportCapabilityMatrixEntry {
             self.capability_result.as_str(),
             self.estimated_visible_ns,
             self.effective_payload_bandwidth_bps,
+            self.estimated_cpu_core_ns,
+            self.dram_read_bytes,
+            self.dram_write_bytes,
+            self.pcie_tx_bytes,
+            self.pcie_rx_bytes,
             self.explicit_copy_bytes,
             self.nic_tx_bytes,
             self.nic_rx_bytes,
             self.pageable_copy,
             self.per_token_registration,
+            self.registration_cache_hit,
+            self.queue_depth,
+            self.credit_stall_ns,
         )
     }
 }
@@ -1393,8 +1409,15 @@ pub struct TransportCapabilityMatrixSummary {
     pub explicit_copy_bytes: usize,
     pub nic_tx_bytes: usize,
     pub nic_rx_bytes: usize,
+    pub estimated_cpu_core_ns: u64,
+    pub dram_read_bytes: usize,
+    pub dram_write_bytes: usize,
+    pub pcie_tx_bytes: usize,
+    pub pcie_rx_bytes: usize,
     pub pageable_copies: u64,
     pub per_token_registrations: u64,
+    pub registration_cache_hits: u64,
+    pub credit_stall_ns: u64,
     pub hot_path_allocations: u64,
     pub error: Option<&'static str>,
 }
@@ -1589,7 +1612,7 @@ impl TransportCapabilityMatrixSummary {
         }
         entries.push(']');
         format!(
-            "{{\"status\":\"{}\",\"sizes\":{},\"entries_count\":{},\"decode_entries\":{},\"prefill_entries\":{},\"gpu_direct_entries\":{},\"host_staged_entries\":{},\"cpu_produced_entries\":{},\"mapped_pinned_entries\":{},\"supported_verified_entries\":{},\"supported_unverified_entries\":{},\"degraded_to_pinned_host_entries\":{},\"unsupported_entries\":{},\"total_estimated_visible_ns\":{},\"p50_estimated_visible_ns\":{},\"p95_estimated_visible_ns\":{},\"p99_estimated_visible_ns\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"hot_path_allocations\":{},\"error\":{},\"entries\":{}}}",
+            "{{\"status\":\"{}\",\"sizes\":{},\"entries_count\":{},\"decode_entries\":{},\"prefill_entries\":{},\"gpu_direct_entries\":{},\"host_staged_entries\":{},\"cpu_produced_entries\":{},\"mapped_pinned_entries\":{},\"supported_verified_entries\":{},\"supported_unverified_entries\":{},\"degraded_to_pinned_host_entries\":{},\"unsupported_entries\":{},\"total_estimated_visible_ns\":{},\"p50_estimated_visible_ns\":{},\"p95_estimated_visible_ns\":{},\"p99_estimated_visible_ns\":{},\"explicit_copy_bytes\":{},\"nic_tx_bytes\":{},\"nic_rx_bytes\":{},\"estimated_cpu_core_ns\":{},\"dram_read_bytes\":{},\"dram_write_bytes\":{},\"pcie_tx_bytes\":{},\"pcie_rx_bytes\":{},\"pageable_copies\":{},\"per_token_registrations\":{},\"registration_cache_hits\":{},\"credit_stall_ns\":{},\"hot_path_allocations\":{},\"error\":{},\"entries\":{}}}",
             status,
             self.sizes,
             self.entries.len(),
@@ -1610,8 +1633,15 @@ impl TransportCapabilityMatrixSummary {
             self.explicit_copy_bytes,
             self.nic_tx_bytes,
             self.nic_rx_bytes,
+            self.estimated_cpu_core_ns,
+            self.dram_read_bytes,
+            self.dram_write_bytes,
+            self.pcie_tx_bytes,
+            self.pcie_rx_bytes,
             self.pageable_copies,
             self.per_token_registrations,
+            self.registration_cache_hits,
+            self.credit_stall_ns,
             self.hot_path_allocations,
             json_opt_static_str(self.error),
             entries,
@@ -1912,6 +1942,7 @@ impl Runtime {
                 let decision = self.plan_transport_path(request)?;
                 let capability_result =
                     transport_matrix_capability_result(requested_path, decision, &capabilities);
+                let resource = transport_resource_estimate(decision);
                 entries.push(TransportCapabilityMatrixEntry {
                     requested_path,
                     size_bytes: bytes,
@@ -1926,11 +1957,19 @@ impl Runtime {
                         decision.request.bytes,
                         decision.estimated_visible_ns,
                     ),
+                    estimated_cpu_core_ns: resource.estimated_cpu_core_ns,
+                    dram_read_bytes: resource.dram_read_bytes,
+                    dram_write_bytes: resource.dram_write_bytes,
+                    pcie_tx_bytes: resource.pcie_tx_bytes,
+                    pcie_rx_bytes: resource.pcie_rx_bytes,
                     explicit_copy_bytes: decision.explicit_copy_bytes,
                     nic_tx_bytes: decision.nic_tx_bytes,
                     nic_rx_bytes: decision.nic_rx_bytes,
                     pageable_copy: decision.pageable_copy,
                     per_token_registration: decision.per_token_registration,
+                    registration_cache_hit: resource.registration_cache_hit,
+                    queue_depth: resource.queue_depth,
+                    credit_stall_ns: resource.credit_stall_ns,
                 });
             }
         }
@@ -3373,11 +3412,24 @@ fn transport_capability_matrix_summary(
     let explicit_copy_bytes = entries.iter().map(|entry| entry.explicit_copy_bytes).sum();
     let nic_tx_bytes = entries.iter().map(|entry| entry.nic_tx_bytes).sum();
     let nic_rx_bytes = entries.iter().map(|entry| entry.nic_rx_bytes).sum();
+    let estimated_cpu_core_ns = entries
+        .iter()
+        .map(|entry| entry.estimated_cpu_core_ns)
+        .sum();
+    let dram_read_bytes = entries.iter().map(|entry| entry.dram_read_bytes).sum();
+    let dram_write_bytes = entries.iter().map(|entry| entry.dram_write_bytes).sum();
+    let pcie_tx_bytes = entries.iter().map(|entry| entry.pcie_tx_bytes).sum();
+    let pcie_rx_bytes = entries.iter().map(|entry| entry.pcie_rx_bytes).sum();
     let pageable_copies = entries.iter().filter(|entry| entry.pageable_copy).count() as u64;
     let per_token_registrations = entries
         .iter()
         .filter(|entry| entry.per_token_registration)
         .count() as u64;
+    let registration_cache_hits = entries
+        .iter()
+        .filter(|entry| entry.registration_cache_hit)
+        .count() as u64;
+    let credit_stall_ns = entries.iter().map(|entry| entry.credit_stall_ns).sum();
 
     TransportCapabilityMatrixSummary {
         status: TransportCapabilityMatrixStatus::Ok,
@@ -3400,8 +3452,15 @@ fn transport_capability_matrix_summary(
         explicit_copy_bytes,
         nic_tx_bytes,
         nic_rx_bytes,
+        estimated_cpu_core_ns,
+        dram_read_bytes,
+        dram_write_bytes,
+        pcie_tx_bytes,
+        pcie_rx_bytes,
         pageable_copies,
         per_token_registrations,
+        registration_cache_hits,
+        credit_stall_ns,
         hot_path_allocations,
         error: None,
     }
@@ -3422,6 +3481,84 @@ fn percentile_estimated_visible_ns(
     let rank = div_ceil_u64(percentile.saturating_mul(values.len() as u64), 100).saturating_sub(1)
         as usize;
     values[rank.min(values.len() - 1)]
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct TransportResourceEstimate {
+    estimated_cpu_core_ns: u64,
+    dram_read_bytes: usize,
+    dram_write_bytes: usize,
+    pcie_tx_bytes: usize,
+    pcie_rx_bytes: usize,
+    registration_cache_hit: bool,
+    queue_depth: u32,
+    credit_stall_ns: u64,
+}
+
+fn transport_resource_estimate(decision: TransportPathDecision) -> TransportResourceEstimate {
+    let bytes = decision.request.bytes;
+    let explicit_half = decision.explicit_copy_bytes / 2;
+    let queue_depth = match decision.request.mode {
+        TransferMode::Decode => 1,
+        TransferMode::Prefill => 4,
+    };
+    let estimated_cpu_core_ns = match (decision.path, decision.request.mode) {
+        (TransportPathKind::TrueGpuDirectRdma, TransferMode::Decode) => 300,
+        (TransportPathKind::TrueGpuDirectRdma, TransferMode::Prefill) => 800,
+        (TransportPathKind::OptimizedPinnedHostBounce, TransferMode::Decode) => 1_000,
+        (TransportPathKind::OptimizedPinnedHostBounce, TransferMode::Prefill) => 2_500,
+        (TransportPathKind::CpuProducedBoundary, TransferMode::Decode) => {
+            decision.estimated_visible_ns / 2
+        }
+        (TransportPathKind::CpuProducedBoundary, TransferMode::Prefill) => {
+            decision.estimated_visible_ns / 3
+        }
+        (TransportPathKind::MappedPinnedHostWrite, TransferMode::Decode) => 800,
+        (TransportPathKind::MappedPinnedHostWrite, TransferMode::Prefill) => 1_800,
+    };
+
+    match decision.path {
+        TransportPathKind::TrueGpuDirectRdma => TransportResourceEstimate {
+            estimated_cpu_core_ns,
+            dram_read_bytes: 0,
+            dram_write_bytes: 0,
+            pcie_tx_bytes: decision.nic_tx_bytes,
+            pcie_rx_bytes: decision.nic_rx_bytes,
+            registration_cache_hit: !decision.per_token_registration,
+            queue_depth,
+            credit_stall_ns: 0,
+        },
+        TransportPathKind::OptimizedPinnedHostBounce => TransportResourceEstimate {
+            estimated_cpu_core_ns,
+            dram_read_bytes: decision.nic_tx_bytes,
+            dram_write_bytes: decision.nic_rx_bytes.saturating_add(explicit_half),
+            pcie_tx_bytes: decision.nic_tx_bytes.saturating_add(explicit_half),
+            pcie_rx_bytes: decision.nic_rx_bytes.saturating_add(explicit_half),
+            registration_cache_hit: !decision.per_token_registration,
+            queue_depth,
+            credit_stall_ns: 0,
+        },
+        TransportPathKind::CpuProducedBoundary => TransportResourceEstimate {
+            estimated_cpu_core_ns,
+            dram_read_bytes: bytes,
+            dram_write_bytes: bytes,
+            pcie_tx_bytes: decision.nic_tx_bytes,
+            pcie_rx_bytes: decision.nic_rx_bytes,
+            registration_cache_hit: !decision.per_token_registration,
+            queue_depth,
+            credit_stall_ns: 0,
+        },
+        TransportPathKind::MappedPinnedHostWrite => TransportResourceEstimate {
+            estimated_cpu_core_ns,
+            dram_read_bytes: decision.nic_tx_bytes,
+            dram_write_bytes: bytes,
+            pcie_tx_bytes: bytes.saturating_add(decision.nic_tx_bytes),
+            pcie_rx_bytes: decision.nic_rx_bytes,
+            registration_cache_hit: !decision.per_token_registration,
+            queue_depth,
+            credit_stall_ns: 0,
+        },
+    }
 }
 
 fn effective_payload_bandwidth_bps(bytes: usize, latency_ns: u64) -> u64 {
@@ -4150,8 +4287,18 @@ mod tests {
         assert_eq!(summary.unsupported_entries, 0);
         assert_eq!(summary.pageable_copies, 0);
         assert_eq!(summary.per_token_registrations, 0);
+        assert_eq!(
+            summary.registration_cache_hits,
+            summary.entries.len() as u64
+        );
+        assert_eq!(summary.credit_stall_ns, 0);
         assert_eq!(summary.hot_path_allocations, 0);
         assert!(summary.explicit_copy_bytes > 0);
+        assert!(summary.estimated_cpu_core_ns > 0);
+        assert!(summary.dram_read_bytes > 0);
+        assert!(summary.dram_write_bytes > 0);
+        assert!(summary.pcie_tx_bytes > 0);
+        assert!(summary.pcie_rx_bytes > 0);
         assert!(summary.total_estimated_visible_ns > 0);
         assert!(summary.p50_estimated_visible_ns > 0);
         assert!(summary.p95_estimated_visible_ns >= summary.p50_estimated_visible_ns);
@@ -4162,6 +4309,13 @@ mod tests {
                 .iter()
                 .all(|entry| entry.effective_payload_bandwidth_bps > 0)
         );
+        assert!(summary.entries.iter().all(|entry| entry.queue_depth > 0));
+        assert!(
+            summary
+                .entries
+                .iter()
+                .all(|entry| entry.registration_cache_hit)
+        );
         let json = summary.to_json();
         assert!(json.contains("\"requested_path\":\"A_GPU_DIRECT_RDMA\""));
         assert!(json.contains("\"size_bytes\":32768"));
@@ -4169,6 +4323,13 @@ mod tests {
         assert!(json.contains("\"metric_source\":\"estimated_model\""));
         assert!(json.contains("\"p95_estimated_visible_ns\""));
         assert!(json.contains("\"effective_payload_bandwidth_bps\""));
+        assert!(json.contains("\"estimated_cpu_core_ns\""));
+        assert!(json.contains("\"dram_read_bytes\""));
+        assert!(json.contains("\"dram_write_bytes\""));
+        assert!(json.contains("\"pcie_tx_bytes\""));
+        assert!(json.contains("\"pcie_rx_bytes\""));
+        assert!(json.contains("\"registration_cache_hits\""));
+        assert!(json.contains("\"credit_stall_ns\""));
     }
 
     #[test]
