@@ -86,6 +86,8 @@ pub struct TopologySnapshot {
     pub block_device_count: usize,
     pub nvme_block_device_count: usize,
     pub rdma_device_count: usize,
+    pub rdma_device_names: Vec<String>,
+    pub rdma_netdev_links: Vec<String>,
     pub iommu_group_count: usize,
     pub iommu_mode: String,
     pub iommu_kernel_args: Option<String>,
@@ -94,7 +96,7 @@ pub struct TopologySnapshot {
 impl TopologySnapshot {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"cpu_online\":{},\"cpu_count\":{},\"numa_node_count\":{},\"pci_device_count\":{},\"pci_root_complex_count\":{},\"pci_bus_count\":{},\"pci_gpu_count\":{},\"pci_network_count\":{},\"pci_nvme_count\":{},\"block_device_count\":{},\"nvme_block_device_count\":{},\"rdma_device_count\":{},\"iommu_group_count\":{},\"iommu_mode\":\"{}\",\"iommu_kernel_args\":{}}}",
+            "{{\"cpu_online\":{},\"cpu_count\":{},\"numa_node_count\":{},\"pci_device_count\":{},\"pci_root_complex_count\":{},\"pci_bus_count\":{},\"pci_gpu_count\":{},\"pci_network_count\":{},\"pci_nvme_count\":{},\"block_device_count\":{},\"nvme_block_device_count\":{},\"rdma_device_count\":{},\"rdma_device_names\":{},\"rdma_netdev_links\":{},\"iommu_group_count\":{},\"iommu_mode\":\"{}\",\"iommu_kernel_args\":{}}}",
             json_opt_string(self.cpu_online.as_deref()),
             self.cpu_count,
             self.numa_node_count,
@@ -107,6 +109,8 @@ impl TopologySnapshot {
             self.block_device_count,
             self.nvme_block_device_count,
             self.rdma_device_count,
+            json_string_array(&self.rdma_device_names),
+            json_string_array(&self.rdma_netdev_links),
             self.iommu_group_count,
             json_escape(&self.iommu_mode),
             json_opt_string(self.iommu_kernel_args.as_deref()),
@@ -3665,6 +3669,8 @@ fn discover_topology_snapshot() -> TopologySnapshot {
         .as_deref()
         .and_then(extract_iommu_kernel_args);
     let iommu_mode = discover_iommu_mode(iommu_group_count, iommu_kernel_args.as_deref());
+    let rdma_device_names = list_entry_names("/sys/class/infiniband");
+    let rdma_netdev_links = rdma_netdev_links("/sys/class/infiniband", &rdma_device_names);
 
     TopologySnapshot {
         cpu_online,
@@ -3678,7 +3684,9 @@ fn discover_topology_snapshot() -> TopologySnapshot {
         pci_nvme_count: pci.nvme,
         block_device_count: count_entries("/sys/block"),
         nvme_block_device_count: count_prefixed_entries("/sys/block", "nvme"),
-        rdma_device_count: count_entries("/sys/class/infiniband"),
+        rdma_device_count: rdma_device_names.len(),
+        rdma_device_names,
+        rdma_netdev_links,
         iommu_group_count,
         iommu_mode,
         iommu_kernel_args,
@@ -3716,6 +3724,21 @@ fn discover_iommu_mode(iommu_group_count: usize, iommu_kernel_args: Option<&str>
 fn has_kernel_arg(args: &str, candidates: &[&str]) -> bool {
     args.split_whitespace()
         .any(|arg| candidates.iter().any(|candidate| arg == *candidate))
+}
+
+fn rdma_netdev_links(root: &str, rdma_device_names: &[String]) -> Vec<String> {
+    let mut links = Vec::new();
+    for rdma in rdma_device_names {
+        let netdev_path = format!("{root}/{rdma}/device/net");
+        let netdevs = list_entry_names(&netdev_path);
+        if netdevs.is_empty() {
+            links.push(format!("{rdma}:"));
+        } else {
+            links.extend(netdevs.into_iter().map(|netdev| format!("{rdma}:{netdev}")));
+        }
+    }
+    links.sort();
+    links
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -3807,6 +3830,18 @@ fn count_prefixed_entries(path: &str, prefix: &str) -> usize {
         .flatten()
         .filter(|entry| entry.file_name().to_string_lossy().starts_with(prefix))
         .count()
+}
+
+fn list_entry_names(path: &str) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(path) else {
+        return Vec::new();
+    };
+    let mut names = entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
 }
 
 fn read_trimmed_first_line(path: &str) -> Option<String> {
@@ -3905,6 +3940,20 @@ fn json_opt_string(value: Option<&str>) -> String {
         || "null".to_string(),
         |value| format!("\"{}\"", json_escape(value)),
     )
+}
+
+fn json_string_array(values: &[String]) -> String {
+    let mut out = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(&json_escape(value));
+        out.push('"');
+    }
+    out.push(']');
+    out
 }
 
 fn json_opt_static_str(value: Option<&'static str>) -> String {
@@ -4061,7 +4110,9 @@ mod tests {
                 pci_nvme_count: 1,
                 block_device_count: 2,
                 nvme_block_device_count: 1,
-                rdma_device_count: 0,
+                rdma_device_count: 1,
+                rdma_device_names: vec!["mlx5_0".to_string()],
+                rdma_netdev_links: vec!["mlx5_0:enp1s0f0".to_string()],
                 iommu_group_count: 3,
                 iommu_mode: "passthrough_groups_present".to_string(),
                 iommu_kernel_args: Some("intel_iommu=on iommu=pt".to_string()),
@@ -4082,6 +4133,8 @@ mod tests {
         assert!(json.contains("\"cpu_online\":\"0-1\""));
         assert!(json.contains("\"pci_root_complex_count\":1"));
         assert!(json.contains("\"pci_bus_count\":2"));
+        assert!(json.contains("\"rdma_device_names\":[\"mlx5_0\"]"));
+        assert!(json.contains("\"rdma_netdev_links\":[\"mlx5_0:enp1s0f0\"]"));
         assert!(json.contains("\"iommu_mode\":\"passthrough_groups_present\""));
         assert!(json.contains("\"iommu_kernel_args\":\"intel_iommu=on iommu=pt\""));
     }
@@ -4100,12 +4153,16 @@ mod tests {
             assert!(snapshot.pci_bus_count >= snapshot.pci_root_complex_count);
         }
         assert!(snapshot.block_device_count >= snapshot.nvme_block_device_count);
+        assert_eq!(snapshot.rdma_device_count, snapshot.rdma_device_names.len());
+        assert!(snapshot.rdma_netdev_links.len() >= snapshot.rdma_device_names.len());
         assert!(!snapshot.iommu_mode.is_empty());
         let json = snapshot.to_json();
         assert!(json.contains("\"cpu_count\""));
         assert!(json.contains("\"pci_device_count\""));
         assert!(json.contains("\"pci_root_complex_count\""));
         assert!(json.contains("\"pci_bus_count\""));
+        assert!(json.contains("\"rdma_device_names\""));
+        assert!(json.contains("\"rdma_netdev_links\""));
         assert!(json.contains("\"iommu_mode\""));
     }
 
@@ -4117,6 +4174,10 @@ mod tests {
         assert_eq!(parse_pci_class("0x030000"), Some(0x030000));
         assert_eq!(parse_pci_class("010802"), Some(0x010802));
         assert_eq!(parse_pci_class("not-hex"), None);
+        assert_eq!(
+            json_string_array(&["a\"b".to_string(), "c\\d".to_string()]),
+            "[\"a\\\"b\",\"c\\\\d\"]"
+        );
         assert_eq!(
             extract_iommu_kernel_args("root=/dev/sda intel_iommu=on quiet iommu=pt"),
             Some("intel_iommu=on iommu=pt".to_string())
