@@ -3,7 +3,8 @@ use std::process::ExitCode;
 use crate::cli::exit;
 use crate::parse::{parse_optional_u64, parse_optional_usize};
 use crate::probes::{
-    backend, kv, memory_loop, mgpu, phase, queue, runtime, synthetic, token, transaction, transport,
+    backend, compute, kv, memory_loop, mgpu, phase, queue, runtime, synthetic, token, transaction,
+    transport,
 };
 
 pub(crate) fn dispatch(
@@ -30,6 +31,9 @@ pub(crate) fn dispatch(
         Some("phase-handoff") => Some(exit::print_json_result(phase::run_phase_handoff_probe())),
         Some("shared-queue") => Some(exit::print_json_result(queue::run_shared_queue_probe())),
         Some("transaction") => Some(exit::print_json_result(transaction::run_transaction_probe())),
+        Some("compute-near-data") => Some(exit::print_json_result(
+            compute::run_compute_near_data_probe(),
+        )),
         Some("memory-loop") => Some(exit::print_json_result(memory_loop::run_memory_loop_probe())),
         Some("kv") => Some(exit::print_json_result(kv::run_kv_probe())),
         Some("tiered-kv") => Some(exit::print_json_result(kv::run_tiered_kv_attention_probe())),
