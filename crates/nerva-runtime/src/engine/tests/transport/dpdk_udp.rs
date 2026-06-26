@@ -51,6 +51,24 @@ fn dpdk_udp_protocol_rejects_insufficient_sender_retention() {
 }
 
 #[test]
+fn dpdk_udp_protocol_reports_credit_pressure_windows() {
+    let config = DpdkUdpProbeConfig::credit_pressure_decode_activation();
+    let plan = plan_dpdk_udp_protocol(
+        config,
+        CapabilityState::DegradedToPinnedHost,
+        CapabilityState::SupportedUnverified,
+    )
+    .unwrap();
+
+    assert_eq!(plan.chunk_count, 8);
+    assert_eq!(plan.credit_windows, 3);
+    assert_eq!(plan.credit_stalls, 2);
+    assert_eq!(plan.preposted_receives, 8);
+    assert_eq!(plan.nack_ranges, 0);
+    assert_eq!(plan.selective_retransmits, 0);
+}
+
+#[test]
 fn dpdk_udp_probe_reports_pinned_host_fallback_without_hot_allocations() {
     let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
     let summary = runtime

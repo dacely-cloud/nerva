@@ -36,6 +36,15 @@ impl DpdkUdpProbeConfig {
             packet_loss_period: 5,
         }
     }
+
+    pub const fn credit_pressure_decode_activation() -> Self {
+        let mut config = Self::reference_decode_activation();
+        config.request_id = 2;
+        config.sequence_id = 2;
+        config.credit_window_chunks = 3;
+        config.packet_loss_period = 0;
+        config
+    }
 }
 
 pub(crate) fn validate_dpdk_udp_config(config: DpdkUdpProbeConfig) -> Result<()> {

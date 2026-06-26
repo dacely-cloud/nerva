@@ -62,3 +62,41 @@ pub(crate) fn push_dpdk_udp_protocol(report: &mut AcceptanceReport, runtime: &Ru
         Err(err) => report.push("dpdk_udp_activation_protocol", false, format!("{err:?}")),
     }
 }
+
+pub(crate) fn push_dpdk_udp_credit_pressure(report: &mut AcceptanceReport, runtime: &Runtime) {
+    match runtime
+        .run_dpdk_udp_protocol_probe(DpdkUdpProbeConfig::credit_pressure_decode_activation())
+    {
+        Ok(summary) => report.push(
+            "dpdk_udp_credit_pressure",
+            matches!(summary.status, DpdkUdpProtocolStatus::Ok)
+                && summary.selected_path == DpdkUdpMemoryPath::PinnedHostBuffer
+                && summary.passed()
+                && summary.chunks == 8
+                && summary.credit_window_chunks == 3
+                && summary.credit_windows == 3
+                && summary.credit_stalls == 2
+                && summary.nack_ranges == 0
+                && summary.selective_retransmits == 0
+                && summary.preposted_receives == summary.chunks
+                && summary.pageable_copies == 0
+                && summary.per_token_registrations == 0
+                && summary.hot_path_allocations == 0,
+            format!(
+                "chunks={} credit_window={} credit_windows={} credit_stalls={} preposted_receives={} nack_ranges={} retransmits={} fallback_decisions={} pageable_copies={} per_token_registrations={} hot_path_allocations={}",
+                summary.chunks,
+                summary.credit_window_chunks,
+                summary.credit_windows,
+                summary.credit_stalls,
+                summary.preposted_receives,
+                summary.nack_ranges,
+                summary.selective_retransmits,
+                summary.fallback_decisions,
+                summary.pageable_copies,
+                summary.per_token_registrations,
+                summary.hot_path_allocations,
+            ),
+        ),
+        Err(err) => report.push("dpdk_udp_credit_pressure", false, format!("{err:?}")),
+    }
+}

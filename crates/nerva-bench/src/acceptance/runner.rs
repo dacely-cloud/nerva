@@ -55,6 +55,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     transport::fabric::push_fabric_topology(&mut report, &runtime);
     transport::fabric::push_fabric_backends(&mut report, &runtime);
     transport::dpdk_udp::push_dpdk_udp_protocol(&mut report, &runtime);
+    transport::dpdk_udp::push_dpdk_udp_credit_pressure(&mut report, &runtime);
     transport::kernel_udp::push_kernel_udp_baseline(&mut report, &runtime);
     transport::kernel_udp::push_kernel_udp_matrix(&mut report, &runtime);
     transport::measured::push_measured_transport_selector(&mut report, &runtime);
