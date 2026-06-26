@@ -24,6 +24,10 @@ pub(crate) fn resident_weight_execution_acceptance(
         .map_err(|err| format!("resident weight execution run failed: {err:?}"))?;
 
     let passed = hotset.promoted_blocks > 0
+        && hotset.considered_blocks == manifest.entries.len()
+        && hotset.kept_dram_blocks > 0
+        && hotset.budget_limited_blocks > 0
+        && hotset.residency_decisions == hotset.considered_blocks as u64
         && hotset.hot_path_allocations == 0
         && !plan.steps.is_empty()
         && plan.gpu_resident_steps > 0
@@ -39,8 +43,13 @@ pub(crate) fn resident_weight_execution_acceptance(
     Ok((
         passed,
         format!(
-            "promoted_blocks={} plan_steps={} plan_gpu_resident={} plan_gpu_staged={} plan_fallbacks={} plan_block_versions={} run_steps={} run_gpu_resident={} run_gpu_staged={} run_fallbacks={} run_block_versions={} hot_path_allocations={}",
+            "hotset_considered={} promoted_blocks={} kept_dram_blocks={} budget_limited_blocks={} capacity_limited_blocks={} hotset_decisions={} plan_steps={} plan_gpu_resident={} plan_gpu_staged={} plan_fallbacks={} plan_block_versions={} run_steps={} run_gpu_resident={} run_gpu_staged={} run_fallbacks={} run_block_versions={} hot_path_allocations={}",
+            hotset.considered_blocks,
             hotset.promoted_blocks,
+            hotset.kept_dram_blocks,
+            hotset.budget_limited_blocks,
+            hotset.capacity_limited_blocks,
+            hotset.residency_decisions,
             plan.steps.len(),
             plan.gpu_resident_steps,
             plan.gpu_staged_steps,

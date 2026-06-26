@@ -4,6 +4,7 @@ use nerva_core::types::memory::MemoryTier;
 use nerva_core::types::ownership::ExecutionOwner;
 use nerva_ledger::types::decision::{CandidateCost, ResidencyDecision};
 use nerva_ledger::types::metric::MetricSource;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::engine::runtime::Runtime;
 use crate::weights::block::ResidentWeightTable;
@@ -15,27 +16,35 @@ impl Runtime {
         table: &mut ResidentWeightTable,
         max_promote_bytes: usize,
     ) -> Result<ResidentWeightHotsetSummary> {
-        if max_promote_bytes == 0 {
-            return Ok(ResidentWeightHotsetSummary {
-                promoted_blocks: 0,
-                promoted_bytes: 0,
-                dram_used_bytes: table.registry.used_bytes(MemoryTier::Dram),
-                vram_used_bytes: table.registry.used_bytes(MemoryTier::Vram),
-                residency_decisions: 0,
-                first_promoted_tensor: None,
-                last_promoted_tensor: None,
-                hot_path_allocations: table.ledger.hot_path_allocations,
-            });
-        }
-
+        let mut considered_blocks = 0usize;
         let mut promoted_blocks = 0usize;
         let mut promoted_bytes = 0usize;
+        let mut kept_dram_blocks = 0usize;
+        let mut budget_limited_blocks = 0usize;
+        let mut capacity_limited_blocks = 0usize;
+        let mut already_hot_blocks = 0usize;
         let mut first_promoted_tensor = None;
         let mut last_promoted_tensor = None;
+        let mut last_keep_reason = None;
+        let mut hotset_closed = false;
         let decision_start = table.ledger.residency_decisions.len();
 
         for (index, entry) in table.entries.iter_mut().enumerate() {
             if entry.tier == MemoryTier::Vram {
+                already_hot_blocks += 1;
+                continue;
+            }
+            considered_blocks += 1;
+            if hotset_closed {
+                kept_dram_blocks += 1;
+                last_keep_reason = Some("keep weight in DRAM outside bounded hotset prefix");
+                record_keep_dram_decision(
+                    &mut table.ledger,
+                    entry.block_id,
+                    entry.tier,
+                    entry.bytes,
+                    last_keep_reason.unwrap(),
+                );
                 continue;
             }
             let next_promoted_bytes = promoted_bytes.checked_add(entry.bytes).ok_or_else(|| {
@@ -45,7 +54,19 @@ impl Runtime {
                 }
             })?;
             if next_promoted_bytes > max_promote_bytes {
-                break;
+                hotset_closed = true;
+                kept_dram_blocks += 1;
+                budget_limited_blocks += 1;
+                last_keep_reason =
+                    Some("keep weight in DRAM because hotset byte budget is exhausted");
+                record_keep_dram_decision(
+                    &mut table.ledger,
+                    entry.block_id,
+                    entry.tier,
+                    entry.bytes,
+                    last_keep_reason.unwrap(),
+                );
+                continue;
             }
             if table
                 .registry
@@ -53,7 +74,19 @@ impl Runtime {
                 .unwrap_or(0)
                 < entry.bytes
             {
-                break;
+                hotset_closed = true;
+                kept_dram_blocks += 1;
+                capacity_limited_blocks += 1;
+                last_keep_reason =
+                    Some("keep weight in DRAM because VRAM hotset capacity is exhausted");
+                record_keep_dram_decision(
+                    &mut table.ledger,
+                    entry.block_id,
+                    entry.tier,
+                    entry.bytes,
+                    last_keep_reason.unwrap(),
+                );
+                continue;
             }
 
             let allocation = AllocationId(10_000 + index as u64);
@@ -90,14 +123,43 @@ impl Runtime {
         table.ledger.require_zero_hot_path_allocations()?;
 
         Ok(ResidentWeightHotsetSummary {
+            considered_blocks,
             promoted_blocks,
             promoted_bytes,
+            kept_dram_blocks,
+            budget_limited_blocks,
+            capacity_limited_blocks,
+            already_hot_blocks,
             dram_used_bytes: table.registry.used_bytes(MemoryTier::Dram),
             vram_used_bytes: table.registry.used_bytes(MemoryTier::Vram),
             residency_decisions: (table.ledger.residency_decisions.len() - decision_start) as u64,
             first_promoted_tensor,
             last_promoted_tensor,
+            last_keep_reason,
             hot_path_allocations: table.ledger.hot_path_allocations,
         })
     }
+}
+
+fn record_keep_dram_decision(
+    ledger: &mut TokenLedger,
+    block_id: nerva_core::types::id::ResidentBlockId,
+    tier: MemoryTier,
+    bytes: usize,
+    reason: &'static str,
+) {
+    ledger.record_residency_decision(ResidencyDecision {
+        block_id,
+        old_tier: tier,
+        new_tier: tier,
+        executor_selected: ExecutionOwner::Cpu,
+        candidate_costs: vec![
+            CandidateCost::estimated("keep-dram", bytes as u64),
+            CandidateCost::estimated("promote-vram-hotset", bytes as u64 + 1),
+        ],
+        reason,
+        predicted_overlap_ns: 0,
+        actual_visible_ns: Some(bytes as u64),
+        metric_source: MetricSource::EstimatedModel,
+    });
 }
