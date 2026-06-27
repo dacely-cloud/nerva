@@ -8,7 +8,7 @@ use nerva_model::hf::metadata::HfModelMetadata;
 use crate::engine::hf_cuda_decode::descriptors::cuda_weight_strategy;
 use crate::engine::hf_cuda_decode::file_backed::load::ShardBackedWeights;
 use crate::engine::hf_cuda_decode::resident::{
-    cuda_compute_capability, default_hotset_bytes, strategy_bytes,
+    cuda_compute_capability, default_large_file_backed_hotset_bytes, strategy_bytes,
 };
 use crate::engine::hf_cuda_decode::summary::HfCudaResidentWeightSummary;
 use crate::engine::runtime::Runtime;
@@ -56,7 +56,7 @@ pub(super) fn shard_backed_resident_weights(
 ) -> Result<ShardBackedResidentWeights> {
     let compute_capability = compute_capability.or_else(cuda_compute_capability);
     let manifest = &weights.manifest;
-    let hotset_bytes = default_hotset_bytes(manifest.total_weight_bytes);
+    let hotset_bytes = default_large_file_backed_hotset_bytes(manifest.total_weight_bytes);
     let budget = ResidencyBudget::new(hotset_bytes, 0, manifest.total_weight_bytes);
     let mut table = runtime.materialize_hf_weight_manifest_with_budget(manifest, budget)?;
     let hotset = runtime.promote_resident_weight_hotset(&mut table, hotset_bytes)?;
