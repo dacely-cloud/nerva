@@ -67,15 +67,22 @@ fn hf_checkpoint_artifact_result() -> Result<(bool, String), String> {
     );
     let cuda = run_artifact(
         Some("hf-cuda-decode".to_string()),
+        vec![path.clone(), "ids:0,1".to_string(), "2".to_string()],
+    );
+    let cuda_device = run_artifact(
+        Some("hf-cuda-decode-device-only".to_string()),
         vec![path, "ids:0,1".to_string(), "2".to_string()],
     );
     remove_tiny_hf_checkpoint_dir(&dir);
     let cpu = cpu?;
     let cuda = cuda?;
+    let cuda_device = cuda_device?;
     Ok((
-        artifact_has_hf_cpu_fields(&cpu) && artifact_has_hf_cuda_fields(&cuda),
+        artifact_has_hf_cpu_fields(&cpu)
+            && artifact_has_hf_cuda_fields(&cuda)
+            && artifact_has_hf_cuda_device_fields(&cuda_device),
         format!(
-            "cpu_schema={} cpu_command={} cpu_summary={} cuda_schema={} cuda_command={} cuda_summary={} cuda_footprint={} cuda_fits_memory={} cuda_contract={} cuda_host_causality_zero={} cuda_hot_path_zero={} cuda_token_ledgers={} cuda_device_timeline={}",
+            "cpu_schema={} cpu_command={} cpu_summary={} cuda_schema={} cuda_command={} cuda_summary={} cuda_footprint={} cuda_fits_memory={} cuda_contract={} cuda_host_causality_zero={} cuda_hot_path_zero={} cuda_token_ledgers={} cuda_device_timeline={} cuda_device_command={} cuda_device_hash={}",
             cpu.contains("\"artifact_schema\":\"nerva-bench-v1\""),
             cpu.contains("\"command\":\"hf-decode\""),
             cpu.contains("\"context_mode\":\"prompt_prefill_kv_decode\""),
@@ -89,6 +96,8 @@ fn hf_checkpoint_artifact_result() -> Result<(bool, String), String> {
             cuda.contains("\"hot_path_allocations\":0"),
             cuda.contains("\"token_ledgers\":["),
             cuda.contains("\"hf_cuda_sequence_device_timeline\""),
+            cuda_device.contains("\"command\":\"hf-cuda-decode-device-only\""),
+            cuda_device.contains("\"data_hash_available\":true"),
         ),
     ))
 }
@@ -123,6 +132,16 @@ fn artifact_has_hf_cuda_fields(artifact: &str) -> bool {
         && artifact.contains("\"proves_host_wait_not_gpu_idle\":true")
         && artifact.contains("\"token_ledgers\":[")
         && artifact.contains("\"hf_cuda_sequence_device_timeline\"")
+}
+
+fn artifact_has_hf_cuda_device_fields(artifact: &str) -> bool {
+    artifact.contains("\"artifact_schema\":\"nerva-bench-v1\"")
+        && artifact.contains("\"command\":\"hf-cuda-decode-device-only\"")
+        && artifact.contains("\"reference_mode\":\"device_only_unverified\"")
+        && artifact.contains("\"data_hash_available\":true")
+        && !artifact.contains("\"data_hash\":0")
+        && artifact.contains("\"host_causality_edges\":0")
+        && artifact.contains("\"hot_path_allocations\":0")
 }
 
 fn write_tiny_hf_checkpoint_dir(prefix: &str) -> Result<PathBuf, String> {

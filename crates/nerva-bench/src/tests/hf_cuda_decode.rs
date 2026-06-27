@@ -136,8 +136,8 @@ fn hf_cuda_decode_device_only_reports_unverified_reference_mode() {
     assert!(json.contains("\"reference_mode\":\"device_only_unverified\""));
     assert!(json.contains("\"reference_verified\":false"));
     assert!(json.contains("\"expected_tokens\":[]"));
-    assert!(json.contains("\"data_hash\":0"));
-    assert!(json.contains("\"data_hash_available\":false"));
+    assert!(json.contains("\"data_hash_available\":true"));
+    assert!(!json.contains("\"data_hash\":0"));
     assert!(json.contains("\"parity\":false"));
     assert!(json.contains("\"tokens\":["));
     assert!(json.contains("\"host_causality_edges\":0"));

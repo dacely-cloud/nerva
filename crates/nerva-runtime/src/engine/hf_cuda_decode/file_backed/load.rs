@@ -20,6 +20,7 @@ pub(super) struct ShardBackedWeights {
     pub manifest: HfTensorManifest,
     pub shard_plan: SafetensorsShardPlan,
     pub buffers: Vec<ShardBuffer>,
+    pub data_hash: u64,
 }
 
 pub(super) struct ShardBuffer {
@@ -94,13 +95,14 @@ pub(super) fn load_shard_backed_weights(dir: &Path) -> Result<ShardBackedWeights
         .map(|(name, header)| SafetensorsShardHeader::new(name.as_str(), header.as_str()))
         .collect::<Vec<_>>();
     let shard_plan = plan_safetensors_shards_for_manifest(&index_json, &shard_headers, &manifest)?;
-    let buffers = read_required_buffers(dir, &shard_plan)?;
+    let (buffers, data_hash) = read_required_buffers(dir, &shard_plan)?;
     Ok(ShardBackedWeights {
         metadata,
         dtype,
         manifest,
         shard_plan,
         buffers,
+        data_hash,
     })
 }
 
@@ -133,20 +135,25 @@ fn read_required_headers(
         .collect()
 }
 
-fn read_required_buffers(dir: &Path, plan: &SafetensorsShardPlan) -> Result<Vec<ShardBuffer>> {
-    plan.shards
-        .iter()
-        .map(|shard| {
-            let path = dir.join(&shard.file_name);
-            let bytes = std::fs::read(&path).map_err(|err| NervaError::InvalidArgument {
-                reason: format!("failed to read safetensors shard {}: {err}", path.display()),
-            })?;
-            Ok(ShardBuffer {
-                file_name: shard.file_name.clone(),
-                bytes,
-            })
-        })
-        .collect()
+fn read_required_buffers(
+    dir: &Path,
+    plan: &SafetensorsShardPlan,
+) -> Result<(Vec<ShardBuffer>, u64)> {
+    let mut buffers = Vec::with_capacity(plan.shards.len());
+    let mut data_hash = 0xcbf2_9ce4_8422_2325u64;
+    for shard in &plan.shards {
+        let path = dir.join(&shard.file_name);
+        let bytes = std::fs::read(&path).map_err(|err| NervaError::InvalidArgument {
+            reason: format!("failed to read safetensors shard {}: {err}", path.display()),
+        })?;
+        data_hash = hash_bytes(data_hash, shard.file_name.as_bytes());
+        data_hash = hash_bytes(data_hash, &bytes);
+        buffers.push(ShardBuffer {
+            file_name: shard.file_name.clone(),
+            bytes,
+        });
+    }
+    Ok((buffers, data_hash))
 }
 
 fn single_shard_index_json(manifest: &HfTensorManifest) -> String {
@@ -168,4 +175,12 @@ fn single_shard_index_json(manifest: &HfTensorManifest) -> String {
 
 fn json_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }

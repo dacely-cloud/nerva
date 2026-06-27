@@ -90,8 +90,8 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_only(
         shard_plan_entries: weights.shard_plan.entries.len(),
         tensors_loaded: weights.manifest.entries.len(),
         bytes_loaded: weights.manifest.total_weight_bytes,
-        data_hash: 0,
-        data_hash_available: false,
+        data_hash: weights.data_hash,
+        data_hash_available: true,
         summary,
     })
 }
