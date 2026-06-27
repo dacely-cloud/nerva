@@ -5,7 +5,7 @@ use nerva_core::types::id::token::TokenId;
 use nerva_ledger::types::event::LedgerEventKind;
 
 use crate::causal_lm::summary::{HfCausalLmSmokeStatus, HfCausalLmSmokeSummary};
-use crate::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
+use crate::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmLoaded, HfCausalLmModel};
 use crate::common::hash::hash_tokens;
 use crate::common::token::expected_cycle;
 use crate::hf::parser::parse_hf_config_metadata;
@@ -21,6 +21,18 @@ pub fn hf_causal_lm_safetensors_smoke(steps: usize) -> Result<HfCausalLmSmokeSum
         reason: format!("failed to create {}: {err}", dir.display()),
     })?;
     let result = write_fixture(&dir).and_then(|manifest| run_fixture(&dir, manifest, steps));
+    let _ = std::fs::remove_file(dir.join("model.safetensors"));
+    let _ = std::fs::remove_file(dir.join("config.json"));
+    let _ = std::fs::remove_dir(&dir);
+    result
+}
+
+pub fn load_hf_causal_lm_smoke_fixture() -> Result<HfCausalLmLoaded> {
+    let dir = temp_model_dir();
+    std::fs::create_dir_all(&dir).map_err(|err| NervaError::InvalidArgument {
+        reason: format!("failed to create {}: {err}", dir.display()),
+    })?;
+    let result = write_fixture(&dir).and_then(|_| HfCausalLmModel::load_from_hf_dir(&dir));
     let _ = std::fs::remove_file(dir.join("model.safetensors"));
     let _ = std::fs::remove_file(dir.join("config.json"));
     let _ = std::fs::remove_dir(&dir);

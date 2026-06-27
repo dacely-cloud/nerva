@@ -1,4 +1,5 @@
 use nerva_core::types::dtype::DType;
+use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
@@ -37,6 +38,30 @@ impl HfCausalLmModel {
 
     pub fn layer_count(&self) -> usize {
         self.layers.len()
+    }
+
+    pub fn layer(&self, index: usize) -> Option<&PrecisionTransformerBlock> {
+        self.layers.get(index)
+    }
+
+    pub fn embedding_row(&self, token: TokenId) -> Result<&[u16]> {
+        let hidden = self.metadata.hidden_size;
+        let start =
+            (token.0 as usize)
+                .checked_mul(hidden)
+                .ok_or_else(|| NervaError::InvalidArgument {
+                    reason: "HF causal LM embedding row offset overflow".to_string(),
+                })?;
+        let end = start
+            .checked_add(hidden)
+            .ok_or_else(|| NervaError::InvalidArgument {
+                reason: "HF causal LM embedding row end overflow".to_string(),
+            })?;
+        self.embeddings
+            .get(start..end)
+            .ok_or_else(|| NervaError::InvalidArgument {
+                reason: "HF causal LM embedding token is outside vocabulary".to_string(),
+            })
     }
 }
 

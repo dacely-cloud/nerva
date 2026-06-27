@@ -6,6 +6,7 @@ mod correctness;
 mod critical_path;
 mod cuda_block;
 mod graph;
+mod hf_cuda;
 mod hot_path;
 mod kv;
 mod kv_attention;

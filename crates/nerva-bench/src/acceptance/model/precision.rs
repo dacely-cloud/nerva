@@ -107,4 +107,6 @@ pub(crate) fn push_precision_and_cuda_blocks(report: &mut AcceptanceReport) {
             format!("{err:?}"),
         ),
     }
+
+    cuda::hf_layer::push_loaded_hf_layer_forward(report);
 }

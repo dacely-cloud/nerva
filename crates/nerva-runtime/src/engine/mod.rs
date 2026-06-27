@@ -1,5 +1,6 @@
 pub mod compute_near_data;
 pub mod cuda_block;
+pub mod hf_cuda;
 pub mod hot_path;
 pub mod kv_attention;
 pub mod kv_probe;
