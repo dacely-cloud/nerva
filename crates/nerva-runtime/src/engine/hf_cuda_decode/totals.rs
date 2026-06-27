@@ -13,6 +13,9 @@ pub(super) struct CudaDecodeCounters {
     resident_weight_bytes: u64,
     h2d_bytes: u64,
     d2h_bytes: u64,
+    graph_replays: u64,
+    graph_nodes: u64,
+    graph_launches: u64,
     kernel_launches: u64,
     sync_calls: u64,
     host_causality_edges: u64,
@@ -24,6 +27,9 @@ impl CudaDecodeCounters {
         self.resident_weight_bytes += cuda.resident_weight_bytes;
         self.h2d_bytes += cuda.h2d_bytes;
         self.d2h_bytes += cuda.d2h_bytes;
+        self.graph_replays += cuda.graph_replays;
+        self.graph_nodes = self.graph_nodes.max(cuda.graph_nodes);
+        self.graph_launches += cuda.graph_launches;
         self.kernel_launches += cuda.kernel_launches;
         self.sync_calls += cuda.sync_calls;
         self.host_causality_edges += cuda.host_causality_edges;
@@ -75,6 +81,10 @@ pub(super) fn build_summary(
         resident_weight_bytes: counters.resident_weight_bytes,
         h2d_bytes: counters.h2d_bytes,
         d2h_bytes: counters.d2h_bytes,
+        graph_replays: counters.graph_replays,
+        graph_nodes: counters.graph_nodes,
+        graph_launches: counters.graph_launches,
+        graph_replay_events: event_count(&parts.ledgers, LedgerEventKind::GraphReplay),
         kernel_launches: counters.kernel_launches,
         sync_calls: counters.sync_calls,
         host_causality_edges: counters.host_causality_edges,

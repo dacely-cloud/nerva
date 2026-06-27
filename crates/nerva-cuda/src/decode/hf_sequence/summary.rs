@@ -21,6 +21,9 @@ pub struct CudaHfDecodeSequenceSummary {
     pub pinned_host_bytes: u64,
     pub h2d_bytes: u64,
     pub d2h_bytes: u64,
+    pub graph_replays: u64,
+    pub graph_nodes: u64,
+    pub graph_launches: u64,
     pub kernel_launches: u64,
     pub sync_calls: u64,
     pub host_causality_edges: u64,
@@ -31,7 +34,7 @@ pub struct CudaHfDecodeSequenceSummary {
 impl CudaHfDecodeSequenceSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"resident_weight_bytes\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"resident_weight_bytes\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
             self.dtype,
             self.hidden,
@@ -51,6 +54,9 @@ impl CudaHfDecodeSequenceSummary {
             self.pinned_host_bytes,
             self.h2d_bytes,
             self.d2h_bytes,
+            self.graph_replays,
+            self.graph_nodes,
+            self.graph_launches,
             self.kernel_launches,
             self.sync_calls,
             self.host_causality_edges,
@@ -88,6 +94,9 @@ pub(crate) fn empty_summary(
         pinned_host_bytes: 0,
         h2d_bytes: 0,
         d2h_bytes: 0,
+        graph_replays: 0,
+        graph_nodes: 0,
+        graph_launches: 0,
         kernel_launches: 0,
         sync_calls: 0,
         host_causality_edges: 0,

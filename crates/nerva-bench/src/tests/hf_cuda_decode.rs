@@ -17,6 +17,9 @@ fn hf_cuda_decode_cli_loads_checkpoint_dir_and_reports_cuda_ledgers() {
     assert!(json.contains("\"parity\":true"));
     assert!(json.contains("\"ledger_count\":2"));
     assert!(json.contains("\"device_events\":2"));
+    assert!(json.contains("\"graph_replays\":2"));
+    assert!(json.contains("\"graph_launches\":2"));
+    assert!(json.contains("\"graph_replay_events\":2"));
     assert!(json.contains("\"kernel_launches\":2"));
     assert!(json.contains("\"sync_calls\":1"));
     assert!(json.contains("\"host_causality_edges\":0"));

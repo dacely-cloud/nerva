@@ -26,6 +26,9 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         pinned_host_bytes: 180,
         h2d_bytes: 160,
         d2h_bytes: 160,
+        graph_replays: 4,
+        graph_nodes: 1,
+        graph_launches: 4,
         kernel_launches: 4,
         sync_calls: 1,
         host_causality_edges: 0,
@@ -37,6 +40,9 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
     assert!(json.contains("\"status\":\"ok\""));
     assert!(json.contains("\"steps\":4"));
     assert!(json.contains("\"tokens\":[1,2,3,0]"));
+    assert!(json.contains("\"graph_replays\":4"));
+    assert!(json.contains("\"graph_nodes\":1"));
+    assert!(json.contains("\"graph_launches\":4"));
     assert!(json.contains("\"sync_calls\":1"));
     assert!(json.contains("\"host_causality_edges\":0"));
 }
@@ -90,6 +96,9 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
         return;
     }
     assert_eq!(summary.tokens, vec![1, 2, 3, 0]);
+    assert_eq!(summary.graph_replays, 4);
+    assert!(summary.graph_nodes > 0);
+    assert_eq!(summary.graph_launches, 4);
     assert_eq!(summary.kernel_launches, 4);
     assert_eq!(summary.sync_calls, 1);
     assert_eq!(summary.host_causality_edges, 0);

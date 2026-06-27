@@ -25,6 +25,12 @@ pub(super) fn sequence_ledgers(summary: &CudaHfDecodeSequenceSummary) -> Vec<Tok
         }
         record_event(
             &mut ledger,
+            LedgerEventKind::GraphReplay,
+            graph_replay_ns(summary),
+            "hf_cuda_sequence_graph_replay",
+        );
+        record_event(
+            &mut ledger,
             LedgerEventKind::KernelLaunch,
             0,
             "hf_cuda_sequence_kernel",
@@ -125,4 +131,9 @@ fn visible_ns(summary: &CudaHfDecodeSequenceSummary) -> u64 {
     let token_count = summary.tokens.len().max(1) as u64;
     let copy = (summary.h2d_bytes + summary.d2h_bytes) / token_count;
     (summary.resident_weight_bytes / token_count + copy).max(1)
+}
+
+fn graph_replay_ns(summary: &CudaHfDecodeSequenceSummary) -> u64 {
+    let replay_count = summary.graph_replays.max(1);
+    ((summary.graph_launches.max(1) + summary.graph_nodes.max(1)) / replay_count).max(1)
 }

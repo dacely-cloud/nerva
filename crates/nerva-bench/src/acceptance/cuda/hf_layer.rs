@@ -85,11 +85,15 @@ pub(crate) fn push_loaded_hf_seed_decode(report: &mut AcceptanceReport) {
             && summary.device_events == summary.execution_decisions
             && summary.copy_events == 2
             && summary.hard_syncs == 1
+            && summary.graph_replays == summary.steps_requested as u64
+            && summary.graph_launches == summary.steps_requested as u64
+            && summary.graph_replay_events == summary.steps_requested as u64
+            && summary.graph_nodes > 0
             && summary.kernel_launches == summary.steps_requested as u64
             && summary.sync_calls == 1
             && summary.host_causality_edges == 0,
         format!(
-            "status={:?} steps={} tokens={} expected={} parity={} ledger_count={} device_events={} copy_events={} hard_syncs={} execution_decisions={} resident_weight_bytes={} H2D_bytes={} D2H_bytes={} kernel_launches={} sync_calls={} host_causality_edges={} output_hash={} expected_hash={} hot_path_allocations={} error={}",
+            "status={:?} steps={} tokens={} expected={} parity={} ledger_count={} device_events={} copy_events={} hard_syncs={} execution_decisions={} resident_weight_bytes={} H2D_bytes={} D2H_bytes={} graph_replays={} graph_nodes={} graph_launches={} graph_replay_events={} kernel_launches={} sync_calls={} host_causality_edges={} output_hash={} expected_hash={} hot_path_allocations={} error={}",
             summary.status,
             summary.steps_requested,
             summary.tokens.len(),
@@ -103,6 +107,10 @@ pub(crate) fn push_loaded_hf_seed_decode(report: &mut AcceptanceReport) {
             summary.resident_weight_bytes,
             summary.h2d_bytes,
             summary.d2h_bytes,
+            summary.graph_replays,
+            summary.graph_nodes,
+            summary.graph_launches,
+            summary.graph_replay_events,
             summary.kernel_launches,
             summary.sync_calls,
             summary.host_causality_edges,

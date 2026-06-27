@@ -358,6 +358,9 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t pinned_host_bytes;
   uint64_t h2d_bytes;
   uint64_t d2h_bytes;
+  uint64_t graph_replays;
+  uint64_t graph_nodes;
+  uint64_t graph_launches;
   uint64_t kernel_launches;
   uint64_t sync_calls;
   uint64_t host_causality_edges;
