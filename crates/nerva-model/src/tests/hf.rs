@@ -84,6 +84,28 @@ fn parses_tied_word_embedding_config() {
 }
 
 #[test]
+fn parses_default_rope_parameters_object() {
+    let metadata = parse_hf_config_metadata(
+        r#"{
+                "model_type": "qwen2",
+                "hidden_size": 8,
+                "intermediate_size": 16,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 12,
+                "rope_parameters": {
+                    "rope_type": "default",
+                    "rope_theta": 1000000.0
+                }
+            }"#,
+    )
+    .unwrap();
+
+    assert_eq!(metadata.rope_theta, Some(1_000_000.0));
+}
+
+#[test]
 fn rejects_invalid_hf_metadata_shapes_and_dtypes() {
     let bad_heads = parse_hf_config_metadata(
         r#"{
@@ -132,11 +154,24 @@ fn rejects_invalid_hf_metadata_shapes_and_dtypes() {
                 "eos_token_id": [2 "bad"]
             }"#,
     );
+    let unsupported_rope_scaling = parse_hf_config_metadata(
+        r#"{
+                "model_type": "llama",
+                "hidden_size": 4096,
+                "intermediate_size": 11008,
+                "num_hidden_layers": 32,
+                "num_attention_heads": 32,
+                "num_key_value_heads": 8,
+                "vocab_size": 32000,
+                "rope_scaling": {"rope_type": "llama3", "factor": 8.0}
+            }"#,
+    );
 
     assert!(bad_heads.is_err());
     assert!(bad_dtype.is_err());
     assert!(bad_tie_word_embeddings.is_err());
     assert!(bad_eos_array.is_err());
+    assert!(unsupported_rope_scaling.is_err());
 }
 
 #[test]

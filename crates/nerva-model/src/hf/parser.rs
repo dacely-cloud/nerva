@@ -2,8 +2,8 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::json::fields::{
-    optional_bool, optional_f32, optional_first_string, optional_string, optional_u32_or_first,
-    optional_usize, required_usize,
+    optional_bool, optional_f32, optional_first_string, optional_object_f32,
+    optional_object_string, optional_string, optional_u32_or_first, optional_usize, required_usize,
 };
 use crate::hf::architecture::{HfArchitectureKind, architecture_kind_from_str};
 use crate::hf::metadata::HfModelMetadata;
@@ -11,6 +11,7 @@ use crate::hf::validate::validate_hf_metadata;
 
 pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
     let architecture = architecture_from_config(config_json)?;
+    validate_supported_rope_config(config_json)?;
     let hidden_size = required_usize(config_json, "hidden_size")?;
     let num_hidden_layers = required_usize(config_json, "num_hidden_layers")?;
     let num_attention_heads = required_usize(config_json, "num_attention_heads")?;
@@ -19,7 +20,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
     let intermediate_size = required_usize(config_json, "intermediate_size")?;
     let vocab_size = required_usize(config_json, "vocab_size")?;
     let max_position_embeddings = optional_usize(config_json, "max_position_embeddings")?;
-    let rope_theta = optional_f32(config_json, "rope_theta")?;
+    let rope_theta = parse_rope_theta(config_json)?;
     let rms_norm_eps = match optional_f32(config_json, "rms_norm_eps")? {
         Some(value) => Some(value),
         None => optional_f32(config_json, "layer_norm_eps")?,
@@ -57,6 +58,32 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         tie_word_embeddings,
         torch_dtype,
     })
+}
+
+fn parse_rope_theta(config_json: &str) -> Result<Option<f32>> {
+    if let Some(theta) = optional_f32(config_json, "rope_theta")? {
+        return Ok(Some(theta));
+    }
+    if let Some(theta) = optional_object_f32(config_json, "rope_parameters", "rope_theta")? {
+        return Ok(Some(theta));
+    }
+    optional_object_f32(config_json, "rope_scaling", "rope_theta")
+}
+
+fn validate_supported_rope_config(config_json: &str) -> Result<()> {
+    validate_default_rope_object(config_json, "rope_parameters")?;
+    validate_default_rope_object(config_json, "rope_scaling")
+}
+
+fn validate_default_rope_object(config_json: &str, key: &'static str) -> Result<()> {
+    let modern = optional_object_string(config_json, key, "rope_type")?;
+    let legacy = optional_object_string(config_json, key, "type")?;
+    match modern.as_deref().or(legacy.as_deref()) {
+        None | Some("default") => Ok(()),
+        Some(rope_type) => Err(NervaError::InvalidArgument {
+            reason: format!("unsupported HF {key} rope_type {rope_type} for exact runtime path"),
+        }),
+    }
 }
 
 pub(crate) fn architecture_from_config(config_json: &str) -> Result<HfArchitectureKind> {

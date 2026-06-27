@@ -55,6 +55,44 @@ pub(crate) fn optional_f32(config_json: &str, key: &'static str) -> Result<Optio
     Ok(Some(parsed))
 }
 
+pub(crate) fn optional_object_f32(
+    config_json: &str,
+    object_key: &'static str,
+    key: &'static str,
+) -> Result<Option<f32>> {
+    let Some(object_json) = optional_object_json(config_json, object_key)? else {
+        return Ok(None);
+    };
+    optional_f32(object_json, key)
+}
+
+pub(crate) fn optional_object_string(
+    config_json: &str,
+    object_key: &'static str,
+    key: &'static str,
+) -> Result<Option<String>> {
+    let Some(object_json) = optional_object_json(config_json, object_key)? else {
+        return Ok(None);
+    };
+    optional_string(object_json, key)
+}
+
+fn optional_object_json<'a>(config_json: &'a str, key: &'static str) -> Result<Option<&'a str>> {
+    let Some(value) = find_top_level_json_value(config_json, key)? else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value == "null" {
+        return Ok(None);
+    }
+    if !value.starts_with('{') {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be an object"),
+        });
+    }
+    Ok(Some(value))
+}
+
 fn parse_u32_or_first_array_value(value: &str, key: &'static str) -> Result<Option<u32>> {
     let value = value.trim();
     if value == "null" {
