@@ -26,7 +26,7 @@ fn parses_llama_hf_config_metadata() {
     assert_eq!(metadata.architecture, HfArchitectureKind::Llama);
     assert_eq!(
         metadata.block_shape(),
-        TransformerBlockShape::new(4096, 32, 11008)
+        TransformerBlockShape::new_with_kv_heads(4096, 32, 8, 11008)
     );
     assert_eq!(metadata.head_dim(), 128);
     assert_eq!(metadata.kv_groups(), 4);

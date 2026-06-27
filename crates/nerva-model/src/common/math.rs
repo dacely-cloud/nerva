@@ -64,9 +64,12 @@ pub(crate) fn single_token_attention(
 ) {
     let head_dim = shape.head_dim();
     for head in 0..shape.heads {
-        let start = head * head_dim;
-        let end = start + head_dim;
-        output[start..end].copy_from_slice(&v[start..end]);
+        let out_start = head * head_dim;
+        let out_end = out_start + head_dim;
+        let kv_head = shape.kv_head_for_attention_head(head);
+        let value_start = kv_head * head_dim;
+        let value_end = value_start + head_dim;
+        output[out_start..out_end].copy_from_slice(&v[value_start..value_end]);
     }
 }
 

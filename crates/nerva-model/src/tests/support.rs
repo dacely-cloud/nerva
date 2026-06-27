@@ -111,10 +111,11 @@ pub(crate) fn dense_attention_reference(
     for head in 0..shape.heads {
         let head_start = head * head_dim;
         let head_end = head_start + head_dim;
+        let kv_head = shape.kv_head_for_attention_head(head);
         let mut max_score = f32::NEG_INFINITY;
         let mut scores = Vec::with_capacity(token_count);
         for token_index in 0..token_count {
-            let token_start = token_index * shape.hidden + head_start;
+            let token_start = token_index * shape.kv_hidden() + kv_head * head_dim;
             let token_end = token_start + head_dim;
             let score = dot(&query[head_start..head_end], &keys[token_start..token_end]) * scale;
             max_score = max_score.max(score);
@@ -124,7 +125,7 @@ pub(crate) fn dense_attention_reference(
         for (token_index, score) in scores.iter().copied().enumerate() {
             let weight = (score - max_score).exp();
             denom += weight;
-            let token_start = token_index * shape.hidden + head_start;
+            let token_start = token_index * shape.kv_hidden() + kv_head * head_dim;
             let token_end = token_start + head_dim;
             for (out, value) in output[head_start..head_end]
                 .iter_mut()

@@ -45,6 +45,39 @@ fn blockwise_attention_matches_dense_reference_across_tiers() {
 }
 
 #[test]
+fn blockwise_attention_maps_grouped_query_heads_to_compact_kv() {
+    let shape = TransformerBlockShape::new_with_kv_heads(8, 4, 2, 8);
+    let query = [0.5, -0.25, 0.1, 0.8, -0.3, 0.4, 0.9, -0.2];
+    let keys = [
+        0.2, 0.1, -0.4, 0.3, 0.7, -0.5, 0.25, 0.6, -0.1, 0.9, 0.4, -0.8,
+    ];
+    let values = [
+        1.0, -0.5, 0.25, 0.75, -1.0, 0.5, 0.8, -0.2, 0.6, 1.1, -0.4, 0.3,
+    ];
+    let block = [KvAttentionBlock::new(&keys, &values, 3, MemoryTier::Dram)];
+    let mut scratch = BlockwiseAttentionScratch::new(shape).unwrap();
+    let mut output = [0.0; 8];
+    let mut ledger = TokenLedger::new(12);
+
+    exact_blockwise_attention_into(
+        shape,
+        &query,
+        &block,
+        &mut scratch,
+        &mut output,
+        &mut ledger,
+    )
+    .unwrap();
+
+    let expected = dense_attention_reference(shape, &query, &keys, &values, 3);
+    for (actual, expected) in output.iter().zip(expected.iter()) {
+        assert!((actual - expected).abs() < 1e-6);
+    }
+    assert_eq!(ledger.event_count(LedgerEventKind::CpuActivity), 1);
+    assert_eq!(ledger.events[0].bytes, 96);
+}
+
+#[test]
 fn blockwise_attention_rejects_empty_and_malformed_blocks() {
     let shape = TransformerBlockShape::new(2, 1, 2);
     let query = [1.0, 0.0];

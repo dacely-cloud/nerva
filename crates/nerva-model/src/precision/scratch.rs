@@ -45,8 +45,8 @@ impl PrecisionTransformerBlockKvScratch {
             len: 0,
             token: PrecisionTransformerBlockScratch::new(shape)?,
             attention: BlockwiseAttentionScratch::new(shape)?,
-            keys: vec![0.0; capacity_tokens * shape.hidden],
-            values: vec![0.0; capacity_tokens * shape.hidden],
+            keys: vec![0.0; capacity_tokens * shape.kv_hidden()],
+            values: vec![0.0; capacity_tokens * shape.kv_hidden()],
         })
     }
 
@@ -94,8 +94,8 @@ impl PrecisionTransformerBlockScratch {
             attn_norm: vec![0.0; shape.hidden],
             mlp_norm: vec![0.0; shape.hidden],
             q: vec![0.0; shape.hidden],
-            k: vec![0.0; shape.hidden],
-            v: vec![0.0; shape.hidden],
+            k: vec![0.0; shape.kv_hidden()],
+            v: vec![0.0; shape.kv_hidden()],
             attn: vec![0.0; shape.hidden],
             residual: vec![0.0; shape.hidden],
             gate: vec![0.0; shape.intermediate],

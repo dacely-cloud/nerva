@@ -53,7 +53,7 @@ pub(crate) fn record_attention_block_event(
         block_id: None,
         from_tier: Some(block.tier),
         to_tier: Some(block.tier),
-        bytes: block.token_count * shape.hidden * core::mem::size_of::<f32>() * 2,
+        bytes: block.token_count * shape.kv_hidden() * core::mem::size_of::<f32>() * 2,
         latency_ns,
         label,
     });

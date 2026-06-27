@@ -23,8 +23,8 @@ impl ReferenceTransformerBlock {
         require_len("rms_attn_weight", rms_attn_weight.len(), shape.hidden)?;
         require_len("rms_mlp_weight", rms_mlp_weight.len(), shape.hidden)?;
         require_len("w_q", w_q.len(), shape.hidden * shape.hidden)?;
-        require_len("w_k", w_k.len(), shape.hidden * shape.hidden)?;
-        require_len("w_v", w_v.len(), shape.hidden * shape.hidden)?;
+        require_len("w_k", w_k.len(), shape.kv_hidden() * shape.hidden)?;
+        require_len("w_v", w_v.len(), shape.kv_hidden() * shape.hidden)?;
         require_len("w_o", w_o.len(), shape.hidden * shape.hidden)?;
         require_len("w_gate", w_gate.len(), shape.intermediate * shape.hidden)?;
         require_len("w_up", w_up.len(), shape.intermediate * shape.hidden)?;
@@ -56,8 +56,8 @@ impl ReferenceTransformerBlock {
             vec![1.0; shape.hidden],
             vec![1.0; shape.hidden],
             vec![0.0; shape.hidden * shape.hidden],
-            vec![0.0; shape.hidden * shape.hidden],
-            vec![0.0; shape.hidden * shape.hidden],
+            vec![0.0; shape.kv_hidden() * shape.hidden],
+            vec![0.0; shape.kv_hidden() * shape.hidden],
             vec![0.0; shape.hidden * shape.hidden],
             vec![0.0; shape.intermediate * shape.hidden],
             vec![0.0; shape.intermediate * shape.hidden],

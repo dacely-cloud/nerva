@@ -115,3 +115,44 @@ fn precision_block_rejects_scratch_shape_mismatch() {
             .is_err()
     );
 }
+
+#[test]
+fn precision_block_accepts_grouped_query_kv_projection_shapes() {
+    let shape = TransformerBlockShape::new_with_kv_heads(4, 2, 1, 4);
+    let rms = [1.0, 1.0, 1.0, 1.0];
+    let full_identity = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    let compact_kv = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let block = PrecisionTransformerBlock::new_from_f32(
+        DType::F16,
+        shape,
+        &rms,
+        &rms,
+        &full_identity,
+        &compact_kv,
+        &compact_kv,
+        &full_identity,
+        &full_identity,
+        &full_identity,
+        &full_identity,
+        1e-5,
+    )
+    .unwrap();
+    let mut scratch = PrecisionTransformerBlockScratch::new(shape).unwrap();
+    let input = [
+        f32_to_f16_bits(1.0),
+        f32_to_f16_bits(0.0),
+        f32_to_f16_bits(0.0),
+        f32_to_f16_bits(1.0),
+    ];
+    let mut output = [0u16; 4];
+    let mut ledger = TokenLedger::new(0);
+
+    block
+        .forward_into(&input, &mut scratch, &mut output, &mut ledger)
+        .unwrap();
+
+    assert!(output.iter().any(|value| *value != 0));
+    assert_eq!(ledger.hot_path_allocations, 0);
+}

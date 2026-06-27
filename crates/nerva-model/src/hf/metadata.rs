@@ -23,9 +23,10 @@ pub struct HfModelMetadata {
 
 impl HfModelMetadata {
     pub fn block_shape(&self) -> TransformerBlockShape {
-        TransformerBlockShape::new(
+        TransformerBlockShape::new_with_kv_heads(
             self.hidden_size,
             self.num_attention_heads,
+            self.num_key_value_heads,
             self.intermediate_size,
         )
     }

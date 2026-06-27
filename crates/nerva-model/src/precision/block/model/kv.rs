@@ -92,8 +92,8 @@ fn append_kv_from_input(
     input: &[u16],
     scratch: &mut PrecisionTransformerBlockKvScratch,
 ) -> Result<()> {
-    let start = scratch.len() * block.shape.hidden;
-    let end = start + block.shape.hidden;
+    let start = scratch.len() * block.shape.kv_hidden();
+    let end = start + block.shape.kv_hidden();
     decode_vec_into(block.dtype, input, &mut scratch.token.input)?;
     rms_norm_encoded_into(
         block.dtype,
@@ -142,7 +142,7 @@ fn forward_with_visible_kv(
         &scratch.token.attn_norm,
         &mut scratch.token.q,
     )?;
-    let values = visible_tokens * block.shape.hidden;
+    let values = visible_tokens * block.shape.kv_hidden();
     let kv = [KvAttentionBlock::new(
         &scratch.keys[..values],
         &scratch.values[..values],

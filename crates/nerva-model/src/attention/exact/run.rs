@@ -33,11 +33,12 @@ pub fn exact_blockwise_attention_into(
     let mut total_tokens = 0usize;
 
     for block in blocks {
-        let values = block.token_count.checked_mul(shape.hidden).ok_or_else(|| {
-            NervaError::InvalidArgument {
+        let values = block
+            .token_count
+            .checked_mul(shape.kv_hidden())
+            .ok_or_else(|| NervaError::InvalidArgument {
                 reason: "KV attention block token count overflow".to_string(),
-            }
-        })?;
+            })?;
         require_len("KV block keys", block.keys.len(), values)?;
         require_len("KV block values", block.values.len(), values)?;
         if block.token_count == 0 {
@@ -52,12 +53,13 @@ pub fn exact_blockwise_attention_into(
         for head in 0..shape.heads {
             let head_start = head * head_dim;
             let head_end = head_start + head_dim;
+            let kv_head = shape.kv_head_for_attention_head(head);
             scratch.local_output[head_start..head_end].fill(0.0);
             let mut local_m = f32::NEG_INFINITY;
             let mut local_l = 0.0f32;
 
             for token_index in 0..block.token_count {
-                let token_start = token_index * shape.hidden + head_start;
+                let token_start = token_index * shape.kv_hidden() + kv_head * head_dim;
                 let token_end = token_start + head_dim;
                 let score = dot(
                     &query[head_start..head_end],
