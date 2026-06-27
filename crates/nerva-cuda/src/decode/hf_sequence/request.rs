@@ -1,3 +1,5 @@
+use core::ptr;
+
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::ffi::{
     NervaCudaHfDecodeSequenceRequest, NervaCudaHfDecodeSequenceResult, run_hf_decode_sequence_u16,
@@ -49,10 +51,19 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
                 error,
             );
         }
+        let uses_declared_descriptors = self
+            .weight_plan
+            .is_some_and(CudaHfDecodeSequenceWeightPlan::is_declared);
         let ffi_layers = self
             .layers
             .iter()
-            .map(|layer| layer.to_ffi())
+            .map(|layer| {
+                if uses_declared_descriptors {
+                    layer.to_descriptor_layout_ffi()
+                } else {
+                    layer.to_ffi()
+                }
+            })
             .collect::<Vec<_>>();
         let mut tokens = vec![0u32; self.steps];
         let ffi_request = self.to_ffi(ffi_layers.as_ptr(), tokens.as_mut_ptr());
@@ -129,10 +140,10 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             eos_token: self.eos_token.unwrap_or(0),
             rms_eps: self.rms_eps,
             rope_theta: self.rope_theta.unwrap_or(0.0),
-            embeddings: self.embeddings.as_ptr(),
+            embeddings: planned_ptr(self.embeddings, plan),
             layers,
-            final_norm_weight: self.final_norm_weight.as_ptr(),
-            lm_head: self.lm_head.as_ptr(),
+            final_norm_weight: planned_ptr(self.final_norm_weight, plan),
+            lm_head: planned_ptr(self.lm_head, plan),
             planned_weight_blocks: plan.blocks,
             planned_gpu_resident_blocks: plan.gpu_resident_blocks,
             planned_gpu_staged_blocks: plan.gpu_staged_blocks,
@@ -145,5 +156,13 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             output_tokens,
             output_token_capacity: self.steps as u32,
         }
+    }
+}
+
+fn planned_ptr(slice: &[u16], plan: CudaHfDecodeSequenceWeightPlan) -> *const u16 {
+    if plan.is_declared() {
+        ptr::null()
+    } else {
+        slice.as_ptr()
     }
 }

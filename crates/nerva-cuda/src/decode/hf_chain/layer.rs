@@ -60,6 +60,24 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
         }
     }
 
+    pub(crate) fn to_descriptor_layout_ffi(&self) -> NervaCudaHfDecodeChainLayer {
+        NervaCudaHfDecodeChainLayer {
+            rms_attn_weight: ptr::null(),
+            rms_mlp_weight: ptr::null(),
+            w_q: ptr::null(),
+            w_k: ptr::null(),
+            w_v: ptr::null(),
+            w_o: ptr::null(),
+            q_bias: optional_ptr(self.q_bias),
+            k_bias: optional_ptr(self.k_bias),
+            v_bias: optional_ptr(self.v_bias),
+            o_bias: optional_ptr(self.o_bias),
+            w_gate: ptr::null(),
+            w_up: ptr::null(),
+            w_down: ptr::null(),
+        }
+    }
+
     fn required_lengths(
         &self,
         hidden: usize,
