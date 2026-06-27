@@ -1,5 +1,6 @@
 use crate::{
     acceptance::runner::run_acceptance_probe,
+    artifact::model,
     cli::model::precision::precision_model_pair_json,
     model_io::{
         config::{run_layout_probe, run_manifest_probe, run_metadata_probe},
@@ -18,6 +19,10 @@ use crate::{
 };
 
 pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<String, String> {
+    if let Some(result) = model::run_model_artifact(command, args) {
+        return result;
+    }
+
     match command {
         "smoke" => Ok(nerva_runtime::capabilities::discovery::cuda_smoke().to_json()),
         "cuda-backend" => {

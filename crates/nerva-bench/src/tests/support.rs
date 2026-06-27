@@ -51,3 +51,36 @@ pub(crate) fn write_safetensors_header(path: &Path, header: &str, payload_bytes:
     bytes.resize(8 + header.len() + payload_bytes, 0);
     std::fs::write(path, bytes).unwrap();
 }
+
+pub(crate) fn write_tiny_hf_checkpoint_dir(prefix: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = r#"{
+            "model_type": "llama",
+            "hidden_size": 2,
+            "intermediate_size": 2,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "vocab_size": 4,
+            "torch_dtype": "float16"
+        }"#;
+    std::fs::write(dir.join("config.json"), config).unwrap();
+    let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config).unwrap();
+    let layout = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata).unwrap();
+    let manifest = nerva_model::weights::manifest::build_hf_tensor_manifest(&layout).unwrap();
+    let header = synthetic_header_for_entries(manifest.architecture, &manifest.entries);
+    write_safetensors_header(
+        &dir.join("model.safetensors"),
+        &header,
+        manifest.total_weight_bytes,
+    );
+    dir
+}
+
+pub(crate) fn remove_tiny_hf_checkpoint_dir(dir: &std::path::Path) {
+    let _ = std::fs::remove_file(dir.join("tokenizer.json"));
+    let _ = std::fs::remove_file(dir.join("model.safetensors"));
+    let _ = std::fs::remove_file(dir.join("config.json"));
+    let _ = std::fs::remove_dir(dir);
+}
