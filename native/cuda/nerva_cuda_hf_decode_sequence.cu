@@ -634,6 +634,47 @@ __global__ void hf_layer_finish_kernel(
   f32_slice_to_encoded(s.down, arena + output_offset, hidden, dtype);
 }
 
+__global__ void hf_layer_finish_next_attn_norm_encode_kernel(
+    uint16_t *arena, uint64_t output_offset, SequenceLayerLayout next_layout,
+    uint32_t dtype, uint32_t hidden, uint32_t attention_hidden,
+    uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, float rms_eps, float *scratch,
+    uint16_t *projection_input) {
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return;
+  }
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    const float value = s.down[index] + s.residual[index];
+    s.input[index] = value;
+    arena[output_offset + index] = f32_to_encoded(value, dtype);
+  }
+  __syncthreads();
+  rms_norm(s.input, arena + next_layout.rms_attn, hidden, dtype, rms_eps,
+           s.attn_norm);
+  f32_slice_to_encoded(s.attn_norm, projection_input, hidden, dtype);
+}
+
+__global__ void hf_layer_finish_final_norm_encode_kernel(
+    uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float rms_eps, float *scratch, uint16_t *projection_input) {
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return;
+  }
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    s.input[index] = s.down[index] + s.residual[index];
+  }
+  __syncthreads();
+  rms_norm(s.input, arena + arena_layout.final_norm, hidden, dtype, rms_eps,
+           s.attn_norm);
+  f32_slice_to_encoded(s.attn_norm, projection_input, hidden, dtype);
+}
+
 __global__ void hf_final_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint64_t input_offset,
     uint32_t dtype, uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
@@ -1403,18 +1444,20 @@ cudaError_t launch_cublas_layer_session_step(
       session->intermediate);
   const PackedProjectionShape packed_shape = packed_projection_shape(
       session->hidden, attention_hidden, kv_hidden, session->intermediate);
-  for (uint32_t layer_index = 0;
-       err == cudaSuccess && layer_index < session->layer_count;
-       ++layer_index) {
-    const SequenceLayerLayout layout = session->host_layouts[layer_index];
+  if (err == cudaSuccess && session->layer_count > 0) {
+    const SequenceLayerLayout first_layout = session->host_layouts[0];
     hf_layer_attn_norm_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
-        session->device_arena, layout, input_offset, session->dtype,
+        session->device_arena, first_layout, input_offset, session->dtype,
         session->hidden, attention_hidden, kv_hidden, session->intermediate,
         session->device_step, max_steps, session->rms_eps,
         session->device_scratch, session->device_projection_input);
     err = cudaGetLastError();
-    if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
+  }
+  for (uint32_t layer_index = 0;
+       err == cudaSuccess && layer_index < session->layer_count;
+       ++layer_index) {
+    const SequenceLayerLayout layout = session->host_layouts[layer_index];
+    err = encoded_row_major_gemv(
           session->cublas,
           session->device_qkv_packed +
               packed_shape.qkv_elements_per_layer * layer_index,
@@ -1464,24 +1507,28 @@ cudaError_t launch_cublas_layer_session_step(
           session->cublas, session->device_arena + layout.w_down,
           session->device_projection_input, session->hidden,
           session->intermediate, session->dtype, scratch.down);
-    if (err == cudaSuccess) {
-      hf_layer_finish_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
-          session->device_arena, output_offset, session->dtype,
+    if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
+      const SequenceLayerLayout next_layout =
+          session->host_layouts[layer_index + 1];
+      hf_layer_finish_next_attn_norm_encode_kernel<<<
+          1, kDecodeThreads, 0, session->stream>>>(
+          session->device_arena, output_offset, next_layout, session->dtype,
           session->hidden, attention_hidden, kv_hidden, session->intermediate,
-          session->device_step, max_steps, session->device_scratch);
+          session->device_step, max_steps, session->rms_eps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    } else if (err == cudaSuccess) {
+      hf_layer_finish_final_norm_encode_kernel<<<
+          1, kDecodeThreads, 0, session->stream>>>(
+          session->device_arena, session->arena_layout, session->dtype,
+          session->hidden, attention_hidden, kv_hidden, session->intermediate,
+          session->device_step, max_steps, session->rms_eps,
+          session->device_scratch, session->device_projection_input);
       err = cudaGetLastError();
     }
     const uint64_t next_input = output_offset;
     output_offset = input_offset;
     input_offset = next_input;
-  }
-  if (err == cudaSuccess) {
-    hf_final_norm_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
-        session->device_arena, session->arena_layout, input_offset,
-        session->dtype, session->hidden, session->device_step, max_steps,
-        session->rms_eps, session->device_scratch,
-        session->device_projection_input);
-    err = cudaGetLastError();
   }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
