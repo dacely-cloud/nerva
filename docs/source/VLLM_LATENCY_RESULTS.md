@@ -72,7 +72,7 @@ Derived output throughput is `2 / 0.0223879596 = 89.33` generated tokens/s.
 The request P99 divided by two output tokens is `11.66 ms/token`. This is a
 derived comparison value, not a per-token vLLM device ledger.
 
-After the CUDA decode QKV-prep, per-head attention, and cuBLASLt gate/up
+After the CUDA decode QKV-prep, per-head attention, and cuBLASLt packed
 projection dispatch changes, the current NERVA Qwen3-8B path measured about
 `97.09` tokens/s, `10.35 ms` token P99, and `328` graph nodes per token on the
 same short decode shape. That beats this recorded vLLM comparison for the fully

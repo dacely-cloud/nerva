@@ -1688,13 +1688,14 @@ cudaError_t launch_cublas_layer_session_step(
        err == cudaSuccess && layer_index < session->layer_count;
        ++layer_index) {
     const SequenceLayerLayout layout = session->host_layouts[layer_index];
-    err = encoded_row_major_gemv(
-          session->cublas,
-          session->device_qkv_packed +
-              packed_shape.qkv_elements_per_layer * layer_index,
-          session->device_projection_input,
-          static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
-          session->dtype, scratch.q);
+    err = encoded_row_major_gemv_lt(
+        session->cublas_lt, session->stream, session->cublas_workspace,
+        kCublasWorkspaceBytes,
+        session->device_qkv_packed +
+            packed_shape.qkv_elements_per_layer * layer_index,
+        session->device_projection_input,
+        static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
+        session->dtype, 0.0f, scratch.q);
     if (err == cudaSuccess) {
       hf_layer_qkv_prepare_kernel<<<qkv_prepare_blocks, kDecodeThreads, 0,
                                     session->stream>>>(
@@ -1716,10 +1717,11 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
-          session->cublas, session->device_arena + layout.w_o,
+      err = encoded_row_major_gemv_lt(
+          session->cublas_lt, session->stream, session->cublas_workspace,
+          kCublasWorkspaceBytes, session->device_arena + layout.w_o,
           session->device_projection_input, session->hidden, attention_hidden,
-          session->dtype, scratch.residual);
+          session->dtype, 0.0f, scratch.residual);
     if (err == cudaSuccess) {
       hf_layer_mlp_norm_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
           session->device_arena, layout, session->dtype, session->hidden,
@@ -1748,8 +1750,9 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_beta(
-          session->cublas, session->device_arena + layout.w_down,
+      err = encoded_row_major_gemv_lt(
+          session->cublas_lt, session->stream, session->cublas_workspace,
+          kCublasWorkspaceBytes, session->device_arena + layout.w_down,
           session->device_projection_input, session->hidden,
           session->intermediate, session->dtype, 1.0f, scratch.residual);
     if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
@@ -1777,10 +1780,12 @@ cudaError_t launch_cublas_layer_session_step(
   }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
-    err = encoded_row_major_gemv(
-        session->cublas, session->device_arena + session->arena_layout.lm_head,
+    err = encoded_row_major_gemv_lt(
+        session->cublas_lt, session->stream, session->cublas_workspace,
+        kCublasWorkspaceBytes,
+        session->device_arena + session->arena_layout.lm_head,
         session->device_projection_input, session->vocab_size, session->hidden,
-        session->dtype, device_logits);
+        session->dtype, 0.0f, device_logits);
   }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
@@ -1848,13 +1853,14 @@ cudaError_t profile_cublas_layer_session_step(
     const SequenceLayerLayout layout = session->host_layouts[layer_index];
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
-          session->cublas,
+      err = encoded_row_major_gemv_lt(
+          session->cublas_lt, session->stream, session->cublas_workspace,
+          kCublasWorkspaceBytes,
           session->device_qkv_packed +
               packed_shape.qkv_elements_per_layer * layer_index,
           session->device_projection_input,
           static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
-          session->dtype, scratch.q);
+          session->dtype, 0.0f, scratch.q);
     if (err == cudaSuccess) err = profile_end(session, &qkv_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
@@ -1882,10 +1888,11 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
-          session->cublas, session->device_arena + layout.w_o,
+      err = encoded_row_major_gemv_lt(
+          session->cublas_lt, session->stream, session->cublas_workspace,
+          kCublasWorkspaceBytes, session->device_arena + layout.w_o,
           session->device_projection_input, session->hidden, attention_hidden,
-          session->dtype, scratch.residual);
+          session->dtype, 0.0f, scratch.residual);
     if (err == cudaSuccess) {
       err = profile_end(session, &attention_output_projection_ns);
     }
@@ -1928,8 +1935,9 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_beta(
-          session->cublas, session->device_arena + layout.w_down,
+      err = encoded_row_major_gemv_lt(
+          session->cublas_lt, session->stream, session->cublas_workspace,
+          kCublasWorkspaceBytes, session->device_arena + layout.w_down,
           session->device_projection_input, session->hidden,
           session->intermediate, session->dtype, 1.0f, scratch.residual);
     if (err == cudaSuccess) err = profile_end(session, &down_projection_ns);
@@ -1963,10 +1971,12 @@ cudaError_t profile_cublas_layer_session_step(
   if (err == cudaSuccess) err = profile_begin(session);
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
-    err = encoded_row_major_gemv(
-        session->cublas, session->device_arena + session->arena_layout.lm_head,
+    err = encoded_row_major_gemv_lt(
+        session->cublas_lt, session->stream, session->cublas_workspace,
+        kCublasWorkspaceBytes,
+        session->device_arena + session->arena_layout.lm_head,
         session->device_projection_input, session->vocab_size, session->hidden,
-        session->dtype, device_logits);
+        session->dtype, 0.0f, device_logits);
   }
   if (err == cudaSuccess) err = profile_end(session, &lm_head_projection_ns);
 
