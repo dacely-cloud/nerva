@@ -23,6 +23,8 @@ pub struct CudaHfDecodeSequenceSummary {
     pub planned_weight_bytes: u64,
     pub planned_gpu_resident_weight_bytes: u64,
     pub planned_gpu_staged_weight_bytes: u64,
+    pub descriptor_gpu_resident_h2d_bytes: u64,
+    pub descriptor_gpu_staged_h2d_bytes: u64,
     pub planned_weight_descriptor_count: u32,
     pub planned_weight_descriptor_hash: u64,
     pub resident_kv_bytes: u64,
@@ -44,7 +46,7 @@ pub struct CudaHfDecodeSequenceSummary {
 impl CudaHfDecodeSequenceSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"planned_gpu_resident_weight_bytes\":{},\"planned_gpu_staged_weight_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"planned_gpu_resident_weight_bytes\":{},\"planned_gpu_staged_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
             self.dtype,
             self.hidden,
@@ -66,6 +68,8 @@ impl CudaHfDecodeSequenceSummary {
             self.planned_weight_bytes,
             self.planned_gpu_resident_weight_bytes,
             self.planned_gpu_staged_weight_bytes,
+            self.descriptor_gpu_resident_h2d_bytes,
+            self.descriptor_gpu_staged_h2d_bytes,
             self.planned_weight_descriptor_count,
             self.planned_weight_descriptor_hash,
             self.resident_kv_bytes,
@@ -116,6 +120,8 @@ pub(crate) fn empty_summary(
         planned_weight_bytes: 0,
         planned_gpu_resident_weight_bytes: 0,
         planned_gpu_staged_weight_bytes: 0,
+        descriptor_gpu_resident_h2d_bytes: 0,
+        descriptor_gpu_staged_h2d_bytes: 0,
         planned_weight_descriptor_count: 0,
         planned_weight_descriptor_hash: 0,
         resident_kv_bytes: 0,

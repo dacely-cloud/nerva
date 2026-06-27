@@ -539,8 +539,7 @@ void copy_layer(uint16_t *arena, const SequenceLayerLayout &layout,
 
 bool copy_weight_descriptors(uint16_t *arena,
                              const NervaCudaHfDecodeSequenceRequest *request,
-                             uint64_t arena_bytes, uint64_t embedding_bytes,
-                             uint64_t scratch_gap_bytes) {
+                             uint64_t arena_bytes) {
   for (uint32_t index = 0; index < request->planned_weight_descriptor_count; ++index) {
     const auto &descriptor = request->planned_weight_descriptors[index];
     if (descriptor.host_source == nullptr ||
@@ -548,18 +547,62 @@ bool copy_weight_descriptors(uint16_t *arena,
         descriptor.bytes % sizeof(uint16_t) != 0) {
       return false;
     }
-    uint64_t destination_bytes = descriptor.offset_bytes;
-    if (destination_bytes >= embedding_bytes) {
-      destination_bytes += scratch_gap_bytes;
-    }
-    if (destination_bytes > arena_bytes ||
-        descriptor.bytes > arena_bytes - destination_bytes) {
+    if (descriptor.offset_bytes > arena_bytes ||
+        descriptor.bytes > arena_bytes - descriptor.offset_bytes) {
       return false;
     }
-    memcpy(arena + destination_bytes / sizeof(uint16_t), descriptor.host_source,
+    memcpy(arena + descriptor.offset_bytes / sizeof(uint16_t), descriptor.host_source,
            descriptor.bytes);
   }
   return true;
+}
+
+bool descriptor_destination_bytes(
+    const NervaCudaHfDecodeSequenceWeightBlock &descriptor,
+    uint64_t arena_bytes, uint64_t embedding_bytes, uint64_t scratch_gap_bytes,
+    uint64_t *destination_bytes) {
+  if (descriptor.offset_bytes % sizeof(uint16_t) != 0 ||
+      descriptor.bytes % sizeof(uint16_t) != 0) {
+    return false;
+  }
+  uint64_t translated = descriptor.offset_bytes;
+  if (translated >= embedding_bytes) {
+    translated += scratch_gap_bytes;
+  }
+  if (translated > arena_bytes || descriptor.bytes > arena_bytes - translated) {
+    return false;
+  }
+  *destination_bytes = translated;
+  return true;
+}
+
+cudaError_t copy_weight_descriptors_to_device(
+    uint16_t *device_arena, const uint16_t *staging,
+    const NervaCudaHfDecodeSequenceRequest *request, uint64_t arena_bytes,
+    uint64_t embedding_bytes, uint64_t scratch_gap_bytes, cudaStream_t stream,
+    NervaCudaHfDecodeSequenceResult *out) {
+  for (uint32_t index = 0; index < request->planned_weight_descriptor_count; ++index) {
+    const auto &descriptor = request->planned_weight_descriptors[index];
+    uint64_t destination_bytes = 0;
+    if (!descriptor_destination_bytes(descriptor, arena_bytes, embedding_bytes,
+                                      scratch_gap_bytes, &destination_bytes)) {
+      return cudaErrorInvalidValue;
+    }
+    cudaError_t err = cudaMemcpyAsync(
+        device_arena + destination_bytes / sizeof(uint16_t),
+        staging + descriptor.offset_bytes / sizeof(uint16_t), descriptor.bytes,
+        cudaMemcpyHostToDevice, stream);
+    if (err != cudaSuccess) {
+      return err;
+    }
+    out->h2d_bytes += descriptor.bytes;
+    if (descriptor.strategy == kWeightStrategyGpuResident) {
+      out->descriptor_gpu_resident_h2d_bytes += descriptor.bytes;
+    } else if (descriptor.strategy == kWeightStrategyGpuStaged) {
+      out->descriptor_gpu_staged_h2d_bytes += descriptor.bytes;
+    }
+  }
+  return cudaSuccess;
 }
 
 uint32_t observed_count(const NervaCudaHfDecodeSequenceRequest *request,
@@ -645,6 +688,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
       static_cast<uint64_t>(context_steps) * sizeof(NervaCudaSyntheticTokenSlot);
   const uint64_t prompt_bytes =
       static_cast<uint64_t>(request->prompt_token_count) * sizeof(uint32_t);
+  const bool descriptor_mode = request->planned_weight_blocks != 0;
+  const uint64_t host_weight_bytes = descriptor_mode ? resident_weight_bytes : arena_bytes;
 
   uint16_t *host_arena = nullptr;
   uint16_t *device_arena = nullptr;
@@ -660,7 +705,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t graph_exec = nullptr;
 
-  err = cudaHostAlloc(reinterpret_cast<void **>(&host_arena), arena_bytes, cudaHostAllocDefault);
+  err = cudaHostAlloc(reinterpret_cast<void **>(&host_arena), host_weight_bytes,
+                      cudaHostAllocDefault);
   if (err == cudaSuccess)
     err = cudaHostAlloc(reinterpret_cast<void **>(&host_slots), slots_bytes,
                         cudaHostAllocDefault);
@@ -688,13 +734,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     return -1;
   }
 
-  memset(host_arena, 0, arena_bytes);
+  memset(host_arena, 0, host_weight_bytes);
   memset(host_slots, 0, slots_bytes);
   const uint64_t embedding_bytes = vocab_size * hidden * sizeof(uint16_t);
   const uint64_t scratch_gap_bytes = hidden * 2 * sizeof(uint16_t);
-  if (request->planned_weight_blocks != 0) {
-    if (!copy_weight_descriptors(host_arena, request, arena_bytes,
-                                 embedding_bytes, scratch_gap_bytes)) {
+  if (descriptor_mode) {
+    if (!copy_weight_descriptors(host_arena, request, host_weight_bytes)) {
       err = cudaErrorInvalidValue;
     }
   } else {
@@ -710,12 +755,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
            vocab_size * hidden * sizeof(uint16_t));
   }
 
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && descriptor_mode) {
+    err = copy_weight_descriptors_to_device(
+        device_arena, host_arena, request, arena_bytes, embedding_bytes,
+        scratch_gap_bytes, stream, out);
+  } else if (err == cudaSuccess) {
     err = cudaMemcpyAsync(device_arena, host_arena, arena_bytes,
                           cudaMemcpyHostToDevice, stream);
+    out->h2d_bytes = arena_bytes;
   }
   if (err == cudaSuccess) {
-    out->h2d_bytes = arena_bytes;
     err = cudaMemcpyAsync(device_layouts, layouts.data(), layout_bytes,
                           cudaMemcpyHostToDevice, stream);
     out->h2d_bytes += layout_bytes;
@@ -803,7 +852,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     out->device_arena_bytes =
         arena_bytes + layout_bytes + scratch_bytes + kv_bytes + prompt_bytes +
         slots_bytes + sizeof(uint32_t);
-    out->pinned_host_bytes = arena_bytes + slots_bytes;
+    out->pinned_host_bytes = host_weight_bytes + slots_bytes;
     out->host_causality_edges = 0;
     out->status = out->observed_tokens > 0 ? 0 : -1;
     for (uint32_t index = 0; out->status == 0 && index < out->observed_tokens; ++index) {

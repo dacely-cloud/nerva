@@ -64,6 +64,8 @@ pub(super) fn loaded_resident_weight_summary(
         cuda_contract_weight_bytes: 0,
         cuda_contract_descriptor_blocks: 0,
         cuda_contract_descriptor_hash: 0,
+        cuda_contract_gpu_resident_h2d_bytes: 0,
+        cuda_contract_gpu_staged_h2d_bytes: 0,
         cuda_contract_matched: false,
         hot_path_allocations: hotset.hot_path_allocations
             + run.hot_path_allocations

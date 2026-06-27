@@ -32,6 +32,8 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         planned_weight_bytes: 128,
         planned_gpu_resident_weight_bytes: 64,
         planned_gpu_staged_weight_bytes: 64,
+        descriptor_gpu_resident_h2d_bytes: 32,
+        descriptor_gpu_staged_h2d_bytes: 96,
         planned_weight_descriptor_count: 12,
         planned_weight_descriptor_hash: 123,
         resident_kv_bytes: 64,
@@ -58,6 +60,8 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
     assert!(json.contains("\"resident_kv_bytes\":64"));
     assert!(json.contains("\"planned_weight_blocks\":12"));
     assert!(json.contains("\"planned_gpu_staged_weight_bytes\":64"));
+    assert!(json.contains("\"descriptor_gpu_resident_H2D_bytes\":32"));
+    assert!(json.contains("\"descriptor_gpu_staged_H2D_bytes\":96"));
     assert!(json.contains("\"planned_weight_descriptor_count\":12"));
     assert!(json.contains("\"kv_tokens\":4"));
     assert!(json.contains("\"graph_nodes\":1"));
@@ -140,6 +144,8 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
     assert_eq!(summary.planned_weight_bytes, summary.resident_weight_bytes);
     assert_eq!(summary.planned_gpu_resident_weight_bytes, 52);
     assert_eq!(summary.planned_gpu_staged_weight_bytes, 48);
+    assert_eq!(summary.descriptor_gpu_resident_h2d_bytes, 52);
+    assert_eq!(summary.descriptor_gpu_staged_h2d_bytes, 48);
     assert_eq!(summary.planned_weight_descriptor_count, 12);
     assert_eq!(
         summary.planned_weight_descriptor_hash,

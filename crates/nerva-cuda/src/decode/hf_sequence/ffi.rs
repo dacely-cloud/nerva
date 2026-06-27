@@ -65,6 +65,8 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) planned_weight_bytes: u64,
     pub(crate) planned_gpu_resident_weight_bytes: u64,
     pub(crate) planned_gpu_staged_weight_bytes: u64,
+    pub(crate) descriptor_gpu_resident_h2d_bytes: u64,
+    pub(crate) descriptor_gpu_staged_h2d_bytes: u64,
     pub(crate) planned_weight_descriptor_count: u32,
     pub(crate) planned_weight_descriptor_hash: u64,
     pub(crate) resident_kv_bytes: u64,

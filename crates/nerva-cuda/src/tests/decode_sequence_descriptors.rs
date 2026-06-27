@@ -80,6 +80,8 @@ fn declared_weight_descriptors_override_legacy_weight_pointers() {
         return;
     }
     assert_eq!(summary.tokens, vec![1, 2, 3, 0]);
+    assert_eq!(summary.descriptor_gpu_resident_h2d_bytes, 52);
+    assert_eq!(summary.descriptor_gpu_staged_h2d_bytes, 48);
     assert_eq!(summary.planned_weight_descriptor_count, 12);
     assert_eq!(
         summary.planned_weight_descriptor_hash,
@@ -155,6 +157,8 @@ fn declared_weight_descriptors_accept_null_legacy_weight_pointers() {
     let return_code = run_hf_decode_sequence_u16(&request, &mut out);
     assert_eq!(return_code, 0);
     assert_eq!(out.status, 0);
+    assert_eq!(out.descriptor_gpu_resident_h2d_bytes, 52);
+    assert_eq!(out.descriptor_gpu_staged_h2d_bytes, 48);
     assert_eq!(output_tokens, [1, 2, 3, 0]);
 }
 

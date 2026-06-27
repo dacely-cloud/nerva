@@ -55,11 +55,15 @@ pub(super) fn attach_cuda_weight_contract(
     summary.cuda_contract_weight_bytes = sequence.planned_weight_bytes;
     summary.cuda_contract_descriptor_blocks = sequence.planned_weight_descriptor_count as u64;
     summary.cuda_contract_descriptor_hash = sequence.planned_weight_descriptor_hash;
+    summary.cuda_contract_gpu_resident_h2d_bytes = sequence.descriptor_gpu_resident_h2d_bytes;
+    summary.cuda_contract_gpu_staged_h2d_bytes = sequence.descriptor_gpu_staged_h2d_bytes;
     summary.cuda_contract_matched = sequence.planned_weight_blocks as u64 == summary.plan_steps
         && sequence.planned_weight_descriptor_count as u64 == summary.plan_descriptor_blocks
         && sequence.planned_weight_descriptor_hash == summary.plan_descriptor_hash
         && sequence.planned_gpu_resident_weight_bytes == summary.plan_gpu_resident_weight_bytes
-        && sequence.planned_gpu_staged_weight_bytes == summary.plan_gpu_staged_weight_bytes;
+        && sequence.planned_gpu_staged_weight_bytes == summary.plan_gpu_staged_weight_bytes
+        && sequence.descriptor_gpu_resident_h2d_bytes == summary.plan_gpu_resident_weight_bytes
+        && sequence.descriptor_gpu_staged_h2d_bytes == summary.plan_gpu_staged_weight_bytes;
     Ok(())
 }
 

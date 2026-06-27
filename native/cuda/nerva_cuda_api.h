@@ -381,6 +381,8 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t planned_weight_bytes;
   uint64_t planned_gpu_resident_weight_bytes;
   uint64_t planned_gpu_staged_weight_bytes;
+  uint64_t descriptor_gpu_resident_h2d_bytes;
+  uint64_t descriptor_gpu_staged_h2d_bytes;
   uint32_t planned_weight_descriptor_count;
   uint64_t planned_weight_descriptor_hash;
   uint64_t resident_kv_bytes;

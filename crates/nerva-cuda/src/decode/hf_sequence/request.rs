@@ -93,6 +93,8 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             planned_weight_bytes: out.planned_weight_bytes,
             planned_gpu_resident_weight_bytes: out.planned_gpu_resident_weight_bytes,
             planned_gpu_staged_weight_bytes: out.planned_gpu_staged_weight_bytes,
+            descriptor_gpu_resident_h2d_bytes: out.descriptor_gpu_resident_h2d_bytes,
+            descriptor_gpu_staged_h2d_bytes: out.descriptor_gpu_staged_h2d_bytes,
             planned_weight_descriptor_count: out.planned_weight_descriptor_count,
             planned_weight_descriptor_hash: out.planned_weight_descriptor_hash,
             resident_kv_bytes: out.resident_kv_bytes,

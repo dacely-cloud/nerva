@@ -39,5 +39,15 @@ fn loaded_hf_cuda_decode_passes_resident_weight_contract_to_native() {
     assert!(summary.resident_weights.cuda_contract_matched);
     assert!(summary.resident_weights.plan_gpu_resident_weight_bytes > 0);
     assert!(summary.resident_weights.plan_gpu_staged_weight_bytes > 0);
+    assert_eq!(
+        summary
+            .resident_weights
+            .cuda_contract_gpu_resident_h2d_bytes,
+        summary.resident_weights.plan_gpu_resident_weight_bytes,
+    );
+    assert_eq!(
+        summary.resident_weights.cuda_contract_gpu_staged_h2d_bytes,
+        summary.resident_weights.plan_gpu_staged_weight_bytes,
+    );
     assert_eq!(summary.resident_weights.plan_fallback_weight_bytes, 0);
 }
