@@ -2,6 +2,7 @@ use std::process::ExitCode;
 
 use nerva_core::types::id::token::TokenId;
 use nerva_model::weights::layout::entry::WeightBlockRole;
+use tokenizers::Tokenizer;
 
 use crate::cli::exit;
 use crate::json::json_escape;
@@ -9,23 +10,64 @@ use crate::parse::{parse_optional_u32, parse_optional_usize};
 
 pub(crate) fn run_hf_causal_lm_decode(args: &mut impl Iterator<Item = String>) -> ExitCode {
     let path = args.next();
-    let seed_token = match parse_optional_u32(args.next(), 0, "seed_token") {
-        Ok(value) => value,
-        Err(reason) => return exit::parse_error(reason),
-    };
+    let input = args.next();
     let steps = match parse_optional_usize(args.next(), 8, "steps") {
         Ok(value) => value,
         Err(reason) => return exit::parse_error(reason),
     };
-    exit::print_json_result(hf_causal_lm_decode_json(path, seed_token, steps))
+    exit::print_json_result(hf_causal_lm_decode_input_json(path, input, steps))
 }
 
-pub(crate) fn hf_causal_lm_decode_json(
+pub(crate) fn hf_causal_lm_decode_input_json(
     path: Option<String>,
-    seed_token: u32,
+    input: Option<String>,
     steps: usize,
 ) -> Result<String, String> {
     let path = path.ok_or_else(|| "hf-decode requires checkpoint_dir".to_string())?;
+    let input = input.unwrap_or_else(|| "0".to_string());
+    if let Ok(seed) = parse_optional_u32(Some(input.clone()), 0, "seed_token") {
+        return hf_causal_lm_decode_with_tokens_json(
+            Some(path),
+            "token_id",
+            vec![seed],
+            None,
+            steps,
+        );
+    }
+    if let Some(rest) = input.strip_prefix("ids:") {
+        return hf_causal_lm_decode_with_tokens_json(
+            Some(path),
+            "token_ids",
+            parse_token_ids(rest)?,
+            None,
+            steps,
+        );
+    }
+    let tokenizer = Tokenizer::from_file(std::path::Path::new(&path).join("tokenizer.json"))
+        .map_err(|err| format!("HF tokenizer load failed: {err}"))?;
+    let encoding = tokenizer
+        .encode(input.as_str(), false)
+        .map_err(|err| format!("HF tokenizer encode failed: {err}"))?;
+    hf_causal_lm_decode_with_tokens_json(
+        Some(path),
+        "tokenizer_json",
+        encoding.get_ids().to_vec(),
+        Some(input),
+        steps,
+    )
+}
+
+fn hf_causal_lm_decode_with_tokens_json(
+    path: Option<String>,
+    input_mode: &'static str,
+    prompt_token_ids: Vec<u32>,
+    prompt_text: Option<String>,
+    steps: usize,
+) -> Result<String, String> {
+    let path = path.ok_or_else(|| "hf-decode requires checkpoint_dir".to_string())?;
+    let seed_token = *prompt_token_ids
+        .last()
+        .ok_or_else(|| "hf-decode requires at least one input token".to_string())?;
     let loaded = nerva_model::causal_lm::types::HfCausalLmModel::load_from_hf_dir(&path)
         .map_err(|err| format!("HF causal LM load failed: {err:?}"))?;
     let summary = loaded.summary;
@@ -56,8 +98,12 @@ pub(crate) fn hf_causal_lm_decode_json(
         .sum();
 
     Ok(format!(
-        "{{\"status\":\"ok\",\"path\":\"{}\",\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"seed_token\":{},\"steps\":{},\"tokens\":{},\"output_hash\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"final_norm_manifest\":{},\"tied_lm_head\":{},\"ledger_count\":{},\"ledger_events\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
+        "{{\"status\":\"ok\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"seed_token\":{},\"steps\":{},\"tokens\":{},\"output_hash\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"final_norm_manifest\":{},\"tied_lm_head\":{},\"ledger_count\":{},\"ledger_events\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
         json_escape(&path),
+        input_mode,
+        json_opt_string(prompt_text.as_deref()),
+        u32s_json(&prompt_token_ids),
+        prompt_token_ids.len(),
         dtype,
         model.layer_count(),
         model.metadata().hidden_size,
@@ -78,6 +124,44 @@ pub(crate) fn hf_causal_lm_decode_json(
         execution_decisions,
         hot_path_allocations,
     ))
+}
+
+fn parse_token_ids(value: &str) -> Result<Vec<u32>, String> {
+    let mut ids = Vec::new();
+    for part in value.split(',') {
+        if part.trim().is_empty() {
+            continue;
+        }
+        ids.push(
+            part.trim()
+                .parse::<u32>()
+                .map_err(|_| "ids prompt must contain unsigned 32-bit integers".to_string())?,
+        );
+    }
+    if ids.is_empty() {
+        Err("ids prompt must contain at least one token".to_string())
+    } else {
+        Ok(ids)
+    }
+}
+
+fn json_opt_string(value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!("\"{}\"", json_escape(value)),
+        None => "null".to_string(),
+    }
+}
+
+fn u32s_json(values: &[u32]) -> String {
+    let mut out = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&value.to_string());
+    }
+    out.push(']');
+    out
 }
 
 fn token_ids_json(tokens: &[TokenId]) -> String {
