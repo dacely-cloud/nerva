@@ -1,5 +1,6 @@
 pub(crate) mod attention;
 pub(crate) mod block;
+pub(crate) mod causal_lm;
 pub(crate) mod contracts;
 pub(crate) mod dispatch;
 pub(crate) mod parity;

@@ -33,6 +33,7 @@ const COMMANDS: &[&str] = &[
     "model [steps]",
     "prompt-model [prompt] [steps]",
     "precision-model [steps]",
+    "hf-decode checkpoint_dir [seed_token] [steps]",
     "vllm-parity vllm_tokens.json [steps]",
     "metadata [config.json]",
     "layout [config.json]",
