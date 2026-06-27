@@ -74,6 +74,7 @@ fn successful_backend_summary() -> CudaBackendContractSummary {
         compute_capability_major: Some(12),
         compute_capability_minor: Some(0),
         device_total_memory_bytes: Some(32 * 1024 * 1024 * 1024),
+        device_free_memory_bytes: Some(31 * 1024 * 1024 * 1024),
         pci_bus_id: Some("0000:65:00.0".to_string()),
         device_count: 1,
         device_ordinal: 0,

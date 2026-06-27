@@ -28,6 +28,7 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
     };
     let cuda_compute_capability = cuda_compute_capability(&cuda_smoke);
     let cuda_device_total_memory_bytes = cuda_smoke.device_total_memory_bytes;
+    let cuda_device_free_memory_bytes = cuda_smoke.device_free_memory_bytes;
     let cuda_pci_bus_id = cuda_smoke.pci_bus_id.clone();
     let topology = discover_topology_snapshot();
     let rdma_core_loaded = module_loaded("ib_core");
@@ -66,6 +67,7 @@ pub fn discover_capabilities() -> CapabilitySnapshot {
         cuda_visible_devices: env::var("CUDA_VISIBLE_DEVICES").ok(),
         cuda_compute_capability,
         cuda_device_total_memory_bytes,
+        cuda_device_free_memory_bytes,
         cuda_pci_bus_id,
         hip,
         hip_visible_devices: env::var("HIP_VISIBLE_DEVICES").ok(),

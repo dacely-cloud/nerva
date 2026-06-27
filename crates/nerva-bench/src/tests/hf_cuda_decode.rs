@@ -22,6 +22,8 @@ fn hf_cuda_decode_cli_loads_checkpoint_dir_and_reports_cuda_ledgers() {
     assert!(json.contains("\"resident_kv_bytes\":"));
     assert!(json.contains("\"cuda_footprint\":{"));
     assert!(json.contains("\"context_tokens\":2"));
+    assert!(json.contains("\"cuda_device_free_memory_bytes\":"));
+    assert!(json.contains("\"cuda_fits_device_free_memory\":true"));
     assert!(json.contains("\"device_arena_bytes\":"));
     assert!(json.contains("\"pinned_host_bytes\":"));
     assert!(json.contains("\"resident_weight_plan\""));
@@ -77,6 +79,7 @@ fn hf_cuda_decode_cli_accepts_token_id_prompt_sequence() {
     assert!(json.contains("\"seed_token\":1"));
     assert!(json.contains("\"kv_tokens\":3"));
     assert!(json.contains("\"context_tokens\":3"));
+    assert!(json.contains("\"cuda_fits_device_free_memory\":true"));
     assert!(json.contains("\"resident_kv_bytes\":"));
     assert!(json.contains("\"hotset_kept_dram_blocks\":"));
     assert!(json.contains("\"cuda_contract_blocks\":12"));

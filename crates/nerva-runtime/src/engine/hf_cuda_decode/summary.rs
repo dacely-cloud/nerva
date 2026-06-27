@@ -88,6 +88,9 @@ pub struct HfCudaSeedDecodeSummary {
     pub execution_decisions: u64,
     pub resident_weight_bytes: u64,
     pub cuda_footprint: CudaHfDecodeSequenceFootprint,
+    pub cuda_device_total_memory_bytes: Option<usize>,
+    pub cuda_device_free_memory_bytes: Option<usize>,
+    pub cuda_fits_device_free_memory: Option<bool>,
     pub resident_kv_bytes: u64,
     pub kv_tokens: u64,
     pub h2d_bytes: u64,
@@ -123,7 +126,7 @@ impl HfCudaSeedDecodeSummary {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"soft_visibility_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"cuda_footprint\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"critical_paths\":{},\"token_ledgers\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"soft_visibility_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"cuda_footprint\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_device_free_memory_bytes\":{},\"cuda_fits_device_free_memory\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"critical_paths\":{},\"token_ledgers\":{},\"error\":{}}}",
             status_json(&self.status),
             self.steps_requested,
             tokens_json(&self.tokens),
@@ -137,6 +140,9 @@ impl HfCudaSeedDecodeSummary {
             self.execution_decisions,
             self.resident_weight_bytes,
             self.cuda_footprint.to_json(),
+            json_opt_usize(self.cuda_device_total_memory_bytes),
+            json_opt_usize(self.cuda_device_free_memory_bytes),
+            json_opt_bool(self.cuda_fits_device_free_memory),
             self.resident_kv_bytes,
             self.kv_tokens,
             self.h2d_bytes,
@@ -172,4 +178,12 @@ fn json_string(value: Option<&str>) -> String {
         Some(value) => format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")),
         None => "null".to_string(),
     }
+}
+
+fn json_opt_usize(value: Option<usize>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
+fn json_opt_bool(value: Option<bool>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
 }

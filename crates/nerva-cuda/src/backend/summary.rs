@@ -10,6 +10,7 @@ pub struct CudaBackendContractSummary {
     pub compute_capability_major: Option<i32>,
     pub compute_capability_minor: Option<i32>,
     pub device_total_memory_bytes: Option<usize>,
+    pub device_free_memory_bytes: Option<usize>,
     pub pci_bus_id: Option<String>,
     pub device_count: i32,
     pub device_ordinal: i32,
@@ -41,7 +42,7 @@ impl CudaBackendContractSummary {
             SmokeStatus::Failed => "failed",
         };
         format!(
-            "{{\"status\":\"{}\",\"gpu_name\":{},\"driver_version\":{},\"runtime_version\":{},\"compute_capability_major\":{},\"compute_capability_minor\":{},\"device_total_memory_bytes\":{},\"pci_bus_id\":{},\"device_count\":{},\"device_ordinal\":{},\"requested_device_bytes\":{},\"requested_pinned_bytes\":{},\"allocated_device_bytes\":{},\"allocated_pinned_bytes\":{},\"stream_creations\":{},\"stream_destroys\":{},\"event_creations\":{},\"event_destroys\":{},\"device_allocations\":{},\"device_frees\":{},\"pinned_allocations\":{},\"pinned_frees\":{},\"memset_bytes\":{},\"D2H_bytes\":{},\"sync_calls\":{},\"observed_word\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"gpu_name\":{},\"driver_version\":{},\"runtime_version\":{},\"compute_capability_major\":{},\"compute_capability_minor\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"pci_bus_id\":{},\"device_count\":{},\"device_ordinal\":{},\"requested_device_bytes\":{},\"requested_pinned_bytes\":{},\"allocated_device_bytes\":{},\"allocated_pinned_bytes\":{},\"stream_creations\":{},\"stream_destroys\":{},\"event_creations\":{},\"event_destroys\":{},\"device_allocations\":{},\"device_frees\":{},\"pinned_allocations\":{},\"pinned_frees\":{},\"memset_bytes\":{},\"D2H_bytes\":{},\"sync_calls\":{},\"observed_word\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status,
             json_opt_str(self.gpu_name.as_deref()),
             json_opt_i32(self.driver_version),
@@ -49,6 +50,7 @@ impl CudaBackendContractSummary {
             json_opt_i32(self.compute_capability_major),
             json_opt_i32(self.compute_capability_minor),
             json_opt_usize(self.device_total_memory_bytes),
+            json_opt_usize(self.device_free_memory_bytes),
             json_opt_str(self.pci_bus_id.as_deref()),
             self.device_count,
             self.device_ordinal,

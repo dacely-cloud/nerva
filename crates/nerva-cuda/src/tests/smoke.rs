@@ -18,6 +18,7 @@ fn unavailable_summary_is_valid_shape() {
     assert!(json.contains("\"gpu_direct_rdma_supported\":null"));
     assert!(json.contains("\"gpu_direct_rdma_with_cuda_vmm_supported\":null"));
     assert!(json.contains("\"device_total_memory_bytes\":null"));
+    assert!(json.contains("\"device_free_memory_bytes\":null"));
     assert!(json.contains("\"pci_bus_id\":null"));
     assert!(json.contains("\"hot_path_allocations\":0"));
 }
@@ -49,4 +50,5 @@ fn cuda_smoke_is_repeatable_when_device_is_available() {
     assert!(second.vmm_posix_fd_export_verified.is_some());
     assert!(second.gpu_direct_rdma_supported.is_some());
     assert!(second.gpu_direct_rdma_with_cuda_vmm_supported.is_some());
+    assert!(second.device_free_memory_bytes.unwrap_or(0) > 0);
 }

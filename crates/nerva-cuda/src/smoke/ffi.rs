@@ -21,6 +21,7 @@ pub(crate) struct NervaCudaDeviceSmokeResult {
     pub(crate) gpu_direct_rdma_supported: i32,
     pub(crate) gpu_direct_rdma_with_cuda_vmm_supported: i32,
     pub(crate) total_global_mem: u64,
+    pub(crate) free_global_mem: u64,
     pub(crate) gpu_name: [c_char; 128],
     pub(crate) pci_bus_id: [c_char; 32],
 }
@@ -42,6 +43,7 @@ impl Default for NervaCudaDeviceSmokeResult {
             gpu_direct_rdma_supported: -1,
             gpu_direct_rdma_with_cuda_vmm_supported: -1,
             total_global_mem: 0,
+            free_global_mem: 0,
             gpu_name: [0; 128],
             pci_bus_id: [0; 32],
         }

@@ -75,7 +75,7 @@ fn hf_checkpoint_artifact_result() -> Result<(bool, String), String> {
     Ok((
         artifact_has_hf_cpu_fields(&cpu) && artifact_has_hf_cuda_fields(&cuda),
         format!(
-            "cpu_schema={} cpu_command={} cpu_summary={} cuda_schema={} cuda_command={} cuda_summary={} cuda_footprint={} cuda_contract={} cuda_host_causality_zero={} cuda_hot_path_zero={} cuda_token_ledgers={} cuda_device_timeline={}",
+            "cpu_schema={} cpu_command={} cpu_summary={} cuda_schema={} cuda_command={} cuda_summary={} cuda_footprint={} cuda_fits_memory={} cuda_contract={} cuda_host_causality_zero={} cuda_hot_path_zero={} cuda_token_ledgers={} cuda_device_timeline={}",
             cpu.contains("\"artifact_schema\":\"nerva-bench-v1\""),
             cpu.contains("\"command\":\"hf-decode\""),
             cpu.contains("\"context_mode\":\"prompt_prefill_kv_decode\""),
@@ -83,6 +83,7 @@ fn hf_checkpoint_artifact_result() -> Result<(bool, String), String> {
             cuda.contains("\"command\":\"hf-cuda-decode\""),
             cuda.contains("\"backend\":\"cuda\""),
             cuda.contains("\"cuda_footprint\":{"),
+            cuda.contains("\"cuda_fits_device_free_memory\":true"),
             cuda.contains("\"cuda_contract_matched\":true"),
             cuda.contains("\"host_causality_edges\":0"),
             cuda.contains("\"hot_path_allocations\":0"),
@@ -113,6 +114,7 @@ fn artifact_has_hf_cuda_fields(artifact: &str) -> bool {
         && artifact.contains("\"input_mode\":\"token_ids\"")
         && artifact.contains("\"cuda_footprint\":{")
         && artifact.contains("\"context_tokens\":3")
+        && artifact.contains("\"cuda_fits_device_free_memory\":true")
         && artifact.contains("\"resident_weight_plan\"")
         && artifact.contains("\"cuda_contract_matched\":true")
         && artifact.contains("\"host_causality_edges\":0")

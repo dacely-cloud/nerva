@@ -18,6 +18,7 @@ void clear_result(NervaCudaBackendContractResult *out) {
   out->compute_capability_major = 0;
   out->compute_capability_minor = 0;
   out->total_global_mem = 0;
+  out->free_global_mem = 0;
   out->requested_device_bytes = 0;
   out->requested_pinned_bytes = 0;
   out->allocated_device_bytes = 0;
@@ -92,6 +93,13 @@ extern "C" int nerva_cuda_backend_contract_smoke(
   out->compute_capability_major = props.major;
   out->compute_capability_minor = props.minor;
   out->total_global_mem = static_cast<uint64_t>(props.totalGlobalMem);
+  size_t free_memory = 0;
+  size_t total_memory = 0;
+  err = cudaMemGetInfo(&free_memory, &total_memory);
+  if (err != cudaSuccess) {
+    return fail(out, err);
+  }
+  out->free_global_mem = static_cast<uint64_t>(free_memory);
   strncpy(out->gpu_name, props.name, sizeof(out->gpu_name) - 1);
   out->gpu_name[sizeof(out->gpu_name) - 1] = '\0';
 

@@ -25,6 +25,7 @@ pub fn smoke() -> CudaSmokeSummary {
                 out.gpu_direct_rdma_with_cuda_vmm_supported,
             ),
             device_total_memory_bytes: usize::try_from(out.total_global_mem).ok(),
+            device_free_memory_bytes: usize::try_from(out.free_global_mem).ok(),
             pci_bus_id: c_char_array_to_string(&out.pci_bus_id),
             device_arena_bytes: 4,
             pinned_host_bytes: 4,

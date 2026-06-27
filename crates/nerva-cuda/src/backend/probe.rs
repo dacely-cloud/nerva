@@ -24,6 +24,7 @@ pub fn backend_contract_smoke(
             compute_capability_major: Some(out.compute_capability_major),
             compute_capability_minor: Some(out.compute_capability_minor),
             device_total_memory_bytes: usize::try_from(out.total_global_mem).ok(),
+            device_free_memory_bytes: usize::try_from(out.free_global_mem).ok(),
             pci_bus_id: c_char_array_to_string(&out.pci_bus_id),
             device_count: out.device_count,
             device_ordinal: out.device_ordinal,
@@ -80,6 +81,9 @@ pub fn backend_contract_smoke(
         compute_capability_minor: (out.compute_capability_major > 0)
             .then_some(out.compute_capability_minor),
         device_total_memory_bytes: usize::try_from(out.total_global_mem)
+            .ok()
+            .filter(|value| *value > 0),
+        device_free_memory_bytes: usize::try_from(out.free_global_mem)
             .ok()
             .filter(|value| *value > 0),
         pci_bus_id: c_char_array_to_string(&out.pci_bus_id),

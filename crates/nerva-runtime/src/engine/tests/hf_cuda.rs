@@ -62,6 +62,7 @@ fn cuda_loaded_hf_seed_decode_matches_cpu_exact_decode() {
     assert_eq!(summary.sync_calls, 1);
     assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.cuda_footprint.context_tokens, summary.kv_tokens);
+    assert_eq!(summary.cuda_fits_device_free_memory, Some(true));
     assert!(summary.cuda_footprint.device_arena_bytes > summary.resident_weight_bytes);
     assert!(summary.resident_kv_bytes > 0);
     assert_eq!(summary.kv_tokens, 4);

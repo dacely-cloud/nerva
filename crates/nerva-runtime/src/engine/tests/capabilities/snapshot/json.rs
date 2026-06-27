@@ -17,6 +17,7 @@ fn capability_snapshot_json_escapes_cuda_error() {
         cuda_visible_devices: Some("0,1".to_string()),
         cuda_compute_capability: Some("8.9".to_string()),
         cuda_device_total_memory_bytes: Some(24 * 1024 * 1024 * 1024),
+        cuda_device_free_memory_bytes: Some(23 * 1024 * 1024 * 1024),
         cuda_pci_bus_id: Some("0000:65:00.0".to_string()),
         hip: CapabilityState::SupportedUnverified,
         hip_visible_devices: Some("2".to_string()),
@@ -51,6 +52,7 @@ fn capability_snapshot_json_escapes_cuda_error() {
     assert!(json.contains("driver\\\\version"));
     assert!(json.contains("\"cuda_compute_capability\":\"8.9\""));
     assert!(json.contains("\"cuda_device_total_memory_bytes\":25769803776"));
+    assert!(json.contains("\"cuda_device_free_memory_bytes\":24696061952"));
     assert!(json.contains("\"hip_runtime_version\":\"rocm\\\"6\\\\test\""));
     assert!(json.contains("\"nvidia_peer_memory_module\":\"nvidia_peermem\""));
     assert!(json.contains("\"gpu_direct_rdma\":\"SUPPORTED_UNVERIFIED\""));

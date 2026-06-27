@@ -12,6 +12,7 @@ fn backend_contract_summary_serializes_allocation_and_queue_fields() {
         compute_capability_major: Some(12),
         compute_capability_minor: Some(0),
         device_total_memory_bytes: Some(32 * 1024 * 1024 * 1024),
+        device_free_memory_bytes: Some(31 * 1024 * 1024 * 1024),
         pci_bus_id: Some("0000:01:00.0".to_string()),
         device_count: 1,
         device_ordinal: 0,
@@ -39,6 +40,7 @@ fn backend_contract_summary_serializes_allocation_and_queue_fields() {
     assert!(summary.passed());
     assert!(json.contains("\"status\":\"ok\""));
     assert!(json.contains("\"requested_device_bytes\":4096"));
+    assert!(json.contains("\"device_free_memory_bytes\":33285996544"));
     assert!(json.contains("\"allocated_device_bytes\":4096"));
     assert!(json.contains("\"requested_pinned_bytes\":4096"));
     assert!(json.contains("\"allocated_pinned_bytes\":4096"));

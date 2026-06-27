@@ -66,6 +66,10 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
                 );
             }
         };
+        let memory = crate::smoke::probe::smoke();
+        let fits_device_free_memory = memory
+            .device_free_memory_bytes
+            .map(|free| planned_footprint.device_arena_bytes <= free as u64);
         let uses_declared_descriptors = self
             .weight_plan
             .is_some_and(CudaHfDecodeSequenceWeightPlan::is_declared);
@@ -102,6 +106,9 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             tokens,
             observed_token_hash: out.observed_token_hash,
             planned_footprint,
+            device_total_memory_bytes: memory.device_total_memory_bytes,
+            device_free_memory_bytes: memory.device_free_memory_bytes,
+            fits_device_free_memory,
             resident_weight_bytes: out.resident_weight_bytes,
             planned_weight_blocks: out.planned_weight_blocks,
             planned_gpu_resident_blocks: out.planned_gpu_resident_blocks,

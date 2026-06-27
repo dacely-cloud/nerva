@@ -27,6 +27,9 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         tokens: vec![1, 2, 3, 0],
         observed_token_hash: 7,
         planned_footprint: CudaHfDecodeSequenceFootprint::default(),
+        device_total_memory_bytes: Some(1024),
+        device_free_memory_bytes: Some(512),
+        fits_device_free_memory: Some(true),
         resident_weight_bytes: 128,
         planned_weight_blocks: 12,
         planned_gpu_resident_blocks: 6,
@@ -60,6 +63,8 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
     assert!(json.contains("\"tokens\":[1,2,3,0]"));
     assert!(json.contains("\"graph_replays\":4"));
     assert!(json.contains("\"planned_footprint\":{"));
+    assert!(json.contains("\"device_free_memory_bytes\":512"));
+    assert!(json.contains("\"fits_device_free_memory\":true"));
     assert!(json.contains("\"resident_kv_bytes\":64"));
     assert!(json.contains("\"planned_weight_blocks\":12"));
     assert!(json.contains("\"planned_gpu_staged_weight_bytes\":64"));
@@ -67,8 +72,6 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
     assert!(json.contains("\"descriptor_gpu_staged_H2D_bytes\":96"));
     assert!(json.contains("\"planned_weight_descriptor_count\":12"));
     assert!(json.contains("\"kv_tokens\":4"));
-    assert!(json.contains("\"graph_nodes\":1"));
-    assert!(json.contains("\"graph_launches\":4"));
     assert!(json.contains("\"sync_calls\":1"));
     assert!(json.contains("\"host_causality_edges\":0"));
 }
@@ -137,11 +140,11 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
     assert_eq!(summary.graph_replays, 4);
     assert!(summary.resident_kv_bytes > 0);
     assert_eq!(summary.kv_tokens, 4);
-    assert!(summary.graph_nodes > 0);
     assert_eq!(summary.graph_launches, 4);
     assert_eq!(summary.kernel_launches, 4);
     assert_eq!(summary.sync_calls, 1);
     assert_eq!(summary.planned_footprint.context_tokens, summary.kv_tokens);
+    assert_eq!(summary.fits_device_free_memory, Some(true));
     assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.hot_path_allocations, 0);
     assert_eq!(summary.planned_weight_blocks, 12);

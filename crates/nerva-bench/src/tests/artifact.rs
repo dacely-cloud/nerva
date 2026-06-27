@@ -27,6 +27,7 @@ fn artifact_wraps_probe_with_reproducibility_metadata() {
     assert!(json.contains("\"target_os\":\"linux\""));
     assert!(json.contains("\"cuda_compute_capability\""));
     assert!(json.contains("\"cuda_device_total_memory_bytes\""));
+    assert!(json.contains("\"cuda_device_free_memory_bytes\""));
     assert!(json.contains("\"cuda_pci_bus_id\""));
     assert!(json.contains("\"rdma_core_loaded\""));
     assert!(json.contains("\"mlx5_core_loaded\""));
@@ -91,6 +92,8 @@ fn artifact_runs_external_hf_cuda_decode_checkpoint_with_metadata() {
     assert!(json.contains("\"prompt_token_ids\":[0,1]"));
     assert!(json.contains("\"cuda_footprint\":{"));
     assert!(json.contains("\"context_tokens\":3"));
+    assert!(json.contains("\"cuda_device_free_memory_bytes\":"));
+    assert!(json.contains("\"cuda_fits_device_free_memory\":true"));
     assert!(json.contains("\"resident_weight_plan\""));
     assert!(json.contains("\"cuda_contract_matched\":true"));
     assert!(json.contains("\"host_causality_edges\":0"));

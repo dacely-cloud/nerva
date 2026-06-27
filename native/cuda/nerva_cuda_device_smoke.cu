@@ -31,6 +31,7 @@ void clear_result(NervaCudaDeviceSmokeResult *out) {
   out->gpu_direct_rdma_supported = -1;
   out->gpu_direct_rdma_with_cuda_vmm_supported = -1;
   out->total_global_mem = 0;
+  out->free_global_mem = 0;
   out->gpu_name[0] = '\0';
   out->pci_bus_id[0] = '\0';
 }
@@ -118,6 +119,13 @@ extern "C" int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out) {
   out->compute_capability_major = props.major;
   out->compute_capability_minor = props.minor;
   out->total_global_mem = static_cast<uint64_t>(props.totalGlobalMem);
+  size_t free_memory = 0;
+  size_t total_memory = 0;
+  err = cudaMemGetInfo(&free_memory, &total_memory);
+  if (err != cudaSuccess) {
+    return fail(out, err);
+  }
+  out->free_global_mem = static_cast<uint64_t>(free_memory);
   strncpy(out->gpu_name, props.name, sizeof(out->gpu_name) - 1);
   out->gpu_name[sizeof(out->gpu_name) - 1] = '\0';
 

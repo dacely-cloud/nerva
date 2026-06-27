@@ -21,6 +21,7 @@ typedef struct NervaCudaDeviceSmokeResult {
   int32_t gpu_direct_rdma_supported;
   int32_t gpu_direct_rdma_with_cuda_vmm_supported;
   uint64_t total_global_mem;
+  uint64_t free_global_mem;
   char gpu_name[128];
   char pci_bus_id[32];
 } NervaCudaDeviceSmokeResult;
@@ -475,6 +476,7 @@ typedef struct NervaCudaBackendContractResult {
   int32_t compute_capability_major;
   int32_t compute_capability_minor;
   uint64_t total_global_mem;
+  uint64_t free_global_mem;
   uint64_t requested_device_bytes;
   uint64_t requested_pinned_bytes;
   uint64_t allocated_device_bytes;

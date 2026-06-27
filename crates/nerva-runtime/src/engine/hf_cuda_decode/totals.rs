@@ -28,6 +28,9 @@ pub(super) struct CudaDecodeCounters {
     host_causality_edges: u64,
     hot_path_allocations: u64,
     cuda_footprint: CudaHfDecodeSequenceFootprint,
+    cuda_device_total_memory_bytes: Option<usize>,
+    cuda_device_free_memory_bytes: Option<usize>,
+    cuda_fits_device_free_memory: Option<bool>,
 }
 
 impl CudaDecodeCounters {
@@ -45,6 +48,9 @@ impl CudaDecodeCounters {
         self.host_causality_edges += cuda.host_causality_edges;
         self.hot_path_allocations += cuda.hot_path_allocations;
         self.cuda_footprint = cuda.planned_footprint;
+        self.cuda_device_total_memory_bytes = cuda.device_total_memory_bytes;
+        self.cuda_device_free_memory_bytes = cuda.device_free_memory_bytes;
+        self.cuda_fits_device_free_memory = cuda.fits_device_free_memory;
     }
 }
 
@@ -95,6 +101,9 @@ pub(super) fn build_summary(
         execution_decisions: execution_decisions(&parts.ledgers),
         resident_weight_bytes: counters.resident_weight_bytes,
         cuda_footprint: counters.cuda_footprint,
+        cuda_device_total_memory_bytes: counters.cuda_device_total_memory_bytes,
+        cuda_device_free_memory_bytes: counters.cuda_device_free_memory_bytes,
+        cuda_fits_device_free_memory: counters.cuda_fits_device_free_memory,
         resident_kv_bytes: counters.resident_kv_bytes,
         kv_tokens: counters.kv_tokens,
         h2d_bytes: counters.h2d_bytes,
