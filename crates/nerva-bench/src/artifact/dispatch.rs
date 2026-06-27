@@ -14,8 +14,8 @@ use crate::{
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
     perf::{external::external_baseline_json_from_args, run::perf_baseline_json_from_args},
     probes::{
-        backend, compute, kv, measurements, memory_loop, mgpu, phase, queue, runtime, synthetic,
-        token, transaction, transport,
+        backend, compute, kv, measurements, memory_loop, mgpu, phase, projection, queue, runtime,
+        synthetic, token, transaction, transport,
     },
 };
 
@@ -80,6 +80,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "measurements" => measurements::run_measurement_table_probe(),
         "measured-planner" => measurements::run_measured_planner_probe(),
         "memory-loop" => memory_loop::run_memory_loop_probe(),
+        "projection-bench" => projection::run_projection_bench_from_args(args),
         "block" => nerva_model::reference::smoke::run::reference_block_smoke()
             .map(|summary| summary.to_json())
             .map_err(|err| format!("reference block failed: {err:?}")),

@@ -9,5 +9,6 @@ mod decode_sequence_qk_norm;
 mod decode_sequence_session;
 mod graph;
 mod json;
+mod projection;
 mod sampler;
 mod smoke;

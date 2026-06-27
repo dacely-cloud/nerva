@@ -1,0 +1,59 @@
+{
+  "schema": "nerva-projection-bench-v1",
+  "measurement_date": "2026-06-27",
+  "host": "RTX 5090",
+  "model": "Qwen3-8B local safetensors snapshot",
+  "dtype": "bfloat16",
+  "command_template": "projection-bench <rows> <cols> 1 <iterations> 1",
+  "entries": [
+    {
+      "name": "qkv",
+      "rows": 6144,
+      "cols": 4096,
+      "iterations": 4,
+      "matrix_bytes": 50331648,
+      "cublaslt_avg_ns": 16432,
+      "custom_avg_ns": 24808,
+      "selected_strategy": "cublaslt",
+      "mismatch_count": 0,
+      "max_abs_diff": 0.0
+    },
+    {
+      "name": "gate_up",
+      "rows": 24576,
+      "cols": 4096,
+      "iterations": 3,
+      "matrix_bytes": 201326592,
+      "cublaslt_avg_ns": 129952,
+      "custom_avg_ns": 155072,
+      "selected_strategy": "cublaslt",
+      "mismatch_count": 0,
+      "max_abs_diff": 0.0
+    },
+    {
+      "name": "down",
+      "rows": 4096,
+      "cols": 12288,
+      "iterations": 4,
+      "matrix_bytes": 100663296,
+      "cublaslt_avg_ns": 27912,
+      "custom_avg_ns": 42704,
+      "selected_strategy": "cublaslt",
+      "mismatch_count": 0,
+      "max_abs_diff": 0.0
+    },
+    {
+      "name": "lm_head",
+      "rows": 151936,
+      "cols": 4096,
+      "iterations": 2,
+      "matrix_bytes": 1244659712,
+      "cublaslt_avg_ns": 793584,
+      "custom_avg_ns": 928128,
+      "selected_strategy": "cublaslt",
+      "mismatch_count": 0,
+      "max_abs_diff": 0.0
+    }
+  ],
+  "conclusion": "The simple exact row-major custom GEMV wins on tiny acceptance shapes, but cuBLASLt remains the measured executor for Qwen3-8B batch-1 projection shapes on this RTX 5090."
+}

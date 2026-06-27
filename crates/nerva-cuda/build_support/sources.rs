@@ -22,6 +22,7 @@ impl NativeCudaSources {
             "nerva_cuda_hf_decode_sequence.cu",
             "nerva_cuda_tiny_decode.cu",
             "nerva_cuda_tiered_attention.cu",
+            "nerva_cuda_projection_bench.cu",
         ]
         .into_iter()
         .map(|source| native_dir.join(source))

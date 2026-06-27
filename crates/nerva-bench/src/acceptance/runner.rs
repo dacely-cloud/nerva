@@ -22,6 +22,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
     cuda::backend::push_backend_contract(&mut report);
     cuda::graph::push_transaction(&mut report);
     cuda::sampler::push_device_sampler(&mut report);
+    cuda::projection::push_projection_benchmark(&mut report);
 
     runtime_checks::push_static_arenas(&mut report, &runtime);
     runtime_checks::push_hot_path_guard(&mut report, &runtime);

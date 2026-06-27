@@ -601,6 +601,46 @@ typedef struct NervaCudaBackendContractResult {
   char pci_bus_id[32];
 } NervaCudaBackendContractResult;
 
+typedef struct NervaCudaProjectionBenchRequest {
+  uint32_t dtype;
+  uint32_t rows;
+  uint32_t cols;
+  uint32_t iterations;
+  uint32_t warmup_iterations;
+} NervaCudaProjectionBenchRequest;
+
+typedef struct NervaCudaProjectionBenchResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t device_ordinal;
+  int32_t compute_capability_major;
+  int32_t compute_capability_minor;
+  uint32_t dtype;
+  uint32_t rows;
+  uint32_t cols;
+  uint32_t iterations;
+  uint32_t warmup_iterations;
+  uint64_t matrix_bytes;
+  uint64_t input_bytes;
+  uint64_t output_bytes;
+  uint64_t cublaslt_total_ns;
+  uint64_t cublaslt_avg_ns;
+  uint64_t custom_total_ns;
+  uint64_t custom_avg_ns;
+  uint64_t cublaslt_effective_bandwidth_bps;
+  uint64_t custom_effective_bandwidth_bps;
+  uint32_t selected_strategy;
+  uint32_t mismatch_count;
+  float max_abs_diff;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t device_allocations;
+  uint64_t device_frees;
+  uint64_t device_arena_bytes;
+  uint64_t hot_path_allocations;
+} NervaCudaProjectionBenchResult;
+
 int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out);
 int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      uint32_t ring_capacity,
@@ -644,6 +684,8 @@ int nerva_cuda_tiered_attention_smoke(NervaCudaTieredAttentionResult *out);
 int nerva_cuda_backend_contract_smoke(NervaCudaBackendContractResult *out,
                                       uint64_t device_bytes,
                                       uint64_t pinned_bytes);
+int nerva_cuda_projection_bench(const NervaCudaProjectionBenchRequest *request,
+                                NervaCudaProjectionBenchResult *out);
 
 #ifdef __cplusplus
 }

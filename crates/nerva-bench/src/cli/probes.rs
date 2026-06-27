@@ -1,11 +1,11 @@
 use std::process::ExitCode;
 
 use crate::cli::exit;
-use crate::parse::{parse_optional_u64, parse_optional_usize};
+use crate::parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize};
 use crate::perf;
 use crate::probes::{
-    backend, compute, kv, measurements, memory_loop, mgpu, phase, queue, runtime, synthetic, token,
-    transaction, transport,
+    backend, compute, kv, measurements, memory_loop, mgpu, phase, projection, queue, runtime,
+    synthetic, token, transaction, transport,
 };
 
 pub(crate) fn dispatch(
@@ -55,6 +55,7 @@ pub(crate) fn dispatch(
             measurements::run_measured_planner_probe(),
         )),
         Some("memory-loop") => Some(exit::print_json_result(memory_loop::run_memory_loop_probe())),
+        Some("projection-bench") => Some(run_projection_bench_command(args)),
         Some("perf-baseline") => Some(exit::print_json_result(
             perf::run::perf_baseline_json_from_args(&args.collect::<Vec<_>>()),
         )),
@@ -97,6 +98,32 @@ pub(crate) fn dispatch(
         Some("multi-gpu") => Some(exit::print_json_result(mgpu::run_multi_gpu_probe())),
         _ => None,
     }
+}
+
+fn run_projection_bench_command(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let rows = match parse_optional_u32(args.next(), 64, "rows") {
+        Ok(rows) => rows,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let cols = match parse_optional_u32(args.next(), 128, "cols") {
+        Ok(cols) => cols,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let dtype = match parse_optional_u32(args.next(), 1, "dtype") {
+        Ok(dtype) => dtype,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let iterations = match parse_optional_u32(args.next(), 16, "iterations") {
+        Ok(iterations) => iterations,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let warmups = match parse_optional_u32(args.next(), 2, "warmup_iterations") {
+        Ok(warmups) => warmups,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    exit::print_json_result(projection::run_projection_bench(
+        rows, cols, dtype, iterations, warmups,
+    ))
 }
 
 fn run_synthetic_command(args: &mut impl Iterator<Item = String>) -> ExitCode {

@@ -9,6 +9,7 @@ pub mod block;
 pub mod decode;
 pub mod graph;
 pub(crate) mod json;
+pub mod projection;
 pub mod sampler;
 pub mod smoke;
 

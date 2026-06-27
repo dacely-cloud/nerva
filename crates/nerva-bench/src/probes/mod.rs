@@ -5,6 +5,7 @@ pub(crate) mod measurements;
 pub(crate) mod memory_loop;
 pub(crate) mod mgpu;
 pub(crate) mod phase;
+pub(crate) mod projection;
 pub(crate) mod queue;
 pub(crate) mod runtime;
 pub(crate) mod synthetic;
