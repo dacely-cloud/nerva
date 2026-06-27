@@ -618,11 +618,13 @@ __global__ void hf_layer_ff_encode_kernel(
   }
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
-  for (uint32_t index = threadIdx.x; index < intermediate; index += blockDim.x) {
-    s.ff[index] = silu(s.gate[index]) * s.up[index];
+  const uint32_t start = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint32_t stride = blockDim.x * gridDim.x;
+  for (uint32_t index = start; index < intermediate; index += stride) {
+    const float value = silu(s.gate[index]) * s.up[index];
+    s.ff[index] = value;
+    projection_input[index] = f32_to_encoded(value, dtype);
   }
-  __syncthreads();
-  f32_slice_to_encoded(s.ff, projection_input, intermediate, dtype);
 }
 
 __global__ void hf_layer_finish_kernel(
@@ -1562,7 +1564,10 @@ cudaError_t launch_cublas_layer_session_step(
           static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
           session->dtype, scratch.gate);
     if (err == cudaSuccess) {
-      hf_layer_ff_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+      const uint32_t ff_blocks =
+          (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
+      hf_layer_ff_encode_kernel<<<ff_blocks, kDecodeThreads, 0,
+                                  session->stream>>>(
           session->dtype, session->hidden, attention_hidden, kv_hidden,
           session->intermediate, session->device_step, max_steps,
           session->device_scratch, session->device_projection_input);
@@ -1723,7 +1728,10 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess) {
-      hf_layer_ff_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+      const uint32_t ff_blocks =
+          (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
+      hf_layer_ff_encode_kernel<<<ff_blocks, kDecodeThreads, 0,
+                                  session->stream>>>(
           session->dtype, session->hidden, attention_hidden, kv_hidden,
           session->intermediate, session->device_step, max_steps,
           session->device_scratch, session->device_projection_input);
