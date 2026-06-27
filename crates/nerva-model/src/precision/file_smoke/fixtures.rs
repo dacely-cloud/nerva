@@ -51,7 +51,12 @@ fn tensor_values_for_entry(
         | WeightBlockRole::UpProjection
         | WeightBlockRole::DownProjection => encoded_identity(entry.rows, entry.cols, 1.0),
         WeightBlockRole::GateProjection => encoded_identity(entry.rows, entry.cols, 0.5),
-        WeightBlockRole::TokenEmbedding | WeightBlockRole::LmHead => vec![0; elements],
+        WeightBlockRole::QueryBias
+        | WeightBlockRole::KeyBias
+        | WeightBlockRole::ValueBias
+        | WeightBlockRole::OutputBias
+        | WeightBlockRole::TokenEmbedding
+        | WeightBlockRole::LmHead => vec![0; elements],
     };
     if values.len() == elements {
         Ok(values)

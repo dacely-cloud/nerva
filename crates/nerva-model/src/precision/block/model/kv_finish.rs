@@ -3,7 +3,7 @@ use nerva_core::types::error::Result;
 use crate::common::math::silu;
 use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::precision::block::ops::{
-    encode_vec_into, mat_vec_encoded_row_major, rms_norm_encoded_into,
+    add_encoded_bias_into, encode_vec_into, mat_vec_encoded_row_major, rms_norm_encoded_into,
 };
 use crate::precision::scratch::PrecisionTransformerBlockKvScratch;
 
@@ -18,6 +18,9 @@ pub(super) fn finish_attention_and_mlp(
         &scratch.token.attn,
         &mut scratch.token.residual,
     )?;
+    if let Some(bias) = block.o_bias.as_deref() {
+        add_encoded_bias_into(block.dtype, bias, &mut scratch.token.residual)?;
+    }
     for (out, residual) in scratch
         .token
         .residual

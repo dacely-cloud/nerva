@@ -116,6 +116,10 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Result<Vec<u16>> {
         WeightBlockRole::AttentionNorm | WeightBlockRole::MlpNorm | WeightBlockRole::FinalNorm => {
             vec![f32_to_f16_bits(1.0); elements]
         }
+        WeightBlockRole::QueryBias
+        | WeightBlockRole::KeyBias
+        | WeightBlockRole::ValueBias
+        | WeightBlockRole::OutputBias => vec![0; elements],
         WeightBlockRole::QueryProjection
         | WeightBlockRole::KeyProjection
         | WeightBlockRole::ValueProjection

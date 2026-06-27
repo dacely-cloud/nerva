@@ -159,6 +159,23 @@ pub(crate) fn push_layer_weight_blocks(
             MemoryTier::Dram,
         )?);
     }
+    if metadata.attention_bias {
+        for (role, rows) in [
+            (WeightBlockRole::QueryBias, hidden),
+            (WeightBlockRole::KeyBias, kv_hidden),
+            (WeightBlockRole::ValueBias, kv_hidden),
+            (WeightBlockRole::OutputBias, hidden),
+        ] {
+            blocks.push(WeightBlockSpec::new(
+                role,
+                Some(layer),
+                rows,
+                1,
+                dtype,
+                MemoryTier::Dram,
+            )?);
+        }
+    }
     Ok(())
 }
 

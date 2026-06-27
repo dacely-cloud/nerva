@@ -6,7 +6,8 @@ use crate::common::rope::apply_rotary_to_query_key;
 use crate::common::validate::require_len;
 use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::precision::block::ops::{
-    decode_vec_into, encode_vec_into, mat_vec_encoded_row_major, rms_norm_encoded_into,
+    add_encoded_bias_into, decode_vec_into, encode_vec_into, mat_vec_encoded_row_major,
+    rms_norm_encoded_into,
 };
 use crate::precision::scratch::PrecisionTransformerBlockScratch;
 
@@ -35,12 +36,24 @@ impl PrecisionTransformerBlock {
         mat_vec_encoded_row_major(self.dtype, &self.w_q, &scratch.attn_norm, &mut scratch.q)?;
         mat_vec_encoded_row_major(self.dtype, &self.w_k, &scratch.attn_norm, &mut scratch.k)?;
         mat_vec_encoded_row_major(self.dtype, &self.w_v, &scratch.attn_norm, &mut scratch.v)?;
+        if let Some(bias) = self.q_bias.as_deref() {
+            add_encoded_bias_into(self.dtype, bias, &mut scratch.q)?;
+        }
+        if let Some(bias) = self.k_bias.as_deref() {
+            add_encoded_bias_into(self.dtype, bias, &mut scratch.k)?;
+        }
+        if let Some(bias) = self.v_bias.as_deref() {
+            add_encoded_bias_into(self.dtype, bias, &mut scratch.v)?;
+        }
         if let Some(theta) = self.rope_theta {
             apply_rotary_to_query_key(shape, 0, theta, &mut scratch.q, &mut scratch.k)?;
         }
 
         single_token_attention(shape, &scratch.q, &scratch.k, &scratch.v, &mut scratch.attn);
         mat_vec_encoded_row_major(self.dtype, &self.w_o, &scratch.attn, &mut scratch.residual)?;
+        if let Some(bias) = self.o_bias.as_deref() {
+            add_encoded_bias_into(self.dtype, bias, &mut scratch.residual)?;
+        }
         for (out, residual) in scratch
             .residual
             .iter_mut()

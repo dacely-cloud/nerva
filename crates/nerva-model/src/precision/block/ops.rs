@@ -66,3 +66,11 @@ pub(crate) fn mat_vec_encoded_row_major(
     }
     Ok(())
 }
+
+pub(crate) fn add_encoded_bias_into(dtype: DType, bias: &[u16], output: &mut [f32]) -> Result<()> {
+    require_len("precision bias", bias.len(), output.len())?;
+    for (out, bias) in output.iter_mut().zip(bias.iter().copied()) {
+        *out += decode_f32_for_dtype(bias, dtype)?;
+    }
+    Ok(())
+}

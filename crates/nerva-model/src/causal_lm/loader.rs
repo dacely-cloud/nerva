@@ -50,6 +50,7 @@ fn load_from_hf_dir(dir: &Path) -> Result<HfCausalLmLoaded> {
     let shape = metadata.block_shape();
     let rms_eps = metadata.rms_norm_eps.unwrap_or(1e-5);
     let rope_theta = metadata.rope_theta;
+    let attention_bias = metadata.attention_bias;
     for layer in 0..metadata.num_hidden_layers {
         let block = load_layer(
             dir,
@@ -58,6 +59,7 @@ fn load_from_hf_dir(dir: &Path) -> Result<HfCausalLmLoaded> {
             shape,
             rms_eps,
             rope_theta,
+            attention_bias,
             layer as u32,
             &mut bytes_loaded,
             &mut data_hash,
@@ -107,6 +109,7 @@ fn load_layer(
     shape: TransformerBlockShape,
     rms_eps: f32,
     rope_theta: Option<f32>,
+    attention_bias: bool,
     layer: u32,
     bytes_loaded: &mut usize,
     data_hash: &mut u64,
@@ -117,7 +120,7 @@ fn load_layer(
         *data_hash = fold_hash(*data_hash, tensor.data_hash);
         Ok(tensor.values)
     };
-    PrecisionTransformerBlock::new_from_encoded(
+    let block = PrecisionTransformerBlock::new_from_encoded(
         dtype,
         shape,
         load(WeightBlockRole::AttentionNorm)?,
@@ -131,7 +134,17 @@ fn load_layer(
         load(WeightBlockRole::DownProjection)?,
         rms_eps,
     )?
-    .with_rope_theta(rope_theta)
+    .with_rope_theta(rope_theta)?;
+    if attention_bias {
+        block.with_attention_biases(
+            load(WeightBlockRole::QueryBias)?,
+            load(WeightBlockRole::KeyBias)?,
+            load(WeightBlockRole::ValueBias)?,
+            load(WeightBlockRole::OutputBias)?,
+        )
+    } else {
+        Ok(block)
+    }
 }
 
 fn load_tensor(

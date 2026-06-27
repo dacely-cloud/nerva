@@ -3,6 +3,7 @@ use nerva_core::types::error::Result;
 
 use crate::common::rope::validate_rope;
 use crate::common::shape::TransformerBlockShape;
+use crate::common::validate::require_len;
 
 mod constructor;
 mod forward;
@@ -19,6 +20,10 @@ pub struct PrecisionTransformerBlock {
     w_k: Vec<u16>,
     w_v: Vec<u16>,
     w_o: Vec<u16>,
+    q_bias: Option<Vec<u16>>,
+    k_bias: Option<Vec<u16>>,
+    v_bias: Option<Vec<u16>>,
+    o_bias: Option<Vec<u16>>,
     w_gate: Vec<u16>,
     w_up: Vec<u16>,
     w_down: Vec<u16>,
@@ -44,6 +49,24 @@ impl PrecisionTransformerBlock {
             validate_rope(self.shape, theta)?;
         }
         self.rope_theta = rope_theta;
+        Ok(self)
+    }
+
+    pub fn with_attention_biases(
+        mut self,
+        q_bias: Vec<u16>,
+        k_bias: Vec<u16>,
+        v_bias: Vec<u16>,
+        o_bias: Vec<u16>,
+    ) -> Result<Self> {
+        require_len("q_proj.bias", q_bias.len(), self.shape.hidden)?;
+        require_len("k_proj.bias", k_bias.len(), self.shape.kv_hidden())?;
+        require_len("v_proj.bias", v_bias.len(), self.shape.kv_hidden())?;
+        require_len("o_proj.bias", o_bias.len(), self.shape.hidden)?;
+        self.q_bias = Some(q_bias);
+        self.k_bias = Some(k_bias);
+        self.v_bias = Some(v_bias);
+        self.o_bias = Some(o_bias);
         Ok(self)
     }
 }

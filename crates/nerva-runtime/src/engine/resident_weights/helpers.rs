@@ -39,6 +39,10 @@ pub(super) fn weight_role_layout_id(role: WeightBlockRole) -> u32 {
         WeightBlockRole::DownProjection => 10,
         WeightBlockRole::FinalNorm => 11,
         WeightBlockRole::LmHead => 12,
+        WeightBlockRole::QueryBias => 13,
+        WeightBlockRole::KeyBias => 14,
+        WeightBlockRole::ValueBias => 15,
+        WeightBlockRole::OutputBias => 16,
     }
 }
 

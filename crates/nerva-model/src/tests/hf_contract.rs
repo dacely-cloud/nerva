@@ -1,6 +1,8 @@
 use crate::hf::architecture::HfArchitectureKind;
 use crate::hf::parser::parse_hf_config_metadata;
+use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::layout::plan::plan_hf_weight_layout;
+use crate::weights::manifest::build_hf_tensor_manifest;
 
 #[test]
 fn exact_runtime_contract_accepts_silu_without_biases() {
@@ -49,7 +51,7 @@ fn exact_runtime_contract_rejects_unsupported_activation() {
 }
 
 #[test]
-fn exact_runtime_contract_rejects_attention_and_mlp_bias() {
+fn exact_runtime_contract_supports_attention_bias_and_rejects_mlp_bias() {
     let attention_bias = parse_hf_config_metadata(
         r#"{
                 "model_type": "qwen2",
@@ -80,7 +82,27 @@ fn exact_runtime_contract_rejects_attention_and_mlp_bias() {
     .unwrap();
 
     assert!(attention_bias.attention_bias);
-    assert!(plan_hf_weight_layout(&attention_bias).is_err());
+    let plan = plan_hf_weight_layout(&attention_bias).unwrap();
+    assert_eq!(
+        plan.blocks
+            .iter()
+            .filter(|block| matches!(
+                block.role,
+                WeightBlockRole::QueryBias
+                    | WeightBlockRole::KeyBias
+                    | WeightBlockRole::ValueBias
+                    | WeightBlockRole::OutputBias
+            ))
+            .count(),
+        4
+    );
+    let manifest = build_hf_tensor_manifest(&plan).unwrap();
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .any(|entry| entry.name == "model.layers.0.self_attn.q_proj.bias")
+    );
     assert!(mlp_bias.mlp_bias);
     assert!(plan_hf_weight_layout(&mlp_bias).is_err());
 }

@@ -38,9 +38,13 @@ pub(crate) fn hf_tensor_name(
         WeightBlockRole::AttentionNorm => layer_name(role, layer, "input_layernorm.weight"),
         WeightBlockRole::MlpNorm => layer_name(role, layer, "post_attention_layernorm.weight"),
         WeightBlockRole::QueryProjection => layer_name(role, layer, "self_attn.q_proj.weight"),
+        WeightBlockRole::QueryBias => layer_name(role, layer, "self_attn.q_proj.bias"),
         WeightBlockRole::KeyProjection => layer_name(role, layer, "self_attn.k_proj.weight"),
+        WeightBlockRole::KeyBias => layer_name(role, layer, "self_attn.k_proj.bias"),
         WeightBlockRole::ValueProjection => layer_name(role, layer, "self_attn.v_proj.weight"),
+        WeightBlockRole::ValueBias => layer_name(role, layer, "self_attn.v_proj.bias"),
         WeightBlockRole::OutputProjection => layer_name(role, layer, "self_attn.o_proj.weight"),
+        WeightBlockRole::OutputBias => layer_name(role, layer, "self_attn.o_proj.bias"),
         WeightBlockRole::GateProjection => layer_name(role, layer, "mlp.gate_proj.weight"),
         WeightBlockRole::UpProjection => layer_name(role, layer, "mlp.up_proj.weight"),
         WeightBlockRole::DownProjection => layer_name(role, layer, "mlp.down_proj.weight"),
@@ -66,7 +70,13 @@ fn layer_name(role: WeightBlockRole, layer: Option<u32>, suffix: &'static str) -
 
 pub(crate) fn weight_block_rank(role: WeightBlockRole) -> u8 {
     match role {
-        WeightBlockRole::AttentionNorm | WeightBlockRole::MlpNorm | WeightBlockRole::FinalNorm => 1,
+        WeightBlockRole::AttentionNorm
+        | WeightBlockRole::QueryBias
+        | WeightBlockRole::KeyBias
+        | WeightBlockRole::ValueBias
+        | WeightBlockRole::OutputBias
+        | WeightBlockRole::MlpNorm
+        | WeightBlockRole::FinalNorm => 1,
         WeightBlockRole::TokenEmbedding
         | WeightBlockRole::QueryProjection
         | WeightBlockRole::KeyProjection

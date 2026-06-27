@@ -6,7 +6,7 @@ use crate::hf::metadata::HfModelMetadata;
 pub(crate) fn validate_exact_runtime_contract(metadata: &HfModelMetadata) -> Result<()> {
     validate_supported_architecture(metadata.architecture)?;
     validate_mlp_activation(metadata)?;
-    validate_projection_bias(metadata)
+    validate_mlp_bias(metadata)
 }
 
 fn validate_supported_architecture(architecture: HfArchitectureKind) -> Result<()> {
@@ -36,12 +36,7 @@ fn validate_mlp_activation(metadata: &HfModelMetadata) -> Result<()> {
     }
 }
 
-fn validate_projection_bias(metadata: &HfModelMetadata) -> Result<()> {
-    if metadata.attention_bias {
-        return Err(NervaError::InvalidArgument {
-            reason: "HF attention bias is not supported by the exact runtime contract".to_string(),
-        });
-    }
+fn validate_mlp_bias(metadata: &HfModelMetadata) -> Result<()> {
     if metadata.mlp_bias {
         return Err(NervaError::InvalidArgument {
             reason: "HF MLP bias is not supported by the exact runtime contract".to_string(),

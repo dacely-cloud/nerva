@@ -1,8 +1,10 @@
 mod attention;
 mod causal_lm;
+mod causal_lm_bias;
 mod hf;
 mod hf_contract;
 mod precision;
+mod precision_bias;
 mod prompt;
 mod reference;
 mod safetensors;
