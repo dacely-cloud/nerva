@@ -4,6 +4,7 @@ use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::ffi::{
     NervaCudaHfDecodeSequenceRequest, NervaCudaHfDecodeSequenceResult, run_hf_decode_sequence_u16,
 };
+use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::status::{sequence_failure_reason, sequence_status_from_result};
 use crate::decode::hf_sequence::summary::{CudaHfDecodeSequenceSummary, empty_summary};
 use crate::decode::hf_sequence::validation::validate_request;
@@ -51,6 +52,20 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
                 error,
             );
         }
+        let planned_footprint = match estimate_sequence_footprint(self) {
+            Ok(footprint) => footprint,
+            Err(error) => {
+                return empty_summary(
+                    SmokeStatus::Failed,
+                    self.dtype,
+                    self.hidden,
+                    self.vocab_size,
+                    self.steps,
+                    self.seed_token,
+                    error,
+                );
+            }
+        };
         let uses_declared_descriptors = self
             .weight_plan
             .is_some_and(CudaHfDecodeSequenceWeightPlan::is_declared);
@@ -86,6 +101,7 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             seed_token: out.seed_token,
             tokens,
             observed_token_hash: out.observed_token_hash,
+            planned_footprint,
             resident_weight_bytes: out.resident_weight_bytes,
             planned_weight_blocks: out.planned_weight_blocks,
             planned_gpu_resident_blocks: out.planned_gpu_resident_blocks,

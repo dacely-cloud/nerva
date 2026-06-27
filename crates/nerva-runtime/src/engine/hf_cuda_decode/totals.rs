@@ -1,5 +1,6 @@
 use nerva_core::types::id::device::DeviceOrdinal;
 use nerva_core::types::id::token::TokenId;
+use nerva_cuda::decode::hf_sequence::footprint::CudaHfDecodeSequenceFootprint;
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_ledger::types::event::LedgerEventKind;
@@ -26,6 +27,7 @@ pub(super) struct CudaDecodeCounters {
     sync_calls: u64,
     host_causality_edges: u64,
     hot_path_allocations: u64,
+    cuda_footprint: CudaHfDecodeSequenceFootprint,
 }
 
 impl CudaDecodeCounters {
@@ -42,6 +44,7 @@ impl CudaDecodeCounters {
         self.sync_calls += cuda.sync_calls;
         self.host_causality_edges += cuda.host_causality_edges;
         self.hot_path_allocations += cuda.hot_path_allocations;
+        self.cuda_footprint = cuda.planned_footprint;
     }
 }
 
@@ -91,6 +94,7 @@ pub(super) fn build_summary(
         soft_visibility_syncs: sync_count(&parts.ledgers, SyncClass::SoftVisibilitySync),
         execution_decisions: execution_decisions(&parts.ledgers),
         resident_weight_bytes: counters.resident_weight_bytes,
+        cuda_footprint: counters.cuda_footprint,
         resident_kv_bytes: counters.resident_kv_bytes,
         kv_tokens: counters.kv_tokens,
         h2d_bytes: counters.h2d_bytes,

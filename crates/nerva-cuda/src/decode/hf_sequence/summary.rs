@@ -1,3 +1,4 @@
+use crate::decode::hf_sequence::footprint::CudaHfDecodeSequenceFootprint;
 use crate::json::json_opt_str;
 use crate::smoke::status::SmokeStatus;
 
@@ -16,6 +17,7 @@ pub struct CudaHfDecodeSequenceSummary {
     pub seed_token: u32,
     pub tokens: Vec<u32>,
     pub observed_token_hash: u64,
+    pub planned_footprint: CudaHfDecodeSequenceFootprint,
     pub resident_weight_bytes: u64,
     pub planned_weight_blocks: u32,
     pub planned_gpu_resident_blocks: u32,
@@ -46,7 +48,7 @@ pub struct CudaHfDecodeSequenceSummary {
 impl CudaHfDecodeSequenceSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"planned_gpu_resident_weight_bytes\":{},\"planned_gpu_staged_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"planned_footprint\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"planned_gpu_resident_weight_bytes\":{},\"planned_gpu_staged_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
             self.dtype,
             self.hidden,
@@ -61,6 +63,7 @@ impl CudaHfDecodeSequenceSummary {
             u32s_json(&self.tokens),
             self.tokens.len(),
             self.observed_token_hash,
+            self.planned_footprint.to_json(),
             self.resident_weight_bytes,
             self.planned_weight_blocks,
             self.planned_gpu_resident_blocks,
@@ -114,6 +117,7 @@ pub(crate) fn empty_summary(
         tokens: Vec::new(),
         observed_token_hash: 0,
         resident_weight_bytes: 0,
+        planned_footprint: CudaHfDecodeSequenceFootprint::default(),
         planned_weight_blocks: 0,
         planned_gpu_resident_blocks: 0,
         planned_gpu_staged_blocks: 0,

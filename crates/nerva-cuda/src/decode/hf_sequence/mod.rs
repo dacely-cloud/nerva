@@ -1,4 +1,5 @@
 pub(crate) mod ffi;
+pub mod footprint;
 pub mod request;
 mod status;
 pub mod summary;

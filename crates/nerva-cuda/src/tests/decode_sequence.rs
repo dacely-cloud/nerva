@@ -1,4 +1,5 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
+use crate::decode::hf_sequence::footprint::CudaHfDecodeSequenceFootprint;
 use crate::decode::hf_sequence::request::{
     CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSequenceRequest,
 };
@@ -25,6 +26,7 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         seed_token: 0,
         tokens: vec![1, 2, 3, 0],
         observed_token_hash: 7,
+        planned_footprint: CudaHfDecodeSequenceFootprint::default(),
         resident_weight_bytes: 128,
         planned_weight_blocks: 12,
         planned_gpu_resident_blocks: 6,
@@ -57,6 +59,7 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
     assert!(json.contains("\"steps\":4"));
     assert!(json.contains("\"tokens\":[1,2,3,0]"));
     assert!(json.contains("\"graph_replays\":4"));
+    assert!(json.contains("\"planned_footprint\":{"));
     assert!(json.contains("\"resident_kv_bytes\":64"));
     assert!(json.contains("\"planned_weight_blocks\":12"));
     assert!(json.contains("\"planned_gpu_staged_weight_bytes\":64"));
@@ -138,6 +141,7 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
     assert_eq!(summary.graph_launches, 4);
     assert_eq!(summary.kernel_launches, 4);
     assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.planned_footprint.context_tokens, summary.kv_tokens);
     assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.hot_path_allocations, 0);
     assert_eq!(summary.planned_weight_blocks, 12);

@@ -89,6 +89,8 @@ fn artifact_runs_external_hf_cuda_decode_checkpoint_with_metadata() {
     assert!(json.contains("\"backend\":\"cuda\""));
     assert!(json.contains("\"input_mode\":\"token_ids\""));
     assert!(json.contains("\"prompt_token_ids\":[0,1]"));
+    assert!(json.contains("\"cuda_footprint\":{"));
+    assert!(json.contains("\"context_tokens\":3"));
     assert!(json.contains("\"resident_weight_plan\""));
     assert!(json.contains("\"cuda_contract_matched\":true"));
     assert!(json.contains("\"host_causality_edges\":0"));

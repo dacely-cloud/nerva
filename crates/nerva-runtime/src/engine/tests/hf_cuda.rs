@@ -61,6 +61,8 @@ fn cuda_loaded_hf_seed_decode_matches_cpu_exact_decode() {
     assert_eq!(summary.kernel_launches, 4);
     assert_eq!(summary.sync_calls, 1);
     assert_eq!(summary.host_causality_edges, 0);
+    assert_eq!(summary.cuda_footprint.context_tokens, summary.kv_tokens);
+    assert!(summary.cuda_footprint.device_arena_bytes > summary.resident_weight_bytes);
     assert!(summary.resident_kv_bytes > 0);
     assert_eq!(summary.kv_tokens, 4);
     assert_eq!(summary.hot_path_allocations, 0);
@@ -90,6 +92,7 @@ fn cuda_loaded_hf_seed_decode_uses_chain_for_multi_layer_model() {
     assert_eq!(summary.graph_replay_events, 4);
     assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.kv_tokens, 4);
+    assert_eq!(summary.cuda_footprint.context_tokens, 4);
     assert_eq!(summary.hot_path_allocations, 0);
     assert_eq!(summary.output_hash, summary.expected_hash);
     assert_eq!(summary.critical_paths.len(), 4);
@@ -121,6 +124,7 @@ fn cuda_loaded_hf_seed_decode_matches_kv_context_model() {
     assert!(summary.resident_kv_bytes > 0);
     assert_eq!(summary.kv_tokens, 4);
     assert_eq!(summary.host_causality_edges, 0);
+    assert_eq!(summary.cuda_footprint.context_tokens, summary.kv_tokens);
     assert_eq!(summary.hot_path_allocations, 0);
 }
 
