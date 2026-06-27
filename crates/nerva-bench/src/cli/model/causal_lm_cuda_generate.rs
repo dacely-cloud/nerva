@@ -7,6 +7,7 @@ use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 use crate::cli::exit;
+use crate::cli::model::causal_lm_cuda_perf::stream_perf_json;
 use crate::cli::model::causal_lm_cuda_session::parse_prompt;
 use crate::cli::model::causal_lm_cuda_session_stream::{
     chunks_json, queue_json, records_json, u32s_json,
@@ -75,7 +76,7 @@ fn generate_json(
         .map_err(|err| format!("HF CUDA generate dtype failed: {err:?}"))?;
     let generated_text = generated_text_json(path, output.tokens())?;
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"device_generate\",\"path\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"max_new_tokens\":{},\"tokens\":{},\"generated_text\":{},\"stop_reason\":\"{}\",\"chunks_observed\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"data_hash_available\":{},\"queue\":{},\"create\":{},\"start\":{},\"records\":{},\"chunks\":{}}}",
+        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"device_generate\",\"path\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"max_new_tokens\":{},\"tokens\":{},\"generated_text\":{},\"stop_reason\":\"{}\",\"chunks_observed\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"data_hash_available\":{},\"perf\":{},\"queue\":{},\"create\":{},\"start\":{},\"records\":{},\"chunks\":{}}}",
         json_escape(path),
         json_escape(prompt),
         u32s_json(prompt_ids),
@@ -94,6 +95,7 @@ fn generate_json(
         stream.bytes_loaded,
         stream.data_hash,
         stream.data_hash_available,
+        stream_perf_json(stream),
         queue_json(stream),
         stream.create.to_json(),
         stream.start.to_json(),

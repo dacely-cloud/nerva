@@ -22,6 +22,10 @@ fn hf_cuda_generate_cli_reports_user_facing_generation() {
     assert!(json.contains("\"max_new_tokens\":2"));
     assert!(json.contains("\"stop_reason\":\"max_steps\""));
     assert!(json.contains("\"chunks_observed\":2"));
+    assert!(json.contains("\"perf\":{\"generated_tokens\":2"));
+    assert!(json.contains("\"tokens_per_second\":"));
+    assert!(json.contains("\"token_p99_ms\":"));
+    assert!(json.contains("\"graph_nodes_per_token\":"));
     assert!(json.contains("\"queue\":{\"capacity\":1"));
     assert!(json.contains("\"host_causality_edges\":0"));
     assert!(json.contains("\"device_authoritative\":true"));
