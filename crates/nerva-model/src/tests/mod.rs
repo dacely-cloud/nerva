@@ -1,4 +1,5 @@
 mod attention;
+mod causal_lm;
 mod hf;
 mod precision;
 mod prompt;

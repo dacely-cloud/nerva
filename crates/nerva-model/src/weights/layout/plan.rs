@@ -59,7 +59,7 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
             reason: "KV hidden size overflow".to_string(),
         })?;
 
-    let static_block_count = if metadata.tie_word_embeddings { 1 } else { 2 };
+    let static_block_count = if metadata.tie_word_embeddings { 2 } else { 3 };
     let mut blocks =
         Vec::with_capacity(metadata.num_hidden_layers.saturating_mul(9) + static_block_count);
     blocks.push(WeightBlockSpec::new(
@@ -77,6 +77,15 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
         })?;
         push_layer_weight_blocks(&mut blocks, metadata, kv_hidden, dtype, layer)?;
     }
+
+    blocks.push(WeightBlockSpec::new(
+        WeightBlockRole::FinalNorm,
+        None,
+        metadata.hidden_size,
+        1,
+        dtype,
+        MemoryTier::Dram,
+    )?);
 
     if !metadata.tie_word_embeddings {
         blocks.push(WeightBlockSpec::new(

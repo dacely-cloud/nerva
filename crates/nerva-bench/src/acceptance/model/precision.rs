@@ -76,4 +76,35 @@ pub(crate) fn push_precision_and_cuda_blocks(report: &mut AcceptanceReport) {
             format!("{err:?}"),
         ),
     }
+
+    match nerva_model::causal_lm::smoke::hf_causal_lm_safetensors_smoke(4) {
+        Ok(summary) => report.push(
+            "hf_causal_lm_safetensors_greedy_decode",
+            summary.passed(),
+            format!(
+                "layers={} hidden={} vocab={} manifest_entries={} shard_plan_entries={} tensors_loaded={} bytes_loaded={} final_norm_loaded={} tied_lm_head={} parity={} ledger_count={} cpu_events={} execution_decisions={} output_hash={} data_hash={} hot_path_allocations={}",
+                summary.layers,
+                summary.hidden,
+                summary.vocab_size,
+                summary.manifest_entries,
+                summary.shard_plan_entries,
+                summary.tensors_loaded,
+                summary.bytes_loaded,
+                summary.final_norm_loaded,
+                summary.tied_lm_head,
+                summary.parity,
+                summary.ledger_count,
+                summary.cpu_events,
+                summary.execution_decisions,
+                summary.output_hash,
+                summary.data_hash,
+                summary.hot_path_allocations,
+            ),
+        ),
+        Err(err) => report.push(
+            "hf_causal_lm_safetensors_greedy_decode",
+            false,
+            format!("{err:?}"),
+        ),
+    }
 }

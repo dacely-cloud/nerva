@@ -4,6 +4,7 @@
 compile_error!("NERVA currently supports Linux only.");
 
 pub mod attention;
+pub mod causal_lm;
 pub mod common;
 pub mod hf;
 pub mod precision;

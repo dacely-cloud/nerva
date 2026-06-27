@@ -12,9 +12,9 @@ pub(crate) fn model_manifest_acceptance() -> Result<(bool, String), String> {
 
     let metadata_body = &metadata.metadata;
     let expected_static_blocks = if metadata_body.tie_word_embeddings {
-        1
-    } else {
         2
+    } else {
+        3
     };
     let expected_blocks = metadata_body
         .num_hidden_layers

@@ -16,6 +16,7 @@ pub enum WeightBlockRole {
     GateProjection,
     UpProjection,
     DownProjection,
+    FinalNorm,
     LmHead,
 }
 
@@ -32,6 +33,7 @@ impl WeightBlockRole {
             Self::GateProjection => "gate_proj",
             Self::UpProjection => "up_proj",
             Self::DownProjection => "down_proj",
+            Self::FinalNorm => "final_norm",
             Self::LmHead => "lm_head",
         }
     }

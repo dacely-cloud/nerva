@@ -7,7 +7,7 @@ pub(crate) fn require_token_in_vocab(token: TokenId, vocab_size: usize) -> Resul
     if token.0 as usize >= vocab_size {
         Err(NervaError::InvalidArgument {
             reason: format!(
-                "token id {} is outside tiny model vocabulary {}",
+                "token id {} is outside model vocabulary {}",
                 token.0, vocab_size
             ),
         })

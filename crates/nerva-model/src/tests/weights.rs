@@ -30,10 +30,10 @@ fn plans_hf_weight_layout_from_metadata() {
     .unwrap();
     let plan = plan_hf_weight_layout(&metadata).unwrap();
 
-    assert_eq!(plan.blocks.len(), 20);
-    assert_eq!(plan.static_weight_bytes, 160);
+    assert_eq!(plan.blocks.len(), 21);
+    assert_eq!(plan.static_weight_bytes, 168);
     assert_eq!(plan.per_layer_weight_bytes, 304);
-    assert_eq!(plan.total_weight_bytes, 768);
+    assert_eq!(plan.total_weight_bytes, 776);
     assert_eq!(plan.blocks[0].role, WeightBlockRole::TokenEmbedding);
     assert_eq!(plan.blocks[2].role, WeightBlockRole::QueryProjection);
     assert_eq!(plan.blocks[2].rows, 4);
@@ -61,15 +61,12 @@ fn tied_word_embedding_layout_omits_lm_head_block() {
     .unwrap();
     let plan = plan_hf_weight_layout(&metadata).unwrap();
 
-    assert_eq!(plan.blocks.len(), 19);
-    assert_eq!(plan.static_weight_bytes, 80);
+    assert_eq!(plan.blocks.len(), 20);
+    assert_eq!(plan.static_weight_bytes, 88);
     assert_eq!(plan.per_layer_weight_bytes, 304);
-    assert_eq!(plan.total_weight_bytes, 688);
+    assert_eq!(plan.total_weight_bytes, 696);
     assert_eq!(plan.blocks[0].role, WeightBlockRole::TokenEmbedding);
-    assert_eq!(
-        plan.blocks.last().unwrap().role,
-        WeightBlockRole::DownProjection
-    );
+    assert_eq!(plan.blocks.last().unwrap().role, WeightBlockRole::FinalNorm);
     assert!(plan.to_json().contains("\"tie_word_embeddings\":true"));
 }
 
@@ -78,13 +75,13 @@ fn hf_weight_layout_probe_reports_llama_scale_counts() {
     let summary = hf_weight_layout_probe().unwrap();
 
     assert_eq!(summary.status, HfWeightLayoutProbeStatus::Ok);
-    assert_eq!(summary.plan.blocks.len(), 290);
-    assert_eq!(summary.plan.static_weight_bytes, 524_288_000);
+    assert_eq!(summary.plan.blocks.len(), 291);
+    assert_eq!(summary.plan.static_weight_bytes, 524_296_192);
     assert_eq!(summary.plan.per_layer_weight_bytes, 354_435_072);
-    assert_eq!(summary.plan.total_weight_bytes, 11_866_210_304);
+    assert_eq!(summary.plan.total_weight_bytes, 11_866_218_496);
     assert_eq!(summary.plan.dtype, DType::BF16);
     assert_ne!(summary.layout_hash, 0);
-    assert!(summary.to_json().contains("\"blocks\":290"));
+    assert!(summary.to_json().contains("\"blocks\":291"));
 }
 
 #[test]
@@ -136,6 +133,12 @@ fn builds_canonical_hf_tensor_manifest_names() {
         manifest.entries[10].name,
         "model.layers.1.input_layernorm.weight"
     );
+    assert_eq!(
+        manifest.entries[18].name,
+        "model.layers.1.mlp.down_proj.weight"
+    );
+    assert_eq!(manifest.entries[19].name, "model.norm.weight");
+    assert_eq!(manifest.entries[19].rank, 1);
     assert_eq!(manifest.entries.last().unwrap().name, "lm_head.weight");
     assert_ne!(manifest.manifest_hash, 0);
 }
@@ -146,13 +149,10 @@ fn tied_word_embedding_manifest_omits_lm_head_tensor() {
     let header = synthetic_safetensors_header_for_manifest(&manifest).unwrap();
     let validation = validate_safetensors_header_for_manifest(&header, &manifest).unwrap();
 
-    assert_eq!(manifest.entries.len(), 19);
-    assert_eq!(manifest.total_weight_bytes, 688);
+    assert_eq!(manifest.entries.len(), 20);
+    assert_eq!(manifest.total_weight_bytes, 696);
     assert_eq!(manifest.entries[0].name, "model.embed_tokens.weight");
-    assert_eq!(
-        manifest.entries.last().unwrap().name,
-        "model.layers.1.mlp.down_proj.weight"
-    );
+    assert_eq!(manifest.entries.last().unwrap().name, "model.norm.weight");
     assert!(
         !manifest
             .entries
@@ -160,8 +160,8 @@ fn tied_word_embedding_manifest_omits_lm_head_tensor() {
             .any(|entry| entry.name == "lm_head.weight")
     );
     assert!(!header.contains("lm_head.weight"));
-    assert_eq!(validation.validated_tensors, 19);
-    assert_eq!(validation.total_data_bytes, 688);
+    assert_eq!(validation.validated_tensors, 20);
+    assert_eq!(validation.total_data_bytes, 696);
 }
 
 #[test]
@@ -178,8 +178,8 @@ fn hf_tensor_manifest_probe_reports_llama_manifest() {
     let summary = hf_tensor_manifest_probe().unwrap();
 
     assert_eq!(summary.status, HfTensorManifestProbeStatus::Ok);
-    assert_eq!(summary.manifest.entries.len(), 290);
-    assert_eq!(summary.manifest.total_weight_bytes, 11_866_210_304);
+    assert_eq!(summary.manifest.entries.len(), 291);
+    assert_eq!(summary.manifest.total_weight_bytes, 11_866_218_496);
     assert_eq!(
         summary.manifest.entries.first().unwrap().name,
         "model.embed_tokens.weight"
@@ -189,5 +189,5 @@ fn hf_tensor_manifest_probe_reports_llama_manifest() {
         "lm_head.weight"
     );
     assert_ne!(summary.manifest.manifest_hash, 0);
-    assert!(summary.to_json().contains("\"entries\":290"));
+    assert!(summary.to_json().contains("\"entries\":291"));
 }

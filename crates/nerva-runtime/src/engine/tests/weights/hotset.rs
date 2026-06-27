@@ -21,14 +21,14 @@ fn resident_weight_hotset_promotion_moves_bounded_prefix_to_vram() {
 
     assert_eq!(summary.promoted_blocks, 7);
     assert_eq!(summary.promoted_bytes, 192);
-    assert_eq!(summary.considered_blocks, 11);
-    assert_eq!(summary.kept_dram_blocks, 4);
+    assert_eq!(summary.considered_blocks, 12);
+    assert_eq!(summary.kept_dram_blocks, 5);
     assert_eq!(summary.budget_limited_blocks, 1);
     assert_eq!(summary.capacity_limited_blocks, 0);
     assert_eq!(summary.already_hot_blocks, 0);
     assert_eq!(summary.vram_used_bytes, 192);
-    assert_eq!(summary.dram_used_bytes, 272);
-    assert_eq!(summary.residency_decisions, 11);
+    assert_eq!(summary.dram_used_bytes, 280);
+    assert_eq!(summary.residency_decisions, 12);
     assert_eq!(
         summary.first_promoted_tensor.as_deref(),
         Some("model.embed_tokens.weight")
@@ -53,7 +53,7 @@ fn resident_weight_hotset_promotion_moves_bounded_prefix_to_vram() {
     }));
     assert!(summary.to_json().contains("\"promoted_blocks\":7"));
     assert!(summary.to_json().contains("\"budget_limited_blocks\":1"));
-    assert!(summary.to_json().contains("\"kept_dram_blocks\":4"));
+    assert!(summary.to_json().contains("\"kept_dram_blocks\":5"));
 }
 
 #[test]
@@ -69,24 +69,24 @@ fn resident_weight_hotset_promotion_respects_vram_capacity_and_zero_limit() {
     let zero = runtime
         .promote_resident_weight_hotset(&mut table, 0)
         .unwrap();
-    assert_eq!(zero.considered_blocks, 11);
+    assert_eq!(zero.considered_blocks, 12);
     assert_eq!(zero.promoted_blocks, 0);
-    assert_eq!(zero.kept_dram_blocks, 11);
+    assert_eq!(zero.kept_dram_blocks, 12);
     assert_eq!(zero.budget_limited_blocks, 1);
     assert_eq!(zero.capacity_limited_blocks, 0);
-    assert_eq!(zero.residency_decisions, 11);
+    assert_eq!(zero.residency_decisions, 12);
     assert_eq!(zero.vram_used_bytes, 0);
 
     let summary = runtime
         .promote_resident_weight_hotset(&mut table, usize::MAX)
         .unwrap();
-    assert_eq!(summary.considered_blocks, 11);
+    assert_eq!(summary.considered_blocks, 12);
     assert_eq!(summary.promoted_blocks, 2);
     assert_eq!(summary.promoted_bytes, 88);
-    assert_eq!(summary.kept_dram_blocks, 9);
+    assert_eq!(summary.kept_dram_blocks, 10);
     assert_eq!(summary.budget_limited_blocks, 0);
     assert_eq!(summary.capacity_limited_blocks, 1);
-    assert_eq!(summary.residency_decisions, 11);
+    assert_eq!(summary.residency_decisions, 12);
     assert_eq!(summary.vram_used_bytes, 88);
-    assert_eq!(summary.dram_used_bytes, 376);
+    assert_eq!(summary.dram_used_bytes, 384);
 }

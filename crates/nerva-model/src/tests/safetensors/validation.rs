@@ -48,9 +48,9 @@ fn safetensors_header_probe_reports_manifest_parity() {
     let summary = safetensors_header_probe().unwrap();
 
     assert_eq!(summary.status, SafetensorsValidationStatus::Ok);
-    assert_eq!(summary.validation.manifest_entries, 290);
-    assert_eq!(summary.validation.validated_tensors, 290);
-    assert_eq!(summary.validation.total_data_bytes, 11_866_210_304);
+    assert_eq!(summary.validation.manifest_entries, 291);
+    assert_eq!(summary.validation.validated_tensors, 291);
+    assert_eq!(summary.validation.total_data_bytes, 11_866_218_496);
     assert_ne!(summary.validation.header_hash, 0);
-    assert!(summary.to_json().contains("\"validated_tensors\":290"));
+    assert!(summary.to_json().contains("\"validated_tensors\":291"));
 }

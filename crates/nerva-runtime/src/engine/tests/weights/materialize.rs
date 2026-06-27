@@ -54,7 +54,7 @@ fn materialized_weight_manifest_preserves_last_block_and_decision() {
     let last = table.entries.last().unwrap();
     let decision = table.ledger.residency_decisions.last().unwrap();
     assert_eq!(last.name, "lm_head.weight");
-    assert_eq!(last.block_id, ResidentBlockId(290));
+    assert_eq!(last.block_id, ResidentBlockId(291));
     assert_eq!(decision.block_id, last.block_id);
     assert_eq!(decision.old_tier, MemoryTier::Disk);
     assert_eq!(decision.new_tier, MemoryTier::Dram);
@@ -84,7 +84,7 @@ fn materializes_safetensors_shard_plan_with_source_offsets() {
 
     assert_eq!(table.entries.len(), plan.entries.len());
     assert_eq!(table.total_weight_bytes, plan.total_weight_bytes);
-    assert_eq!(table.registry.used_bytes(MemoryTier::Dram), 464);
+    assert_eq!(table.registry.used_bytes(MemoryTier::Dram), 472);
     assert_eq!(table.registry.used_bytes(MemoryTier::Vram), 0);
     assert_eq!(table.ledger.hot_path_allocations, 0);
     assert_eq!(table.ledger.residency_decisions.len(), plan.entries.len());

@@ -29,7 +29,7 @@ fn resident_weight_prefetch_plan_records_bounded_tasks() {
     assert_eq!(first.file_offset_begin, 8 + header_len);
     assert_eq!(first.file_offset_end, 8 + header_len + first.bytes);
     assert_eq!(first.target_tier, MemoryTier::Dram);
-    assert!(prefetch.to_json().contains("\"tasks\":11"));
+    assert!(prefetch.to_json().contains("\"tasks\":12"));
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn resident_weight_prefetch_execution_marks_blocks_ready() {
     assert_eq!(summary.copy_events, prefetch.tasks.len() as u64);
     assert_eq!(summary.ready_blocks, table.entries.len());
     assert_eq!(summary.hot_path_allocations, 0);
-    assert!(summary.to_json().contains("\"ready_blocks\":11"));
+    assert!(summary.to_json().contains("\"ready_blocks\":12"));
     assert!(table.entries.iter().all(|entry| {
         table
             .registry

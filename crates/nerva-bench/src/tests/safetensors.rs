@@ -43,7 +43,7 @@ fn safetensors_probe_reads_file_header_and_validates_manifest() {
     assert!(json.contains("\"status\":\"ok\""));
     assert!(json.contains("\"file_header\""));
     assert!(json.contains("\"validation\""));
-    assert!(json.contains("\"validated_tensors\":11"));
+    assert!(json.contains("\"validated_tensors\":12"));
     assert!(json.contains("\"payload_bytes\""));
 
     let _ = std::fs::remove_file(&path);
@@ -93,7 +93,7 @@ fn safetensors_shard_probe_reads_index_and_headers() {
     .unwrap();
 
     assert!(json.contains("\"status\":\"ok\""));
-    assert!(json.contains("\"entries\":20"));
+    assert!(json.contains("\"entries\":21"));
     assert!(json.contains("\"shards\":2"));
 
     let resident_json = run_resident_shard_probe(
@@ -104,10 +104,10 @@ fn safetensors_shard_probe_reads_index_and_headers() {
     )
     .unwrap();
     assert!(resident_json.contains("\"status\":\"ok\""));
-    assert!(resident_json.contains("\"blocks\":20"));
+    assert!(resident_json.contains("\"blocks\":21"));
     assert!(resident_json.contains("\"prefetch\""));
     assert!(resident_json.contains("\"execution\""));
-    assert!(resident_json.contains("\"tasks\":20"));
+    assert!(resident_json.contains("\"tasks\":21"));
     assert!(resident_json.contains("\"disk_read_events\""));
     assert!(resident_json.contains("\"data_hash\""));
 

@@ -32,6 +32,9 @@ pub(crate) fn hf_tensor_name(
         WeightBlockRole::LmHead => {
             require_static_tensor(role, layer).map(|()| "lm_head.weight".to_string())
         }
+        WeightBlockRole::FinalNorm => {
+            require_static_tensor(role, layer).map(|()| "model.norm.weight".to_string())
+        }
         WeightBlockRole::AttentionNorm => layer_name(role, layer, "input_layernorm.weight"),
         WeightBlockRole::MlpNorm => layer_name(role, layer, "post_attention_layernorm.weight"),
         WeightBlockRole::QueryProjection => layer_name(role, layer, "self_attn.q_proj.weight"),
@@ -63,7 +66,7 @@ fn layer_name(role: WeightBlockRole, layer: Option<u32>, suffix: &'static str) -
 
 pub(crate) fn weight_block_rank(role: WeightBlockRole) -> u8 {
     match role {
-        WeightBlockRole::AttentionNorm | WeightBlockRole::MlpNorm => 1,
+        WeightBlockRole::AttentionNorm | WeightBlockRole::MlpNorm | WeightBlockRole::FinalNorm => 1,
         WeightBlockRole::TokenEmbedding
         | WeightBlockRole::QueryProjection
         | WeightBlockRole::KeyProjection

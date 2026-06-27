@@ -26,10 +26,10 @@ fn plans_safetensors_shards_from_index_and_headers() {
     .unwrap();
 
     assert_eq!(required, vec![SHARD_ONE.to_string(), SHARD_TWO.to_string()]);
-    assert_eq!(plan.entries.len(), 20);
+    assert_eq!(plan.entries.len(), 21);
     assert_eq!(plan.shards.len(), 2);
-    assert_eq!(plan.total_weight_bytes, 768);
-    assert_eq!(plan.index_total_size, Some(768));
+    assert_eq!(plan.total_weight_bytes, 776);
+    assert_eq!(plan.index_total_size, Some(776));
     assert_eq!(plan.shards[0].file_name, SHARD_ONE);
     assert_eq!(plan.shards[0].tensor_count, 10);
     assert_eq!(plan.shards[0].payload_bytes, 384);
@@ -60,11 +60,11 @@ fn safetensors_shard_plan_supports_tied_embedding_manifest() {
     )
     .unwrap();
 
-    assert_eq!(plan.entries.len(), 19);
-    assert_eq!(plan.total_weight_bytes, 688);
+    assert_eq!(plan.entries.len(), 20);
+    assert_eq!(plan.total_weight_bytes, 696);
     assert_eq!(
         plan.entries.last().unwrap().tensor_name,
-        "model.layers.1.mlp.down_proj.weight"
+        "model.norm.weight"
     );
     assert!(
         !plan

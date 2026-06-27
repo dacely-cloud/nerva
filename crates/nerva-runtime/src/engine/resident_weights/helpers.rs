@@ -37,7 +37,8 @@ pub(super) fn weight_role_layout_id(role: WeightBlockRole) -> u32 {
         WeightBlockRole::GateProjection => 8,
         WeightBlockRole::UpProjection => 9,
         WeightBlockRole::DownProjection => 10,
-        WeightBlockRole::LmHead => 11,
+        WeightBlockRole::FinalNorm => 11,
+        WeightBlockRole::LmHead => 12,
     }
 }
 
