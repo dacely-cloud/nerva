@@ -83,6 +83,13 @@ speedup over rvLLM for this exact model.
 The current rvLLM baseline status is tracked separately in
 `docs/source/RVLLM_BASELINE_RESULTS.md`.
 
+The machine-readable comparison evidence used by acceptance is stored in:
+
+```text
+docs/source/perf/qwen3_8b_nerva_cuda_generate.json
+docs/source/perf/qwen3_8b_vllm_latency.json
+```
+
 ## Profiler Result
 
 The single-prompt profile for 128 input tokens and 64 output tokens shows the

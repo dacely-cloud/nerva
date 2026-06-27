@@ -56,7 +56,10 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"measurement_table_bootstrap\""));
     assert!(json.contains("\"measured_planner_decision\""));
     assert!(json.contains("\"perf_claim_gate\""));
+    assert!(json.contains("qwen_artifacts_loaded=true"));
     assert!(json.contains("current_qwen_claim_allowed=false"));
+    assert!(json.contains("current_qwen_beats_vllm=true"));
+    assert!(json.contains("current_qwen_nerva_artifact=nerva-qwen3-8b-cuda-generate-2026-06-27"));
     assert!(json.contains("current_qwen_rvllm_comparable=false"));
     assert!(json.contains("requires_vllm_and_rvllm=true"));
     assert!(json.contains("\"memory_fabric_loop\""));

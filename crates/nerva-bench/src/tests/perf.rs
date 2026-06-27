@@ -1,5 +1,11 @@
 use crate::artifact::run::run_artifact;
+use crate::perf::measurement::PerfMeasurement;
 use crate::perf::run::{compare_perf_baseline, perf_baseline_json_from_args};
+
+const NERVA_QWEN3_8B_PERF: &str =
+    include_str!("../../../../docs/source/perf/qwen3_8b_nerva_cuda_generate.json");
+const VLLM_QWEN3_8B_PERF: &str =
+    include_str!("../../../../docs/source/perf/qwen3_8b_vllm_latency.json");
 
 #[test]
 fn perf_baseline_rejects_claims_without_beating_all_baselines() {
@@ -85,4 +91,38 @@ fn external_baseline_artifact_records_unmeasured_rvllm_status() {
     assert!(json.contains("\"baseline_status\":\"unsupported_workload\""));
     assert!(json.contains("\"tokens_per_second\":null"));
     assert!(json.contains("\"claim_blocked\":true"));
+}
+
+#[test]
+fn perf_measurement_artifacts_prove_current_qwen_vllm_comparison() {
+    let nerva = PerfMeasurement::parse("nerva", NERVA_QWEN3_8B_PERF).unwrap();
+    let vllm = PerfMeasurement::parse("vllm", VLLM_QWEN3_8B_PERF).unwrap();
+
+    assert_eq!(nerva.engine, "nerva");
+    assert_eq!(vllm.engine, "vllm");
+    assert!(nerva.matches_workload(&vllm));
+    assert!(nerva.beats(&vllm));
+    assert_eq!(
+        nerva.measurement_id,
+        "nerva-qwen3-8b-cuda-generate-2026-06-27"
+    );
+}
+
+#[test]
+fn perf_measurement_rejects_non_positive_or_mismatched_artifacts() {
+    let bad = r#"{
+        "schema":"nerva-perf-measurement-v1",
+        "engine":"nerva",
+        "workload":"qwen3_8b_bf16_decode",
+        "scope":"single_gpu_resident_external_baseline_required",
+        "measurement_id":"bad",
+        "tokens_per_second":0,
+        "p99_ms":1
+    }"#;
+    assert!(PerfMeasurement::parse("bad", bad).is_err());
+
+    let mut other = PerfMeasurement::parse("vllm", VLLM_QWEN3_8B_PERF).unwrap();
+    other.scope = "different_scope".to_string();
+    let nerva = PerfMeasurement::parse("nerva", NERVA_QWEN3_8B_PERF).unwrap();
+    assert!(!nerva.matches_workload(&other));
 }

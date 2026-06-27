@@ -1,0 +1,19 @@
+{
+  "schema": "nerva-perf-measurement-v1",
+  "engine": "nerva",
+  "workload": "qwen3_8b_bf16_decode",
+  "scope": "single_gpu_resident_external_baseline_required",
+  "measurement_id": "nerva-qwen3-8b-cuda-generate-2026-06-27",
+  "measurement_date": "2026-06-27",
+  "host": "RTX 5090",
+  "model": "Qwen3-8B local safetensors snapshot",
+  "command": "hf-cuda-generate <qwen3-8b-snapshot> 3 2 64 ids:0",
+  "generated_tokens": 2,
+  "tokens_per_second": 97.100407,
+  "p99_ms": 10.355418,
+  "graph_nodes_per_token": 328.0,
+  "host_causality_edges": 0,
+  "hot_path_allocations": 0,
+  "comparable": true,
+  "source": "NERVA CUDA device-generate artifact perf block"
+}

@@ -1,0 +1,18 @@
+{
+  "schema": "nerva-perf-measurement-v1",
+  "engine": "vllm",
+  "workload": "qwen3_8b_bf16_decode",
+  "scope": "single_gpu_resident_external_baseline_required",
+  "measurement_id": "vllm-qwen3-8b-latency-2026-06-27",
+  "measurement_date": "2026-06-27",
+  "host": "RTX 5090",
+  "model": "Qwen3-8B local safetensors snapshot",
+  "command": "vllm bench latency",
+  "generated_tokens": 2,
+  "request_avg_ms": 22.3879596,
+  "request_p99_ms": 23.32,
+  "tokens_per_second": 89.33,
+  "p99_ms": 11.66,
+  "comparable": true,
+  "source": "docs/source/VLLM_LATENCY_RESULTS.md short decode baseline"
+}
