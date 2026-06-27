@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use crate::cli::model::{
-    attention, block, causal_lm, contracts, parity, precision, prompt, tiny, warm,
+    attention, block, causal_lm, causal_lm_cuda, contracts, parity, precision, prompt, tiny, warm,
 };
 
 pub(crate) fn dispatch(
@@ -16,6 +16,7 @@ pub(crate) fn dispatch(
         Some("prompt-model") => Some(prompt::run_prompt_model(args)),
         Some("precision-model") => Some(precision::run_tiny_precision_model(args)),
         Some("hf-decode") => Some(causal_lm::run_hf_causal_lm_decode(args)),
+        Some("hf-cuda-decode") => Some(causal_lm_cuda::run_hf_causal_lm_cuda_decode(args)),
         Some("vllm-parity") => Some(parity::run_vllm_parity(args)),
         Some("attention") => Some(attention::run_attention()),
         Some("warm") => Some(warm::run_warm_compute()),
