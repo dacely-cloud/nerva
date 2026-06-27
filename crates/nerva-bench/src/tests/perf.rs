@@ -64,3 +64,25 @@ fn perf_baseline_artifact_wraps_comparison_evidence() {
     assert!(json.contains("\"summary\""));
     assert!(json.contains("\"claim_allowed\":true"));
 }
+
+#[test]
+fn external_baseline_artifact_records_unmeasured_rvllm_status() {
+    let json = run_artifact(
+        Some("external-baseline".to_string()),
+        vec![
+            "rvllm".to_string(),
+            "qwen3_8b_bf16_decode".to_string(),
+            "single_gpu_resident_external_baseline_required".to_string(),
+            "compile_failed".to_string(),
+            "rvllm-loader missing Gemma4LayerWeights fields".to_string(),
+        ],
+    )
+    .unwrap();
+
+    assert!(json.contains("\"artifact_schema\":\"nerva-bench-v1\""));
+    assert!(json.contains("\"schema\":\"nerva-external-baseline-v1\""));
+    assert!(json.contains("\"engine\":\"rvllm\""));
+    assert!(json.contains("\"baseline_status\":\"compile_failed\""));
+    assert!(json.contains("\"tokens_per_second\":null"));
+    assert!(json.contains("\"claim_blocked\":true"));
+}

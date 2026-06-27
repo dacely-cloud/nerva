@@ -12,7 +12,7 @@ use crate::{
     },
     parity::run::run_vllm_token_identity_parity,
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
-    perf::run::perf_baseline_json_from_args,
+    perf::{external::external_baseline_json_from_args, run::perf_baseline_json_from_args},
     probes::{
         backend, compute, kv, measurements, memory_loop, mgpu, phase, queue, runtime, synthetic,
         token, transaction, transport,
@@ -113,6 +113,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
             run_vllm_token_identity_parity(args.first().cloned(), steps)
         }
         "perf-baseline" => perf_baseline_json_from_args(args),
+        "external-baseline" => external_baseline_json_from_args(args),
         "metadata" => run_metadata_probe(args.first().cloned()),
         "layout" => run_layout_probe(args.first().cloned()),
         "manifest" => run_manifest_probe(args.first().cloned()),

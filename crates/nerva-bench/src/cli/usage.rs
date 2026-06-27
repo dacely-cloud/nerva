@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "measured-planner",
     "memory-loop",
     "perf-baseline workload scope nerva_tps vllm_tps rvllm_tps nerva_p99_ms vllm_p99_ms rvllm_p99_ms",
+    "external-baseline engine workload scope status evidence",
     "block",
     "precision",
     "safetensors-block",

@@ -78,6 +78,9 @@ NERVA Qwen3-8B path measured about `97.07` tokens/s, `10.35 ms` token P99, and
 recorded vLLM comparison for the fully resident single-GPU sample, but the
 claim gate remains open until an rvLLM baseline is recorded too.
 
+The current rvLLM baseline status is tracked separately in
+`docs/source/RVLLM_BASELINE_RESULTS.md`.
+
 ## Profiler Result
 
 The single-prompt profile for 128 input tokens and 64 output tokens shows the
