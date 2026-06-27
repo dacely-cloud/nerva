@@ -4,6 +4,10 @@ use nerva_core::types::id::token::TokenId;
 use crate::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
 
 impl HfCausalLmModel {
+    pub fn token_embeddings(&self) -> &[u16] {
+        &self.embeddings
+    }
+
     pub fn final_norm_weight(&self) -> &[u16] {
         &self.final_norm
     }

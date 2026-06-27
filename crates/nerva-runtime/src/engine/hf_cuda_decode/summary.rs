@@ -20,6 +20,7 @@ pub struct HfCudaSeedDecodeSummary {
     pub d2h_bytes: u64,
     pub kernel_launches: u64,
     pub sync_calls: u64,
+    pub host_causality_edges: u64,
     pub hot_path_allocations: u64,
     pub output_hash: u64,
     pub expected_hash: u64,
@@ -33,7 +34,7 @@ impl HfCudaSeedDecodeSummary {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"error\":{}}}",
             status_json(&self.status),
             self.steps_requested,
             tokens_json(&self.tokens),
@@ -49,6 +50,7 @@ impl HfCudaSeedDecodeSummary {
             self.d2h_bytes,
             self.kernel_launches,
             self.sync_calls,
+            self.host_causality_edges,
             self.hot_path_allocations,
             self.output_hash,
             self.expected_hash,

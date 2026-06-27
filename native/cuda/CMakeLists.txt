@@ -209,6 +209,7 @@ add_library(nerva_cuda STATIC
     nerva_cuda_hf_sampler.cu
     nerva_cuda_hf_decode_step.cu
     nerva_cuda_hf_decode_chain.cu
+    nerva_cuda_hf_decode_sequence.cu
     nerva_cuda_tiny_decode.cu
     nerva_cuda_tiered_attention.cu
     smoke_kernel.cu

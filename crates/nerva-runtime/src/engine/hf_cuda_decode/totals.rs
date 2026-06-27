@@ -1,8 +1,5 @@
 use nerva_core::types::id::token::TokenId;
-use nerva_cuda::block::forward::summary::CudaBlockForwardSummary;
-use nerva_cuda::decode::hf_chain::summary::CudaHfDecodeChainSummary;
-use nerva_cuda::decode::hf_step::summary::CudaHfDecodeStepSummary;
-use nerva_cuda::sampler::hf_head::summary::CudaHfSamplerSummary;
+use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
@@ -18,43 +15,18 @@ pub(super) struct CudaDecodeCounters {
     d2h_bytes: u64,
     kernel_launches: u64,
     sync_calls: u64,
+    host_causality_edges: u64,
     hot_path_allocations: u64,
 }
 
 impl CudaDecodeCounters {
-    pub(super) fn record_block(&mut self, cuda: &CudaBlockForwardSummary) {
+    pub(super) fn record_sequence(&mut self, cuda: &CudaHfDecodeSequenceSummary) {
         self.resident_weight_bytes += cuda.resident_weight_bytes;
         self.h2d_bytes += cuda.h2d_bytes;
         self.d2h_bytes += cuda.d2h_bytes;
         self.kernel_launches += cuda.kernel_launches;
         self.sync_calls += cuda.sync_calls;
-        self.hot_path_allocations += cuda.hot_path_allocations;
-    }
-
-    pub(super) fn record_sampler(&mut self, cuda: &CudaHfSamplerSummary) {
-        self.resident_weight_bytes += cuda.resident_weight_bytes;
-        self.h2d_bytes += cuda.h2d_bytes;
-        self.d2h_bytes += cuda.d2h_bytes;
-        self.kernel_launches += cuda.kernel_launches;
-        self.sync_calls += cuda.sync_calls;
-        self.hot_path_allocations += cuda.hot_path_allocations;
-    }
-
-    pub(super) fn record_fused(&mut self, cuda: &CudaHfDecodeStepSummary) {
-        self.resident_weight_bytes += cuda.resident_weight_bytes;
-        self.h2d_bytes += cuda.h2d_bytes;
-        self.d2h_bytes += cuda.d2h_bytes;
-        self.kernel_launches += cuda.kernel_launches;
-        self.sync_calls += cuda.sync_calls;
-        self.hot_path_allocations += cuda.hot_path_allocations;
-    }
-
-    pub(super) fn record_chain(&mut self, cuda: &CudaHfDecodeChainSummary) {
-        self.resident_weight_bytes += cuda.resident_weight_bytes;
-        self.h2d_bytes += cuda.h2d_bytes;
-        self.d2h_bytes += cuda.d2h_bytes;
-        self.kernel_launches += cuda.kernel_launches;
-        self.sync_calls += cuda.sync_calls;
+        self.host_causality_edges += cuda.host_causality_edges;
         self.hot_path_allocations += cuda.hot_path_allocations;
     }
 }
@@ -105,6 +77,7 @@ pub(super) fn build_summary(
         d2h_bytes: counters.d2h_bytes,
         kernel_launches: counters.kernel_launches,
         sync_calls: counters.sync_calls,
+        host_causality_edges: counters.host_causality_edges,
         hot_path_allocations: counters.hot_path_allocations
             + hot_path_allocations(&parts.ledgers)
             + hot_path_allocations(cpu_ledgers),

@@ -313,6 +313,57 @@ typedef struct NervaCudaHfDecodeChainResult {
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeChainResult;
 
+typedef struct NervaCudaHfDecodeSequenceRequest {
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint32_t vocab_size;
+  uint32_t layer_count;
+  uint32_t steps;
+  uint32_t seed_token;
+  uint32_t has_eos_token;
+  uint32_t eos_token;
+  float rms_eps;
+  float rope_theta;
+  const uint16_t *embeddings;
+  const NervaCudaHfDecodeChainLayer *layers;
+  const uint16_t *final_norm_weight;
+  const uint16_t *lm_head;
+  uint32_t *output_tokens;
+  uint32_t output_token_capacity;
+} NervaCudaHfDecodeSequenceRequest;
+
+typedef struct NervaCudaHfDecodeSequenceResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint32_t vocab_size;
+  uint32_t layer_count;
+  uint32_t steps;
+  uint32_t seed_token;
+  uint32_t observed_tokens;
+  uint32_t last_token;
+  uint64_t observed_token_hash;
+  uint64_t resident_weight_bytes;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t host_causality_edges;
+  uint64_t hot_path_allocations;
+} NervaCudaHfDecodeSequenceResult;
+
 typedef struct NervaCudaTinyDecodeResult {
   int32_t status;
   int32_t cuda_error;
@@ -425,6 +476,9 @@ int nerva_cuda_hf_decode_step_u16(const NervaCudaHfDecodeStepRequest *request,
                                   NervaCudaHfDecodeStepResult *out);
 int nerva_cuda_hf_decode_chain_u16(const NervaCudaHfDecodeChainRequest *request,
                                    NervaCudaHfDecodeChainResult *out);
+int nerva_cuda_hf_decode_sequence_u16(
+    const NervaCudaHfDecodeSequenceRequest *request,
+    NervaCudaHfDecodeSequenceResult *out);
 int nerva_cuda_tiny_decode_smoke(uint32_t steps,
                                  uint32_t ring_capacity,
                                  uint32_t seed_token,

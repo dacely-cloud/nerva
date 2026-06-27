@@ -44,11 +44,12 @@ fn cuda_loaded_hf_seed_decode_matches_cpu_exact_decode() {
     assert_eq!(summary.tokens, summary.expected_tokens);
     assert_eq!(summary.ledger_count, 4);
     assert_eq!(summary.device_events, 4);
-    assert_eq!(summary.copy_events, 8);
-    assert_eq!(summary.hard_syncs, 4);
+    assert_eq!(summary.copy_events, 2);
+    assert_eq!(summary.hard_syncs, 1);
     assert_eq!(summary.execution_decisions, 4);
     assert_eq!(summary.kernel_launches, 4);
-    assert_eq!(summary.sync_calls, 4);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.hot_path_allocations, 0);
     assert_eq!(summary.output_hash, summary.expected_hash);
     assert!(summary.h2d_bytes >= summary.resident_weight_bytes);
@@ -72,11 +73,12 @@ fn cuda_loaded_hf_seed_decode_uses_chain_for_multi_layer_model() {
     assert_eq!(summary.tokens, summary.expected_tokens);
     assert_eq!(summary.ledger_count, 4);
     assert_eq!(summary.device_events, 4);
-    assert_eq!(summary.copy_events, 8);
-    assert_eq!(summary.hard_syncs, 4);
+    assert_eq!(summary.copy_events, 2);
+    assert_eq!(summary.hard_syncs, 1);
     assert_eq!(summary.execution_decisions, 4);
     assert_eq!(summary.kernel_launches, 4);
-    assert_eq!(summary.sync_calls, 4);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.hot_path_allocations, 0);
     assert_eq!(summary.output_hash, summary.expected_hash);
 }
