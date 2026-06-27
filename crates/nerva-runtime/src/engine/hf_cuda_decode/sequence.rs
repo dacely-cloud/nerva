@@ -88,7 +88,7 @@ fn sequence_layers(model: &HfCausalLmModel) -> Result<Vec<CudaHfDecodeChainLayer
     Ok(layers)
 }
 
-fn cuda_dtype(dtype: DType) -> Result<u32> {
+pub(super) fn cuda_dtype(dtype: DType) -> Result<u32> {
     match dtype {
         DType::F16 => Ok(CUDA_HF_DECODE_SEQUENCE_DTYPE_F16),
         DType::BF16 => Ok(CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16),

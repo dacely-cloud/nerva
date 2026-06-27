@@ -3,14 +3,13 @@ use std::process::ExitCode;
 use nerva_core::types::id::token::TokenId;
 use nerva_model::causal_lm::load_options::HfCausalLmLoadOptions;
 use nerva_runtime::engine::hf_cuda_decode::run::{
-    run_loaded_hf_causal_lm_cuda_prompt_decode,
-    run_loaded_hf_causal_lm_cuda_prompt_decode_device_only,
-    run_loaded_hf_causal_lm_cuda_seed_decode,
+    run_loaded_hf_causal_lm_cuda_prompt_decode, run_loaded_hf_causal_lm_cuda_seed_decode,
 };
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 use tokenizers::Tokenizer;
 
 use crate::cli::exit;
+use crate::cli::model::causal_lm_cuda_device::hf_causal_lm_cuda_device_only_with_tokens_json;
 use crate::cli::model::causal_lm_cuda_json::{HfCudaDecodeJson, hf_cuda_decode_json};
 use crate::cli::model::causal_lm_text::generated_text_json;
 use crate::parse::{parse_optional_u32, parse_optional_usize};
@@ -120,14 +119,18 @@ fn hf_causal_lm_cuda_decode_with_tokens_json(
     steps: usize,
     verify_reference: bool,
 ) -> Result<String, String> {
-    let load_options = if verify_reference {
-        HfCausalLmLoadOptions::full_verification()
-    } else {
-        HfCausalLmLoadOptions::skip_payload_hash()
-    };
+    if !verify_reference {
+        return hf_causal_lm_cuda_device_only_with_tokens_json(
+            path,
+            input_mode,
+            prompt_token_ids,
+            prompt_text,
+            steps,
+        );
+    }
     let loaded = nerva_model::causal_lm::types::HfCausalLmModel::load_from_hf_dir_with_options(
         &path,
-        load_options,
+        HfCausalLmLoadOptions::full_verification(),
     )
     .map_err(|err| format!("HF causal LM load failed: {err:?}"))?;
     let runtime = Runtime::new(RuntimeConfig::default())
@@ -136,18 +139,10 @@ fn hf_causal_lm_cuda_decode_with_tokens_json(
     let dtype = nerva_model::precision::bits::dtype_label(model.dtype())
         .map_err(|err| format!("HF causal LM dtype failed: {err:?}"))?;
     let prompt_tokens: Vec<TokenId> = prompt_token_ids.iter().copied().map(TokenId).collect();
-    let summary = if verify_reference && prompt_tokens.len() == 1 {
+    let summary = if prompt_tokens.len() == 1 {
         run_loaded_hf_causal_lm_cuda_seed_decode(&runtime, &loaded, prompt_tokens[0], steps, None)
-    } else if verify_reference {
-        run_loaded_hf_causal_lm_cuda_prompt_decode(&runtime, &loaded, &prompt_tokens, steps, None)
     } else {
-        run_loaded_hf_causal_lm_cuda_prompt_decode_device_only(
-            &runtime,
-            &loaded,
-            &prompt_tokens,
-            steps,
-            None,
-        )
+        run_loaded_hf_causal_lm_cuda_prompt_decode(&runtime, &loaded, &prompt_tokens, steps, None)
     }
     .map_err(|err| format!("HF CUDA causal LM decode failed: {err:?}"))?;
     let generated_text = generated_text_json(&path, &summary.tokens)?;

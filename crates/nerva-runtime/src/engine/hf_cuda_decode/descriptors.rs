@@ -112,7 +112,7 @@ fn required_bias<'a>(bias: Option<&'a [u16]>, name: &str) -> Result<&'a [u16]> {
     })
 }
 
-fn cuda_weight_strategy(strategy: ResidentWeightExecutionStrategy) -> Result<u32> {
+pub(super) fn cuda_weight_strategy(strategy: ResidentWeightExecutionStrategy) -> Result<u32> {
     match strategy {
         ResidentWeightExecutionStrategy::GpuResident => Ok(CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT),
         ResidentWeightExecutionStrategy::GpuStaged => Ok(CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED),

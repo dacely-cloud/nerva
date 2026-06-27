@@ -1,5 +1,6 @@
 mod contract;
 mod descriptors;
+pub mod file_backed;
 mod hash;
 mod resident;
 mod sequence;

@@ -1,6 +1,7 @@
 use crate::decode::hf_sequence::request::{
     CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CudaHfDecodeSequenceRequest,
 };
+use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 
 pub(super) fn validate_request(request: &CudaHfDecodeSequenceRequest<'_>) -> Option<String> {
     if request.hidden == 0 || request.heads == 0 || request.kv_heads == 0 || request.head_dim == 0 {
@@ -18,7 +19,7 @@ pub(super) fn validate_request(request: &CudaHfDecodeSequenceRequest<'_>) -> Opt
     validate_prompt(request)
         .or_else(|| validate_attention(request))
         .or_else(|| validate_weight_plan(request))
-        .or_else(|| validate_lengths(request))
+        .or_else(|| validate_legacy_lengths(request))
 }
 
 fn validate_prompt(request: &CudaHfDecodeSequenceRequest<'_>) -> Option<String> {
@@ -55,7 +56,13 @@ fn validate_weight_plan(request: &CudaHfDecodeSequenceRequest<'_>) -> Option<Str
     })
 }
 
-fn validate_lengths(request: &CudaHfDecodeSequenceRequest<'_>) -> Option<String> {
+fn validate_legacy_lengths(request: &CudaHfDecodeSequenceRequest<'_>) -> Option<String> {
+    if request
+        .weight_plan
+        .is_some_and(CudaHfDecodeSequenceWeightPlan::is_declared)
+    {
+        return None;
+    }
     if request.embeddings.len() != request.vocab_size * request.hidden {
         return Some("CUDA HF decode sequence embeddings length does not match shape".to_string());
     }

@@ -77,7 +77,7 @@ pub(super) fn loaded_resident_weight_summary(
     })
 }
 
-fn strategy_bytes(
+pub(super) fn strategy_bytes(
     plan: &ResidentWeightExecutionPlan,
     strategy: ResidentWeightExecutionStrategy,
 ) -> u64 {
@@ -88,7 +88,7 @@ fn strategy_bytes(
         .sum()
 }
 
-fn default_hotset_bytes(total_weight_bytes: usize) -> usize {
+pub(super) fn default_hotset_bytes(total_weight_bytes: usize) -> usize {
     const MAX_HOTSET_BYTES: usize = 512 * 1024 * 1024;
     total_weight_bytes
         .saturating_div(2)
@@ -96,7 +96,7 @@ fn default_hotset_bytes(total_weight_bytes: usize) -> usize {
         .min(MAX_HOTSET_BYTES)
 }
 
-fn cuda_compute_capability() -> Option<u32> {
+pub(super) fn cuda_compute_capability() -> Option<u32> {
     let summary = nerva_cuda::smoke::probe::smoke();
     if summary.status != SmokeStatus::Ok {
         return None;

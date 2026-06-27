@@ -1,4 +1,5 @@
 use crate::decode::hf_sequence::request::CudaHfDecodeSequenceRequest;
+use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 
 const U16_BYTES: u64 = 2;
 const F32_BYTES: u64 = 4;
@@ -52,12 +53,26 @@ pub fn estimate_sequence_footprint(
         .ok_or_else(|| "CUDA HF decode context token count underflow".to_string())?;
     let attention_hidden = checked_mul(heads, head_dim, "attention hidden")?;
     let kv_hidden = checked_mul(kv_heads, head_dim, "KV hidden")?;
-    let arena_elements = arena_elements(request, hidden, attention_hidden, kv_hidden)?;
+    let arena_elements = arena_elements(
+        request,
+        hidden,
+        attention_hidden,
+        kv_hidden,
+        head_dim,
+        intermediate,
+    )?;
     let arena_bytes = checked_mul(arena_elements, U16_BYTES, "arena bytes")?;
     let scratch_gap_bytes = checked_mul(hidden, U16_BYTES * 2, "scratch gap bytes")?;
     let resident_weight_bytes = arena_bytes
         .checked_sub(scratch_gap_bytes)
         .ok_or_else(|| "CUDA HF decode resident weight byte underflow".to_string())?;
+    if let Some(plan) = request.weight_plan {
+        if plan.is_declared() && plan.weight_bytes != resident_weight_bytes {
+            return Err(
+                "CUDA HF decode declared weight bytes do not match packed layout".to_string(),
+            );
+        }
+    }
     let layout_bytes = checked_mul(layer_count, LAYER_LAYOUT_BYTES, "layout bytes")?;
     let scratch_bytes = scratch_bytes(
         hidden,
@@ -105,14 +120,27 @@ fn arena_elements(
     hidden: u64,
     attention_hidden: u64,
     kv_hidden: u64,
+    head_dim: u64,
+    intermediate: u64,
 ) -> Result<u64, String> {
     let mut elements = checked_mul(as_u64("vocab", request.vocab_size)?, hidden, "embeddings")?;
     elements = checked_add(elements, hidden, "input buffer")?;
     elements = checked_add(elements, hidden, "scratch buffer")?;
+    let declared_weight_plan = request
+        .weight_plan
+        .is_some_and(CudaHfDecodeSequenceWeightPlan::is_declared);
     for layer in request.layers {
         elements = checked_add(
             elements,
-            layer_elements(layer, hidden, attention_hidden, kv_hidden)?,
+            crate::decode::hf_sequence::footprint_layers::layer_elements(
+                layer,
+                hidden,
+                attention_hidden,
+                kv_hidden,
+                head_dim,
+                intermediate,
+                declared_weight_plan,
+            )?,
             "layer weights",
         )?;
     }
@@ -122,45 +150,6 @@ fn arena_elements(
         checked_mul(as_u64("vocab", request.vocab_size)?, hidden, "LM head")?,
         "arena elements",
     )
-}
-
-fn layer_elements(
-    layer: &crate::decode::hf_chain::layer::CudaHfDecodeChainLayer<'_>,
-    hidden: u64,
-    attention_hidden: u64,
-    kv_hidden: u64,
-) -> Result<u64, String> {
-    let intermediate = as_u64("gate rows", layer.w_gate.len())?
-        .checked_div(hidden)
-        .ok_or_else(|| "CUDA HF decode layer hidden is zero".to_string())?;
-    let mut total = hidden * 2;
-    total = checked_add(
-        total,
-        checked_mul(attention_hidden, hidden, "Q weight")?,
-        "Q",
-    )?;
-    total = checked_add(total, checked_mul(kv_hidden, hidden, "K weight")?, "K")?;
-    total = checked_add(total, checked_mul(kv_hidden, hidden, "V weight")?, "V")?;
-    total = checked_add(
-        total,
-        checked_mul(hidden, attention_hidden, "O weight")?,
-        "O",
-    )?;
-    total = checked_add(
-        total,
-        checked_mul(intermediate, hidden, "gate weight")?,
-        "gate",
-    )?;
-    total = checked_add(total, checked_mul(intermediate, hidden, "up weight")?, "up")?;
-    total = checked_add(
-        total,
-        checked_mul(hidden, intermediate, "down weight")?,
-        "down",
-    )?;
-    total = checked_add(total, optional_len(layer.q_bias)?, "Q bias")?;
-    total = checked_add(total, optional_len(layer.k_bias)?, "K bias")?;
-    total = checked_add(total, optional_len(layer.v_bias)?, "V bias")?;
-    checked_add(total, optional_len(layer.o_bias)?, "O bias")
 }
 
 fn scratch_bytes(
@@ -173,10 +162,6 @@ fn scratch_bytes(
     let block = hidden * 5 + attention_hidden * 2 + kv_hidden * 2 + intermediate * 3;
     let final_pass = hidden * 2 + vocab_size;
     checked_mul(block.max(final_pass), F32_BYTES, "scratch bytes")
-}
-
-fn optional_len(value: Option<&[u16]>) -> Result<u64, String> {
-    value.map_or(Ok(0), |slice| as_u64("optional bias", slice.len()))
 }
 
 fn sum_bytes(values: &[u64]) -> Result<u64, String> {
