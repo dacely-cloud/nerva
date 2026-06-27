@@ -26,6 +26,12 @@ fn hf_cuda_generate_cli_reports_user_facing_generation() {
     assert!(json.contains("\"tokens_per_second\":"));
     assert!(json.contains("\"token_p99_ms\":"));
     assert!(json.contains("\"graph_nodes_per_token\":"));
+    assert!(json.contains("\"timing_source\":\"replay_critical_path_gpu_events\""));
+    assert!(json.contains("\"profile_bucket_source\":\"profile_pass_gpu_events\""));
+    assert!(json.contains("\"measured_replay_ns_per_token\":"));
+    assert!(json.contains("\"profile_accounted_ns_per_token\":"));
+    assert!(json.contains("\"profile_replay_ratio\":"));
+    assert!(json.contains("\"profile_projection_ns_per_token\":"));
     assert!(json.contains("\"queue\":{\"capacity\":1"));
     assert!(json.contains("\"host_causality_edges\":0"));
     assert!(json.contains("\"device_authoritative\":true"));
