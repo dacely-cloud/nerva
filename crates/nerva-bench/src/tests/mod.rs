@@ -3,6 +3,7 @@ mod artifact;
 mod hf_cuda_decode;
 mod hf_cuda_session;
 mod hf_cuda_session_loop;
+mod hf_cuda_session_stream;
 mod hf_decode;
 mod hygiene;
 mod json;
