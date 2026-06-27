@@ -1,5 +1,3 @@
-use core::ptr;
-
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::ffi::{
     NervaCudaHfDecodeSequenceRequest, NervaCudaHfDecodeSequenceResult, run_hf_decode_sequence_u16,
@@ -133,6 +131,11 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             graph_cache_hits: out.graph_cache_hits,
             kernel_launches: out.kernel_launches,
             device_elapsed_ns: out.device_elapsed_ns,
+            projection_ns: out.projection_ns,
+            attention_ns: out.attention_ns,
+            mlp_ns: out.mlp_ns,
+            norm_ns: out.norm_ns,
+            sampling_ns: out.sampling_ns,
             sync_calls: out.sync_calls,
             host_causality_edges: out.host_causality_edges,
             hot_path_allocations: out.hot_path_allocations,
@@ -189,7 +192,7 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
 
 fn planned_ptr(slice: &[u16], plan: CudaHfDecodeSequenceWeightPlan) -> *const u16 {
     if plan.is_declared() {
-        ptr::null()
+        core::ptr::null()
     } else {
         slice.as_ptr()
     }

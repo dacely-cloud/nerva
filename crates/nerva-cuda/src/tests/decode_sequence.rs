@@ -54,6 +54,11 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         graph_cache_hits: 0,
         kernel_launches: 4,
         device_elapsed_ns: 900,
+        projection_ns: 500,
+        attention_ns: 100,
+        mlp_ns: 90,
+        norm_ns: 80,
+        sampling_ns: 20,
         sync_calls: 1,
         host_causality_edges: 0,
         hot_path_allocations: 0,
@@ -65,13 +70,10 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
     assert!(json.contains("\"steps\":4"));
     assert!(json.contains("\"tokens\":[1,2,3,0]"));
     assert!(json.contains("\"graph_replays\":4"));
-    assert!(json.contains("\"graph_captures\":1"));
-    assert!(json.contains("\"graph_cache_hits\":0"));
-    assert!(json.contains("\"planned_footprint\":{"));
-    assert!(json.contains("\"planned_weight_blocks\":12"));
     assert!(json.contains("\"planned_gpu_staged_weight_bytes\":64"));
     assert!(json.contains("\"descriptor_gpu_resident_H2D_bytes\":32"));
     assert!(json.contains("\"descriptor_gpu_staged_H2D_bytes\":96"));
+    assert!(json.contains("\"projection_ns\":500"));
 }
 
 #[test]

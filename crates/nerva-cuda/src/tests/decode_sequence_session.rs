@@ -174,6 +174,11 @@ fn hf_decode_sequence_session_packs_projection_replicas_for_cublas_path() {
     assert_eq!(summary.status, SmokeStatus::Ok);
     assert_eq!(summary.tokens, vec![0]);
     assert_eq!((summary.graph_nodes, summary.kernel_launches), (12, 12));
+    assert!(summary.projection_ns > 0);
+    assert!(summary.attention_ns > 0);
+    assert!(summary.mlp_ns > 0);
+    assert!(summary.norm_ns > 0);
+    assert!(summary.sampling_ns > 0);
     assert!(summary.device_arena_bytes > summary.resident_weight_bytes);
     assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.hot_path_allocations, 0);

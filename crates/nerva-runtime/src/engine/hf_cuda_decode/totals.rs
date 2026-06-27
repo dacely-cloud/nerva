@@ -26,6 +26,11 @@ pub(super) struct CudaDecodeCounters {
     graph_captures: u64,
     graph_cache_hits: u64,
     kernel_launches: u64,
+    projection_ns: u64,
+    attention_ns: u64,
+    mlp_ns: u64,
+    norm_ns: u64,
+    sampling_ns: u64,
     sync_calls: u64,
     host_causality_edges: u64,
     hot_path_allocations: u64,
@@ -48,6 +53,11 @@ impl CudaDecodeCounters {
         self.graph_captures += cuda.graph_captures;
         self.graph_cache_hits += cuda.graph_cache_hits;
         self.kernel_launches += cuda.kernel_launches;
+        self.projection_ns += cuda.projection_ns;
+        self.attention_ns += cuda.attention_ns;
+        self.mlp_ns += cuda.mlp_ns;
+        self.norm_ns += cuda.norm_ns;
+        self.sampling_ns += cuda.sampling_ns;
         self.sync_calls += cuda.sync_calls;
         self.host_causality_edges += cuda.host_causality_edges;
         self.hot_path_allocations += cuda.hot_path_allocations;
@@ -127,6 +137,11 @@ pub(super) fn build_summary(
         graph_cache_hits: counters.graph_cache_hits,
         graph_replay_events: event_count(&parts.ledgers, LedgerEventKind::GraphReplay),
         kernel_launches: counters.kernel_launches,
+        projection_ns: counters.projection_ns,
+        attention_ns: counters.attention_ns,
+        mlp_ns: counters.mlp_ns,
+        norm_ns: counters.norm_ns,
+        sampling_ns: counters.sampling_ns,
         sync_calls: counters.sync_calls,
         host_causality_edges: counters.host_causality_edges,
         hot_path_allocations: counters.hot_path_allocations
