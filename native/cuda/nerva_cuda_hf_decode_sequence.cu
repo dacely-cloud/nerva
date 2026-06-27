@@ -743,9 +743,7 @@ __global__ void hf_layer_finish_next_attn_norm_encode_kernel(
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
-    const float value = s.residual[index];
-    s.input[index] = value;
-    arena[output_offset + index] = f32_to_encoded(value, dtype);
+    s.input[index] = s.residual[index];
   }
   __syncthreads();
   rms_norm(s.input, arena + next_layout.rms_attn, hidden, dtype, rms_eps,
