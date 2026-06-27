@@ -1630,7 +1630,134 @@ Without this, we are guessing.
 
 ---
 
-## 32. Final Architecture Summary
+## 32. Phase 1 Acceptance Gate
+
+Phase 1 is not accepted by showing that a model can run once.
+
+Phase 1 is accepted only when the runtime can prove where token time goes and
+can change placement or dataflow based on that proof.
+
+Required evidence:
+
+```text id="f3w81y"
+per-token wall latency
+per-token GPU active spans
+per-token GPU idle gaps
+per-token CPU active time
+per-token CPU blocked/off-CPU time
+per-kernel or per-graph replay cost
+runtime API cost
+driver wait cost
+allocator calls
+page faults
+host/device copy bytes
+DRAM/VRAM residency decisions
+candidate CPU/GPU/DRAM costs
+selected executor and reason
+```
+
+The runtime must distinguish:
+
+```text id="h4qj2f"
+hardware latency:
+    unavoidable device, memory, and fabric latency
+
+software latency:
+    avoidable waits, redundant movement, bad layout, bad sync,
+    weak kernel shape, launch storms, allocator work, page faults,
+    poor cache behavior, and wrong executor choice
+```
+
+Phase 1 must not use hardware as an excuse until these software causes have
+been measured and either removed or marked unavoidable.
+
+### Current Qwen decode bottleneck rule
+
+The current single-GPU Qwen decode profile shows that the hot replay path is
+dominated by dense batch-1 projection work over resident weights.
+
+The observed hot path is not dominated by:
+
+```text id="wvrqf8"
+disk reads
+PCIe model loading
+token D2H visibility copy
+host output synchronization
+graph replay overhead
+attention
+sampling
+```
+
+The observed hot path is dominated by:
+
+```text id="tn0b04"
+QKV projection
+attention output projection
+MLP gate/up projection
+MLP down projection
+lm_head projection
+```
+
+So the first real performance target is not "add more timing." It is:
+
+```text id="pt558b"
+reduce projection memory traffic
+reduce projection kernel overhead
+fuse MLP projection/activation/down dataflow where legal
+test CPU/DRAM compute-near-data for nonresident shards
+test GPU-resident, GPU-staged, CPU-resident, and hybrid candidates
+select the lowest visible critical-path cost
+```
+
+### Required source-level analysis
+
+For any hot operation, Phase 1 must record:
+
+```text id="d2t65u"
+source file and function
+what memory it reads
+what memory it writes
+who owns each buffer
+which synchronization protects correctness
+which work is inside graph replay
+which work happens during setup/capture
+which memory movement is avoidable
+which kernel shape limits occupancy or bandwidth
+what exact replacement is being tested
+```
+
+For `y = W x`, the planner must compare at least:
+
+```text id="gj8w90"
+GPU reads W from VRAM and computes
+GPU stages W from DRAM then computes
+CPU computes against DRAM-resident W
+CPU/GPU split W and merge partial y
+```
+
+The selected path must be justified by measured or explicitly estimated visible
+critical-path cost, not by assuming that GPU always wins.
+
+### Old-hardware requirement
+
+Phase 1 must keep old hardware in the design loop.
+
+That means:
+
+```text id="lrv88w"
+no dependency on newest tensor-core-only paths
+no dependency on enterprise memory pooling
+no assumption that aggregate VRAM is coherent
+no global all-reduce as the default distributed strategy
+no precision loss to make a result look fast
+```
+
+The old-GPU path is allowed to be slower than a new single GPU. It is not
+allowed to be architecturally ignored.
+
+---
+
+## 33. Final Architecture Summary
 
 The final proposed runtime is:
 
@@ -1663,7 +1790,7 @@ avoid vendor lock-in where possible
 
 ---
 
-## 33. Final Answer to the Big Question
+## 34. Final Answer to the Big Question
 
 Can you run an 800 GB model on 4 systems with 32x RTX 2080 Ti?
 
