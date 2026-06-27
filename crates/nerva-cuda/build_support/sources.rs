@@ -16,6 +16,7 @@ impl NativeCudaSources {
             "nerva_cuda_tiny_block.cu",
             "nerva_cuda_block_forward.cu",
             "nerva_cuda_greedy_sampler.cu",
+            "nerva_cuda_hf_sampler.cu",
             "nerva_cuda_tiny_decode.cu",
             "nerva_cuda_tiered_attention.cu",
         ]

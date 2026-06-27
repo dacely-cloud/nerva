@@ -162,6 +162,39 @@ typedef struct NervaCudaGreedySamplerResult {
   uint64_t hot_path_allocations;
 } NervaCudaGreedySamplerResult;
 
+typedef struct NervaCudaHfSamplerRequest {
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t vocab_size;
+  uint64_t token_index;
+  float rms_eps;
+  const uint16_t *hidden_bits;
+  const uint16_t *final_norm_weight;
+  const uint16_t *lm_head;
+} NervaCudaHfSamplerRequest;
+
+typedef struct NervaCudaHfSamplerResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t vocab_size;
+  uint64_t token_index;
+  uint32_t token;
+  uint64_t slot_version;
+  uint32_t completion;
+  uint64_t output_hash;
+  uint64_t resident_weight_bytes;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaHfSamplerResult;
+
 typedef struct NervaCudaTinyDecodeResult {
   int32_t status;
   int32_t cuda_error;
@@ -268,6 +301,8 @@ int nerva_cuda_loaded_tiny_block_smoke(NervaCudaLoadedTinyBlockResult *out);
 int nerva_cuda_block_forward_u16(const NervaCudaBlockForwardRequest *request,
                                  NervaCudaBlockForwardResult *out);
 int nerva_cuda_greedy_sampler_smoke(NervaCudaGreedySamplerResult *out);
+int nerva_cuda_hf_sample_u16(const NervaCudaHfSamplerRequest *request,
+                             NervaCudaHfSamplerResult *out);
 int nerva_cuda_tiny_decode_smoke(uint32_t steps,
                                  uint32_t ring_capacity,
                                  uint32_t seed_token,

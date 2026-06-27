@@ -4,6 +4,18 @@ use nerva_core::types::id::token::TokenId;
 use crate::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
 
 impl HfCausalLmModel {
+    pub fn final_norm_weight(&self) -> &[u16] {
+        &self.final_norm
+    }
+
+    pub fn lm_head(&self) -> &[u16] {
+        &self.lm_head
+    }
+
+    pub fn rms_eps(&self) -> f32 {
+        self.rms_eps
+    }
+
     pub fn sample_encoded_hidden(
         &self,
         hidden_bits: &[u16],

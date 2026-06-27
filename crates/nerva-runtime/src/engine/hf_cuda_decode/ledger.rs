@@ -2,6 +2,7 @@ use nerva_core::types::id::device::DeviceOrdinal;
 use nerva_core::types::memory::tier::MemoryTier;
 use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_cuda::block::forward::summary::CudaBlockForwardSummary;
+use nerva_cuda::sampler::hf_head::summary::CudaHfSamplerSummary;
 use nerva_ledger::types::decision::{CandidateCost, ExecutionDecision};
 use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
@@ -55,6 +56,56 @@ pub(super) fn record_layer_execution(ledger: &mut TokenLedger, cuda: &CudaBlockF
         cuda.sync_calls.max(1),
         MetricSource::EstimatedModel,
         "hf_cuda_seed_decode_visibility",
+    );
+}
+
+pub(super) fn record_sampler_execution(ledger: &mut TokenLedger, cuda: &CudaHfSamplerSummary) {
+    let visible_ns = (cuda.h2d_bytes + cuda.d2h_bytes + cuda.resident_weight_bytes).max(1);
+    ledger.record_execution_decision(ExecutionDecision {
+        operation: "hf_cuda_final_head_sampler",
+        executor_selected: ExecutionOwner::Gpu(DeviceOrdinal(0)),
+        candidate_costs: vec![
+            CandidateCost::estimated("cuda-final-head-sampler", visible_ns),
+            CandidateCost::estimated("cpu-final-head-sampler", visible_ns.saturating_mul(2)),
+        ],
+        reason: "loaded HF final norm, LM head, and greedy argmax executed on CUDA",
+        predicted_visible_ns: visible_ns,
+        actual_visible_ns: None,
+        metric_source: MetricSource::EstimatedModel,
+    });
+    record_copy(
+        ledger,
+        MemoryTier::PinnedDram,
+        MemoryTier::Vram,
+        cuda.h2d_bytes,
+    );
+    record_copy(
+        ledger,
+        MemoryTier::Vram,
+        MemoryTier::PinnedDram,
+        cuda.d2h_bytes,
+    );
+    record_event(
+        ledger,
+        LedgerEventKind::KernelLaunch,
+        0,
+        "hf_cuda_final_head_sampler_kernel",
+    );
+    record_event(
+        ledger,
+        LedgerEventKind::DeviceActivity,
+        visible_ns,
+        "hf_cuda_final_head_sampler",
+    );
+    ledger.record_sync(
+        SyncClass::HardSync,
+        None,
+        Some(MemoryTier::Vram),
+        Some(MemoryTier::PinnedDram),
+        cuda.d2h_bytes as usize,
+        cuda.sync_calls.max(1),
+        MetricSource::EstimatedModel,
+        "hf_cuda_final_head_token_visibility",
     );
 }
 
