@@ -71,8 +71,9 @@ Measured with `vllm bench latency` after warmup and graph capture:
 Derived output throughput is `2 / 0.0223879596 = 89.33` generated tokens/s.
 The request P99 divided by two output tokens is `11.66 ms/token`. This is a
 derived comparison value, not a per-token vLLM device ledger. It is still enough
-to show that the current NERVA Qwen3-8B path at about `71.76` tokens/s and
-`14.10 ms` token P99 does not beat vLLM on this fully resident short workload.
+to show that the current NERVA Qwen3-8B path at about `73.72` tokens/s,
+`13.64 ms` token P99, and `328` graph nodes per token does not beat vLLM on this
+fully resident short workload.
 
 ## Profiler Result
 

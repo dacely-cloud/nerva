@@ -51,6 +51,13 @@ struct SequenceLayerLayout {
   uint64_t w_down;
 };
 
+struct PackedProjectionShape {
+  uint64_t qkv_rows;
+  uint64_t gate_up_rows;
+  uint64_t qkv_elements_per_layer;
+  uint64_t gate_up_elements_per_layer;
+};
+
 struct LayerScratch {
   float *input;
   float *attn_norm;
@@ -641,6 +648,62 @@ __global__ void hf_final_norm_encode_kernel(
   f32_slice_to_encoded(final_norm, projection_input, hidden, dtype);
 }
 
+__global__ void hf_pack_qkv_weights_kernel(
+    uint16_t *packed, const uint16_t *arena,
+    const SequenceLayerLayout *layouts, uint32_t layer_count, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden) {
+  const uint64_t rows_per_layer =
+      static_cast<uint64_t>(attention_hidden) + static_cast<uint64_t>(kv_hidden) * 2;
+  const uint64_t global_row = blockIdx.x;
+  if (global_row >= rows_per_layer * layer_count) {
+    return;
+  }
+  const uint32_t layer_index =
+      static_cast<uint32_t>(global_row / rows_per_layer);
+  const uint32_t row = static_cast<uint32_t>(global_row % rows_per_layer);
+  const SequenceLayerLayout layout = layouts[layer_index];
+  const uint16_t *src = nullptr;
+  if (row < attention_hidden) {
+    src = arena + layout.w_q + static_cast<uint64_t>(row) * hidden;
+  } else if (row < attention_hidden + kv_hidden) {
+    const uint32_t local_row = row - attention_hidden;
+    src = arena + layout.w_k + static_cast<uint64_t>(local_row) * hidden;
+  } else {
+    const uint32_t local_row = row - attention_hidden - kv_hidden;
+    src = arena + layout.w_v + static_cast<uint64_t>(local_row) * hidden;
+  }
+  uint16_t *dst = packed + global_row * hidden;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    dst[col] = src[col];
+  }
+}
+
+__global__ void hf_pack_gate_up_weights_kernel(
+    uint16_t *packed, const uint16_t *arena,
+    const SequenceLayerLayout *layouts, uint32_t layer_count, uint32_t hidden,
+    uint32_t intermediate) {
+  const uint64_t rows_per_layer = static_cast<uint64_t>(intermediate) * 2;
+  const uint64_t global_row = blockIdx.x;
+  if (global_row >= rows_per_layer * layer_count) {
+    return;
+  }
+  const uint32_t layer_index =
+      static_cast<uint32_t>(global_row / rows_per_layer);
+  const uint32_t row = static_cast<uint32_t>(global_row % rows_per_layer);
+  const SequenceLayerLayout layout = layouts[layer_index];
+  const uint16_t *src = nullptr;
+  if (row < intermediate) {
+    src = arena + layout.w_gate + static_cast<uint64_t>(row) * hidden;
+  } else {
+    const uint32_t local_row = row - intermediate;
+    src = arena + layout.w_up + static_cast<uint64_t>(local_row) * hidden;
+  }
+  uint16_t *dst = packed + global_row * hidden;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    dst[col] = src[col];
+  }
+}
+
 uint64_t push(uint64_t &cursor, uint64_t len) {
   const uint64_t offset = cursor;
   cursor += len;
@@ -961,6 +1024,22 @@ cudaError_t warm_cublas_gemv(cublasHandle_t handle, uint16_t *arena,
                                 scratch);
 }
 
+bool should_pack_cublas_weights(uint32_t hidden, uint32_t attention_hidden) {
+  return hidden >= 128 && attention_hidden == hidden;
+}
+
+PackedProjectionShape packed_projection_shape(uint64_t hidden,
+                                              uint64_t attention_hidden,
+                                              uint64_t kv_hidden,
+                                              uint64_t intermediate) {
+  PackedProjectionShape shape{};
+  shape.qkv_rows = attention_hidden + kv_hidden * 2;
+  shape.gate_up_rows = intermediate * 2;
+  shape.qkv_elements_per_layer = shape.qkv_rows * hidden;
+  shape.gate_up_elements_per_layer = shape.gate_up_rows * hidden;
+  return shape;
+}
+
 void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
                 const NervaCudaHfDecodeChainLayer &layer, uint64_t hidden,
                 uint64_t attention_hidden, uint64_t kv_hidden, uint64_t head_dim,
@@ -1121,6 +1200,8 @@ struct NervaCudaHfDecodeSequenceSession {
   uint64_t layout_bytes = 0;
   uint64_t scratch_bytes = 0;
   uint64_t projection_input_bytes = 0;
+  uint64_t packed_qkv_bytes = 0;
+  uint64_t packed_gate_up_bytes = 0;
   uint64_t kv_bytes = 0;
   uint64_t slots_bytes = 0;
   uint64_t prompt_bytes = 0;
@@ -1140,6 +1221,8 @@ struct NervaCudaHfDecodeSequenceSession {
   SequenceLayerLayout *device_layouts = nullptr;
   float *device_scratch = nullptr;
   uint16_t *device_projection_input = nullptr;
+  uint16_t *device_qkv_packed = nullptr;
+  uint16_t *device_gate_up_packed = nullptr;
   float *device_kv_keys = nullptr;
   float *device_kv_values = nullptr;
   uint32_t *device_prompt_tokens = nullptr;
@@ -1190,6 +1273,8 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_prompt_tokens);
   cudaFree(session->device_kv_values);
   cudaFree(session->device_kv_keys);
+  cudaFree(session->device_gate_up_packed);
+  cudaFree(session->device_qkv_packed);
   cudaFree(session->device_projection_input);
   cudaFree(session->device_scratch);
   cudaFree(session->device_layouts);
@@ -1213,6 +1298,15 @@ void reset_session_graph(NervaCudaHfDecodeSequenceSession *session) {
   session->cached_graph_nodes = 0;
 }
 
+uint64_t session_device_footprint(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  return session->arena_bytes + session->layout_bytes + session->scratch_bytes +
+         session->projection_input_bytes + session->packed_qkv_bytes +
+         session->packed_gate_up_bytes + session->kv_bytes +
+         session->prompt_bytes + session->slots_bytes + sizeof(uint32_t) +
+         kCublasWorkspaceBytes;
+}
+
 bool session_graph_matches(const NervaCudaHfDecodeSequenceSession *session,
                            uint32_t context_steps,
                            uint32_t prompt_token_count,
@@ -1229,7 +1323,38 @@ bool use_cublas_layer_path(const NervaCudaHfDecodeSequenceSession *session) {
   const uint32_t attention_hidden = session->heads * session->head_dim;
   return session->hidden >= 128 && attention_hidden == session->hidden &&
          session->host_layouts.size() == session->layer_count &&
-         session->device_projection_input != nullptr && session->cublas != nullptr;
+         session->device_projection_input != nullptr &&
+         session->device_qkv_packed != nullptr &&
+         session->device_gate_up_packed != nullptr &&
+         session->cublas != nullptr;
+}
+
+cudaError_t pack_session_weight_replicas(
+    NervaCudaHfDecodeSequenceSession *session) {
+  if (!use_cublas_layer_path(session)) {
+    return cudaSuccess;
+  }
+  const uint32_t attention_hidden = session->heads * session->head_dim;
+  const uint32_t kv_hidden = session->kv_heads * session->head_dim;
+  const PackedProjectionShape shape = packed_projection_shape(
+      session->hidden, attention_hidden, kv_hidden, session->intermediate);
+  hf_pack_qkv_weights_kernel<<<
+      static_cast<uint32_t>(shape.qkv_rows * session->layer_count),
+      kDecodeThreads, 0, session->stream>>>(
+      session->device_qkv_packed, session->device_arena,
+      session->device_layouts, session->layer_count, session->hidden,
+      attention_hidden, kv_hidden);
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  hf_pack_gate_up_weights_kernel<<<
+      static_cast<uint32_t>(shape.gate_up_rows * session->layer_count),
+      kDecodeThreads, 0, session->stream>>>(
+      session->device_gate_up_packed, session->device_arena,
+      session->device_layouts, session->layer_count, session->hidden,
+      session->intermediate);
+  return cudaGetLastError();
 }
 
 cudaError_t launch_monolithic_session_step(
@@ -1276,6 +1401,8 @@ cudaError_t launch_cublas_layer_session_step(
   LayerScratch scratch = layer_scratch_ptrs(
       session->device_scratch, session->hidden, attention_hidden, kv_hidden,
       session->intermediate);
+  const PackedProjectionShape packed_shape = packed_projection_shape(
+      session->hidden, attention_hidden, kv_hidden, session->intermediate);
   for (uint32_t layer_index = 0;
        err == cudaSuccess && layer_index < session->layer_count;
        ++layer_index) {
@@ -1288,19 +1415,12 @@ cudaError_t launch_cublas_layer_session_step(
     err = cudaGetLastError();
     if (err == cudaSuccess)
       err = encoded_row_major_gemv(
-          session->cublas, session->device_arena + layout.w_q,
-          session->device_projection_input, attention_hidden, session->hidden,
+          session->cublas,
+          session->device_qkv_packed +
+              packed_shape.qkv_elements_per_layer * layer_index,
+          session->device_projection_input,
+          static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
           session->dtype, scratch.q);
-    if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
-          session->cublas, session->device_arena + layout.w_k,
-          session->device_projection_input, kv_hidden, session->hidden,
-          session->dtype, scratch.k);
-    if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
-          session->cublas, session->device_arena + layout.w_v,
-          session->device_projection_input, kv_hidden, session->hidden,
-          session->dtype, scratch.v);
     if (err == cudaSuccess) {
       hf_layer_attention_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
@@ -1326,14 +1446,12 @@ cudaError_t launch_cublas_layer_session_step(
     }
     if (err == cudaSuccess)
       err = encoded_row_major_gemv(
-          session->cublas, session->device_arena + layout.w_gate,
-          session->device_projection_input, session->intermediate,
-          session->hidden, session->dtype, scratch.gate);
-    if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
-          session->cublas, session->device_arena + layout.w_up,
-          session->device_projection_input, session->intermediate,
-          session->hidden, session->dtype, scratch.up);
+          session->cublas,
+          session->device_gate_up_packed +
+              packed_shape.gate_up_elements_per_layer * layer_index,
+          session->device_projection_input,
+          static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
+          session->dtype, scratch.gate);
     if (err == cudaSuccess) {
       hf_layer_ff_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
           session->dtype, session->hidden, attention_hidden, kv_hidden,
@@ -1515,12 +1633,7 @@ void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
   out->descriptor_gpu_resident_h2d_bytes = session->descriptor_gpu_resident_h2d_bytes;
   out->descriptor_gpu_staged_h2d_bytes = session->descriptor_gpu_staged_h2d_bytes;
   out->resident_kv_bytes = session->kv_bytes;
-  out->device_arena_bytes = session->arena_bytes + session->layout_bytes +
-                            session->scratch_bytes +
-                            session->projection_input_bytes +
-                            session->kv_bytes + session->prompt_bytes +
-                            session->slots_bytes + sizeof(uint32_t) +
-                            kCublasWorkspaceBytes;
+  out->device_arena_bytes = session_device_footprint(session);
   out->pinned_host_bytes = session->slots_bytes;
   out->h2d_bytes = session->h2d_bytes;
   out->sync_calls = 1;
@@ -1949,6 +2062,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       intermediate > attention_hidden
           ? (intermediate > hidden ? intermediate : hidden)
           : (attention_hidden > hidden ? attention_hidden : hidden);
+  const bool pack_cublas =
+      should_pack_cublas_weights(request->hidden, attention_hidden);
+  const PackedProjectionShape packed_shape = packed_projection_shape(
+      hidden, attention_hidden, kv_hidden, intermediate);
   session->dtype = request->dtype;
   session->hidden = request->hidden;
   session->heads = request->heads;
@@ -1963,6 +2080,14 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);
   session->scratch_bytes = scratch_elements * sizeof(float);
   session->projection_input_bytes = projection_input_elements * sizeof(uint16_t);
+  if (pack_cublas) {
+    session->packed_qkv_bytes =
+        packed_shape.qkv_elements_per_layer * request->layer_count *
+        sizeof(uint16_t);
+    session->packed_gate_up_bytes =
+        packed_shape.gate_up_elements_per_layer * request->layer_count *
+        sizeof(uint16_t);
+  }
   session->kv_bytes =
       request->layer_count * static_cast<uint64_t>(request->max_context_tokens) *
       kv_hidden * sizeof(float) * 2;
@@ -2004,6 +2129,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   if (err == cudaSuccess)
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_projection_input),
                      session->projection_input_bytes);
+  if (err == cudaSuccess && session->packed_qkv_bytes != 0)
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_qkv_packed),
+                     session->packed_qkv_bytes);
+  if (err == cudaSuccess && session->packed_gate_up_bytes != 0)
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_gate_up_packed),
+                     session->packed_gate_up_bytes);
   if (err == cudaSuccess)
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_keys),
                      session->kv_bytes / 2);
@@ -2072,6 +2203,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
                           session->layout_bytes, cudaMemcpyHostToDevice,
                           session->stream);
     out->h2d_bytes += session->layout_bytes;
+  }
+  if (err == cudaSuccess) {
+    err = pack_session_weight_replicas(session);
   }
   if (err == cudaSuccess) {
     err = warm_cublas_gemv(session->cublas, session->device_arena,
@@ -2290,12 +2424,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
         hash_tokens(request->output_tokens, out->observed_tokens);
     out->resident_kv_bytes = session->kv_bytes;
     out->kv_tokens = output_start + out->observed_tokens;
-    out->device_arena_bytes = session->arena_bytes + session->layout_bytes +
-                              session->scratch_bytes +
-                              session->projection_input_bytes +
-                              session->kv_bytes + session->prompt_bytes +
-                              session->slots_bytes + sizeof(uint32_t) +
-                              kCublasWorkspaceBytes;
+    out->device_arena_bytes = session_device_footprint(session);
     out->pinned_host_bytes = session->slots_bytes;
     out->host_causality_edges = 0;
     out->status = out->observed_tokens > 0 ? 0 : -1;
@@ -2371,12 +2500,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
     session->active_started = true;
     session->active_finished = false;
     out->resident_kv_bytes = session->kv_bytes;
-    out->device_arena_bytes = session->arena_bytes + session->layout_bytes +
-                              session->scratch_bytes +
-                              session->projection_input_bytes +
-                              session->kv_bytes + session->prompt_bytes +
-                              session->slots_bytes + sizeof(uint32_t) +
-                              kCublasWorkspaceBytes;
+    out->device_arena_bytes = session_device_footprint(session);
     out->pinned_host_bytes = session->slots_bytes;
     out->status = 0;
   } else {
@@ -2468,12 +2592,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
         hash_tokens(request->output_tokens, out->observed_tokens);
     out->resident_kv_bytes = session->kv_bytes;
     out->kv_tokens = slot_start + out->observed_tokens;
-    out->device_arena_bytes = session->arena_bytes + session->layout_bytes +
-                              session->scratch_bytes +
-                              session->projection_input_bytes +
-                              session->kv_bytes + session->prompt_bytes +
-                              session->slots_bytes + sizeof(uint32_t) +
-                              kCublasWorkspaceBytes;
+    out->device_arena_bytes = session_device_footprint(session);
     out->pinned_host_bytes = session->slots_bytes;
     out->host_causality_edges = 0;
     out->status = out->observed_tokens > 0 ? 0 : -1;
