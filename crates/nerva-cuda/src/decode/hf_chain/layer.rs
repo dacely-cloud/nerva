@@ -8,6 +8,8 @@ pub struct CudaHfDecodeChainLayer<'a> {
     pub rms_mlp_weight: &'a [u16],
     pub w_q: &'a [u16],
     pub w_k: &'a [u16],
+    pub q_norm_weight: Option<&'a [u16]>,
+    pub k_norm_weight: Option<&'a [u16]>,
     pub w_v: &'a [u16],
     pub w_o: &'a [u16],
     pub q_bias: Option<&'a [u16]>,
@@ -25,6 +27,7 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
         hidden: usize,
         attention_hidden: usize,
         kv_hidden: usize,
+        head_dim: usize,
         intermediate: usize,
     ) -> Option<String> {
         for (name, actual, expected) in
@@ -40,6 +43,8 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             .or_else(|| validate_optional("k_bias", self.k_bias, kv_hidden))
             .or_else(|| validate_optional("v_bias", self.v_bias, kv_hidden))
             .or_else(|| validate_optional("o_bias", self.o_bias, hidden))
+            .or_else(|| validate_optional("q_norm_weight", self.q_norm_weight, head_dim))
+            .or_else(|| validate_optional("k_norm_weight", self.k_norm_weight, head_dim))
     }
 
     pub(crate) fn to_ffi(&self) -> NervaCudaHfDecodeChainLayer {
@@ -48,6 +53,8 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             rms_mlp_weight: self.rms_mlp_weight.as_ptr(),
             w_q: self.w_q.as_ptr(),
             w_k: self.w_k.as_ptr(),
+            q_norm_weight: optional_ptr(self.q_norm_weight),
+            k_norm_weight: optional_ptr(self.k_norm_weight),
             w_v: self.w_v.as_ptr(),
             w_o: self.w_o.as_ptr(),
             q_bias: optional_ptr(self.q_bias),
@@ -66,6 +73,8 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             rms_mlp_weight: ptr::null(),
             w_q: ptr::null(),
             w_k: ptr::null(),
+            q_norm_weight: optional_ptr(self.q_norm_weight),
+            k_norm_weight: optional_ptr(self.k_norm_weight),
             w_v: ptr::null(),
             w_o: ptr::null(),
             q_bias: optional_ptr(self.q_bias),

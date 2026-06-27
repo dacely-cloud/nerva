@@ -77,6 +77,7 @@ fn validate_lengths(request: &CudaHfDecodeSequenceRequest<'_>) -> Option<String>
                     request.hidden,
                     attention_hidden,
                     kv_hidden,
+                    request.head_dim,
                     request.intermediate,
                 )
                 .map(|error| format!("layer {index}: {error}"))

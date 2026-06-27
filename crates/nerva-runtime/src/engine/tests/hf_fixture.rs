@@ -32,6 +32,18 @@ pub(crate) fn write_kv_hf_checkpoint_dir(prefix: &str) -> PathBuf {
     dir
 }
 
+pub(crate) fn write_qwen3_hf_checkpoint_dir(prefix: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = qwen3_fixture_config();
+    std::fs::write(dir.join("config.json"), config).unwrap();
+    let metadata = parse_hf_config_metadata(config).unwrap();
+    let layout = plan_hf_weight_layout(&metadata).unwrap();
+    let manifest = build_hf_tensor_manifest(&layout).unwrap();
+    write_safetensors(&dir, &manifest);
+    dir
+}
+
 pub(crate) fn remove_hf_checkpoint_dir(dir: &Path) {
     let _ = std::fs::remove_file(dir.join("model.safetensors"));
     let _ = std::fs::remove_file(dir.join("config.json"));
@@ -52,6 +64,23 @@ fn fixture_config(layers: usize) -> String {
             "torch_dtype": "float16"
         }}"#,
     )
+}
+
+fn qwen3_fixture_config() -> &'static str {
+    r#"{
+        "architectures": ["Qwen3ForCausalLM"],
+        "model_type": "qwen3",
+        "hidden_size": 2,
+        "intermediate_size": 2,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 1,
+        "num_key_value_heads": 1,
+        "head_dim": 2,
+        "vocab_size": 4,
+        "rms_norm_eps": 0.00001,
+        "rope_theta": 1000000.0,
+        "torch_dtype": "float16"
+    }"#
 }
 
 fn write_safetensors(dir: &Path, manifest: &HfTensorManifest) {
@@ -114,9 +143,11 @@ fn values_for_entry_role(role: WeightBlockRole, elements: usize) -> Vec<u16> {
             encode_values(&[1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0])
         }
         WeightBlockRole::LmHead => encode_values(&[0.0, -1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 0.0]),
-        WeightBlockRole::AttentionNorm | WeightBlockRole::MlpNorm | WeightBlockRole::FinalNorm => {
-            vec![f32_to_f16_bits(1.0); elements]
-        }
+        WeightBlockRole::AttentionNorm
+        | WeightBlockRole::QueryNorm
+        | WeightBlockRole::KeyNorm
+        | WeightBlockRole::MlpNorm
+        | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
         WeightBlockRole::QueryBias
         | WeightBlockRole::KeyBias
         | WeightBlockRole::ValueBias

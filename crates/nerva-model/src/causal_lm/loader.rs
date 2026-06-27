@@ -120,7 +120,7 @@ fn load_layer(
         *data_hash = fold_hash(*data_hash, tensor.data_hash);
         Ok(tensor.values)
     };
-    let block = PrecisionTransformerBlock::new_from_encoded(
+    let mut block = PrecisionTransformerBlock::new_from_encoded(
         dtype,
         shape,
         load(WeightBlockRole::AttentionNorm)?,
@@ -135,6 +135,16 @@ fn load_layer(
         rms_eps,
     )?
     .with_rope_theta(rope_theta)?;
+    if plan
+        .entries
+        .iter()
+        .any(|entry| entry.role == WeightBlockRole::QueryNorm && entry.layer == Some(layer))
+    {
+        block = block.with_qk_norm(
+            load(WeightBlockRole::QueryNorm)?,
+            load(WeightBlockRole::KeyNorm)?,
+        )?;
+    }
     if attention_bias {
         block.with_attention_biases(
             load(WeightBlockRole::QueryBias)?,

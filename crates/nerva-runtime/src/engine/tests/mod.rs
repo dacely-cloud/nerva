@@ -8,6 +8,7 @@ mod cuda_block;
 mod graph;
 mod hf_cuda;
 mod hf_cuda_contract;
+mod hf_cuda_qwen3;
 mod hf_fixture;
 mod hot_path;
 mod kv;

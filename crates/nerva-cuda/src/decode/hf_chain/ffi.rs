@@ -7,6 +7,8 @@ pub(crate) struct NervaCudaHfDecodeChainLayer {
     pub(crate) rms_mlp_weight: *const u16,
     pub(crate) w_q: *const u16,
     pub(crate) w_k: *const u16,
+    pub(crate) q_norm_weight: *const u16,
+    pub(crate) k_norm_weight: *const u16,
     pub(crate) w_v: *const u16,
     pub(crate) w_o: *const u16,
     pub(crate) q_bias: *const u16,

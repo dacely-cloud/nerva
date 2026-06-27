@@ -18,6 +18,8 @@ pub struct PrecisionTransformerBlock {
     rms_mlp_weight: Vec<u16>,
     w_q: Vec<u16>,
     w_k: Vec<u16>,
+    q_norm_weight: Option<Vec<u16>>,
+    k_norm_weight: Option<Vec<u16>>,
     w_v: Vec<u16>,
     w_o: Vec<u16>,
     q_bias: Option<Vec<u16>>,
@@ -39,6 +41,8 @@ pub struct PrecisionTransformerBlockEncodedView<'a> {
     pub rms_mlp_weight: &'a [u16],
     pub w_q: &'a [u16],
     pub w_k: &'a [u16],
+    pub q_norm_weight: Option<&'a [u16]>,
+    pub k_norm_weight: Option<&'a [u16]>,
     pub w_v: &'a [u16],
     pub w_o: &'a [u16],
     pub q_bias: Option<&'a [u16]>,
@@ -73,6 +77,8 @@ impl PrecisionTransformerBlock {
             rms_mlp_weight: &self.rms_mlp_weight,
             w_q: &self.w_q,
             w_k: &self.w_k,
+            q_norm_weight: self.q_norm_weight.as_deref(),
+            k_norm_weight: self.k_norm_weight.as_deref(),
             w_v: &self.w_v,
             w_o: &self.w_o,
             q_bias: self.q_bias.as_deref(),
@@ -110,6 +116,18 @@ impl PrecisionTransformerBlock {
         self.k_bias = Some(k_bias);
         self.v_bias = Some(v_bias);
         self.o_bias = Some(o_bias);
+        Ok(self)
+    }
+
+    pub fn with_qk_norm(
+        mut self,
+        q_norm_weight: Vec<u16>,
+        k_norm_weight: Vec<u16>,
+    ) -> Result<Self> {
+        require_len("q_norm.weight", q_norm_weight.len(), self.shape.head_dim())?;
+        require_len("k_norm.weight", k_norm_weight.len(), self.shape.head_dim())?;
+        self.q_norm_weight = Some(q_norm_weight);
+        self.k_norm_weight = Some(k_norm_weight);
         Ok(self)
     }
 }

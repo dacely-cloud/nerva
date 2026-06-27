@@ -89,7 +89,9 @@ fn layer_weight_source<'a>(
     match role {
         WeightBlockRole::AttentionNorm => Ok(view.rms_attn_weight),
         WeightBlockRole::QueryProjection => Ok(view.w_q),
+        WeightBlockRole::QueryNorm => required_bias(view.q_norm_weight, &entry.name),
         WeightBlockRole::KeyProjection => Ok(view.w_k),
+        WeightBlockRole::KeyNorm => required_bias(view.k_norm_weight, &entry.name),
         WeightBlockRole::ValueProjection => Ok(view.w_v),
         WeightBlockRole::OutputProjection => Ok(view.w_o),
         WeightBlockRole::MlpNorm => Ok(view.rms_mlp_weight),

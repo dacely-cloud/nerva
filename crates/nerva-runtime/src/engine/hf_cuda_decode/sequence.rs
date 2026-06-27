@@ -72,6 +72,8 @@ fn sequence_layers(model: &HfCausalLmModel) -> Result<Vec<CudaHfDecodeChainLayer
             rms_mlp_weight: view.rms_mlp_weight,
             w_q: view.w_q,
             w_k: view.w_k,
+            q_norm_weight: view.q_norm_weight,
+            k_norm_weight: view.k_norm_weight,
             w_v: view.w_v,
             w_o: view.w_o,
             q_bias: view.q_bias,

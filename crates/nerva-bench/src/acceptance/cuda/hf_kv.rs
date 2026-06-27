@@ -95,9 +95,11 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
             encode_values(&[1.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, -1.0])
         }
         WeightBlockRole::LmHead => encode_values(&[0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 1.0]),
-        WeightBlockRole::AttentionNorm | WeightBlockRole::MlpNorm | WeightBlockRole::FinalNorm => {
-            vec![f32_to_f16_bits(1.0); elements]
-        }
+        WeightBlockRole::AttentionNorm
+        | WeightBlockRole::QueryNorm
+        | WeightBlockRole::KeyNorm
+        | WeightBlockRole::MlpNorm
+        | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
         WeightBlockRole::QueryProjection => encoded_identity(entry.rows, entry.cols, -1.0),
         WeightBlockRole::KeyProjection
         | WeightBlockRole::ValueProjection

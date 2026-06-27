@@ -7,6 +7,9 @@ use crate::hf::contract::validate_exact_runtime_contract;
 use crate::hf::metadata::HfModelMetadata;
 use crate::hf::validate::validate_hf_metadata;
 use crate::weights::layout::entry::{WeightBlockRole, WeightBlockSpec};
+use crate::weights::layout::plan::layer_blocks::{push_layer_weight_blocks, sum_weight_bytes};
+
+mod layer_blocks;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HfWeightLayoutPlan {
@@ -59,8 +62,10 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
     let kv_hidden = metadata.kv_hidden();
 
     let static_block_count = if metadata.tie_word_embeddings { 2 } else { 3 };
-    let mut blocks =
-        Vec::with_capacity(metadata.num_hidden_layers.saturating_mul(9) + static_block_count);
+    let per_layer_blocks = if metadata.qk_norm { 11 } else { 9 };
+    let mut blocks = Vec::with_capacity(
+        metadata.num_hidden_layers.saturating_mul(per_layer_blocks) + static_block_count,
+    );
     blocks.push(WeightBlockSpec::new(
         WeightBlockRole::TokenEmbedding,
         None,
@@ -131,65 +136,5 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
         total_weight_bytes,
         per_layer_weight_bytes,
         static_weight_bytes,
-    })
-}
-
-pub(crate) fn push_layer_weight_blocks(
-    blocks: &mut Vec<WeightBlockSpec>,
-    metadata: &HfModelMetadata,
-    attention_hidden: usize,
-    kv_hidden: usize,
-    dtype: DType,
-    layer: u32,
-) -> Result<()> {
-    let hidden = metadata.hidden_size;
-    let intermediate = metadata.intermediate_size;
-    for (role, rows, cols) in [
-        (WeightBlockRole::AttentionNorm, hidden, 1),
-        (WeightBlockRole::QueryProjection, attention_hidden, hidden),
-        (WeightBlockRole::KeyProjection, kv_hidden, hidden),
-        (WeightBlockRole::ValueProjection, kv_hidden, hidden),
-        (WeightBlockRole::OutputProjection, hidden, attention_hidden),
-        (WeightBlockRole::MlpNorm, hidden, 1),
-        (WeightBlockRole::GateProjection, intermediate, hidden),
-        (WeightBlockRole::UpProjection, intermediate, hidden),
-        (WeightBlockRole::DownProjection, hidden, intermediate),
-    ] {
-        blocks.push(WeightBlockSpec::new(
-            role,
-            Some(layer),
-            rows,
-            cols,
-            dtype,
-            MemoryTier::Dram,
-        )?);
-    }
-    if metadata.attention_bias {
-        for (role, rows) in [
-            (WeightBlockRole::QueryBias, attention_hidden),
-            (WeightBlockRole::KeyBias, kv_hidden),
-            (WeightBlockRole::ValueBias, kv_hidden),
-            (WeightBlockRole::OutputBias, hidden),
-        ] {
-            blocks.push(WeightBlockSpec::new(
-                role,
-                Some(layer),
-                rows,
-                1,
-                dtype,
-                MemoryTier::Dram,
-            )?);
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn sum_weight_bytes(blocks: &[WeightBlockSpec]) -> Result<usize> {
-    blocks.iter().try_fold(0usize, |acc, block| {
-        acc.checked_add(block.bytes)
-            .ok_or_else(|| NervaError::AllocationFailed {
-                bytes: block.bytes,
-                reason: "total weight byte count overflow".to_string(),
-            })
     })
 }

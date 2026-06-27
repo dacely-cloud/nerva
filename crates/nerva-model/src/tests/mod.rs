@@ -8,6 +8,7 @@ mod precision;
 mod precision_bias;
 mod precision_rope;
 mod prompt;
+mod qwen3;
 mod reference;
 mod safetensors;
 mod support;

@@ -4,6 +4,7 @@ pub enum HfArchitectureKind {
     Mistral,
     Gemma,
     Qwen2,
+    Qwen3,
     Unknown,
 }
 
@@ -14,6 +15,7 @@ impl HfArchitectureKind {
             Self::Mistral => "mistral",
             Self::Gemma => "gemma",
             Self::Qwen2 => "qwen2",
+            Self::Qwen3 => "qwen3",
             Self::Unknown => "unknown",
         }
     }
@@ -27,6 +29,18 @@ pub(crate) fn architecture_kind_from_str(value: &str) -> HfArchitectureKind {
         HfArchitectureKind::Mistral
     } else if lower.contains("gemma") {
         HfArchitectureKind::Gemma
+    } else if lower.contains("qwen3_5")
+        || lower.contains("qwen3.5")
+        || lower.contains("qwen3next")
+        || lower.contains("qwen3_next")
+        || lower.contains("qwen3moe")
+        || lower.contains("qwen3_moe")
+        || lower.contains("qwen3vl")
+        || lower.contains("qwen3_vl")
+    {
+        HfArchitectureKind::Unknown
+    } else if lower == "qwen3" || lower == "qwen3forcausallm" {
+        HfArchitectureKind::Qwen3
     } else if lower.contains("qwen2") {
         HfArchitectureKind::Qwen2
     } else {

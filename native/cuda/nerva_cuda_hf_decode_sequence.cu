@@ -34,6 +34,8 @@ struct SequenceLayerLayout {
   uint64_t rms_mlp;
   uint64_t w_q;
   uint64_t w_k;
+  uint64_t q_norm;
+  uint64_t k_norm;
   uint64_t w_v;
   uint64_t w_o;
   uint64_t q_bias;
@@ -99,6 +101,26 @@ __device__ void add_bias(const uint16_t *arena, uint64_t offset, uint32_t len,
   }
 }
 
+__device__ void per_head_rms_norm(uint16_t *arena, uint64_t offset, float *values,
+                                  uint32_t heads, uint32_t head_dim,
+                                  uint32_t dtype, float eps) {
+  if (offset == kMissingOffset) {
+    return;
+  }
+  const uint16_t *weight = arena + offset;
+  for (uint32_t head = 0; head < heads; ++head) {
+    float mean_square = 0.0f;
+    float *base = values + head * head_dim;
+    for (uint32_t index = 0; index < head_dim; ++index) {
+      mean_square += base[index] * base[index];
+    }
+    const float scale = rsqrtf(mean_square / static_cast<float>(head_dim) + eps);
+    for (uint32_t index = 0; index < head_dim; ++index) {
+      base[index] *= scale * encoded_to_f32(weight[index], dtype);
+    }
+  }
+}
+
 __device__ void apply_rope(float *values, uint32_t heads, uint32_t head_dim,
                            uint32_t position, float theta) {
   if (theta <= 0.0f) {
@@ -155,6 +177,8 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
   add_bias(arena, layout.q_bias, attention_hidden, dtype, q);
   add_bias(arena, layout.k_bias, kv_hidden, dtype, k);
   add_bias(arena, layout.v_bias, kv_hidden, dtype, v);
+  per_head_rms_norm(arena, layout.q_norm, q, heads, head_dim, dtype, rms_eps);
+  per_head_rms_norm(arena, layout.k_norm, k, kv_heads, head_dim, dtype, rms_eps);
   apply_rope(q, heads, head_dim, position, rope_theta);
   apply_rope(k, kv_heads, head_dim, position, rope_theta);
 
@@ -497,10 +521,13 @@ int fail(NervaCudaHfDecodeSequenceResult *out, cudaError_t err) {
 
 void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
                 const NervaCudaHfDecodeChainLayer &layer, uint64_t hidden,
-                uint64_t attention_hidden, uint64_t kv_hidden, uint64_t intermediate) {
+                uint64_t attention_hidden, uint64_t kv_hidden, uint64_t head_dim,
+                uint64_t intermediate) {
   layout.rms_attn = push(cursor, hidden);
   layout.w_q = push(cursor, attention_hidden * hidden);
+  layout.q_norm = push_optional(cursor, head_dim, layer.q_norm_weight);
   layout.w_k = push(cursor, kv_hidden * hidden);
+  layout.k_norm = push_optional(cursor, head_dim, layer.k_norm_weight);
   layout.w_v = push(cursor, kv_hidden * hidden);
   layout.w_o = push(cursor, hidden * attention_hidden);
   layout.rms_mlp = push(cursor, hidden);
@@ -521,11 +548,14 @@ void copy_optional(uint16_t *arena, uint64_t offset, const uint16_t *src, uint64
 
 void copy_layer(uint16_t *arena, const SequenceLayerLayout &layout,
                 const NervaCudaHfDecodeChainLayer &layer, uint64_t hidden,
-                uint64_t attention_hidden, uint64_t kv_hidden, uint64_t intermediate) {
+                uint64_t attention_hidden, uint64_t kv_hidden, uint64_t head_dim,
+                uint64_t intermediate) {
   memcpy(arena + layout.rms_attn, layer.rms_attn_weight, hidden * sizeof(uint16_t));
   memcpy(arena + layout.rms_mlp, layer.rms_mlp_weight, hidden * sizeof(uint16_t));
   memcpy(arena + layout.w_q, layer.w_q, attention_hidden * hidden * sizeof(uint16_t));
+  copy_optional(arena, layout.q_norm, layer.q_norm_weight, head_dim);
   memcpy(arena + layout.w_k, layer.w_k, kv_hidden * hidden * sizeof(uint16_t));
+  copy_optional(arena, layout.k_norm, layer.k_norm_weight, head_dim);
   memcpy(arena + layout.w_v, layer.w_v, kv_hidden * hidden * sizeof(uint16_t));
   memcpy(arena + layout.w_o, layer.w_o, hidden * attention_hidden * sizeof(uint16_t));
   copy_optional(arena, layout.q_bias, layer.q_bias, attention_hidden);
@@ -660,7 +690,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   arena_layout.scratch = push(elements, hidden);
   for (uint32_t index = 0; index < request->layer_count; ++index) {
     pack_layer(layouts[index], elements, request->layers[index], hidden,
-               attention_hidden, kv_hidden, intermediate);
+               attention_hidden, kv_hidden, request->head_dim, intermediate);
   }
   arena_layout.final_norm = push(elements, hidden);
   arena_layout.lm_head = push(elements, vocab_size * hidden);
@@ -747,7 +777,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
            vocab_size * hidden * sizeof(uint16_t));
     for (uint32_t index = 0; index < request->layer_count; ++index) {
       copy_layer(host_arena, layouts[index], request->layers[index], hidden,
-                 attention_hidden, kv_hidden, intermediate);
+                 attention_hidden, kv_hidden, request->head_dim, intermediate);
     }
     memcpy(host_arena + arena_layout.final_norm, request->final_norm_weight,
            hidden * sizeof(uint16_t));

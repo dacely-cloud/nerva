@@ -5,9 +5,10 @@ use crate::weights::layout::entry::WeightBlockRole;
 
 pub(crate) fn ensure_supported_hf_tensor_names(architecture: HfArchitectureKind) -> Result<()> {
     match architecture {
-        HfArchitectureKind::Llama | HfArchitectureKind::Mistral | HfArchitectureKind::Qwen2 => {
-            Ok(())
-        }
+        HfArchitectureKind::Llama
+        | HfArchitectureKind::Mistral
+        | HfArchitectureKind::Qwen2
+        | HfArchitectureKind::Qwen3 => Ok(()),
         HfArchitectureKind::Gemma | HfArchitectureKind::Unknown => {
             Err(NervaError::InvalidArgument {
                 reason: format!(
@@ -38,8 +39,10 @@ pub(crate) fn hf_tensor_name(
         WeightBlockRole::AttentionNorm => layer_name(role, layer, "input_layernorm.weight"),
         WeightBlockRole::MlpNorm => layer_name(role, layer, "post_attention_layernorm.weight"),
         WeightBlockRole::QueryProjection => layer_name(role, layer, "self_attn.q_proj.weight"),
+        WeightBlockRole::QueryNorm => layer_name(role, layer, "self_attn.q_norm.weight"),
         WeightBlockRole::QueryBias => layer_name(role, layer, "self_attn.q_proj.bias"),
         WeightBlockRole::KeyProjection => layer_name(role, layer, "self_attn.k_proj.weight"),
+        WeightBlockRole::KeyNorm => layer_name(role, layer, "self_attn.k_norm.weight"),
         WeightBlockRole::KeyBias => layer_name(role, layer, "self_attn.k_proj.bias"),
         WeightBlockRole::ValueProjection => layer_name(role, layer, "self_attn.v_proj.weight"),
         WeightBlockRole::ValueBias => layer_name(role, layer, "self_attn.v_proj.bias"),
@@ -71,7 +74,9 @@ fn layer_name(role: WeightBlockRole, layer: Option<u32>, suffix: &'static str) -
 pub(crate) fn weight_block_rank(role: WeightBlockRole) -> u8 {
     match role {
         WeightBlockRole::AttentionNorm
+        | WeightBlockRole::QueryNorm
         | WeightBlockRole::QueryBias
+        | WeightBlockRole::KeyNorm
         | WeightBlockRole::KeyBias
         | WeightBlockRole::ValueBias
         | WeightBlockRole::OutputBias

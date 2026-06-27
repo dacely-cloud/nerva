@@ -52,6 +52,8 @@ fn hf_decode_chain_runs_two_layers_and_final_head_when_device_is_available() {
         rms_mlp_weight: &rms,
         w_q: &matrix,
         w_k: &matrix,
+        q_norm_weight: None,
+        k_norm_weight: None,
         w_v: &matrix,
         w_o: &matrix,
         q_bias: None,

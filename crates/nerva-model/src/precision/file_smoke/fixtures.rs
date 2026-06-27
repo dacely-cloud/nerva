@@ -41,9 +41,11 @@ fn tensor_values_for_entry(
 ) -> Result<Vec<u16>> {
     let elements = entry.bytes / 2;
     let values = match entry.role {
-        WeightBlockRole::AttentionNorm | WeightBlockRole::MlpNorm | WeightBlockRole::FinalNorm => {
-            vec![f32_to_f16_bits(1.0); elements]
-        }
+        WeightBlockRole::AttentionNorm
+        | WeightBlockRole::QueryNorm
+        | WeightBlockRole::KeyNorm
+        | WeightBlockRole::MlpNorm
+        | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
         WeightBlockRole::QueryProjection
         | WeightBlockRole::KeyProjection
         | WeightBlockRole::ValueProjection

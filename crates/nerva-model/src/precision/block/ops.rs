@@ -49,6 +49,29 @@ pub(crate) fn rms_norm_encoded_into(
     Ok(())
 }
 
+pub(crate) fn per_head_rms_norm_encoded_in_place(
+    dtype: DType,
+    weight: &[u16],
+    head_dim: usize,
+    values: &mut [f32],
+    eps: f32,
+) -> Result<()> {
+    if head_dim == 0 || !values.len().is_multiple_of(head_dim) {
+        return Err(nerva_core::types::error::NervaError::InvalidArgument {
+            reason: "per-head RMS norm values must divide evenly by head dimension".to_string(),
+        });
+    }
+    require_len("per-head RMS weight", weight.len(), head_dim)?;
+    for head in values.chunks_exact_mut(head_dim) {
+        let mean_square = head.iter().map(|value| value * value).sum::<f32>() / head_dim as f32;
+        let scale = (mean_square + eps).sqrt().recip();
+        for (value, weight) in head.iter_mut().zip(weight.iter().copied()) {
+            *value *= scale * decode_f32_for_dtype(weight, dtype)?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn mat_vec_encoded_row_major(
     dtype: DType,
     matrix: &[u16],

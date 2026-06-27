@@ -257,6 +257,8 @@ typedef struct NervaCudaHfDecodeChainLayer {
   const uint16_t *rms_mlp_weight;
   const uint16_t *w_q;
   const uint16_t *w_k;
+  const uint16_t *q_norm_weight;
+  const uint16_t *k_norm_weight;
   const uint16_t *w_v;
   const uint16_t *w_o;
   const uint16_t *q_bias;

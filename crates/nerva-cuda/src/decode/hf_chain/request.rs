@@ -113,7 +113,13 @@ impl<'a> CudaHfDecodeChainRequest<'a> {
         let kv_hidden = self.kv_heads * self.head_dim;
         self.layers.iter().enumerate().find_map(|(index, layer)| {
             layer
-                .validate(self.hidden, attention_hidden, kv_hidden, self.intermediate)
+                .validate(
+                    self.hidden,
+                    attention_hidden,
+                    kv_hidden,
+                    self.head_dim,
+                    self.intermediate,
+                )
                 .map(|error| format!("layer {index}: {error}"))
         })
     }

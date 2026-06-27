@@ -31,6 +31,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
     let tie_word_embeddings = optional_bool(config_json, "tie_word_embeddings")?.unwrap_or(false);
     let hidden_act = parse_hidden_act(config_json)?;
     let attention_bias = parse_attention_bias(config_json)?;
+    let qk_norm = parse_qk_norm(config_json, architecture)?;
     let mlp_bias = optional_bool(config_json, "mlp_bias")?.unwrap_or(false);
     let torch_dtype = optional_string(config_json, "torch_dtype")?
         .as_deref()
@@ -64,6 +65,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         tie_word_embeddings,
         hidden_act,
         attention_bias,
+        qk_norm,
         mlp_bias,
         torch_dtype,
     })
@@ -125,6 +127,13 @@ fn parse_attention_bias(config_json: &str) -> Result<bool> {
     let attention_bias = optional_bool(config_json, "attention_bias")?.unwrap_or(false);
     let qkv_bias = optional_bool(config_json, "qkv_bias")?.unwrap_or(false);
     Ok(attention_bias || qkv_bias)
+}
+
+fn parse_qk_norm(config_json: &str, architecture: HfArchitectureKind) -> Result<bool> {
+    match optional_bool(config_json, "qk_norm")? {
+        Some(value) => Ok(value),
+        None => Ok(architecture == HfArchitectureKind::Qwen3),
+    }
 }
 
 pub(crate) fn architecture_from_config(config_json: &str) -> Result<HfArchitectureKind> {

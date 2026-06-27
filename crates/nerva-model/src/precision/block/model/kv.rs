@@ -8,7 +8,8 @@ use crate::common::rope::{apply_rotary_to_key, apply_rotary_to_query};
 use crate::common::validate::require_len;
 use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::precision::block::ops::{
-    add_encoded_bias_into, decode_vec_into, mat_vec_encoded_row_major, rms_norm_encoded_into,
+    add_encoded_bias_into, decode_vec_into, mat_vec_encoded_row_major,
+    per_head_rms_norm_encoded_in_place, rms_norm_encoded_into,
 };
 use crate::precision::scratch::PrecisionTransformerBlockKvScratch;
 
@@ -115,6 +116,15 @@ fn append_kv_from_input(
     if let Some(bias) = block.k_bias.as_deref() {
         add_encoded_bias_into(block.dtype, bias, &mut scratch.token.k)?;
     }
+    if let Some(weight) = block.k_norm_weight.as_deref() {
+        per_head_rms_norm_encoded_in_place(
+            block.dtype,
+            weight,
+            block.shape.head_dim(),
+            &mut scratch.token.k,
+            block.rms_eps,
+        )?;
+    }
     mat_vec_encoded_row_major(
         block.dtype,
         &block.w_v,
@@ -158,6 +168,15 @@ fn forward_with_visible_kv(
     )?;
     if let Some(bias) = block.q_bias.as_deref() {
         add_encoded_bias_into(block.dtype, bias, &mut scratch.token.q)?;
+    }
+    if let Some(weight) = block.q_norm_weight.as_deref() {
+        per_head_rms_norm_encoded_in_place(
+            block.dtype,
+            weight,
+            block.shape.head_dim(),
+            &mut scratch.token.q,
+            block.rms_eps,
+        )?;
     }
     if let Some(theta) = block.rope_theta {
         apply_rotary_to_query(block.shape, position, theta, &mut scratch.token.q)?;

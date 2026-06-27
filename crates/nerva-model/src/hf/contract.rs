@@ -5,15 +5,17 @@ use crate::hf::metadata::HfModelMetadata;
 
 pub(crate) fn validate_exact_runtime_contract(metadata: &HfModelMetadata) -> Result<()> {
     validate_supported_architecture(metadata.architecture)?;
+    validate_qk_norm(metadata)?;
     validate_mlp_activation(metadata)?;
     validate_mlp_bias(metadata)
 }
 
 fn validate_supported_architecture(architecture: HfArchitectureKind) -> Result<()> {
     match architecture {
-        HfArchitectureKind::Llama | HfArchitectureKind::Mistral | HfArchitectureKind::Qwen2 => {
-            Ok(())
-        }
+        HfArchitectureKind::Llama
+        | HfArchitectureKind::Mistral
+        | HfArchitectureKind::Qwen2
+        | HfArchitectureKind::Qwen3 => Ok(()),
         HfArchitectureKind::Gemma | HfArchitectureKind::Unknown => {
             Err(NervaError::InvalidArgument {
                 reason: format!(
@@ -23,6 +25,23 @@ fn validate_supported_architecture(architecture: HfArchitectureKind) -> Result<(
             })
         }
     }
+}
+
+fn validate_qk_norm(metadata: &HfModelMetadata) -> Result<()> {
+    if metadata.qk_norm
+        && !matches!(
+            metadata.architecture,
+            HfArchitectureKind::Qwen2 | HfArchitectureKind::Qwen3
+        )
+    {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "HF architecture {} does not define supported q_norm/k_norm tensor names",
+                metadata.architecture.as_str()
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn validate_mlp_activation(metadata: &HfModelMetadata) -> Result<()> {

@@ -23,6 +23,7 @@ pub struct HfModelMetadata {
     pub tie_word_embeddings: bool,
     pub hidden_act: Option<String>,
     pub attention_bias: bool,
+    pub qk_norm: bool,
     pub mlp_bias: bool,
     pub torch_dtype: Option<DType>,
 }
@@ -56,7 +57,7 @@ impl HfModelMetadata {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"architecture\":\"{}\",\"hidden_size\":{},\"num_hidden_layers\":{},\"num_attention_heads\":{},\"num_key_value_heads\":{},\"head_dim\":{},\"attention_hidden_size\":{},\"kv_hidden_size\":{},\"kv_groups\":{},\"intermediate_size\":{},\"vocab_size\":{},\"max_position_embeddings\":{},\"rope_theta\":{},\"rms_norm_eps\":{},\"bos_token_id\":{},\"eos_token_id\":{},\"tie_word_embeddings\":{},\"hidden_act\":{},\"attention_bias\":{},\"mlp_bias\":{},\"torch_dtype\":{}}}",
+            "{{\"architecture\":\"{}\",\"hidden_size\":{},\"num_hidden_layers\":{},\"num_attention_heads\":{},\"num_key_value_heads\":{},\"head_dim\":{},\"attention_hidden_size\":{},\"kv_hidden_size\":{},\"kv_groups\":{},\"intermediate_size\":{},\"vocab_size\":{},\"max_position_embeddings\":{},\"rope_theta\":{},\"rms_norm_eps\":{},\"bos_token_id\":{},\"eos_token_id\":{},\"tie_word_embeddings\":{},\"hidden_act\":{},\"attention_bias\":{},\"qk_norm\":{},\"mlp_bias\":{},\"torch_dtype\":{}}}",
             self.architecture.as_str(),
             self.hidden_size,
             self.num_hidden_layers,
@@ -76,6 +77,7 @@ impl HfModelMetadata {
             self.tie_word_embeddings,
             json_opt_str(self.hidden_act.as_deref()),
             self.attention_bias,
+            self.qk_norm,
             self.mlp_bias,
             json_opt_dtype(self.torch_dtype),
         )

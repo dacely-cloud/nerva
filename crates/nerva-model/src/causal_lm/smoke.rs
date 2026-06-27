@@ -125,9 +125,11 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Result<Vec<u16>> {
     let values = match entry.role {
         WeightBlockRole::TokenEmbedding => encoded_cycle_embeddings(entry.rows, entry.cols)?,
         WeightBlockRole::LmHead => encoded_cycle_lm_head(entry.rows, entry.cols)?,
-        WeightBlockRole::AttentionNorm | WeightBlockRole::MlpNorm | WeightBlockRole::FinalNorm => {
-            vec![f32_to_f16_bits(1.0); elements]
-        }
+        WeightBlockRole::AttentionNorm
+        | WeightBlockRole::QueryNorm
+        | WeightBlockRole::KeyNorm
+        | WeightBlockRole::MlpNorm
+        | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
         WeightBlockRole::QueryBias
         | WeightBlockRole::KeyBias
         | WeightBlockRole::ValueBias
