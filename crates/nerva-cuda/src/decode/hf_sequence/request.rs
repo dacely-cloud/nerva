@@ -20,6 +20,7 @@ pub struct CudaHfDecodeSequenceRequest<'a> {
     pub vocab_size: usize,
     pub steps: usize,
     pub seed_token: u32,
+    pub prompt_tokens: &'a [u32],
     pub eos_token: Option<u32>,
     pub rms_eps: f32,
     pub rope_theta: Option<f32>,
@@ -85,7 +86,6 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             error,
         }
     }
-
     fn validate(&self) -> Option<String> {
         if self.hidden == 0 || self.heads == 0 || self.kv_heads == 0 || self.head_dim == 0 {
             return Some("CUDA HF decode sequence dimensions must be non-zero".to_string());
@@ -100,6 +100,16 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
         }
         if self.seed_token as usize >= self.vocab_size {
             return Some("CUDA HF decode sequence seed token is outside vocabulary".to_string());
+        }
+        if self.prompt_tokens.is_empty() {
+            return Some("CUDA HF decode sequence requires prompt tokens".to_string());
+        }
+        if self
+            .prompt_tokens
+            .iter()
+            .any(|token| *token as usize >= self.vocab_size)
+        {
+            return Some("CUDA HF decode sequence prompt token is outside vocabulary".to_string());
         }
         if self.kv_heads > self.heads || !self.heads.is_multiple_of(self.kv_heads) {
             return Some(
@@ -156,6 +166,8 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             layer_count: self.layers.len() as u32,
             steps: self.steps as u32,
             seed_token: self.seed_token,
+            prompt_tokens: self.prompt_tokens.as_ptr(),
+            prompt_token_count: self.prompt_tokens.len() as u32,
             has_eos_token: self.eos_token.is_some() as u32,
             eos_token: self.eos_token.unwrap_or(0),
             rms_eps: self.rms_eps,

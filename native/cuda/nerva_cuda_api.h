@@ -324,6 +324,8 @@ typedef struct NervaCudaHfDecodeSequenceRequest {
   uint32_t layer_count;
   uint32_t steps;
   uint32_t seed_token;
+  const uint32_t *prompt_tokens;
+  uint32_t prompt_token_count;
   uint32_t has_eos_token;
   uint32_t eos_token;
   float rms_eps;

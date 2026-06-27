@@ -56,7 +56,7 @@ pub(crate) fn push_loaded_hf_kv_seed_decode(report: &mut AcceptanceReport) {
     }
 }
 
-fn write_checkpoint_dir() -> PathBuf {
+pub(crate) fn write_checkpoint_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("nerva-hf-kv-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let config = config_json();
@@ -125,7 +125,7 @@ fn encode_values(values: &[f32]) -> Vec<u16> {
     values.iter().copied().map(f32_to_f16_bits).collect()
 }
 
-fn remove_checkpoint_dir(dir: &Path) {
+pub(crate) fn remove_checkpoint_dir(dir: &Path) {
     let _ = std::fs::remove_file(dir.join("model.safetensors"));
     let _ = std::fs::remove_file(dir.join("config.json"));
     let _ = std::fs::remove_dir(dir);

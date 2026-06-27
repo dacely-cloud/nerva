@@ -1,4 +1,6 @@
-use crate::cli::model::causal_lm_cuda::hf_causal_lm_cuda_decode_json;
+use crate::cli::model::causal_lm_cuda::{
+    hf_causal_lm_cuda_decode_input_json, hf_causal_lm_cuda_decode_json,
+};
 use crate::tests::support::{synthetic_header_for_entries, write_safetensors_header};
 
 #[test]
@@ -35,6 +37,28 @@ fn hf_cuda_decode_cli_requires_checkpoint_dir() {
     let err = hf_causal_lm_cuda_decode_json(None, 0, 1).unwrap_err();
 
     assert_eq!(err, "hf-cuda-decode requires checkpoint_dir");
+}
+
+#[test]
+fn hf_cuda_decode_cli_accepts_token_id_prompt_sequence() {
+    let dir = write_checkpoint_dir("nerva-hf-cuda-decode-ids-cli");
+    let json = hf_causal_lm_cuda_decode_input_json(
+        Some(dir.to_string_lossy().into_owned()),
+        Some("ids:0,1".to_string()),
+        2,
+    )
+    .unwrap();
+
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"input_mode\":\"token_ids\""));
+    assert!(json.contains("\"prompt_token_ids\":[0,1]"));
+    assert!(json.contains("\"prompt_tokens\":2"));
+    assert!(json.contains("\"seed_token\":1"));
+    assert!(json.contains("\"kv_tokens\":3"));
+    assert!(json.contains("\"graph_replays\":3"));
+    assert!(json.contains("\"parity\":true"));
+
+    remove_checkpoint_dir(&dir);
 }
 
 fn write_checkpoint_dir(prefix: &str) -> std::path::PathBuf {

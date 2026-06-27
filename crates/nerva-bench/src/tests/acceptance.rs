@@ -62,6 +62,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"cuda_resident_block\""));
     assert!(json.contains("\"cuda_loaded_hf_seed_decode\""));
     assert!(json.contains("\"cuda_loaded_hf_kv_seed_decode\""));
+    assert!(json.contains("\"cuda_loaded_hf_prompt_kv_decode\""));
     assert!(json.contains("\"precision_tiny_model_greedy_parity\""));
     assert!(json.contains("\"prompt_tokenization_decode\""));
     assert!(json.contains("\"cuda_tiny_decode_model\""));

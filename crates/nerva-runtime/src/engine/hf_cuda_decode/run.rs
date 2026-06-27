@@ -13,24 +13,38 @@ pub fn run_hf_causal_lm_cuda_seed_decode(
     seed: TokenId,
     steps: usize,
 ) -> Result<HfCudaSeedDecodeSummary> {
+    run_hf_causal_lm_cuda_prompt_decode(model, &[seed], steps)
+}
+
+pub fn run_hf_causal_lm_cuda_prompt_decode(
+    model: &HfCausalLmModel,
+    prompt_tokens: &[TokenId],
+    steps: usize,
+) -> Result<HfCudaSeedDecodeSummary> {
     if steps == 0 {
         return Err(NervaError::InvalidArgument {
             reason: "HF CUDA seed decode steps must be non-zero".to_string(),
         });
     }
-    let context_tokens = steps
-        .checked_add(1)
-        .ok_or_else(|| NervaError::InvalidArgument {
-            reason: "HF CUDA seed decode context length overflow".to_string(),
-        })?;
+    if prompt_tokens.is_empty() {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF CUDA prompt decode requires prompt tokens".to_string(),
+        });
+    }
+    let context_tokens =
+        steps
+            .checked_add(prompt_tokens.len())
+            .ok_or_else(|| NervaError::InvalidArgument {
+                reason: "HF CUDA seed decode context length overflow".to_string(),
+            })?;
     let mut cpu_scratch = HfCausalLmDecodeScratch::new_with_context(
         model.shape(),
         model.metadata().vocab_size,
         model.layer_count(),
         context_tokens,
     )?;
-    let (expected_tokens, cpu_ledgers) = model.decode_greedy(seed, steps, &mut cpu_scratch)?;
-    let sequence = run_device_sequence(model, seed, steps)?;
+    let output = model.decode_greedy_from_prompt_tokens(prompt_tokens, steps, &mut cpu_scratch)?;
+    let sequence = run_device_sequence(model, prompt_tokens, steps)?;
     let mut counters = CudaDecodeCounters::default();
     counters.record_sequence(&sequence);
     if sequence.status != SmokeStatus::Ok {
@@ -51,6 +65,8 @@ pub fn run_hf_causal_lm_cuda_seed_decode(
     for ledger in &ledgers {
         ledger.require_zero_hot_path_allocations()?;
     }
+    let expected_tokens = output.generated_tokens;
+    let cpu_ledgers = output.ledgers;
     let status = if tokens == expected_tokens {
         SmokeStatus::Ok
     } else {

@@ -86,6 +86,7 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
         vocab_size: 4,
         steps: 4,
         seed_token: 0,
+        prompt_tokens: &[0],
         eos_token: None,
         rms_eps: 1e-5,
         rope_theta: None,

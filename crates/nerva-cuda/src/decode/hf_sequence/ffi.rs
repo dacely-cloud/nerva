@@ -15,6 +15,8 @@ pub(crate) struct NervaCudaHfDecodeSequenceRequest {
     pub(crate) layer_count: u32,
     pub(crate) steps: u32,
     pub(crate) seed_token: u32,
+    pub(crate) prompt_tokens: *const u32,
+    pub(crate) prompt_token_count: u32,
     pub(crate) has_eos_token: u32,
     pub(crate) eos_token: u32,
     pub(crate) rms_eps: f32,

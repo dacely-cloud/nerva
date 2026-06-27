@@ -5,5 +5,6 @@ pub(crate) mod decode;
 pub(crate) mod graph;
 pub(crate) mod hf_kv;
 pub(crate) mod hf_layer;
+pub(crate) mod hf_prompt;
 pub(crate) mod runtime;
 pub(crate) mod sampler;

@@ -11,9 +11,19 @@ use nerva_model::causal_lm::types::HfCausalLmModel;
 
 pub(super) fn run_device_sequence(
     model: &HfCausalLmModel,
-    seed: TokenId,
+    prompt_tokens: &[TokenId],
     steps: usize,
 ) -> Result<CudaHfDecodeSequenceSummary> {
+    let seed = prompt_tokens
+        .last()
+        .copied()
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "CUDA HF decode sequence requires prompt tokens".to_string(),
+        })?;
+    let prompt_token_ids = prompt_tokens
+        .iter()
+        .map(|token| token.0)
+        .collect::<Vec<_>>();
     let layers = sequence_layers(model)?;
     let first_layer = model.layer(0).ok_or_else(|| NervaError::InvalidArgument {
         reason: "CUDA HF decode sequence requires at least one loaded layer".to_string(),
@@ -29,6 +39,7 @@ pub(super) fn run_device_sequence(
         vocab_size: model.metadata().vocab_size,
         steps,
         seed_token: seed.0,
+        prompt_tokens: &prompt_token_ids,
         eos_token: model.metadata().eos_token_id,
         rms_eps: model.rms_eps(),
         rope_theta: first_layer.rope_theta(),
