@@ -46,6 +46,34 @@ disabled unless noted.
 
 Detokenization had no material effect in this benchmark shape.
 
+## Qwen3-8B Short Decode Baseline
+
+Additional measurement on 2026-06-27 used the local Qwen3-8B BF16 checkpoint
+and the uv-managed vLLM environment at `/root/vllm/.venv`.
+
+```text
+model:          Qwen3-8B local safetensors snapshot
+vLLM:           0.23.1rc1.dev455+g27da2a2ac
+torch:          2.11.0+cu130
+GPU:            RTX 5090
+input length:   1 token
+output length:  2 tokens
+batch size:     1
+detokenization: disabled
+```
+
+Measured with `vllm bench latency` after warmup and graph capture:
+
+| Workload | Avg request latency | Median | P90 | P99 |
+|---|---:|---:|---:|---:|
+| Qwen3-8B, batch 1, input 1, output 2 | 22.39 ms | 22.24 ms | 22.75 ms | 23.32 ms |
+
+Derived output throughput is `2 / 0.0223879596 = 89.33` generated tokens/s.
+The request P99 divided by two output tokens is `11.66 ms/token`. This is a
+derived comparison value, not a per-token vLLM device ledger. It is still enough
+to show that the current NERVA Qwen3-8B path at about `71.76` tokens/s and
+`14.10 ms` token P99 does not beat vLLM on this fully resident short workload.
+
 ## Profiler Result
 
 The single-prompt profile for 128 input tokens and 64 output tokens shows the
@@ -205,6 +233,23 @@ CUDA_VISIBLE_DEVICES=0 \
   --profiler-config.torch_profiler_dir $VLLM_DIR/.bench/profile_single_bs1_i128_o64 \
   --profiler-config.torch_profiler_with_stack false \
   --profiler-config.torch_profiler_use_gzip false
+```
+
+Qwen3-8B short decode benchmark:
+
+```bash
+cd $VLLM_DIR
+.venv/bin/python -m vllm.entrypoints.cli.main bench latency \
+  --model /root/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218 \
+  --dtype bfloat16 \
+  --max-model-len 3 \
+  --input-len 1 \
+  --output-len 2 \
+  --batch-size 1 \
+  --num-iters-warmup 3 \
+  --num-iters 10 \
+  --disable-detokenize \
+  --output-json /tmp/vllm_qwen3_8b_latency_i1_o2_b1.json
 ```
 
 ## Local Artifacts
