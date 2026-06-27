@@ -818,6 +818,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   NervaCudaSyntheticTokenSlot *device_slots = nullptr;
   uint32_t *device_step = nullptr;
   cudaStream_t stream = nullptr;
+  cudaEvent_t device_start = nullptr;
+  cudaEvent_t device_stop = nullptr;
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t graph_exec = nullptr;
 
@@ -835,8 +837,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_slots), slots_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_step), sizeof(uint32_t));
   if (err == cudaSuccess) err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err == cudaSuccess) err = cudaEventCreate(&device_start);
+  if (err == cudaSuccess) err = cudaEventCreate(&device_stop);
   if (err != cudaSuccess) {
     fail(out, err);
+    if (device_stop != nullptr) cudaEventDestroy(device_stop);
+    if (device_start != nullptr) cudaEventDestroy(device_start);
     cudaFree(device_step);
     cudaFree(device_slots);
     cudaFree(device_prompt_tokens);
@@ -934,6 +940,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   if (err == cudaSuccess) {
     err = cudaGraphInstantiate(&graph_exec, graph, 0);
   }
+  if (err == cudaSuccess) {
+    err = cudaEventRecord(device_start, stream);
+  }
   for (uint32_t step = 0; err == cudaSuccess && step < context_steps; ++step) {
     err = cudaGraphLaunch(graph_exec, stream);
     if (err == cudaSuccess) {
@@ -943,6 +952,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     }
   }
   if (err == cudaSuccess) {
+    err = cudaEventRecord(device_stop, stream);
+  }
+  if (err == cudaSuccess) {
     err = cudaMemcpyAsync(host_slots, device_slots, slots_bytes,
                           cudaMemcpyDeviceToHost, stream);
     out->d2h_bytes = slots_bytes;
@@ -950,6 +962,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   if (err == cudaSuccess) {
     err = cudaStreamSynchronize(stream);
     out->sync_calls = 1;
+  }
+  if (err == cudaSuccess) {
+    float device_ms = 0.0f;
+    err = cudaEventElapsedTime(&device_ms, device_start, device_stop);
+    if (err == cudaSuccess && device_ms > 0.0f) {
+      out->device_elapsed_ns = static_cast<uint64_t>(device_ms * 1000000.0f);
+      if (out->device_elapsed_ns == 0) {
+        out->device_elapsed_ns = 1;
+      }
+    }
   }
 
   if (err == cudaSuccess) {
@@ -988,6 +1010,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   }
   if (graph != nullptr) {
     cudaGraphDestroy(graph);
+  }
+  if (device_stop != nullptr) {
+    cudaEventDestroy(device_stop);
+  }
+  if (device_start != nullptr) {
+    cudaEventDestroy(device_start);
   }
   cudaStreamDestroy(stream);
   cudaFree(device_step);

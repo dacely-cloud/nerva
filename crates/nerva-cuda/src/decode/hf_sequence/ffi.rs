@@ -79,6 +79,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) graph_nodes: u64,
     pub(crate) graph_launches: u64,
     pub(crate) kernel_launches: u64,
+    pub(crate) device_elapsed_ns: u64,
     pub(crate) sync_calls: u64,
     pub(crate) host_causality_edges: u64,
     pub(crate) hot_path_allocations: u64,

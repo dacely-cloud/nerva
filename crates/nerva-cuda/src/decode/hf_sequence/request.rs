@@ -130,6 +130,7 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             graph_nodes: out.graph_nodes,
             graph_launches: out.graph_launches,
             kernel_launches: out.kernel_launches,
+            device_elapsed_ns: out.device_elapsed_ns,
             sync_calls: out.sync_calls,
             host_causality_edges: out.host_causality_edges,
             hot_path_allocations: out.hot_path_allocations,

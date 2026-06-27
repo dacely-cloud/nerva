@@ -77,6 +77,10 @@ pub(crate) fn push_loaded_hf_seed_decode(report: &mut AcceptanceReport) {
             return;
         }
     };
+    let gpu_event_timing = summary
+        .critical_paths
+        .iter()
+        .all(|path| path.gpu_event_count > 0 && path.measured_latency_ns > 0);
 
     report.push(
         "cuda_loaded_hf_seed_decode",
@@ -99,9 +103,10 @@ pub(crate) fn push_loaded_hf_seed_decode(report: &mut AcceptanceReport) {
             && summary.kv_tokens == summary.steps_requested as u64
             && summary.kernel_launches == summary.steps_requested as u64
             && summary.sync_calls == 1
-            && summary.host_causality_edges == 0,
+            && summary.host_causality_edges == 0
+            && gpu_event_timing,
         format!(
-            "status={:?} steps={} tokens={} expected={} parity={} ledger_count={} device_events={} copy_events={} hard_syncs={} soft_visibility_syncs={} critical_paths={} execution_decisions={} resident_weight_bytes={} resident_kv_bytes={} kv_tokens={} H2D_bytes={} D2H_bytes={} graph_replays={} graph_nodes={} graph_launches={} graph_replay_events={} kernel_launches={} sync_calls={} host_causality_edges={} output_hash={} expected_hash={} hot_path_allocations={} error={}",
+            "status={:?} steps={} tokens={} expected={} parity={} ledger_count={} device_events={} copy_events={} hard_syncs={} soft_visibility_syncs={} critical_paths={} gpu_event_timing={} execution_decisions={} resident_weight_bytes={} resident_kv_bytes={} kv_tokens={} H2D_bytes={} D2H_bytes={} graph_replays={} graph_nodes={} graph_launches={} graph_replay_events={} kernel_launches={} sync_calls={} host_causality_edges={} output_hash={} expected_hash={} hot_path_allocations={} error={}",
             summary.status,
             summary.steps_requested,
             summary.tokens.len(),
@@ -113,6 +118,7 @@ pub(crate) fn push_loaded_hf_seed_decode(report: &mut AcceptanceReport) {
             summary.hard_syncs,
             summary.soft_visibility_syncs,
             summary.critical_paths.len(),
+            gpu_event_timing,
             summary.execution_decisions,
             summary.resident_weight_bytes,
             summary.resident_kv_bytes,

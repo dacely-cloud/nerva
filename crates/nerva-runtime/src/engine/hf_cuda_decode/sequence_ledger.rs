@@ -21,27 +21,30 @@ pub(super) fn sequence_ledgers(summary: &CudaHfDecodeSequenceSummary) -> Vec<Tok
             &mut ledger,
             LedgerEventKind::GraphReplay,
             graph_replay_ns(summary),
+            MetricSource::EstimatedModel,
             "hf_cuda_sequence_graph_replay",
         );
         record_event(
             &mut ledger,
             LedgerEventKind::KernelLaunch,
             0,
+            MetricSource::EstimatedModel,
             "hf_cuda_sequence_kernel",
         );
-        let device_active_ns = visible_ns(summary);
+        let device_active_ns = device_active_ns(summary);
+        let device_source = device_metric_source(summary);
         record_event(
             &mut ledger,
             LedgerEventKind::DeviceActivity,
             device_active_ns,
+            device_source,
             "hf_cuda_sequence_device_step",
         );
-        record_device_span(&mut ledger, device_active_ns);
+        record_device_span(&mut ledger, device_active_ns, device_source);
         if step == last {
             record_copy(
                 &mut ledger,
-                MemoryTier::Vram,
-                MemoryTier::PinnedDram,
+                false,
                 summary.d2h_bytes,
                 "hf_cuda_sequence_token_ring_d2h",
             );
@@ -56,33 +59,21 @@ fn record_bootstrap_copies(ledger: &mut TokenLedger, summary: &CudaHfDecodeSeque
     let descriptor_bytes =
         summary.descriptor_gpu_resident_h2d_bytes + summary.descriptor_gpu_staged_h2d_bytes;
     if descriptor_bytes == 0 {
-        record_copy(
-            ledger,
-            MemoryTier::PinnedDram,
-            MemoryTier::Vram,
-            summary.h2d_bytes,
-            "hf_cuda_sequence_bootstrap_h2d",
-        );
+        record_h2d(ledger, summary.h2d_bytes, "hf_cuda_sequence_bootstrap_h2d");
         return;
     }
-    record_copy(
+    record_h2d(
         ledger,
-        MemoryTier::PinnedDram,
-        MemoryTier::Vram,
         summary.descriptor_gpu_resident_h2d_bytes,
         "hf_cuda_sequence_descriptor_resident_h2d",
     );
-    record_copy(
+    record_h2d(
         ledger,
-        MemoryTier::PinnedDram,
-        MemoryTier::Vram,
         summary.descriptor_gpu_staged_h2d_bytes,
         "hf_cuda_sequence_descriptor_staged_h2d",
     );
-    record_copy(
+    record_h2d(
         ledger,
-        MemoryTier::PinnedDram,
-        MemoryTier::Vram,
         summary.h2d_bytes.saturating_sub(descriptor_bytes),
         "hf_cuda_sequence_metadata_h2d",
     );
@@ -90,17 +81,23 @@ fn record_bootstrap_copies(ledger: &mut TokenLedger, summary: &CudaHfDecodeSeque
 
 fn record_decision(ledger: &mut TokenLedger, summary: &CudaHfDecodeSequenceSummary, _step: usize) {
     let visible = visible_ns(summary);
+    let device = device_active_ns(summary);
+    let measured = summary.device_elapsed_ns > 0;
     ledger.record_execution_decision(ExecutionDecision {
         operation: "hf_cuda_device_token_sequence",
         executor_selected: ExecutionOwner::Gpu(DeviceOrdinal(0)),
         candidate_costs: vec![
-            CandidateCost::estimated("cuda-device-token-sequence", visible),
+            if measured {
+                CandidateCost::measured("cuda-device-token-sequence", device)
+            } else {
+                CandidateCost::estimated("cuda-device-token-sequence", visible)
+            },
             CandidateCost::estimated("host-per-token-chain", visible.saturating_mul(2)),
         ],
         reason: "loaded HF decode sequence keeps next-token causality on device",
         predicted_visible_ns: visible,
-        actual_visible_ns: None,
-        metric_source: MetricSource::EstimatedModel,
+        actual_visible_ns: measured.then_some(device),
+        metric_source: device_metric_source(summary),
     });
 }
 
@@ -117,28 +114,27 @@ fn record_final_sync(ledger: &mut TokenLedger, summary: &CudaHfDecodeSequenceSum
     );
 }
 
-fn record_device_span(ledger: &mut TokenLedger, active_ns: u64) {
+fn record_device_span(ledger: &mut TokenLedger, active_ns: u64, source: MetricSource) {
     ledger
         .record_device_span(DeviceTimelineSpan::new(
             DeviceOrdinal(0),
             0,
             active_ns,
-            MetricSource::EstimatedModel,
+            source,
             "hf_cuda_sequence_device_timeline",
         ))
         .expect("HF CUDA sequence ledger records valid device spans");
 }
 
-fn record_copy(
-    ledger: &mut TokenLedger,
-    from: MemoryTier,
-    to: MemoryTier,
-    bytes: u64,
-    label: &'static str,
-) {
+fn record_copy(ledger: &mut TokenLedger, h2d: bool, bytes: u64, label: &'static str) {
     if bytes == 0 {
         return;
     }
+    let (from, to) = if h2d {
+        (MemoryTier::PinnedDram, MemoryTier::Vram)
+    } else {
+        (MemoryTier::Vram, MemoryTier::PinnedDram)
+    };
     ledger.record(LedgerEvent {
         kind: LedgerEventKind::Copy,
         sync_class: None,
@@ -152,16 +148,21 @@ fn record_copy(
     });
 }
 
+fn record_h2d(ledger: &mut TokenLedger, bytes: u64, label: &'static str) {
+    record_copy(ledger, true, bytes, label);
+}
+
 fn record_event(
     ledger: &mut TokenLedger,
     kind: LedgerEventKind,
     latency_ns: u64,
+    metric_source: MetricSource,
     label: &'static str,
 ) {
     ledger.record(LedgerEvent {
         kind,
         sync_class: None,
-        metric_source: MetricSource::EstimatedModel,
+        metric_source,
         block_id: None,
         from_tier: Some(MemoryTier::Vram),
         to_tier: Some(MemoryTier::Vram),
@@ -175,6 +176,22 @@ fn visible_ns(summary: &CudaHfDecodeSequenceSummary) -> u64 {
     let token_count = summary.tokens.len().max(1) as u64;
     let copy = (summary.h2d_bytes + summary.d2h_bytes) / token_count;
     (summary.resident_weight_bytes / token_count + copy).max(1)
+}
+
+fn device_active_ns(summary: &CudaHfDecodeSequenceSummary) -> u64 {
+    if summary.device_elapsed_ns == 0 {
+        return visible_ns(summary);
+    }
+    let token_count = summary.tokens.len().max(1) as u64;
+    (summary.device_elapsed_ns / token_count).max(1)
+}
+
+fn device_metric_source(summary: &CudaHfDecodeSequenceSummary) -> MetricSource {
+    if summary.device_elapsed_ns == 0 {
+        MetricSource::EstimatedModel
+    } else {
+        MetricSource::GpuEvent
+    }
 }
 
 fn graph_replay_ns(summary: &CudaHfDecodeSequenceSummary) -> u64 {
