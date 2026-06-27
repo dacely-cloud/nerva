@@ -4,6 +4,7 @@ mod block;
 mod decode;
 mod decode_chain;
 mod decode_sequence;
+mod decode_sequence_descriptors;
 mod graph;
 mod json;
 mod sampler;
