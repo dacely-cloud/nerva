@@ -34,12 +34,18 @@ pub(crate) fn push_loaded_hf_prompt_kv_decode(report: &mut AcceptanceReport) {
                 && summary.kv_tokens == 4
                 && summary.resident_weights.plan_steps == 12
                 && summary.resident_weights.run_steps == 12
-                && summary.resident_weights.plan_gpu_staged_steps == 12
-                && summary.resident_weights.run_gpu_staged_steps == 12
+                && summary.resident_weights.hotset_promoted_blocks > 0
+                && summary.resident_weights.hotset_kept_dram_blocks > 0
+                && summary.resident_weights.plan_gpu_resident_steps > 0
+                && summary.resident_weights.plan_gpu_staged_steps > 0
+                && summary.resident_weights.run_gpu_resident_steps
+                    == summary.resident_weights.plan_gpu_resident_steps
+                && summary.resident_weights.run_gpu_staged_steps
+                    == summary.resident_weights.plan_gpu_staged_steps
                 && summary.host_causality_edges == 0
                 && summary.hot_path_allocations == 0,
             format!(
-                "status={:?} steps={} parity={} tokens={} expected={} graph_replays={} graph_replay_events={} resident_kv_bytes={} kv_tokens={} plan_steps={} run_steps={} plan_gpu_staged={} run_gpu_staged={} host_causality_edges={} hot_path_allocations={} output_hash={} expected_hash={} error={}",
+                "status={:?} steps={} parity={} tokens={} expected={} graph_replays={} graph_replay_events={} resident_kv_bytes={} kv_tokens={} hotset_promoted={} hotset_kept_dram={} plan_steps={} run_steps={} plan_gpu_resident={} plan_gpu_staged={} run_gpu_resident={} run_gpu_staged={} host_causality_edges={} hot_path_allocations={} output_hash={} expected_hash={} error={}",
                 summary.status,
                 summary.steps_requested,
                 summary.parity,
@@ -49,9 +55,13 @@ pub(crate) fn push_loaded_hf_prompt_kv_decode(report: &mut AcceptanceReport) {
                 summary.graph_replay_events,
                 summary.resident_kv_bytes,
                 summary.kv_tokens,
+                summary.resident_weights.hotset_promoted_blocks,
+                summary.resident_weights.hotset_kept_dram_blocks,
                 summary.resident_weights.plan_steps,
                 summary.resident_weights.run_steps,
+                summary.resident_weights.plan_gpu_resident_steps,
                 summary.resident_weights.plan_gpu_staged_steps,
+                summary.resident_weights.run_gpu_resident_steps,
                 summary.resident_weights.run_gpu_staged_steps,
                 summary.host_causality_edges,
                 summary.hot_path_allocations,

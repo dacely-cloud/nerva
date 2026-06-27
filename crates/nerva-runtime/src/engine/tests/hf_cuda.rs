@@ -177,8 +177,23 @@ fn cuda_loaded_hf_prompt_decode_reports_resident_weight_plan() {
     assert_eq!(summary.tokens, summary.expected_tokens);
     assert_eq!(summary.resident_weights.plan_steps, 12);
     assert_eq!(summary.resident_weights.run_steps, 12);
-    assert_eq!(summary.resident_weights.plan_gpu_staged_steps, 12);
-    assert_eq!(summary.resident_weights.run_gpu_staged_steps, 12);
+    assert!(summary.resident_weights.hotset_promoted_blocks > 0);
+    assert!(summary.resident_weights.hotset_kept_dram_blocks > 0);
+    assert!(summary.resident_weights.plan_gpu_resident_steps > 0);
+    assert!(summary.resident_weights.plan_gpu_staged_steps > 0);
+    assert_eq!(
+        summary.resident_weights.plan_gpu_resident_steps
+            + summary.resident_weights.plan_gpu_staged_steps,
+        12,
+    );
+    assert_eq!(
+        summary.resident_weights.run_gpu_resident_steps,
+        summary.resident_weights.plan_gpu_resident_steps,
+    );
+    assert_eq!(
+        summary.resident_weights.run_gpu_staged_steps,
+        summary.resident_weights.plan_gpu_staged_steps,
+    );
     assert_eq!(summary.resident_weights.hot_path_allocations, 0);
     assert!(summary.to_json().contains("\"resident_weight_plan\""));
 }

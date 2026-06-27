@@ -13,8 +13,10 @@ pub(super) fn loaded_resident_weight_summary(
 ) -> Result<HfCudaResidentWeightSummary> {
     let compute_capability = compute_capability.or_else(cuda_compute_capability);
     let manifest = &loaded.summary.manifest;
-    let budget = ResidencyBudget::new(0, 0, manifest.total_weight_bytes);
-    let table = runtime.materialize_hf_weight_manifest_with_budget(manifest, budget)?;
+    let hotset_bytes = default_hotset_bytes(manifest.total_weight_bytes);
+    let budget = ResidencyBudget::new(hotset_bytes, 0, manifest.total_weight_bytes);
+    let mut table = runtime.materialize_hf_weight_manifest_with_budget(manifest, budget)?;
+    let hotset = runtime.promote_resident_weight_hotset(&mut table, hotset_bytes)?;
     let plan = runtime.plan_resident_weight_execution(
         &table,
         loaded.summary.manifest.entries.len(),
@@ -25,6 +27,9 @@ pub(super) fn loaded_resident_weight_summary(
     Ok(HfCudaResidentWeightSummary {
         plan_steps: plan.steps.len() as u64,
         plan_weight_bytes: plan.total_weight_bytes as u64,
+        hotset_promoted_blocks: hotset.promoted_blocks as u64,
+        hotset_promoted_bytes: hotset.promoted_bytes as u64,
+        hotset_kept_dram_blocks: hotset.kept_dram_blocks as u64,
         plan_gpu_resident_steps: plan.gpu_resident_steps,
         plan_gpu_staged_steps: plan.gpu_staged_steps,
         plan_fallback_steps: plan.fallback_steps,
@@ -34,8 +39,18 @@ pub(super) fn loaded_resident_weight_summary(
         run_gpu_staged_steps: run.gpu_staged_steps,
         run_fallback_steps: run.fallback_steps,
         run_block_version_dependencies: run.block_version_dependencies,
-        hot_path_allocations: run.hot_path_allocations + plan.ledger.hot_path_allocations,
+        hot_path_allocations: hotset.hot_path_allocations
+            + run.hot_path_allocations
+            + plan.ledger.hot_path_allocations,
     })
+}
+
+fn default_hotset_bytes(total_weight_bytes: usize) -> usize {
+    const MAX_HOTSET_BYTES: usize = 512 * 1024 * 1024;
+    total_weight_bytes
+        .saturating_div(2)
+        .max(1)
+        .min(MAX_HOTSET_BYTES)
 }
 
 fn cuda_compute_capability() -> Option<u32> {
