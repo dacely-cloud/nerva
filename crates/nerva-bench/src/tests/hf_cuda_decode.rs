@@ -15,6 +15,9 @@ fn hf_cuda_decode_cli_loads_checkpoint_dir_and_reports_cuda_ledgers() {
     assert!(json.contains("\"input_mode\":\"seed_token\""));
     assert!(json.contains("\"seed_token\":0"));
     assert!(json.contains("\"layers\":1"));
+    assert!(json.contains("\"manifest_entries\":12"));
+    assert!(json.contains("\"shard_plan_entries\":12"));
+    assert!(json.contains("\"data_hash_available\":true"));
     assert!(json.contains("\"tokens\":[0,0]"));
     assert!(json.contains("\"expected_tokens\":[0,0]"));
     assert!(json.contains("\"parity\":true"));
@@ -133,6 +136,8 @@ fn hf_cuda_decode_device_only_reports_unverified_reference_mode() {
     assert!(json.contains("\"reference_mode\":\"device_only_unverified\""));
     assert!(json.contains("\"reference_verified\":false"));
     assert!(json.contains("\"expected_tokens\":[]"));
+    assert!(json.contains("\"data_hash\":0"));
+    assert!(json.contains("\"data_hash_available\":false"));
     assert!(json.contains("\"parity\":false"));
     assert!(json.contains("\"tokens\":["));
     assert!(json.contains("\"host_causality_edges\":0"));

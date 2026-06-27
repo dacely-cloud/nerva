@@ -37,6 +37,14 @@ pub fn read_safetensors_tensor_u16(
     shard_path: impl AsRef<Path>,
     entry: &SafetensorsShardPlanEntry,
 ) -> Result<LoadedSafetensorsTensorU16> {
+    read_safetensors_tensor_u16_with_hash(shard_path, entry, true)
+}
+
+pub fn read_safetensors_tensor_u16_with_hash(
+    shard_path: impl AsRef<Path>,
+    entry: &SafetensorsShardPlanEntry,
+    compute_hash: bool,
+) -> Result<LoadedSafetensorsTensorU16> {
     match entry.dtype {
         DType::F16 | DType::BF16 => {}
         dtype => {
@@ -106,7 +114,7 @@ pub fn read_safetensors_tensor_u16(
         dtype: entry.dtype,
         values,
         bytes_read: entry.bytes,
-        data_hash: hash_bytes(&bytes),
+        data_hash: if compute_hash { hash_bytes(&bytes) } else { 0 },
     })
 }
 

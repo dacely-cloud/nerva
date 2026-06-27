@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 use nerva_core::types::id::token::TokenId;
+use nerva_model::causal_lm::load_options::HfCausalLmLoadOptions;
 use nerva_runtime::engine::hf_cuda_decode::run::{
     run_loaded_hf_causal_lm_cuda_prompt_decode,
     run_loaded_hf_causal_lm_cuda_prompt_decode_device_only,
@@ -119,8 +120,16 @@ fn hf_causal_lm_cuda_decode_with_tokens_json(
     steps: usize,
     verify_reference: bool,
 ) -> Result<String, String> {
-    let loaded = nerva_model::causal_lm::types::HfCausalLmModel::load_from_hf_dir(&path)
-        .map_err(|err| format!("HF causal LM load failed: {err:?}"))?;
+    let load_options = if verify_reference {
+        HfCausalLmLoadOptions::full_verification()
+    } else {
+        HfCausalLmLoadOptions::skip_payload_hash()
+    };
+    let loaded = nerva_model::causal_lm::types::HfCausalLmModel::load_from_hf_dir_with_options(
+        &path,
+        load_options,
+    )
+    .map_err(|err| format!("HF causal LM load failed: {err:?}"))?;
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
     let model = &loaded.model;
@@ -155,6 +164,12 @@ fn hf_causal_lm_cuda_decode_with_tokens_json(
         layers: model.layer_count(),
         hidden: model.metadata().hidden_size,
         vocab_size: model.metadata().vocab_size,
+        manifest_entries: loaded.summary.manifest.entries.len(),
+        shard_plan_entries: loaded.summary.shard_plan.entries.len(),
+        tensors_loaded: loaded.summary.tensors_loaded,
+        bytes_loaded: loaded.summary.bytes_loaded,
+        data_hash: loaded.summary.data_hash,
+        data_hash_available: loaded.summary.data_hash_available,
         generated_text: &generated_text,
         summary: &summary,
     }))

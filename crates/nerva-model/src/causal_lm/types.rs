@@ -72,6 +72,7 @@ pub struct HfCausalLmLoadSummary {
     pub tensors_loaded: usize,
     pub bytes_loaded: usize,
     pub data_hash: u64,
+    pub data_hash_available: bool,
     pub tied_lm_head: bool,
 }
 

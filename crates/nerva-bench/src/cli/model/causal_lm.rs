@@ -103,7 +103,7 @@ fn hf_causal_lm_decode_with_tokens_json(
     let generated_text = generated_text_json(&path, &output.generated_tokens)?;
 
     Ok(format!(
-        "{{\"status\":\"ok\",\"path\":\"{}\",\"input_mode\":\"{}\",\"context_mode\":\"{}\",\"stop_reason\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"seed_token\":{},\"steps\":{},\"tokens\":{},\"generated_text\":{},\"output_hash\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"final_norm_manifest\":{},\"tied_lm_head\":{},\"ledger_count\":{},\"ledger_events\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
+        "{{\"status\":\"ok\",\"path\":\"{}\",\"input_mode\":\"{}\",\"context_mode\":\"{}\",\"stop_reason\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"seed_token\":{},\"steps\":{},\"tokens\":{},\"generated_text\":{},\"output_hash\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"data_hash_available\":{},\"final_norm_manifest\":{},\"tied_lm_head\":{},\"ledger_count\":{},\"ledger_events\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
         json_escape(&path),
         input_mode,
         output.context_mode.as_str(),
@@ -125,6 +125,7 @@ fn hf_causal_lm_decode_with_tokens_json(
         summary.tensors_loaded,
         summary.bytes_loaded,
         summary.data_hash,
+        summary.data_hash_available,
         final_norm_manifest,
         summary.tied_lm_head,
         output.ledgers.len(),
