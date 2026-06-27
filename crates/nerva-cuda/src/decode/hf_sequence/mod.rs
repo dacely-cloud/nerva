@@ -1,4 +1,4 @@
-mod ffi;
+pub(crate) mod ffi;
 pub mod request;
 mod status;
 pub mod summary;

@@ -333,7 +333,14 @@ void hash_descriptor(uint64_t &hash,
   hash_u32(hash, descriptor.strategy);
 }
 
-bool valid_layer(const NervaCudaHfDecodeChainLayer &layer) {
+bool has_declared_weight_plan(const NervaCudaHfDecodeSequenceRequest *request) {
+  return request->planned_weight_blocks != 0 || request->planned_weight_bytes != 0;
+}
+
+bool valid_layer(const NervaCudaHfDecodeChainLayer &layer, bool require_sources) {
+  if (!require_sources) {
+    return true;
+  }
   return layer.rms_attn_weight != nullptr && layer.rms_mlp_weight != nullptr &&
          layer.w_q != nullptr && layer.w_k != nullptr && layer.w_v != nullptr &&
          layer.w_o != nullptr && layer.w_gate != nullptr && layer.w_up != nullptr &&
@@ -341,15 +348,22 @@ bool valid_layer(const NervaCudaHfDecodeChainLayer &layer) {
 }
 
 bool valid_request(const NervaCudaHfDecodeSequenceRequest *request) {
-  if (request == nullptr || request->embeddings == nullptr || request->layers == nullptr ||
-      request->final_norm_weight == nullptr || request->lm_head == nullptr ||
-      request->output_tokens == nullptr || request->prompt_tokens == nullptr ||
+  if (request == nullptr) {
+    return false;
+  }
+  const bool declared_weight_plan = has_declared_weight_plan(request);
+  if (request->layers == nullptr || request->output_tokens == nullptr ||
+      request->prompt_tokens == nullptr ||
+      (!declared_weight_plan &&
+       (request->embeddings == nullptr || request->final_norm_weight == nullptr ||
+        request->lm_head == nullptr)) ||
       request->output_token_capacity < request->steps || request->layer_count == 0 ||
-      request->steps == 0 || request->prompt_token_count == 0 || request->hidden == 0 ||
-      request->heads == 0 || request->kv_heads == 0 || request->head_dim == 0 ||
-      request->intermediate == 0 || request->vocab_size == 0 ||
-      request->seed_token >= request->vocab_size || request->kv_heads > request->heads ||
-      request->heads % request->kv_heads != 0 || request->dtype > kDTypeBF16 ||
+      request->steps == 0 || request->prompt_token_count == 0 ||
+      request->hidden == 0 || request->heads == 0 || request->kv_heads == 0 ||
+      request->head_dim == 0 || request->intermediate == 0 ||
+      request->vocab_size == 0 || request->seed_token >= request->vocab_size ||
+      request->kv_heads > request->heads || request->heads % request->kv_heads != 0 ||
+      request->dtype > kDTypeBF16 ||
       (request->rope_theta > 0.0f && request->head_dim % 2 != 0) ||
       request->prompt_token_count > UINT32_MAX - request->steps + 1u) {
     return false;
@@ -363,11 +377,11 @@ bool valid_request(const NervaCudaHfDecodeSequenceRequest *request) {
     return false;
   }
   for (uint32_t index = 0; index < request->layer_count; ++index) {
-    if (!valid_layer(request->layers[index])) {
+    if (!valid_layer(request->layers[index], !declared_weight_plan)) {
       return false;
     }
   }
-  if (request->planned_weight_blocks != 0 || request->planned_weight_bytes != 0) {
+  if (declared_weight_plan) {
     if (request->planned_weight_blocks == 0 || request->planned_weight_bytes == 0) {
       return false;
     }
