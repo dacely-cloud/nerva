@@ -1,0 +1,83 @@
+use std::os::raw::c_int;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaHfDecodeChainLayer {
+    pub(crate) rms_attn_weight: *const u16,
+    pub(crate) rms_mlp_weight: *const u16,
+    pub(crate) w_q: *const u16,
+    pub(crate) w_k: *const u16,
+    pub(crate) w_v: *const u16,
+    pub(crate) w_o: *const u16,
+    pub(crate) q_bias: *const u16,
+    pub(crate) k_bias: *const u16,
+    pub(crate) v_bias: *const u16,
+    pub(crate) o_bias: *const u16,
+    pub(crate) w_gate: *const u16,
+    pub(crate) w_up: *const u16,
+    pub(crate) w_down: *const u16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaHfDecodeChainRequest {
+    pub(crate) dtype: u32,
+    pub(crate) hidden: u32,
+    pub(crate) heads: u32,
+    pub(crate) kv_heads: u32,
+    pub(crate) head_dim: u32,
+    pub(crate) intermediate: u32,
+    pub(crate) vocab_size: u32,
+    pub(crate) layer_count: u32,
+    pub(crate) position: u32,
+    pub(crate) token_index: u64,
+    pub(crate) rms_eps: f32,
+    pub(crate) rope_theta: f32,
+    pub(crate) input: *const u16,
+    pub(crate) layers: *const NervaCudaHfDecodeChainLayer,
+    pub(crate) final_norm_weight: *const u16,
+    pub(crate) lm_head: *const u16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NervaCudaHfDecodeChainResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) device_count: i32,
+    pub(crate) dtype: u32,
+    pub(crate) hidden: u32,
+    pub(crate) heads: u32,
+    pub(crate) kv_heads: u32,
+    pub(crate) head_dim: u32,
+    pub(crate) intermediate: u32,
+    pub(crate) vocab_size: u32,
+    pub(crate) layer_count: u32,
+    pub(crate) token_index: u64,
+    pub(crate) token: u32,
+    pub(crate) slot_version: u64,
+    pub(crate) completion: u32,
+    pub(crate) output_hash: u64,
+    pub(crate) resident_weight_bytes: u64,
+    pub(crate) device_arena_bytes: u64,
+    pub(crate) pinned_host_bytes: u64,
+    pub(crate) h2d_bytes: u64,
+    pub(crate) d2h_bytes: u64,
+    pub(crate) kernel_launches: u64,
+    pub(crate) sync_calls: u64,
+    pub(crate) hot_path_allocations: u64,
+}
+
+unsafe extern "C" {
+    fn nerva_cuda_hf_decode_chain_u16(
+        request: *const NervaCudaHfDecodeChainRequest,
+        out: *mut NervaCudaHfDecodeChainResult,
+    ) -> c_int;
+}
+
+pub(crate) fn run_hf_decode_chain_u16(
+    request: &NervaCudaHfDecodeChainRequest,
+    out: &mut NervaCudaHfDecodeChainResult,
+) -> c_int {
+    unsafe { nerva_cuda_hf_decode_chain_u16(request, out) }
+}

@@ -2,6 +2,7 @@ mod attention;
 mod backend;
 mod block;
 mod decode;
+mod decode_chain;
 mod graph;
 mod json;
 mod sampler;

@@ -1,5 +1,6 @@
 use nerva_core::types::id::token::TokenId;
 use nerva_cuda::block::forward::summary::CudaBlockForwardSummary;
+use nerva_cuda::decode::hf_chain::summary::CudaHfDecodeChainSummary;
 use nerva_cuda::decode::hf_step::summary::CudaHfDecodeStepSummary;
 use nerva_cuda::sampler::hf_head::summary::CudaHfSamplerSummary;
 use nerva_cuda::smoke::status::SmokeStatus;
@@ -40,6 +41,15 @@ impl CudaDecodeCounters {
     }
 
     pub(super) fn record_fused(&mut self, cuda: &CudaHfDecodeStepSummary) {
+        self.resident_weight_bytes += cuda.resident_weight_bytes;
+        self.h2d_bytes += cuda.h2d_bytes;
+        self.d2h_bytes += cuda.d2h_bytes;
+        self.kernel_launches += cuda.kernel_launches;
+        self.sync_calls += cuda.sync_calls;
+        self.hot_path_allocations += cuda.hot_path_allocations;
+    }
+
+    pub(super) fn record_chain(&mut self, cuda: &CudaHfDecodeChainSummary) {
         self.resident_weight_bytes += cuda.resident_weight_bytes;
         self.h2d_bytes += cuda.h2d_bytes;
         self.d2h_bytes += cuda.d2h_bytes;

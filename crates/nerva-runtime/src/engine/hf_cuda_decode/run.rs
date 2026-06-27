@@ -9,9 +9,11 @@ use nerva_ledger::types::token::ledger::TokenLedger;
 use nerva_model::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
 
 use crate::engine::cuda_block::run_precision_block_on_cuda;
+use crate::engine::hf_cuda_decode::chain::run_fused_chain;
 use crate::engine::hf_cuda_decode::fused::run_fused_step;
 use crate::engine::hf_cuda_decode::ledger::{
-    record_fused_step_execution, record_layer_execution, record_sampler_execution,
+    record_chain_execution, record_fused_step_execution, record_layer_execution,
+    record_sampler_execution,
 };
 use crate::engine::hf_cuda_decode::summary::HfCudaSeedDecodeSummary;
 use crate::engine::hf_cuda_decode::totals::{CudaDecodeCounters, DecodeParts, build_summary};
@@ -39,6 +41,8 @@ pub fn run_hf_causal_lm_cuda_seed_decode(
         let mut ledger = TokenLedger::new(step as u64);
         let token = if model.layer_count() == 1 {
             fused_token(model, current, step, &mut ledger, &mut counters)?
+        } else if model.layer_count() > 1 {
+            chain_token(model, current, step, &mut ledger, &mut counters)?
         } else {
             split_token(
                 model,
@@ -101,6 +105,26 @@ fn fused_token(
         });
     }
     Ok(TokenId(fused.token))
+}
+
+fn chain_token(
+    model: &HfCausalLmModel,
+    current: TokenId,
+    step: usize,
+    ledger: &mut TokenLedger,
+    counters: &mut CudaDecodeCounters,
+) -> Result<TokenId> {
+    let chain = run_fused_chain(model, current, step)?;
+    counters.record_chain(&chain);
+    record_chain_execution(ledger, &chain);
+    if chain.status != SmokeStatus::Ok {
+        return Err(NervaError::InvalidArgument {
+            reason: chain
+                .error
+                .unwrap_or_else(|| "CUDA HF decode chain failed".to_string()),
+        });
+    }
+    Ok(TokenId(chain.token))
 }
 
 fn split_token(

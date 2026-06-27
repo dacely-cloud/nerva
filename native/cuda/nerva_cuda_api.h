@@ -251,6 +251,68 @@ typedef struct NervaCudaHfDecodeStepResult {
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeStepResult;
 
+typedef struct NervaCudaHfDecodeChainLayer {
+  const uint16_t *rms_attn_weight;
+  const uint16_t *rms_mlp_weight;
+  const uint16_t *w_q;
+  const uint16_t *w_k;
+  const uint16_t *w_v;
+  const uint16_t *w_o;
+  const uint16_t *q_bias;
+  const uint16_t *k_bias;
+  const uint16_t *v_bias;
+  const uint16_t *o_bias;
+  const uint16_t *w_gate;
+  const uint16_t *w_up;
+  const uint16_t *w_down;
+} NervaCudaHfDecodeChainLayer;
+
+typedef struct NervaCudaHfDecodeChainRequest {
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint32_t vocab_size;
+  uint32_t layer_count;
+  uint32_t position;
+  uint64_t token_index;
+  float rms_eps;
+  float rope_theta;
+  const uint16_t *input;
+  const NervaCudaHfDecodeChainLayer *layers;
+  const uint16_t *final_norm_weight;
+  const uint16_t *lm_head;
+} NervaCudaHfDecodeChainRequest;
+
+typedef struct NervaCudaHfDecodeChainResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint32_t vocab_size;
+  uint32_t layer_count;
+  uint64_t token_index;
+  uint32_t token;
+  uint64_t slot_version;
+  uint32_t completion;
+  uint64_t output_hash;
+  uint64_t resident_weight_bytes;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaHfDecodeChainResult;
+
 typedef struct NervaCudaTinyDecodeResult {
   int32_t status;
   int32_t cuda_error;
@@ -361,6 +423,8 @@ int nerva_cuda_hf_sample_u16(const NervaCudaHfSamplerRequest *request,
                              NervaCudaHfSamplerResult *out);
 int nerva_cuda_hf_decode_step_u16(const NervaCudaHfDecodeStepRequest *request,
                                   NervaCudaHfDecodeStepResult *out);
+int nerva_cuda_hf_decode_chain_u16(const NervaCudaHfDecodeChainRequest *request,
+                                   NervaCudaHfDecodeChainResult *out);
 int nerva_cuda_tiny_decode_smoke(uint32_t steps,
                                  uint32_t ring_capacity,
                                  uint32_t seed_token,
