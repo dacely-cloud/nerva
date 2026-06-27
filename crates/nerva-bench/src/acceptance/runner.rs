@@ -14,6 +14,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
 
     environment::push_capability_provenance(&mut report, &runtime);
     artifact::push_artifact_reproducibility(&mut report);
+    artifact::push_hf_checkpoint_artifacts(&mut report);
     report.push_audit_result("vllm_rvllm_audit", audit::audit_acceptance());
     backend::push_backend_contract(&mut report, &runtime);
 
