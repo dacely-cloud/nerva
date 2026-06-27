@@ -1,3 +1,4 @@
+mod fused;
 mod hash;
 mod ledger;
 mod totals;

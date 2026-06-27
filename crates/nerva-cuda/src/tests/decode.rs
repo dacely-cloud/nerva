@@ -1,3 +1,5 @@
+use crate::decode::hf_step::request::{CUDA_HF_DECODE_STEP_DTYPE_F16, CudaHfDecodeStepRequest};
+use crate::decode::hf_step::summary::CudaHfDecodeStepSummary;
 use crate::decode::summary::CudaTinyDecodeSummary;
 use crate::smoke::status::SmokeStatus;
 
@@ -62,4 +64,91 @@ fn tiny_decode_summary_serializes_device_first_fields() {
     assert!(json.contains("\"gpu_idle_ns\":0"));
     assert!(json.contains("\"host_wait_gpu_idle_separated\":true"));
     assert!(json.contains("\"hot_path_allocations\":0"));
+}
+
+#[test]
+fn hf_decode_step_summary_serializes_fused_device_step_fields() {
+    let summary = CudaHfDecodeStepSummary {
+        status: SmokeStatus::Ok,
+        dtype: CUDA_HF_DECODE_STEP_DTYPE_F16,
+        hidden: 2,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 2,
+        vocab_size: 4,
+        token_index: 3,
+        token: 1,
+        slot_version: 1,
+        completion: 1,
+        output_hash: 9,
+        resident_weight_bytes: 84,
+        device_arena_bytes: 160,
+        pinned_host_bytes: 132,
+        h2d_bytes: 92,
+        d2h_bytes: 40,
+        kernel_launches: 1,
+        sync_calls: 1,
+        hot_path_allocations: 0,
+        error: None,
+    };
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"vocab_size\":4"));
+    assert!(json.contains("\"token_index\":3"));
+    assert!(json.contains("\"token\":1"));
+    assert!(json.contains("\"H2D_bytes\":92"));
+    assert!(json.contains("\"D2H_bytes\":40"));
+}
+
+#[test]
+fn hf_decode_step_runs_layer_and_final_head_when_device_is_available() {
+    let one = 0x3c00;
+    let zero = 0x0000;
+    let neg_one = 0xbc00;
+    let input = [one, zero];
+    let rms = [one, one];
+    let matrix = [zero; 4];
+    let lm_head = [zero, neg_one, one, zero, zero, one, neg_one, zero];
+    let summary = CudaHfDecodeStepRequest {
+        dtype: CUDA_HF_DECODE_STEP_DTYPE_F16,
+        hidden: 2,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 2,
+        vocab_size: 4,
+        position: 0,
+        token_index: 3,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        input: &input,
+        rms_attn_weight: &rms,
+        rms_mlp_weight: &rms,
+        w_q: &matrix,
+        w_k: &matrix,
+        w_v: &matrix,
+        w_o: &matrix,
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &matrix,
+        w_up: &matrix,
+        w_down: &matrix,
+        final_norm_weight: &rms,
+        lm_head: &lm_head,
+    }
+    .run();
+
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+    assert_eq!(summary.token_index, 3);
+    assert_eq!(summary.token, 1);
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert!(summary.h2d_bytes >= summary.resident_weight_bytes);
+    assert!(summary.d2h_bytes > 0);
 }
