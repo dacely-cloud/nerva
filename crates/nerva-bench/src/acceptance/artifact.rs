@@ -112,6 +112,8 @@ fn artifact_has_hf_cuda_fields(artifact: &str) -> bool {
         && artifact.contains("\"cuda_contract_matched\":true")
         && artifact.contains("\"host_causality_edges\":0")
         && artifact.contains("\"hot_path_allocations\":0")
+        && artifact.contains("\"critical_paths\":[")
+        && artifact.contains("\"proves_host_wait_not_gpu_idle\":true")
 }
 
 fn write_tiny_hf_checkpoint_dir(prefix: &str) -> Result<PathBuf, String> {

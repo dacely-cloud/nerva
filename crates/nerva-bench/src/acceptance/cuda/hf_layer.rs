@@ -84,7 +84,13 @@ pub(crate) fn push_loaded_hf_seed_decode(report: &mut AcceptanceReport) {
             && summary.ledger_count == summary.tokens.len() as u64
             && summary.device_events == summary.execution_decisions
             && summary.copy_events == 2
-            && summary.hard_syncs == 1
+            && summary.hard_syncs == 0
+            && summary.soft_visibility_syncs == 1
+            && summary.critical_paths.len() == summary.tokens.len()
+            && summary
+                .critical_paths
+                .last()
+                .is_some_and(|path| path.proves_host_wait_not_gpu_idle())
             && summary.graph_replays == summary.steps_requested as u64
             && summary.graph_launches == summary.steps_requested as u64
             && summary.graph_replay_events == summary.steps_requested as u64
@@ -95,7 +101,7 @@ pub(crate) fn push_loaded_hf_seed_decode(report: &mut AcceptanceReport) {
             && summary.sync_calls == 1
             && summary.host_causality_edges == 0,
         format!(
-            "status={:?} steps={} tokens={} expected={} parity={} ledger_count={} device_events={} copy_events={} hard_syncs={} execution_decisions={} resident_weight_bytes={} resident_kv_bytes={} kv_tokens={} H2D_bytes={} D2H_bytes={} graph_replays={} graph_nodes={} graph_launches={} graph_replay_events={} kernel_launches={} sync_calls={} host_causality_edges={} output_hash={} expected_hash={} hot_path_allocations={} error={}",
+            "status={:?} steps={} tokens={} expected={} parity={} ledger_count={} device_events={} copy_events={} hard_syncs={} soft_visibility_syncs={} critical_paths={} execution_decisions={} resident_weight_bytes={} resident_kv_bytes={} kv_tokens={} H2D_bytes={} D2H_bytes={} graph_replays={} graph_nodes={} graph_launches={} graph_replay_events={} kernel_launches={} sync_calls={} host_causality_edges={} output_hash={} expected_hash={} hot_path_allocations={} error={}",
             summary.status,
             summary.steps_requested,
             summary.tokens.len(),
@@ -105,6 +111,8 @@ pub(crate) fn push_loaded_hf_seed_decode(report: &mut AcceptanceReport) {
             summary.device_events,
             summary.copy_events,
             summary.hard_syncs,
+            summary.soft_visibility_syncs,
+            summary.critical_paths.len(),
             summary.execution_decisions,
             summary.resident_weight_bytes,
             summary.resident_kv_bytes,

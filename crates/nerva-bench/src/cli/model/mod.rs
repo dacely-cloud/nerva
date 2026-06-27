@@ -2,6 +2,7 @@ pub(crate) mod attention;
 pub(crate) mod block;
 pub(crate) mod causal_lm;
 pub(crate) mod causal_lm_cuda;
+pub(crate) mod causal_lm_cuda_json;
 pub(crate) mod causal_lm_text;
 pub(crate) mod contracts;
 pub(crate) mod dispatch;

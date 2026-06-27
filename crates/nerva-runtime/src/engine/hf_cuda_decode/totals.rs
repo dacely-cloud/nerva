@@ -1,8 +1,10 @@
+use nerva_core::types::id::device::DeviceOrdinal;
 use nerva_core::types::id::token::TokenId;
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
+use nerva_ledger::types::token::critical::TokenCriticalPathReport;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::engine::hf_cuda_decode::hash::hash_tokens;
@@ -66,7 +68,6 @@ impl DecodeParts {
             resident_weights: HfCudaResidentWeightSummary::default(),
         }
     }
-
 }
 
 pub(super) fn build_summary(
@@ -86,6 +87,7 @@ pub(super) fn build_summary(
         device_events: event_count(&parts.ledgers, LedgerEventKind::DeviceActivity),
         copy_events: event_count(&parts.ledgers, LedgerEventKind::Copy),
         hard_syncs: sync_count(&parts.ledgers, SyncClass::HardSync),
+        soft_visibility_syncs: sync_count(&parts.ledgers, SyncClass::SoftVisibilitySync),
         execution_decisions: execution_decisions(&parts.ledgers),
         resident_weight_bytes: counters.resident_weight_bytes,
         resident_kv_bytes: counters.resident_kv_bytes,
@@ -105,10 +107,21 @@ pub(super) fn build_summary(
         output_hash,
         expected_hash,
         resident_weights: parts.resident_weights,
+        critical_paths: critical_paths(&parts.ledgers),
         tokens: parts.tokens,
         expected_tokens: parts.expected_tokens,
         error,
     }
+}
+
+fn critical_paths(ledgers: &[TokenLedger]) -> Vec<TokenCriticalPathReport> {
+    ledgers
+        .iter()
+        .map(|ledger| {
+            TokenCriticalPathReport::from_ledger(ledger, DeviceOrdinal(0))
+                .expect("HF CUDA token ledgers have valid device timelines")
+        })
+        .collect()
 }
 
 fn event_count(ledgers: &[TokenLedger], kind: LedgerEventKind) -> u64 {

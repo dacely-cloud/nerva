@@ -93,6 +93,8 @@ fn artifact_runs_external_hf_cuda_decode_checkpoint_with_metadata() {
     assert!(json.contains("\"cuda_contract_matched\":true"));
     assert!(json.contains("\"host_causality_edges\":0"));
     assert!(json.contains("\"hot_path_allocations\":0"));
+    assert!(json.contains("\"critical_paths\":["));
+    assert!(json.contains("\"proves_host_wait_not_gpu_idle\":true"));
 
     remove_tiny_hf_checkpoint_dir(&dir);
 }

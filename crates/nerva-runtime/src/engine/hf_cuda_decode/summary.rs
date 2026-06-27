@@ -1,5 +1,6 @@
 use nerva_core::types::id::token::TokenId;
 use nerva_cuda::smoke::status::SmokeStatus;
+use nerva_ledger::types::token::critical::TokenCriticalPathReport;
 
 use crate::engine::hf_cuda_decode::hash::tokens_json;
 
@@ -80,6 +81,7 @@ pub struct HfCudaSeedDecodeSummary {
     pub device_events: u64,
     pub copy_events: u64,
     pub hard_syncs: u64,
+    pub soft_visibility_syncs: u64,
     pub execution_decisions: u64,
     pub resident_weight_bytes: u64,
     pub resident_kv_bytes: u64,
@@ -97,6 +99,7 @@ pub struct HfCudaSeedDecodeSummary {
     pub output_hash: u64,
     pub expected_hash: u64,
     pub resident_weights: HfCudaResidentWeightSummary,
+    pub critical_paths: Vec<TokenCriticalPathReport>,
     pub error: Option<String>,
 }
 
@@ -105,9 +108,13 @@ impl HfCudaSeedDecodeSummary {
         self.status == SmokeStatus::Ok && self.parity && self.hot_path_allocations == 0
     }
 
+    pub fn critical_paths_json(&self) -> String {
+        critical_paths_json(&self.critical_paths)
+    }
+
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"soft_visibility_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"critical_paths\":{},\"error\":{}}}",
             status_json(&self.status),
             self.steps_requested,
             tokens_json(&self.tokens),
@@ -117,6 +124,7 @@ impl HfCudaSeedDecodeSummary {
             self.device_events,
             self.copy_events,
             self.hard_syncs,
+            self.soft_visibility_syncs,
             self.execution_decisions,
             self.resident_weight_bytes,
             self.resident_kv_bytes,
@@ -134,9 +142,22 @@ impl HfCudaSeedDecodeSummary {
             self.output_hash,
             self.expected_hash,
             self.resident_weights.to_json(),
+            critical_paths_json(&self.critical_paths),
             json_string(self.error.as_deref()),
         )
     }
+}
+
+fn critical_paths_json(paths: &[TokenCriticalPathReport]) -> String {
+    let mut out = String::from("[");
+    for (index, path) in paths.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&path.to_json());
+    }
+    out.push(']');
+    out
 }
 
 fn status_json(status: &SmokeStatus) -> &'static str {

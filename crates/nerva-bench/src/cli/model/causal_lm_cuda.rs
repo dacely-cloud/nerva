@@ -8,8 +8,8 @@ use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 use tokenizers::Tokenizer;
 
 use crate::cli::exit;
+use crate::cli::model::causal_lm_cuda_json::{HfCudaDecodeJson, hf_cuda_decode_json};
 use crate::cli::model::causal_lm_text::generated_text_json;
-use crate::json::json_escape;
 use crate::parse::{parse_optional_u32, parse_optional_usize};
 
 pub(crate) fn run_hf_causal_lm_cuda_decode(args: &mut impl Iterator<Item = String>) -> ExitCode {
@@ -94,47 +94,21 @@ fn hf_causal_lm_cuda_decode_with_tokens_json(
     .map_err(|err| format!("HF CUDA causal LM decode failed: {err:?}"))?;
     let generated_text = generated_text_json(&path, &summary.tokens)?;
 
-    Ok(format!(
-        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"seed_token\":{},\"steps\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"tokens\":{},\"expected_tokens\":{},\"generated_text\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"error\":{}}}",
-        status_json(&summary.status),
-        json_escape(&path),
+    Ok(hf_cuda_decode_json(HfCudaDecodeJson {
+        path: &path,
         input_mode,
-        json_opt_string(prompt_text.as_deref()),
-        u32s_json(&prompt_token_ids),
-        prompt_tokens.len(),
-        prompt_tokens.last().map(|token| token.0).unwrap_or(0),
+        prompt_text: prompt_text.as_deref(),
+        prompt_token_ids: &prompt_token_ids,
+        prompt_tokens_len: prompt_tokens.len(),
+        seed_token: prompt_tokens.last().map(|token| token.0).unwrap_or(0),
         steps,
         dtype,
-        model.layer_count(),
-        model.metadata().hidden_size,
-        model.metadata().vocab_size,
-        token_ids_json(&summary.tokens),
-        token_ids_json(&summary.expected_tokens),
-        generated_text,
-        summary.parity,
-        summary.ledger_count,
-        summary.device_events,
-        summary.copy_events,
-        summary.hard_syncs,
-        summary.execution_decisions,
-        summary.resident_weight_bytes,
-        summary.resident_kv_bytes,
-        summary.kv_tokens,
-        summary.h2d_bytes,
-        summary.d2h_bytes,
-        summary.graph_replays,
-        summary.graph_nodes,
-        summary.graph_launches,
-        summary.graph_replay_events,
-        summary.kernel_launches,
-        summary.sync_calls,
-        summary.host_causality_edges,
-        summary.hot_path_allocations,
-        summary.output_hash,
-        summary.expected_hash,
-        summary.resident_weights.to_json(),
-        json_opt_string(summary.error.as_deref()),
-    ))
+        layers: model.layer_count(),
+        hidden: model.metadata().hidden_size,
+        vocab_size: model.metadata().vocab_size,
+        generated_text: &generated_text,
+        summary: &summary,
+    }))
 }
 
 fn parse_token_ids(value: &str) -> Result<Vec<u32>, String> {
@@ -153,44 +127,5 @@ fn parse_token_ids(value: &str) -> Result<Vec<u32>, String> {
         Err("ids prompt must contain at least one token".to_string())
     } else {
         Ok(ids)
-    }
-}
-
-fn status_json(status: &nerva_cuda::smoke::status::SmokeStatus) -> &'static str {
-    match status {
-        nerva_cuda::smoke::status::SmokeStatus::Ok => "ok",
-        nerva_cuda::smoke::status::SmokeStatus::Unavailable => "unavailable",
-        nerva_cuda::smoke::status::SmokeStatus::Failed => "failed",
-    }
-}
-
-fn token_ids_json(tokens: &[TokenId]) -> String {
-    let mut out = String::from("[");
-    for (index, token) in tokens.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&token.0.to_string());
-    }
-    out.push(']');
-    out
-}
-
-fn u32s_json(values: &[u32]) -> String {
-    let mut out = String::from("[");
-    for (index, value) in values.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&value.to_string());
-    }
-    out.push(']');
-    out
-}
-
-fn json_opt_string(value: Option<&str>) -> String {
-    match value {
-        Some(value) => format!("\"{}\"", json_escape(value)),
-        None => "null".to_string(),
     }
 }

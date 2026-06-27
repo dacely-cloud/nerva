@@ -3,7 +3,7 @@ use nerva_core::types::memory::tier::MemoryTier;
 use nerva_core::types::ownership::owner::ExecutionOwner;
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use nerva_ledger::types::decision::{CandidateCost, ExecutionDecision};
-use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
+use nerva_ledger::types::event::{DeviceTimelineSpan, LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
@@ -29,12 +29,14 @@ pub(super) fn sequence_ledgers(summary: &CudaHfDecodeSequenceSummary) -> Vec<Tok
             0,
             "hf_cuda_sequence_kernel",
         );
+        let device_active_ns = visible_ns(summary);
         record_event(
             &mut ledger,
             LedgerEventKind::DeviceActivity,
-            visible_ns(summary),
+            device_active_ns,
             "hf_cuda_sequence_device_step",
         );
+        record_device_span(&mut ledger, device_active_ns);
         if step == last {
             record_copy(
                 &mut ledger,
@@ -104,7 +106,7 @@ fn record_decision(ledger: &mut TokenLedger, summary: &CudaHfDecodeSequenceSumma
 
 fn record_final_sync(ledger: &mut TokenLedger, summary: &CudaHfDecodeSequenceSummary) {
     ledger.record_sync(
-        SyncClass::HardSync,
+        SyncClass::SoftVisibilitySync,
         None,
         Some(MemoryTier::Vram),
         Some(MemoryTier::PinnedDram),
@@ -113,6 +115,18 @@ fn record_final_sync(ledger: &mut TokenLedger, summary: &CudaHfDecodeSequenceSum
         MetricSource::EstimatedModel,
         "hf_cuda_sequence_final_token_visibility",
     );
+}
+
+fn record_device_span(ledger: &mut TokenLedger, active_ns: u64) {
+    ledger
+        .record_device_span(DeviceTimelineSpan::new(
+            DeviceOrdinal(0),
+            0,
+            active_ns,
+            MetricSource::EstimatedModel,
+            "hf_cuda_sequence_device_timeline",
+        ))
+        .expect("HF CUDA sequence ledger records valid device spans");
 }
 
 fn record_copy(
