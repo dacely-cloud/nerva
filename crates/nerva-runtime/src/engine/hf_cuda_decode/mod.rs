@@ -6,6 +6,7 @@ mod resident;
 mod sequence;
 mod sequence_ledger;
 mod totals;
+mod totals_counts;
 
 pub mod run;
 pub mod summary;

@@ -4,16 +4,15 @@ use crate::decode::hf_sequence::ffi::{
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::status::{sequence_failure_reason, sequence_status_from_result};
-use crate::decode::hf_sequence::summary::{CudaHfDecodeSequenceSummary, empty_summary};
+use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
+use crate::decode::hf_sequence::summary_empty::empty_summary;
 use crate::decode::hf_sequence::validation::validate_request;
 use crate::decode::hf_sequence::weight_plan::{
     CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
 };
 use crate::smoke::status::SmokeStatus;
-
 pub const CUDA_HF_DECODE_SEQUENCE_DTYPE_F16: u32 = 0;
 pub const CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16: u32 = 1;
-
 #[derive(Clone, Debug)]
 pub struct CudaHfDecodeSequenceRequest<'a> {
     pub dtype: u32,
@@ -36,7 +35,6 @@ pub struct CudaHfDecodeSequenceRequest<'a> {
     pub weight_plan: Option<CudaHfDecodeSequenceWeightPlan>,
     pub weight_blocks: &'a [CudaHfDecodeSequenceWeightBlock],
 }
-
 impl<'a> CudaHfDecodeSequenceRequest<'a> {
     pub fn run(&self) -> CudaHfDecodeSequenceSummary {
         if let Some(error) = validate_request(self) {
@@ -132,6 +130,11 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             kernel_launches: out.kernel_launches,
             device_elapsed_ns: out.device_elapsed_ns,
             projection_ns: out.projection_ns,
+            qkv_projection_ns: out.qkv_projection_ns,
+            attention_output_projection_ns: out.attention_output_projection_ns,
+            gate_up_projection_ns: out.gate_up_projection_ns,
+            down_projection_ns: out.down_projection_ns,
+            lm_head_projection_ns: out.lm_head_projection_ns,
             attention_ns: out.attention_ns,
             mlp_ns: out.mlp_ns,
             norm_ns: out.norm_ns,
@@ -142,7 +145,6 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             error,
         }
     }
-
     fn to_ffi(
         &self,
         layers: *const crate::decode::hf_chain::ffi::NervaCudaHfDecodeChainLayer,
@@ -189,7 +191,6 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
         }
     }
 }
-
 fn planned_ptr(slice: &[u16], plan: CudaHfDecodeSequenceWeightPlan) -> *const u16 {
     if plan.is_declared() {
         core::ptr::null()

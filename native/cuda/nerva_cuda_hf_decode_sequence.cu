@@ -1290,6 +1290,11 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t cached_eos_token = 0;
   uint64_t cached_graph_nodes = 0;
   uint64_t cached_projection_ns = 0;
+  uint64_t cached_qkv_projection_ns = 0;
+  uint64_t cached_attention_output_projection_ns = 0;
+  uint64_t cached_gate_up_projection_ns = 0;
+  uint64_t cached_down_projection_ns = 0;
+  uint64_t cached_lm_head_projection_ns = 0;
   uint64_t cached_attention_ns = 0;
   uint64_t cached_mlp_ns = 0;
   uint64_t cached_norm_ns = 0;
@@ -1350,6 +1355,11 @@ void reset_session_graph(NervaCudaHfDecodeSequenceSession *session) {
   session->cached_eos_token = 0;
   session->cached_graph_nodes = 0;
   session->cached_projection_ns = 0;
+  session->cached_qkv_projection_ns = 0;
+  session->cached_attention_output_projection_ns = 0;
+  session->cached_gate_up_projection_ns = 0;
+  session->cached_down_projection_ns = 0;
+  session->cached_lm_head_projection_ns = 0;
   session->cached_attention_ns = 0;
   session->cached_mlp_ns = 0;
   session->cached_norm_ns = 0;
@@ -1390,6 +1400,12 @@ bool use_cublas_layer_path(const NervaCudaHfDecodeSequenceSession *session) {
 void copy_cached_profile(const NervaCudaHfDecodeSequenceSession *session,
                          NervaCudaHfDecodeSequenceResult *out) {
   out->projection_ns = session->cached_projection_ns;
+  out->qkv_projection_ns = session->cached_qkv_projection_ns;
+  out->attention_output_projection_ns =
+      session->cached_attention_output_projection_ns;
+  out->gate_up_projection_ns = session->cached_gate_up_projection_ns;
+  out->down_projection_ns = session->cached_down_projection_ns;
+  out->lm_head_projection_ns = session->cached_lm_head_projection_ns;
   out->attention_ns = session->cached_attention_ns;
   out->mlp_ns = session->cached_mlp_ns;
   out->norm_ns = session->cached_norm_ns;
@@ -1603,6 +1619,11 @@ cudaError_t profile_cublas_layer_session_step(
     uint32_t prompt_token_count, uint32_t has_eos_token, uint32_t eos_token,
     uint32_t cursor) {
   uint64_t projection_ns = 0;
+  uint64_t qkv_projection_ns = 0;
+  uint64_t attention_output_projection_ns = 0;
+  uint64_t gate_up_projection_ns = 0;
+  uint64_t down_projection_ns = 0;
+  uint64_t lm_head_projection_ns = 0;
   uint64_t attention_ns = 0;
   uint64_t mlp_ns = 0;
   uint64_t norm_ns = 0;
@@ -1653,7 +1674,7 @@ cudaError_t profile_cublas_layer_session_step(
           session->device_projection_input,
           static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
           session->dtype, scratch.q);
-    if (err == cudaSuccess) err = profile_end(session, &projection_ns);
+    if (err == cudaSuccess) err = profile_end(session, &qkv_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess) {
@@ -1674,7 +1695,9 @@ cudaError_t profile_cublas_layer_session_step(
           session->cublas, session->device_arena + layout.w_o,
           session->device_projection_input, session->hidden, attention_hidden,
           session->dtype, scratch.residual);
-    if (err == cudaSuccess) err = profile_end(session, &projection_ns);
+    if (err == cudaSuccess) {
+      err = profile_end(session, &attention_output_projection_ns);
+    }
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess) {
@@ -1696,7 +1719,7 @@ cudaError_t profile_cublas_layer_session_step(
           session->device_projection_input,
           static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
           session->dtype, scratch.gate);
-    if (err == cudaSuccess) err = profile_end(session, &projection_ns);
+    if (err == cudaSuccess) err = profile_end(session, &gate_up_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess) {
@@ -1714,7 +1737,7 @@ cudaError_t profile_cublas_layer_session_step(
           session->cublas, session->device_arena + layout.w_down,
           session->device_projection_input, session->hidden,
           session->intermediate, session->dtype, scratch.down);
-    if (err == cudaSuccess) err = profile_end(session, &projection_ns);
+    if (err == cudaSuccess) err = profile_end(session, &down_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
@@ -1750,7 +1773,7 @@ cudaError_t profile_cublas_layer_session_step(
         session->device_projection_input, session->vocab_size, session->hidden,
         session->dtype, device_logits);
   }
-  if (err == cudaSuccess) err = profile_end(session, &projection_ns);
+  if (err == cudaSuccess) err = profile_end(session, &lm_head_projection_ns);
 
   if (err == cudaSuccess) err = profile_begin(session);
   if (err == cudaSuccess) {
@@ -1770,7 +1793,16 @@ cudaError_t profile_cublas_layer_session_step(
   }
   if (err == cudaSuccess) err = cudaStreamSynchronize(session->stream);
   if (err == cudaSuccess) {
+    projection_ns = qkv_projection_ns + attention_output_projection_ns +
+                    gate_up_projection_ns + down_projection_ns +
+                    lm_head_projection_ns;
     session->cached_projection_ns = projection_ns;
+    session->cached_qkv_projection_ns = qkv_projection_ns;
+    session->cached_attention_output_projection_ns =
+        attention_output_projection_ns;
+    session->cached_gate_up_projection_ns = gate_up_projection_ns;
+    session->cached_down_projection_ns = down_projection_ns;
+    session->cached_lm_head_projection_ns = lm_head_projection_ns;
     session->cached_attention_ns = attention_ns;
     session->cached_mlp_ns = mlp_ns;
     session->cached_norm_ns = norm_ns;

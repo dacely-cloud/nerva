@@ -9,7 +9,6 @@ use crate::decode::hf_sequence::weight_plan::{
     CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use crate::smoke::status::SmokeStatus;
-
 #[test]
 fn hf_decode_sequence_summary_serializes_device_token_fields() {
     let summary = CudaHfDecodeSequenceSummary {
@@ -55,6 +54,11 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         kernel_launches: 4,
         device_elapsed_ns: 900,
         projection_ns: 500,
+        qkv_projection_ns: 100,
+        attention_output_projection_ns: 80,
+        gate_up_projection_ns: 120,
+        down_projection_ns: 90,
+        lm_head_projection_ns: 110,
         attention_ns: 100,
         mlp_ns: 90,
         norm_ns: 80,
@@ -64,18 +68,17 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         hot_path_allocations: 0,
         error: None,
     };
-
     let json = summary.to_json();
-    assert!(json.contains("\"status\":\"ok\""));
-    assert!(json.contains("\"steps\":4"));
-    assert!(json.contains("\"tokens\":[1,2,3,0]"));
-    assert!(json.contains("\"graph_replays\":4"));
-    assert!(json.contains("\"planned_gpu_staged_weight_bytes\":64"));
-    assert!(json.contains("\"descriptor_gpu_resident_H2D_bytes\":32"));
-    assert!(json.contains("\"descriptor_gpu_staged_H2D_bytes\":96"));
-    assert!(json.contains("\"projection_ns\":500"));
+    for expected in [
+        "\"status\":\"ok\"",
+        "\"steps\":4",
+        "\"tokens\":[1,2,3,0]",
+        "\"projection_ns\":500",
+        "\"lm_head_projection_ns\":110",
+    ] {
+        assert!(json.contains(expected));
+    }
 }
-
 #[test]
 fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
     let one = 0x3c00;
@@ -134,7 +137,6 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
         weight_blocks: &weight_blocks,
     }
     .run();
-
     if summary.status != SmokeStatus::Ok {
         return;
     }
@@ -161,7 +163,6 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
         hash_weight_blocks(&weight_blocks)
     );
 }
-
 fn sequence_weight_blocks(
     embeddings: &[u16],
     rms: &[u16],

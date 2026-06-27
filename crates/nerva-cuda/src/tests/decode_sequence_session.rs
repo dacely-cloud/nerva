@@ -175,6 +175,14 @@ fn hf_decode_sequence_session_packs_projection_replicas_for_cublas_path() {
     assert_eq!(summary.tokens, vec![0]);
     assert_eq!((summary.graph_nodes, summary.kernel_launches), (12, 12));
     assert!(summary.projection_ns > 0);
+    assert_eq!(
+        summary.projection_ns,
+        summary.qkv_projection_ns
+            + summary.attention_output_projection_ns
+            + summary.gate_up_projection_ns
+            + summary.down_projection_ns
+            + summary.lm_head_projection_ns
+    );
     assert!(summary.attention_ns > 0);
     assert!(summary.mlp_ns > 0);
     assert!(summary.norm_ns > 0);

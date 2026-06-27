@@ -1,16 +1,17 @@
-use nerva_core::types::id::device::DeviceOrdinal;
 use nerva_core::types::id::token::TokenId;
 use nerva_cuda::decode::hf_sequence::footprint::CudaHfDecodeSequenceFootprint;
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_ledger::types::event::LedgerEventKind;
 use nerva_ledger::types::sync::SyncClass;
-use nerva_ledger::types::token::critical::TokenCriticalPathReport;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::engine::hf_cuda_decode::hash::hash_tokens;
 use crate::engine::hf_cuda_decode::summary::{
     HfCudaResidentWeightSummary, HfCudaSeedDecodeSummary,
+};
+use crate::engine::hf_cuda_decode::totals_counts::{
+    critical_paths, event_count, execution_decisions, hot_path_allocations, sync_count,
 };
 
 #[derive(Default)]
@@ -27,6 +28,11 @@ pub(super) struct CudaDecodeCounters {
     graph_cache_hits: u64,
     kernel_launches: u64,
     projection_ns: u64,
+    qkv_projection_ns: u64,
+    attention_output_projection_ns: u64,
+    gate_up_projection_ns: u64,
+    down_projection_ns: u64,
+    lm_head_projection_ns: u64,
     attention_ns: u64,
     mlp_ns: u64,
     norm_ns: u64,
@@ -54,6 +60,11 @@ impl CudaDecodeCounters {
         self.graph_cache_hits += cuda.graph_cache_hits;
         self.kernel_launches += cuda.kernel_launches;
         self.projection_ns += cuda.projection_ns;
+        self.qkv_projection_ns += cuda.qkv_projection_ns;
+        self.attention_output_projection_ns += cuda.attention_output_projection_ns;
+        self.gate_up_projection_ns += cuda.gate_up_projection_ns;
+        self.down_projection_ns += cuda.down_projection_ns;
+        self.lm_head_projection_ns += cuda.lm_head_projection_ns;
         self.attention_ns += cuda.attention_ns;
         self.mlp_ns += cuda.mlp_ns;
         self.norm_ns += cuda.norm_ns;
@@ -138,6 +149,11 @@ pub(super) fn build_summary(
         graph_replay_events: event_count(&parts.ledgers, LedgerEventKind::GraphReplay),
         kernel_launches: counters.kernel_launches,
         projection_ns: counters.projection_ns,
+        qkv_projection_ns: counters.qkv_projection_ns,
+        attention_output_projection_ns: counters.attention_output_projection_ns,
+        gate_up_projection_ns: counters.gate_up_projection_ns,
+        down_projection_ns: counters.down_projection_ns,
+        lm_head_projection_ns: counters.lm_head_projection_ns,
         attention_ns: counters.attention_ns,
         mlp_ns: counters.mlp_ns,
         norm_ns: counters.norm_ns,
@@ -156,39 +172,4 @@ pub(super) fn build_summary(
         expected_tokens: parts.expected_tokens,
         error,
     }
-}
-
-fn critical_paths(ledgers: &[TokenLedger]) -> Vec<TokenCriticalPathReport> {
-    ledgers
-        .iter()
-        .map(|ledger| {
-            TokenCriticalPathReport::from_ledger(ledger, DeviceOrdinal(0))
-                .expect("HF CUDA token ledgers have valid device timelines")
-        })
-        .collect()
-}
-
-fn event_count(ledgers: &[TokenLedger], kind: LedgerEventKind) -> u64 {
-    ledgers.iter().map(|ledger| ledger.event_count(kind)).sum()
-}
-
-fn sync_count(ledgers: &[TokenLedger], class: SyncClass) -> u64 {
-    ledgers
-        .iter()
-        .map(|ledger| ledger.sync_count_for(class))
-        .sum()
-}
-
-fn execution_decisions(ledgers: &[TokenLedger]) -> u64 {
-    ledgers
-        .iter()
-        .map(|ledger| ledger.execution_decisions.len() as u64)
-        .sum()
-}
-
-fn hot_path_allocations(ledgers: &[TokenLedger]) -> u64 {
-    ledgers
-        .iter()
-        .map(|ledger| ledger.hot_path_allocations)
-        .sum()
 }

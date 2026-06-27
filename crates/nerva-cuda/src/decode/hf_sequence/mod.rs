@@ -5,5 +5,6 @@ pub mod request;
 pub mod session;
 mod status;
 pub mod summary;
+mod summary_empty;
 mod validation;
 pub mod weight_plan;

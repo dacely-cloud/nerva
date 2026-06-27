@@ -108,6 +108,11 @@ pub struct HfCudaSeedDecodeSummary {
     pub graph_replay_events: u64,
     pub kernel_launches: u64,
     pub projection_ns: u64,
+    pub qkv_projection_ns: u64,
+    pub attention_output_projection_ns: u64,
+    pub gate_up_projection_ns: u64,
+    pub down_projection_ns: u64,
+    pub lm_head_projection_ns: u64,
     pub attention_ns: u64,
     pub mlp_ns: u64,
     pub norm_ns: u64,
@@ -141,7 +146,7 @@ impl HfCudaSeedDecodeSummary {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"reference_mode\":\"{}\",\"reference_verified\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"soft_visibility_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"cuda_footprint\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_device_free_memory_bytes\":{},\"cuda_fits_device_free_memory\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_captures\":{},\"graph_cache_hits\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"critical_paths\":{},\"token_ledgers\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"reference_mode\":\"{}\",\"reference_verified\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"soft_visibility_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"cuda_footprint\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_device_free_memory_bytes\":{},\"cuda_fits_device_free_memory\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_captures\":{},\"graph_cache_hits\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"critical_paths\":{},\"token_ledgers\":{},\"error\":{}}}",
             status_json(&self.status),
             self.steps_requested,
             tokens_json(&self.tokens),
@@ -172,6 +177,11 @@ impl HfCudaSeedDecodeSummary {
             self.graph_replay_events,
             self.kernel_launches,
             self.projection_ns,
+            self.qkv_projection_ns,
+            self.attention_output_projection_ns,
+            self.gate_up_projection_ns,
+            self.down_projection_ns,
+            self.lm_head_projection_ns,
             self.attention_ns,
             self.mlp_ns,
             self.norm_ns,

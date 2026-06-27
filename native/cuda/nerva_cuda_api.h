@@ -402,6 +402,11 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t kernel_launches;
   uint64_t device_elapsed_ns;
   uint64_t projection_ns;
+  uint64_t qkv_projection_ns;
+  uint64_t attention_output_projection_ns;
+  uint64_t gate_up_projection_ns;
+  uint64_t down_projection_ns;
+  uint64_t lm_head_projection_ns;
   uint64_t attention_ns;
   uint64_t mlp_ns;
   uint64_t norm_ns;
