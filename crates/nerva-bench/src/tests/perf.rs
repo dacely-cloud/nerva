@@ -73,8 +73,8 @@ fn external_baseline_artifact_records_unmeasured_rvllm_status() {
             "rvllm".to_string(),
             "qwen3_8b_bf16_decode".to_string(),
             "single_gpu_resident_external_baseline_required".to_string(),
-            "compile_failed".to_string(),
-            "rvllm-loader missing Gemma4LayerWeights fields".to_string(),
+            "unsupported_workload".to_string(),
+            "patched rvllm-bench exits before inference with unsupported architecture: Qwen3ForCausalLM".to_string(),
         ],
     )
     .unwrap();
@@ -82,7 +82,7 @@ fn external_baseline_artifact_records_unmeasured_rvllm_status() {
     assert!(json.contains("\"artifact_schema\":\"nerva-bench-v1\""));
     assert!(json.contains("\"schema\":\"nerva-external-baseline-v1\""));
     assert!(json.contains("\"engine\":\"rvllm\""));
-    assert!(json.contains("\"baseline_status\":\"compile_failed\""));
+    assert!(json.contains("\"baseline_status\":\"unsupported_workload\""));
     assert!(json.contains("\"tokens_per_second\":null"));
     assert!(json.contains("\"claim_blocked\":true"));
 }

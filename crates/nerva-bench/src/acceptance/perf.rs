@@ -3,8 +3,8 @@ use crate::artifact::run::run_artifact;
 use crate::perf::run::compare_perf_baseline;
 
 pub(crate) fn push_perf_claim_gate(report: &mut AcceptanceReport) {
-    let rvllm_status = "compile_failed";
-    let rvllm_evidence = "rvllm-bench build failed at /root/rvllm commit 17b1c85dff7cea3cc6259f19fce394d6cfea002e with CUDA_HOME=/usr/local/cuda-13.1: rvllm-loader missing Gemma4LayerWeights and Gemma4LoadedModel fields";
+    let rvllm_status = "unsupported_workload";
+    let rvllm_evidence = "rvllm commit 17b1c85dff7cea3cc6259f19fce394d6cfea002e does not provide a comparable Qwen3-8B baseline: unpatched rvllm-bench fails to compile from stale Gemma4 PLE initializers; a temporary compatibility-patched checkout builds, then rvllm-bench exits before inference with unsupported architecture: Qwen3ForCausalLM";
     push_rvllm_baseline_status(report, rvllm_status, rvllm_evidence);
     let current_qwen_nerva_tps = 97.09;
     let current_qwen_nerva_p99_ms = 10.35;
@@ -27,7 +27,7 @@ pub(crate) fn push_perf_claim_gate(report: &mut AcceptanceReport) {
             "perf_claim_gate",
             allowed.claim_allowed,
             format!(
-                "current_qwen_claim_allowed=false current_qwen_nerva_tps={:.2} current_qwen_nerva_p99_ms={:.2} current_qwen_vllm_tps={:.2} current_qwen_vllm_p99_ms={:.2} current_qwen_beats_vllm={} current_qwen_rvllm_baseline_status={} advantage_claim_allowed={} advantage_speedup_vs_best={:.3} advantage_p99_ratio_vs_best={:.3} requires_vllm_and_rvllm=true",
+                "current_qwen_claim_allowed=false current_qwen_nerva_tps={:.2} current_qwen_nerva_p99_ms={:.2} current_qwen_vllm_tps={:.2} current_qwen_vllm_p99_ms={:.2} current_qwen_beats_vllm={} current_qwen_rvllm_baseline_status={} current_qwen_rvllm_comparable=false advantage_claim_allowed={} advantage_speedup_vs_best={:.3} advantage_p99_ratio_vs_best={:.3} requires_vllm_and_rvllm=true",
                 current_qwen_nerva_tps,
                 current_qwen_nerva_p99_ms,
                 current_qwen_vllm_tps,
@@ -62,14 +62,14 @@ fn push_rvllm_baseline_status(
         Ok(json) => report.push(
             "rvllm_external_baseline",
             json.contains("\"engine\":\"rvllm\"")
-                && json.contains("\"baseline_status\":\"compile_failed\"")
+                && json.contains("\"baseline_status\":\"unsupported_workload\"")
                 && json.contains("\"claim_blocked\":true"),
             format!(
                 "status={} artifact_schema={} claim_blocked={} evidence_recorded={}",
                 baseline_status,
                 json.contains("\"artifact_schema\":\"nerva-bench-v1\""),
                 json.contains("\"claim_blocked\":true"),
-                json.contains("rvllm-loader missing Gemma4LayerWeights"),
+                json.contains("unsupported architecture: Qwen3ForCausalLM"),
             ),
         ),
         Err(err) => report.push("rvllm_external_baseline", false, err),
