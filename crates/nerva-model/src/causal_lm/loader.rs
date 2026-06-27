@@ -49,6 +49,7 @@ fn load_from_hf_dir(dir: &Path) -> Result<HfCausalLmLoaded> {
     let mut data_hash = 0xcbf2_9ce4_8422_2325u64;
     let shape = metadata.block_shape();
     let rms_eps = metadata.rms_norm_eps.unwrap_or(1e-5);
+    let rope_theta = metadata.rope_theta;
     for layer in 0..metadata.num_hidden_layers {
         let block = load_layer(
             dir,
@@ -56,6 +57,7 @@ fn load_from_hf_dir(dir: &Path) -> Result<HfCausalLmLoaded> {
             dtype,
             shape,
             rms_eps,
+            rope_theta,
             layer as u32,
             &mut bytes_loaded,
             &mut data_hash,
@@ -104,6 +106,7 @@ fn load_layer(
     dtype: DType,
     shape: TransformerBlockShape,
     rms_eps: f32,
+    rope_theta: Option<f32>,
     layer: u32,
     bytes_loaded: &mut usize,
     data_hash: &mut u64,
@@ -127,7 +130,8 @@ fn load_layer(
         load(WeightBlockRole::UpProjection)?,
         load(WeightBlockRole::DownProjection)?,
         rms_eps,
-    )
+    )?
+    .with_rope_theta(rope_theta)
 }
 
 fn load_tensor(

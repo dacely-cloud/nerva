@@ -2,6 +2,7 @@ use nerva_core::types::error::Result;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::math::{silu, single_token_attention};
+use crate::common::rope::apply_rotary_to_query_key;
 use crate::common::validate::require_len;
 use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::precision::block::ops::{
@@ -34,6 +35,9 @@ impl PrecisionTransformerBlock {
         mat_vec_encoded_row_major(self.dtype, &self.w_q, &scratch.attn_norm, &mut scratch.q)?;
         mat_vec_encoded_row_major(self.dtype, &self.w_k, &scratch.attn_norm, &mut scratch.k)?;
         mat_vec_encoded_row_major(self.dtype, &self.w_v, &scratch.attn_norm, &mut scratch.v)?;
+        if let Some(theta) = self.rope_theta {
+            apply_rotary_to_query_key(shape, 0, theta, &mut scratch.q, &mut scratch.k)?;
+        }
 
         single_token_attention(shape, &scratch.q, &scratch.k, &scratch.v, &mut scratch.attn);
         mat_vec_encoded_row_major(self.dtype, &self.w_o, &scratch.attn, &mut scratch.residual)?;

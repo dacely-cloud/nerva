@@ -93,6 +93,7 @@ fn hf_causal_lm_loader_accepts_grouped_query_kv_tensors() {
     assert_eq!(model.shape().hidden, 4);
     assert_eq!(model.shape().heads, 2);
     assert_eq!(model.shape().kv_heads, 1);
+    assert_eq!(model.layers[0].rope_theta(), Some(10_000.0));
     assert_eq!(loaded.summary.manifest.entries.len(), 12);
     assert_eq!(
         loaded.summary.bytes_loaded,
@@ -180,6 +181,7 @@ fn gqa_fixture_config() -> &'static str {
         "num_attention_heads": 2,
         "num_key_value_heads": 1,
         "vocab_size": 4,
+        "rope_theta": 10000.0,
         "torch_dtype": "float16"
     }"#
 }

@@ -4,6 +4,7 @@ use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::attention::block::KvAttentionBlock;
 use crate::attention::exact::run::exact_blockwise_attention_into;
+use crate::common::rope::{apply_rotary_to_key, apply_rotary_to_query};
 use crate::common::validate::require_len;
 use crate::precision::block::model::PrecisionTransformerBlock;
 use crate::precision::block::ops::{
@@ -26,7 +27,7 @@ impl PrecisionTransformerBlock {
         scratch.reset();
         for row in 0..token_count {
             let start = row * self.shape.hidden;
-            append_kv_from_input(self, &input[start..start + self.shape.hidden], scratch)?;
+            append_kv_from_input(self, &input[start..start + self.shape.hidden], row, scratch)?;
         }
         for row in 0..token_count {
             let start = row * self.shape.hidden;
@@ -34,6 +35,7 @@ impl PrecisionTransformerBlock {
                 self,
                 &input[start..start + self.shape.hidden],
                 row + 1,
+                row,
                 scratch,
                 &mut output[start..start + self.shape.hidden],
                 ledger,
@@ -59,8 +61,9 @@ impl PrecisionTransformerBlock {
                 reason: "precision KV length overflow".to_string(),
             })?;
         scratch.require_capacity(self.shape, next_len)?;
-        append_kv_from_input(self, input, scratch)?;
-        forward_with_visible_kv(self, input, next_len, scratch, output, ledger)
+        let position = scratch.len();
+        append_kv_from_input(self, input, position, scratch)?;
+        forward_with_visible_kv(self, input, next_len, position, scratch, output, ledger)
     }
 
     fn require_sequence_io(
@@ -90,6 +93,7 @@ impl PrecisionTransformerBlock {
 fn append_kv_from_input(
     block: &PrecisionTransformerBlock,
     input: &[u16],
+    position: usize,
     scratch: &mut PrecisionTransformerBlockKvScratch,
 ) -> Result<()> {
     let start = scratch.len() * block.shape.kv_hidden();
@@ -114,6 +118,9 @@ fn append_kv_from_input(
         &scratch.token.attn_norm,
         &mut scratch.token.v,
     )?;
+    if let Some(theta) = block.rope_theta {
+        apply_rotary_to_key(block.shape, position, theta, &mut scratch.token.k)?;
+    }
     scratch.keys[start..end].copy_from_slice(&scratch.token.k);
     scratch.values[start..end].copy_from_slice(&scratch.token.v);
     scratch.set_len(scratch.len() + 1);
@@ -124,6 +131,7 @@ fn forward_with_visible_kv(
     block: &PrecisionTransformerBlock,
     input: &[u16],
     visible_tokens: usize,
+    position: usize,
     scratch: &mut PrecisionTransformerBlockKvScratch,
     output: &mut [u16],
     ledger: &mut TokenLedger,
@@ -142,6 +150,9 @@ fn forward_with_visible_kv(
         &scratch.token.attn_norm,
         &mut scratch.token.q,
     )?;
+    if let Some(theta) = block.rope_theta {
+        apply_rotary_to_query(block.shape, position, theta, &mut scratch.token.q)?;
+    }
     let values = visible_tokens * block.shape.kv_hidden();
     let kv = [KvAttentionBlock::new(
         &scratch.keys[..values],

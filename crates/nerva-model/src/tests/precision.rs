@@ -1,3 +1,4 @@
+use crate::common::rope::apply_rotary_to_query_key;
 use crate::common::shape::TransformerBlockShape;
 use crate::precision::bits::{
     bf16_bits_to_f32, f16_bits_to_f32, f32_to_bf16_bits, f32_to_f16_bits,
@@ -155,4 +156,36 @@ fn precision_block_accepts_grouped_query_kv_projection_shapes() {
 
     assert!(output.iter().any(|value| *value != 0));
     assert_eq!(ledger.hot_path_allocations, 0);
+}
+
+#[test]
+fn rotary_embedding_rotates_query_and_compact_key_heads() {
+    let shape = TransformerBlockShape::new_with_kv_heads(4, 1, 1, 4);
+    let mut query = [1.0, 2.0, 3.0, 4.0];
+    let mut key = [0.5, -1.0, -0.25, 0.75];
+    let angle0 = 1.0f32;
+    let angle1 = 0.01f32;
+    let (sin0, cos0) = angle0.sin_cos();
+    let (sin1, cos1) = angle1.sin_cos();
+
+    apply_rotary_to_query_key(shape, 1, 10_000.0, &mut query, &mut key).unwrap();
+
+    let expected_query = [
+        1.0 * cos0 - 3.0 * sin0,
+        2.0 * cos1 - 4.0 * sin1,
+        3.0 * cos0 + 1.0 * sin0,
+        4.0 * cos1 + 2.0 * sin1,
+    ];
+    let expected_key = [
+        0.5 * cos0 - -0.25 * sin0,
+        -cos1 - 0.75 * sin1,
+        -0.25 * cos0 + 0.5 * sin0,
+        0.75 * cos1 + -1.0 * sin1,
+    ];
+    for (actual, expected) in query.iter().zip(expected_query.iter()) {
+        assert!((actual - expected).abs() < 1e-6);
+    }
+    for (actual, expected) in key.iter().zip(expected_key.iter()) {
+        assert!((actual - expected).abs() < 1e-6);
+    }
 }

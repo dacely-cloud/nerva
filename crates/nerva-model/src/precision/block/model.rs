@@ -1,5 +1,7 @@
 use nerva_core::types::dtype::DType;
+use nerva_core::types::error::Result;
 
+use crate::common::rope::validate_rope;
 use crate::common::shape::TransformerBlockShape;
 
 mod constructor;
@@ -21,6 +23,7 @@ pub struct PrecisionTransformerBlock {
     w_up: Vec<u16>,
     w_down: Vec<u16>,
     rms_eps: f32,
+    rope_theta: Option<f32>,
 }
 
 impl PrecisionTransformerBlock {
@@ -30,5 +33,17 @@ impl PrecisionTransformerBlock {
 
     pub const fn shape(&self) -> TransformerBlockShape {
         self.shape
+    }
+
+    pub const fn rope_theta(&self) -> Option<f32> {
+        self.rope_theta
+    }
+
+    pub fn with_rope_theta(mut self, rope_theta: Option<f32>) -> Result<Self> {
+        if let Some(theta) = rope_theta {
+            validate_rope(self.shape, theta)?;
+        }
+        self.rope_theta = rope_theta;
+        Ok(self)
     }
 }

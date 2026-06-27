@@ -50,6 +50,7 @@ impl PrecisionTransformerBlock {
             w_up: encode_vec(dtype, w_up)?,
             w_down: encode_vec(dtype, w_down)?,
             rms_eps,
+            rope_theta: None,
         })
     }
 
@@ -96,6 +97,7 @@ impl PrecisionTransformerBlock {
             w_up,
             w_down,
             rms_eps,
+            rope_theta: None,
         })
     }
 }
