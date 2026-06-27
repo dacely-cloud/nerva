@@ -17,6 +17,7 @@ constexpr uint32_t kSequenceId = 1;
 constexpr uint32_t kCompletionDeviceComplete = 1;
 constexpr uint32_t kWeightStrategyGpuResident = 1;
 constexpr uint32_t kWeightStrategyGpuStaged = 2;
+constexpr uint32_t kDecodeThreads = 256;
 constexpr uint64_t kMissingOffset = UINT64_MAX;
 constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ull;
 constexpr uint64_t kFnvPrime = 0x00000100000001b3ull;
@@ -67,57 +68,102 @@ __device__ float silu(float value) {
   return value / (1.0f + expf(-value));
 }
 
+__device__ float block_sum(float value) {
+  __shared__ float values[kDecodeThreads];
+  const uint32_t tid = threadIdx.x;
+  values[tid] = value;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      values[tid] += values[tid + stride];
+    }
+    __syncthreads();
+  }
+  return values[0];
+}
+
+__device__ void encoded_slice_to_f32(const uint16_t *input, uint32_t len,
+                                     uint32_t dtype, float *output) {
+  for (uint32_t index = threadIdx.x; index < len; index += blockDim.x) {
+    output[index] = encoded_to_f32(input[index], dtype);
+  }
+  __syncthreads();
+}
+
+__device__ void f32_slice_to_encoded(const float *input, uint16_t *output,
+                                     uint32_t len, uint32_t dtype) {
+  for (uint32_t index = threadIdx.x; index < len; index += blockDim.x) {
+    output[index] = f32_to_encoded(input[index], dtype);
+  }
+  __syncthreads();
+}
+
+__device__ void copy_encoded_slice(uint16_t *dst, const uint16_t *src, uint32_t len) {
+  for (uint32_t index = threadIdx.x; index < len; index += blockDim.x) {
+    dst[index] = src[index];
+  }
+  __syncthreads();
+}
+
 __device__ void mat_vec(const uint16_t *matrix, const float *input, uint32_t rows,
                         uint32_t cols, uint32_t dtype, float *output) {
-  for (uint32_t row = 0; row < rows; ++row) {
+  for (uint32_t row = threadIdx.x; row < rows; row += blockDim.x) {
     float sum = 0.0f;
     for (uint32_t col = 0; col < cols; ++col) {
       sum += encoded_to_f32(matrix[row * cols + col], dtype) * input[col];
     }
     output[row] = sum;
   }
+  __syncthreads();
 }
 
 __device__ void rms_norm(const float *input, const uint16_t *weight, uint32_t hidden,
                          uint32_t dtype, float eps, float *output) {
   float mean_square = 0.0f;
-  for (uint32_t index = 0; index < hidden; ++index) {
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
     mean_square += input[index] * input[index];
   }
+  mean_square = block_sum(mean_square);
   const float scale = rsqrtf(mean_square / static_cast<float>(hidden) + eps);
-  for (uint32_t index = 0; index < hidden; ++index) {
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
     output[index] = input[index] * scale * encoded_to_f32(weight[index], dtype);
   }
+  __syncthreads();
 }
 
 __device__ void add_bias(const uint16_t *arena, uint64_t offset, uint32_t len,
                          uint32_t dtype, float *output) {
   if (offset == kMissingOffset) {
+    __syncthreads();
     return;
   }
   const uint16_t *bias = arena + offset;
-  for (uint32_t index = 0; index < len; ++index) {
+  for (uint32_t index = threadIdx.x; index < len; index += blockDim.x) {
     output[index] += encoded_to_f32(bias[index], dtype);
   }
+  __syncthreads();
 }
 
 __device__ void per_head_rms_norm(uint16_t *arena, uint64_t offset, float *values,
                                   uint32_t heads, uint32_t head_dim,
                                   uint32_t dtype, float eps) {
   if (offset == kMissingOffset) {
+    __syncthreads();
     return;
   }
   const uint16_t *weight = arena + offset;
   for (uint32_t head = 0; head < heads; ++head) {
     float mean_square = 0.0f;
     float *base = values + head * head_dim;
-    for (uint32_t index = 0; index < head_dim; ++index) {
+    for (uint32_t index = threadIdx.x; index < head_dim; index += blockDim.x) {
       mean_square += base[index] * base[index];
     }
+    mean_square = block_sum(mean_square);
     const float scale = rsqrtf(mean_square / static_cast<float>(head_dim) + eps);
-    for (uint32_t index = 0; index < head_dim; ++index) {
+    for (uint32_t index = threadIdx.x; index < head_dim; index += blockDim.x) {
       base[index] *= scale * encoded_to_f32(weight[index], dtype);
     }
+    __syncthreads();
   }
 }
 
@@ -127,22 +173,24 @@ __device__ void apply_rope(float *values, uint32_t heads, uint32_t head_dim,
     return;
   }
   const uint32_t half = head_dim / 2;
-  for (uint32_t head = 0; head < heads; ++head) {
+  const uint32_t total = heads * half;
+  for (uint32_t index = threadIdx.x; index < total; index += blockDim.x) {
+    const uint32_t head = index / half;
+    const uint32_t offset = index % half;
     const uint32_t start = head * head_dim;
-    for (uint32_t offset = 0; offset < half; ++offset) {
-      const uint32_t first = start + offset;
-      const uint32_t second = first + half;
-      const float exponent = static_cast<float>(2 * offset) / static_cast<float>(head_dim);
-      float angle = static_cast<float>(position) / powf(theta, exponent);
-      float sin_value = 0.0f;
-      float cos_value = 0.0f;
-      sincosf(angle, &sin_value, &cos_value);
-      const float left = values[first];
-      const float right = values[second];
-      values[first] = left * cos_value - right * sin_value;
-      values[second] = right * cos_value + left * sin_value;
-    }
+    const uint32_t first = start + offset;
+    const uint32_t second = first + half;
+    const float exponent = static_cast<float>(2 * offset) / static_cast<float>(head_dim);
+    float angle = static_cast<float>(position) / powf(theta, exponent);
+    float sin_value = 0.0f;
+    float cos_value = 0.0f;
+    sincosf(angle, &sin_value, &cos_value);
+    const float left = values[first];
+    const float right = values[second];
+    values[first] = left * cos_value - right * sin_value;
+    values[second] = right * cos_value + left * sin_value;
   }
+  __syncthreads();
 }
 
 __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
@@ -167,9 +215,7 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
   float *ff = up + intermediate;
   float *down = ff + intermediate;
 
-  for (uint32_t index = 0; index < hidden; ++index) {
-    input[index] = encoded_to_f32(arena[input_offset + index], dtype);
-  }
+  encoded_slice_to_f32(arena + input_offset, hidden, dtype, input);
   rms_norm(input, arena + layout.rms_attn, hidden, dtype, rms_eps, attn_norm);
   mat_vec(arena + layout.w_q, attn_norm, attention_hidden, hidden, dtype, q);
   mat_vec(arena + layout.w_k, attn_norm, kv_hidden, hidden, dtype, k);
@@ -184,13 +230,14 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
 
   const uint64_t kv_base =
       (static_cast<uint64_t>(layer_index) * max_steps + position) * kv_hidden;
-  for (uint32_t index = 0; index < kv_hidden; ++index) {
+  for (uint32_t index = threadIdx.x; index < kv_hidden; index += blockDim.x) {
     kv_keys[kv_base + index] = k[index];
     kv_values[kv_base + index] = v[index];
   }
+  __syncthreads();
 
   const float scale = rsqrtf(static_cast<float>(head_dim));
-  for (uint32_t head = 0; head < heads; ++head) {
+  for (uint32_t head = threadIdx.x; head < heads; head += blockDim.x) {
     const uint32_t kv_head = head / (heads / kv_heads);
     const uint32_t head_start = head * head_dim;
     float local_m = -INFINITY;
@@ -223,22 +270,59 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
       }
     }
   }
+  __syncthreads();
   mat_vec(arena + layout.w_o, attn, hidden, attention_hidden, dtype, residual);
   add_bias(arena, layout.o_bias, hidden, dtype, residual);
-  for (uint32_t index = 0; index < hidden; ++index) {
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
     residual[index] += input[index];
   }
+  __syncthreads();
 
   rms_norm(residual, arena + layout.rms_mlp, hidden, dtype, rms_eps, mlp_norm);
   mat_vec(arena + layout.w_gate, mlp_norm, intermediate, hidden, dtype, gate);
   mat_vec(arena + layout.w_up, mlp_norm, intermediate, hidden, dtype, up);
-  for (uint32_t index = 0; index < intermediate; ++index) {
+  for (uint32_t index = threadIdx.x; index < intermediate; index += blockDim.x) {
     ff[index] = silu(gate[index]) * up[index];
   }
+  __syncthreads();
   mat_vec(arena + layout.w_down, ff, hidden, intermediate, dtype, down);
-  for (uint32_t index = 0; index < hidden; ++index) {
-    arena[output_offset + index] = f32_to_encoded(residual[index] + down[index], dtype);
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    down[index] += residual[index];
   }
+  __syncthreads();
+  f32_slice_to_encoded(down, arena + output_offset, hidden, dtype);
+}
+
+__device__ uint32_t block_argmax(const float *values, uint32_t len) {
+  __shared__ float best_values[kDecodeThreads];
+  __shared__ uint32_t best_indices[kDecodeThreads];
+  float best_value = -INFINITY;
+  uint32_t best_index = 0;
+  for (uint32_t index = threadIdx.x; index < len; index += blockDim.x) {
+    const float value = values[index];
+    if (isfinite(value) && (value > best_value ||
+                            (value == best_value && index < best_index))) {
+      best_value = value;
+      best_index = index;
+    }
+  }
+  best_values[threadIdx.x] = best_value;
+  best_indices[threadIdx.x] = best_index;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      const float other_value = best_values[threadIdx.x + stride];
+      const uint32_t other_index = best_indices[threadIdx.x + stride];
+      if (other_value > best_values[threadIdx.x] ||
+          (other_value == best_values[threadIdx.x] &&
+           other_index < best_indices[threadIdx.x])) {
+        best_values[threadIdx.x] = other_value;
+        best_indices[threadIdx.x] = other_index;
+      }
+    }
+    __syncthreads();
+  }
+  return best_indices[0];
 }
 
 __global__ void hf_decode_sequence_kernel(
@@ -250,21 +334,29 @@ __global__ void hf_decode_sequence_kernel(
     float rms_eps, float rope_theta,
     float *scratch, float *kv_keys, float *kv_values,
     NervaCudaSyntheticTokenSlot *slots) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) {
+  if (blockIdx.x != 0) {
     return;
   }
-  const uint32_t current_position = step_cursor == nullptr ? position : *step_cursor;
+  __shared__ uint32_t current_position_shared;
+  __shared__ uint32_t current_token_shared;
+  if (threadIdx.x == 0) {
+    current_position_shared = step_cursor == nullptr ? position : *step_cursor;
+  }
+  __syncthreads();
+  const uint32_t current_position = current_position_shared;
   if (current_position >= max_steps) {
     return;
   }
-  const uint32_t current_token = current_position < prompt_token_count
-                                     ? prompt_tokens[current_position]
-                                     : slots[current_position - 1].token;
+  if (threadIdx.x == 0) {
+    current_token_shared = current_position < prompt_token_count
+                               ? prompt_tokens[current_position]
+                               : slots[current_position - 1].token;
+  }
+  __syncthreads();
+  const uint32_t current_token = current_token_shared;
   const uint64_t embedding_offset = arena_layout.embeddings +
                                     static_cast<uint64_t>(current_token) * hidden;
-  for (uint32_t index = 0; index < hidden; ++index) {
-    arena[arena_layout.input + index] = arena[embedding_offset + index];
-  }
+  copy_encoded_slice(arena + arena_layout.input, arena + embedding_offset, hidden);
 
   uint64_t input_offset = arena_layout.input;
   uint64_t output_offset = arena_layout.scratch;
@@ -281,31 +373,23 @@ __global__ void hf_decode_sequence_kernel(
   float *decoded = scratch;
   float *final_norm = decoded + hidden;
   float *logits = final_norm + hidden;
-  for (uint32_t index = 0; index < hidden; ++index) {
-    decoded[index] = encoded_to_f32(arena[input_offset + index], dtype);
-  }
+  encoded_slice_to_f32(arena + input_offset, hidden, dtype, decoded);
   rms_norm(decoded, arena + arena_layout.final_norm, hidden, dtype, rms_eps, final_norm);
   mat_vec(arena + arena_layout.lm_head, final_norm, vocab_size, hidden, dtype, logits);
-  uint32_t best_index = 0;
-  float best_value = logits[0];
-  for (uint32_t index = 1; index < vocab_size; ++index) {
-    const float value = logits[index];
-    if (isfinite(value) && value > best_value) {
-      best_value = value;
-      best_index = index;
-    }
-  }
+  const uint32_t best_index = block_argmax(logits, vocab_size);
 
-  NervaCudaSyntheticTokenSlot *slot = slots + current_position;
-  slot->request_id = kRequestId;
-  slot->sequence_id = kSequenceId;
-  slot->token_index = current_position;
-  slot->token = best_index;
-  slot->version = current_position + 1;
-  slot->completion = kCompletionDeviceComplete;
-  slot->host_copied = 0;
-  if (step_cursor != nullptr) {
-    *step_cursor = current_position + 1;
+  if (threadIdx.x == 0) {
+    NervaCudaSyntheticTokenSlot *slot = slots + current_position;
+    slot->request_id = kRequestId;
+    slot->sequence_id = kSequenceId;
+    slot->token_index = current_position;
+    slot->token = best_index;
+    slot->version = current_position + 1;
+    slot->completion = kCompletionDeviceComplete;
+    slot->host_copied = 0;
+    if (step_cursor != nullptr) {
+      *step_cursor = current_position + 1;
+    }
   }
 }
 
@@ -822,7 +906,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     capture_started = err == cudaSuccess;
   }
   if (err == cudaSuccess) {
-    hf_decode_sequence_kernel<<<1, 1, 0, stream>>>(
+    hf_decode_sequence_kernel<<<1, kDecodeThreads, 0, stream>>>(
         device_arena, arena_layout, device_layouts, request->layer_count, request->dtype,
         request->hidden, request->heads, request->kv_heads, request->head_dim,
         request->intermediate, request->vocab_size, 0, device_step, context_steps,
