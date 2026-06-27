@@ -7,6 +7,7 @@ use nerva_cuda::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop
 use nerva_cuda::decode::hf_sequence::session::summary::CudaHfDecodeSequenceSessionCreateSummary;
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use nerva_cuda::smoke::status::SmokeStatus;
+use nerva_model::causal_lm::types::HfCausalLmStopReason;
 use nerva_model::hf::metadata::HfModelMetadata;
 
 use crate::engine::hf_cuda_decode::file_backed::run::summary_from_sequence;
@@ -30,6 +31,7 @@ pub struct HfCudaDeviceSessionStreamOutput {
     pub chunks: Vec<HfCudaSeedDecodeSummary>,
     pub tokens: Vec<TokenId>,
     pub queue: HfCudaHostOutputQueueSummary,
+    pub stop_reason: HfCausalLmStopReason,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,6 +73,7 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
         max_context_tokens,
         compute_capability,
     )?;
+    validate_vocab(prompt_tokens, session.metadata.vocab_size)?;
     let prompt = prompt_tokens
         .iter()
         .map(|token| token.0)
@@ -94,10 +97,12 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
     let mut records = Vec::new();
     let mut summaries = Vec::new();
     let mut tokens = Vec::new();
+    let mut stop_reason = HfCausalLmStopReason::MaxSteps;
     for chunk_index in 0..chunks {
         let sequence = loop_state.advance(chunk_steps);
         let mut summary = summary_from_sequence(&sequence, chunk_steps)?;
         summary.resident_weights = session.resident_weights.clone();
+        let hit_eos = contains_eos(&summary.tokens, session.metadata.eos_token_id);
         for (chunk_offset, token) in summary.tokens.iter().copied().enumerate() {
             let record = queue.push(token, chunk_index, chunk_offset)?;
             records.push(record);
@@ -106,6 +111,10 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
         let observed = summary.tokens.len();
         summaries.push(summary);
         queue.drain_all();
+        if hit_eos {
+            stop_reason = HfCausalLmStopReason::EosToken;
+            break;
+        }
         if observed < chunk_steps {
             break;
         }
@@ -125,7 +134,12 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
         chunks: summaries,
         tokens,
         queue: queue.summary(),
+        stop_reason,
     })
+}
+
+fn contains_eos(tokens: &[TokenId], eos_token: Option<u32>) -> bool {
+    eos_token.is_some_and(|eos| tokens.iter().any(|token| token.0 == eos))
 }
 
 fn validate_args(
@@ -138,6 +152,19 @@ fn validate_args(
         Err(NervaError::InvalidArgument {
             reason: "HF CUDA session stream requires prompt, chunks, and queue capacity"
                 .to_string(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_vocab(prompt_tokens: &[TokenId], vocab_size: usize) -> Result<()> {
+    if prompt_tokens
+        .iter()
+        .any(|token| token.0 as usize >= vocab_size)
+    {
+        Err(NervaError::InvalidArgument {
+            reason: "HF CUDA session stream prompt token is outside vocabulary".to_string(),
         })
     } else {
         Ok(())
