@@ -96,7 +96,7 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_only(
     })
 }
 
-fn summary_from_sequence(
+pub(super) fn summary_from_sequence(
     sequence: &nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary,
     steps: usize,
 ) -> Result<HfCudaSeedDecodeSummary> {

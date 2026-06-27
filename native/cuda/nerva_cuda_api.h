@@ -404,6 +404,79 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeSequenceResult;
 
+typedef struct NervaCudaHfDecodeSequenceSession NervaCudaHfDecodeSequenceSession;
+
+typedef struct NervaCudaHfDecodeSequenceSessionCreateRequest {
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint32_t vocab_size;
+  uint32_t layer_count;
+  uint32_t max_context_tokens;
+  float rms_eps;
+  float rope_theta;
+  const uint16_t *embeddings;
+  const NervaCudaHfDecodeChainLayer *layers;
+  const uint16_t *final_norm_weight;
+  const uint16_t *lm_head;
+  uint32_t planned_weight_blocks;
+  uint32_t planned_gpu_resident_blocks;
+  uint32_t planned_gpu_staged_blocks;
+  uint64_t planned_weight_bytes;
+  uint64_t planned_gpu_resident_weight_bytes;
+  uint64_t planned_gpu_staged_weight_bytes;
+  const NervaCudaHfDecodeSequenceWeightBlock *planned_weight_descriptors;
+  uint32_t planned_weight_descriptor_count;
+  uint64_t planned_weight_descriptor_hash;
+} NervaCudaHfDecodeSequenceSessionCreateRequest;
+
+typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint32_t vocab_size;
+  uint32_t layer_count;
+  uint32_t max_context_tokens;
+  uint64_t resident_weight_bytes;
+  uint32_t planned_weight_blocks;
+  uint32_t planned_gpu_resident_blocks;
+  uint32_t planned_gpu_staged_blocks;
+  uint64_t planned_weight_bytes;
+  uint64_t planned_gpu_resident_weight_bytes;
+  uint64_t planned_gpu_staged_weight_bytes;
+  uint64_t descriptor_gpu_resident_h2d_bytes;
+  uint64_t descriptor_gpu_staged_h2d_bytes;
+  uint32_t planned_weight_descriptor_count;
+  uint64_t planned_weight_descriptor_hash;
+  uint64_t resident_kv_bytes;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaHfDecodeSequenceSessionCreateResult;
+
+typedef struct NervaCudaHfDecodeSequenceSessionRunRequest {
+  NervaCudaHfDecodeSequenceSession *session;
+  uint32_t steps;
+  uint32_t seed_token;
+  const uint32_t *prompt_tokens;
+  uint32_t prompt_token_count;
+  uint32_t has_eos_token;
+  uint32_t eos_token;
+  uint32_t *output_tokens;
+  uint32_t output_token_capacity;
+} NervaCudaHfDecodeSequenceSessionRunRequest;
+
 typedef struct NervaCudaTinyDecodeResult {
   int32_t status;
   int32_t cuda_error;
@@ -520,6 +593,16 @@ int nerva_cuda_hf_decode_chain_u16(const NervaCudaHfDecodeChainRequest *request,
 int nerva_cuda_hf_decode_sequence_u16(
     const NervaCudaHfDecodeSequenceRequest *request,
     NervaCudaHfDecodeSequenceResult *out);
+int nerva_cuda_hf_decode_sequence_session_create(
+    const NervaCudaHfDecodeSequenceSessionCreateRequest *request,
+    NervaCudaHfDecodeSequenceSessionCreateResult *out,
+    NervaCudaHfDecodeSequenceSession **session);
+int nerva_cuda_hf_decode_sequence_session_run(
+    const NervaCudaHfDecodeSequenceSessionRunRequest *request,
+    NervaCudaHfDecodeSequenceResult *out);
+int nerva_cuda_hf_decode_sequence_session_destroy(
+    NervaCudaHfDecodeSequenceSession *session,
+    NervaCudaHfDecodeSequenceSessionCreateResult *out);
 int nerva_cuda_tiny_decode_smoke(uint32_t steps,
                                  uint32_t ring_capacity,
                                  uint32_t seed_token,

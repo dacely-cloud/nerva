@@ -1,0 +1,92 @@
+use crate::decode::hf_sequence::footprint::CudaHfDecodeSequenceFootprint;
+use crate::decode::hf_sequence::session::request::CudaHfDecodeSequenceSessionConfig;
+use crate::decode::hf_sequence::session::summary::CudaHfDecodeSequenceSessionCreateSummary;
+use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
+use crate::smoke::status::SmokeStatus;
+
+pub(super) fn failed_create_summary(
+    request: &CudaHfDecodeSequenceSessionConfig<'_>,
+    error: String,
+) -> CudaHfDecodeSequenceSessionCreateSummary {
+    CudaHfDecodeSequenceSessionCreateSummary {
+        status: SmokeStatus::Failed,
+        dtype: request.dtype,
+        hidden: request.hidden as u32,
+        heads: request.heads as u32,
+        kv_heads: request.kv_heads as u32,
+        head_dim: request.head_dim as u32,
+        intermediate: request.intermediate as u32,
+        vocab_size: request.vocab_size as u32,
+        layer_count: request.layers.len() as u32,
+        max_context_tokens: request.max_context_tokens as u32,
+        resident_weight_bytes: 0,
+        planned_weight_blocks: 0,
+        planned_gpu_resident_blocks: 0,
+        planned_gpu_staged_blocks: 0,
+        planned_weight_bytes: 0,
+        descriptor_gpu_resident_h2d_bytes: 0,
+        descriptor_gpu_staged_h2d_bytes: 0,
+        planned_weight_descriptor_count: 0,
+        planned_weight_descriptor_hash: 0,
+        resident_kv_bytes: 0,
+        device_arena_bytes: 0,
+        pinned_host_bytes: 0,
+        h2d_bytes: 0,
+        sync_calls: 0,
+        hot_path_allocations: 0,
+        error: Some(error),
+    }
+}
+
+pub(super) fn failed_run_summary(
+    create: &CudaHfDecodeSequenceSessionCreateSummary,
+    steps: usize,
+    seed_token: u32,
+    error: String,
+) -> CudaHfDecodeSequenceSummary {
+    CudaHfDecodeSequenceSummary {
+        status: SmokeStatus::Failed,
+        dtype: create.dtype,
+        hidden: create.hidden,
+        heads: create.heads,
+        kv_heads: create.kv_heads,
+        head_dim: create.head_dim,
+        intermediate: create.intermediate,
+        vocab_size: create.vocab_size,
+        layer_count: create.layer_count,
+        steps: steps as u32,
+        seed_token,
+        tokens: Vec::new(),
+        observed_token_hash: 0,
+        planned_footprint: CudaHfDecodeSequenceFootprint::default(),
+        device_total_memory_bytes: None,
+        device_free_memory_bytes: None,
+        fits_device_free_memory: None,
+        resident_weight_bytes: create.resident_weight_bytes,
+        planned_weight_blocks: create.planned_weight_blocks,
+        planned_gpu_resident_blocks: create.planned_gpu_resident_blocks,
+        planned_gpu_staged_blocks: create.planned_gpu_staged_blocks,
+        planned_weight_bytes: create.planned_weight_bytes,
+        planned_gpu_resident_weight_bytes: 0,
+        planned_gpu_staged_weight_bytes: 0,
+        descriptor_gpu_resident_h2d_bytes: 0,
+        descriptor_gpu_staged_h2d_bytes: 0,
+        planned_weight_descriptor_count: create.planned_weight_descriptor_count,
+        planned_weight_descriptor_hash: create.planned_weight_descriptor_hash,
+        resident_kv_bytes: 0,
+        kv_tokens: 0,
+        device_arena_bytes: 0,
+        pinned_host_bytes: 0,
+        h2d_bytes: 0,
+        d2h_bytes: 0,
+        graph_replays: 0,
+        graph_nodes: 0,
+        graph_launches: 0,
+        kernel_launches: 0,
+        device_elapsed_ns: 0,
+        sync_calls: 0,
+        host_causality_edges: 0,
+        hot_path_allocations: 0,
+        error: Some(error),
+    }
+}

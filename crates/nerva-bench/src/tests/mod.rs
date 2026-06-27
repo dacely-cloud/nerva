@@ -1,6 +1,7 @@
 mod acceptance;
 mod artifact;
 mod hf_cuda_decode;
+mod hf_cuda_session;
 mod hf_decode;
 mod hygiene;
 mod json;

@@ -4,6 +4,7 @@ pub(crate) mod causal_lm;
 pub(crate) mod causal_lm_cuda;
 pub(crate) mod causal_lm_cuda_device;
 pub(crate) mod causal_lm_cuda_json;
+pub(crate) mod causal_lm_cuda_session;
 pub(crate) mod causal_lm_text;
 pub(crate) mod contracts;
 pub(crate) mod dispatch;
