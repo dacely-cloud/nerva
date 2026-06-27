@@ -61,6 +61,28 @@ fn hf_cuda_decode_cli_accepts_token_id_prompt_sequence() {
     remove_checkpoint_dir(&dir);
 }
 
+#[test]
+fn hf_cuda_decode_cli_uses_hf_tokenizer_json_for_text_prompt() {
+    let dir = write_checkpoint_dir("nerva-hf-cuda-decode-text-cli");
+    write_wordlevel_tokenizer(&dir);
+    let json = hf_causal_lm_cuda_decode_input_json(
+        Some(dir.to_string_lossy().into_owned()),
+        Some("one two".to_string()),
+        2,
+    )
+    .unwrap();
+
+    assert!(json.contains("\"input_mode\":\"tokenizer_json\""));
+    assert!(json.contains("\"prompt_text\":\"one two\""));
+    assert!(json.contains("\"prompt_token_ids\":[1,2]"));
+    assert!(json.contains("\"generated_text\":\"zero zero\""));
+    assert!(json.contains("\"seed_token\":2"));
+    assert!(json.contains("\"kv_tokens\":3"));
+    assert!(json.contains("\"parity\":true"));
+
+    remove_checkpoint_dir(&dir);
+}
+
 fn write_checkpoint_dir(prefix: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -88,7 +110,27 @@ fn write_checkpoint_dir(prefix: &str) -> std::path::PathBuf {
 }
 
 fn remove_checkpoint_dir(dir: &std::path::Path) {
+    let _ = std::fs::remove_file(dir.join("tokenizer.json"));
     let _ = std::fs::remove_file(dir.join("model.safetensors"));
     let _ = std::fs::remove_file(dir.join("config.json"));
     let _ = std::fs::remove_dir(dir);
+}
+
+fn write_wordlevel_tokenizer(dir: &std::path::Path) {
+    let tokenizer = r#"{
+        "version":"1.0",
+        "truncation":null,
+        "padding":null,
+        "added_tokens":[],
+        "normalizer":null,
+        "pre_tokenizer":{"type":"Whitespace"},
+        "post_processor":null,
+        "decoder":null,
+        "model":{
+            "type":"WordLevel",
+            "vocab":{"zero":0,"one":1,"two":2,"three":3},
+            "unk_token":"zero"
+        }
+    }"#;
+    std::fs::write(dir.join("tokenizer.json"), tokenizer).unwrap();
 }
