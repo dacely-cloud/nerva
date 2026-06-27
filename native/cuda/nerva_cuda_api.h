@@ -318,6 +318,9 @@ typedef struct NervaCudaHfDecodeChainResult {
 
 typedef struct NervaCudaHfDecodeSequenceWeightBlock {
   const uint16_t *host_source;
+  const char *source_file;
+  uint64_t source_file_len;
+  uint64_t file_offset_begin;
   uint64_t block_id;
   uint64_t block_version;
   uint64_t offset_bytes;

@@ -5,6 +5,7 @@ mod decode;
 mod decode_chain;
 mod decode_sequence;
 mod decode_sequence_descriptors;
+mod decode_sequence_file_descriptors;
 mod decode_sequence_qk_norm;
 mod decode_sequence_session;
 mod graph;

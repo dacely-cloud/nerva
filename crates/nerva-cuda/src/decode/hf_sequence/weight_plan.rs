@@ -1,3 +1,5 @@
+use std::os::raw::c_char;
+
 pub const CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT: u32 = 1;
 pub const CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED: u32 = 2;
 
@@ -8,6 +10,9 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct CudaHfDecodeSequenceWeightBlock {
     pub host_source: *const u16,
+    pub source_file: *const c_char,
+    pub source_file_len: u64,
+    pub file_offset_begin: u64,
     pub block_id: u64,
     pub block_version: u64,
     pub offset_bytes: u64,
@@ -75,7 +80,8 @@ impl CudaHfDecodeSequenceWeightPlan {
             return Some("CUDA HF decode sequence weight descriptor count is invalid".to_string());
         }
         if descriptors.iter().any(|descriptor| {
-            descriptor.host_source.is_null()
+            (descriptor.host_source.is_null()
+                && (descriptor.source_file.is_null() || descriptor.source_file_len == 0))
                 || descriptor.offset_bytes % 2 != 0
                 || descriptor.bytes % 2 != 0
         }) {

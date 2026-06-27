@@ -112,6 +112,7 @@ fn weight_blocks(
                 bytes: *bytes,
                 strategy,
                 reserved: 0,
+                ..CudaHfDecodeSequenceWeightBlock::default()
             };
             offset_bytes += *bytes;
             block

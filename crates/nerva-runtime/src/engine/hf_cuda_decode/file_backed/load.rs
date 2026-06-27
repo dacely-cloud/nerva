@@ -1,4 +1,8 @@
-use std::path::Path;
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
@@ -14,22 +18,21 @@ use nerva_model::weights::safetensors::shard::{
     SafetensorsShardHeader, SafetensorsShardPlan, SafetensorsShardPlanEntry,
 };
 
+const STREAM_HASH_LIMIT_BYTES: usize = 256 * 1024 * 1024;
+const STREAM_HASH_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
 pub(super) struct ShardBackedWeights {
+    pub dir: PathBuf,
     pub metadata: HfModelMetadata,
     pub dtype: DType,
     pub manifest: HfTensorManifest,
     pub shard_plan: SafetensorsShardPlan,
-    pub buffers: Vec<ShardBuffer>,
     pub data_hash: u64,
-}
-
-pub(super) struct ShardBuffer {
-    pub file_name: String,
-    pub bytes: Vec<u8>,
+    pub data_hash_available: bool,
 }
 
 impl ShardBackedWeights {
-    pub fn source_bytes(&self, entry: &SafetensorsShardPlanEntry) -> Result<&[u8]> {
+    pub fn source_path(&self, entry: &SafetensorsShardPlanEntry) -> Result<PathBuf> {
         if entry.bytes % 2 != 0 {
             return Err(NervaError::InvalidArgument {
                 reason: format!(
@@ -38,14 +41,13 @@ impl ShardBackedWeights {
                 ),
             });
         }
-        let buffer = self
-            .buffers
-            .iter()
-            .find(|buffer| buffer.file_name == entry.shard_file)
-            .ok_or_else(|| NervaError::InvalidArgument {
-                reason: format!("safetensors shard {} was not loaded", entry.shard_file),
-            })?;
-        if entry.file_offset_end > buffer.bytes.len() {
+        let path = self.dir.join(&entry.shard_file);
+        let len = std::fs::metadata(&path)
+            .map_err(|err| NervaError::InvalidArgument {
+                reason: format!("failed to stat safetensors shard {}: {err}", path.display()),
+            })?
+            .len();
+        if entry.file_offset_end as u64 > len {
             return Err(NervaError::InvalidArgument {
                 reason: format!(
                     "safetensors tensor {} exceeds shard bounds",
@@ -53,8 +55,7 @@ impl ShardBackedWeights {
                 ),
             });
         }
-        let bytes = &buffer.bytes[entry.file_offset_begin..entry.file_offset_end];
-        if bytes.len() != entry.bytes {
+        if entry.file_offset_end - entry.file_offset_begin != entry.bytes {
             return Err(NervaError::InvalidArgument {
                 reason: format!(
                     "safetensors tensor {} byte length changed",
@@ -62,7 +63,7 @@ impl ShardBackedWeights {
                 ),
             });
         }
-        Ok(bytes)
+        Ok(path)
     }
 }
 
@@ -95,14 +96,15 @@ pub(super) fn load_shard_backed_weights(dir: &Path) -> Result<ShardBackedWeights
         .map(|(name, header)| SafetensorsShardHeader::new(name.as_str(), header.as_str()))
         .collect::<Vec<_>>();
     let shard_plan = plan_safetensors_shards_for_manifest(&index_json, &shard_headers, &manifest)?;
-    let (buffers, data_hash) = read_required_buffers(dir, &shard_plan)?;
+    let (data_hash, data_hash_available) = maybe_hash_required_buffers(dir, &manifest)?;
     Ok(ShardBackedWeights {
+        dir: dir.to_path_buf(),
         metadata,
         dtype,
         manifest,
         shard_plan,
-        buffers,
         data_hash,
+        data_hash_available,
     })
 }
 
@@ -135,25 +137,33 @@ fn read_required_headers(
         .collect()
 }
 
-fn read_required_buffers(
-    dir: &Path,
-    plan: &SafetensorsShardPlan,
-) -> Result<(Vec<ShardBuffer>, u64)> {
-    let mut buffers = Vec::with_capacity(plan.shards.len());
-    let mut data_hash = 0xcbf2_9ce4_8422_2325u64;
-    for shard in &plan.shards {
-        let path = dir.join(&shard.file_name);
-        let bytes = std::fs::read(&path).map_err(|err| NervaError::InvalidArgument {
-            reason: format!("failed to read safetensors shard {}: {err}", path.display()),
-        })?;
-        data_hash = hash_bytes(data_hash, shard.file_name.as_bytes());
-        data_hash = hash_bytes(data_hash, &bytes);
-        buffers.push(ShardBuffer {
-            file_name: shard.file_name.clone(),
-            bytes,
-        });
+fn maybe_hash_required_buffers(dir: &Path, manifest: &HfTensorManifest) -> Result<(u64, bool)> {
+    if manifest.total_weight_bytes > STREAM_HASH_LIMIT_BYTES {
+        return Ok((0, false));
     }
-    Ok((buffers, data_hash))
+    let index_json = load_or_synthesize_index(dir, manifest)?;
+    let required_shards = required_safetensors_shards_for_manifest(&index_json, manifest)?;
+    let mut data_hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut buffer = vec![0u8; STREAM_HASH_CHUNK_BYTES];
+    for shard in required_shards {
+        let path = dir.join(&shard);
+        let mut file = File::open(&path).map_err(|err| NervaError::InvalidArgument {
+            reason: format!("failed to open safetensors shard {}: {err}", path.display()),
+        })?;
+        data_hash = hash_bytes(data_hash, shard.as_bytes());
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|err| NervaError::InvalidArgument {
+                    reason: format!("failed to read safetensors shard {}: {err}", path.display()),
+                })?;
+            if read == 0 {
+                break;
+            }
+            data_hash = hash_bytes(data_hash, &buffer[..read]);
+        }
+    }
+    Ok((data_hash, true))
 }
 
 fn single_shard_index_json(manifest: &HfTensorManifest) -> String {

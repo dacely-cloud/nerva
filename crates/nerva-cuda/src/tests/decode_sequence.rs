@@ -158,10 +158,8 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
     assert_eq!(summary.descriptor_gpu_resident_h2d_bytes, 52);
     assert_eq!(summary.descriptor_gpu_staged_h2d_bytes, 48);
     assert_eq!(summary.planned_weight_descriptor_count, 12);
-    assert_eq!(
-        summary.planned_weight_descriptor_hash,
-        hash_weight_blocks(&weight_blocks)
-    );
+    let descriptor_hash = hash_weight_blocks(&weight_blocks);
+    assert_eq!(summary.planned_weight_descriptor_hash, descriptor_hash);
 }
 fn sequence_weight_blocks(
     embeddings: &[u16],
@@ -192,6 +190,7 @@ fn sequence_weight_blocks(
                 bytes: *bytes,
                 strategy,
                 reserved: 0,
+                ..CudaHfDecodeSequenceWeightBlock::default()
             };
             offset_bytes += *bytes;
             block

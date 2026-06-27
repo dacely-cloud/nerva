@@ -4,11 +4,14 @@
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <stdio.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
 
+#include <algorithm>
 #include <new>
+#include <string>
 #include <vector>
 
 namespace {
@@ -25,6 +28,7 @@ constexpr uint64_t kMissingOffset = UINT64_MAX;
 constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ull;
 constexpr uint64_t kFnvPrime = 0x00000100000001b3ull;
 constexpr size_t kCublasWorkspaceBytes = 16ull * 1024ull * 1024ull;
+constexpr uint64_t kDescriptorStreamStagingBytes = 64ull * 1024ull * 1024ull;
 
 struct SequenceArenaLayout {
   uint64_t embeddings;
@@ -1078,6 +1082,50 @@ void hash_descriptor(uint64_t &hash,
   hash_u32(hash, descriptor.strategy);
 }
 
+bool descriptor_has_memory_source(
+    const NervaCudaHfDecodeSequenceWeightBlock &descriptor) {
+  return descriptor.host_source != nullptr;
+}
+
+bool descriptor_has_file_source(
+    const NervaCudaHfDecodeSequenceWeightBlock &descriptor) {
+  return descriptor.source_file != nullptr && descriptor.source_file_len != 0;
+}
+
+bool descriptor_has_source(
+    const NervaCudaHfDecodeSequenceWeightBlock &descriptor) {
+  return descriptor_has_memory_source(descriptor) ||
+         descriptor_has_file_source(descriptor);
+}
+
+template <typename Request>
+bool descriptors_require_file_staging(const Request *request) {
+  if (request == nullptr || request->planned_weight_descriptor_count == 0 ||
+      request->planned_weight_descriptors == nullptr) {
+    return false;
+  }
+  for (uint32_t index = 0; index < request->planned_weight_descriptor_count; ++index) {
+    if (descriptor_has_file_source(request->planned_weight_descriptors[index])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+template <typename Request>
+uint64_t pinned_weight_staging_bytes(const Request *request,
+                                     uint64_t full_weight_bytes) {
+  if (request->planned_weight_blocks == 0 && request->planned_weight_bytes == 0) {
+    return full_weight_bytes;
+  }
+  if (!descriptors_require_file_staging(request)) {
+    return sizeof(uint16_t);
+  }
+  uint64_t bytes = std::min(full_weight_bytes, kDescriptorStreamStagingBytes);
+  bytes -= bytes % sizeof(uint16_t);
+  return bytes == 0 ? sizeof(uint16_t) : bytes;
+}
+
 template <typename Request>
 bool has_declared_weight_plan(const Request *request) {
   return request->planned_weight_blocks != 0 || request->planned_weight_bytes != 0;
@@ -1226,7 +1274,7 @@ bool validate_weight_descriptors(const Request *request,
   for (uint32_t index = 0; index < request->planned_weight_descriptor_count; ++index) {
     const auto &descriptor = request->planned_weight_descriptors[index];
     if (descriptor.bytes == 0 || descriptor.reserved != 0 ||
-        descriptor.host_source == nullptr || descriptor.offset_bytes != cursor ||
+        !descriptor_has_source(descriptor) || descriptor.offset_bytes != cursor ||
         descriptor.offset_bytes % sizeof(uint16_t) != 0 ||
         descriptor.bytes % sizeof(uint16_t) != 0) {
       return false;
@@ -1485,26 +1533,6 @@ void copy_layer(uint16_t *arena, const SequenceLayerLayout &layout,
   memcpy(arena + layout.w_down, layer.w_down, hidden * intermediate * sizeof(uint16_t));
 }
 
-template <typename Request>
-bool copy_weight_descriptors(uint16_t *arena, const Request *request,
-                             uint64_t arena_bytes) {
-  for (uint32_t index = 0; index < request->planned_weight_descriptor_count; ++index) {
-    const auto &descriptor = request->planned_weight_descriptors[index];
-    if (descriptor.host_source == nullptr ||
-        descriptor.offset_bytes % sizeof(uint16_t) != 0 ||
-        descriptor.bytes % sizeof(uint16_t) != 0) {
-      return false;
-    }
-    if (descriptor.offset_bytes > arena_bytes ||
-        descriptor.bytes > arena_bytes - descriptor.offset_bytes) {
-      return false;
-    }
-    memcpy(arena + descriptor.offset_bytes / sizeof(uint16_t), descriptor.host_source,
-           descriptor.bytes);
-  }
-  return true;
-}
-
 bool descriptor_destination_bytes(
     const NervaCudaHfDecodeSequenceWeightBlock &descriptor,
     uint64_t arena_bytes, uint64_t embedding_bytes, uint64_t scratch_gap_bytes,
@@ -1524,12 +1552,91 @@ bool descriptor_destination_bytes(
   return true;
 }
 
+void report_native_load_progress(uint64_t done, uint64_t total,
+                                 uint32_t *last_percent) {
+  if (total == 0 || last_percent == nullptr) {
+    return;
+  }
+  const uint32_t percent =
+      done >= total ? 100u : static_cast<uint32_t>((done * 100u) / total);
+  if (percent == *last_percent) {
+    return;
+  }
+  fprintf(stderr, "[nerva-load] weights H2D %u%% (%llu/%llu bytes)\n",
+          percent, static_cast<unsigned long long>(done),
+          static_cast<unsigned long long>(total));
+  fflush(stderr);
+  *last_percent = percent;
+}
+
+cudaError_t copy_file_descriptor_to_device(
+    uint16_t *device_destination, uint16_t *staging, uint64_t staging_bytes,
+    const NervaCudaHfDecodeSequenceWeightBlock &descriptor, cudaStream_t stream,
+    uint64_t *setup_sync_calls, uint64_t *progress_done,
+    uint64_t progress_total, uint32_t *last_progress_percent) {
+  if (device_destination == nullptr || staging == nullptr || staging_bytes == 0 ||
+      staging_bytes % sizeof(uint16_t) != 0 ||
+      !descriptor_has_file_source(descriptor)) {
+    return cudaErrorInvalidValue;
+  }
+  std::string path(descriptor.source_file, descriptor.source_file_len);
+  FILE *file = fopen(path.c_str(), "rb");
+  if (file == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  if (fseek(file, static_cast<long>(descriptor.file_offset_begin), SEEK_SET) != 0) {
+    fclose(file);
+    return cudaErrorInvalidValue;
+  }
+  uint64_t remaining = descriptor.bytes;
+  uint64_t destination_offset_elements = 0;
+  while (remaining != 0) {
+    const uint64_t chunk_bytes = std::min(remaining, staging_bytes);
+    const size_t read = fread(staging, 1, static_cast<size_t>(chunk_bytes), file);
+    if (read != static_cast<size_t>(chunk_bytes)) {
+      fclose(file);
+      return cudaErrorInvalidValue;
+    }
+    cudaError_t err = cudaMemcpyAsync(
+        device_destination + destination_offset_elements, staging, chunk_bytes,
+        cudaMemcpyHostToDevice, stream);
+    if (err != cudaSuccess) {
+      fclose(file);
+      return err;
+    }
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+      fclose(file);
+      return err;
+    }
+    if (setup_sync_calls != nullptr) {
+      *setup_sync_calls += 1;
+    }
+    remaining -= chunk_bytes;
+    destination_offset_elements += chunk_bytes / sizeof(uint16_t);
+    if (progress_done != nullptr) {
+      *progress_done += chunk_bytes;
+      report_native_load_progress(*progress_done, progress_total,
+                                  last_progress_percent);
+    }
+  }
+  fclose(file);
+  return cudaSuccess;
+}
+
 template <typename Request, typename Result>
 cudaError_t copy_weight_descriptors_to_device(
-    uint16_t *device_arena, const uint16_t *staging,
+    uint16_t *device_arena, uint16_t *staging, uint64_t staging_bytes,
     const Request *request, uint64_t arena_bytes,
     uint64_t embedding_bytes, uint64_t scratch_gap_bytes, cudaStream_t stream,
-    Result *out) {
+    Result *out, uint64_t *setup_sync_calls) {
+  uint64_t progress_done = 0;
+  uint32_t last_progress_percent = UINT32_MAX;
+  const bool report_progress = descriptors_require_file_staging(request);
+  if (report_progress) {
+    report_native_load_progress(0, request->planned_weight_bytes,
+                                &last_progress_percent);
+  }
   for (uint32_t index = 0; index < request->planned_weight_descriptor_count; ++index) {
     const auto &descriptor = request->planned_weight_descriptors[index];
     uint64_t destination_bytes = 0;
@@ -1537,12 +1644,29 @@ cudaError_t copy_weight_descriptors_to_device(
                                       scratch_gap_bytes, &destination_bytes)) {
       return cudaErrorInvalidValue;
     }
-    cudaError_t err = cudaMemcpyAsync(
-        device_arena + destination_bytes / sizeof(uint16_t),
-        staging + descriptor.offset_bytes / sizeof(uint16_t), descriptor.bytes,
-        cudaMemcpyHostToDevice, stream);
-    if (err != cudaSuccess) {
-      return err;
+    uint16_t *destination = device_arena + destination_bytes / sizeof(uint16_t);
+    if (descriptor_has_file_source(descriptor)) {
+      cudaError_t err = copy_file_descriptor_to_device(
+          destination, staging, staging_bytes, descriptor, stream, setup_sync_calls,
+          &progress_done, request->planned_weight_bytes,
+          &last_progress_percent);
+      if (err != cudaSuccess) {
+        return err;
+      }
+    } else if (descriptor_has_memory_source(descriptor)) {
+      cudaError_t err = cudaMemcpyAsync(destination, descriptor.host_source,
+                                        descriptor.bytes, cudaMemcpyHostToDevice,
+                                        stream);
+      if (err != cudaSuccess) {
+        return err;
+      }
+      if (report_progress) {
+        progress_done += descriptor.bytes;
+        report_native_load_progress(progress_done, request->planned_weight_bytes,
+                                    &last_progress_percent);
+      }
+    } else {
+      return cudaErrorInvalidValue;
     }
     out->h2d_bytes += descriptor.bytes;
     if (descriptor.strategy == kWeightStrategyGpuResident) {
@@ -1550,6 +1674,11 @@ cudaError_t copy_weight_descriptors_to_device(
     } else if (descriptor.strategy == kWeightStrategyGpuStaged) {
       out->descriptor_gpu_staged_h2d_bytes += descriptor.bytes;
     }
+  }
+  if (report_progress) {
+    report_native_load_progress(request->planned_weight_bytes,
+                                request->planned_weight_bytes,
+                                &last_progress_percent);
   }
   return cudaSuccess;
 }
@@ -1603,6 +1732,8 @@ struct NervaCudaHfDecodeSequenceSession {
   uint64_t slots_bytes = 0;
   uint64_t prompt_bytes = 0;
   uint64_t h2d_bytes = 0;
+  uint64_t load_staging_bytes = 0;
+  uint64_t setup_sync_calls = 0;
   uint64_t descriptor_gpu_resident_h2d_bytes = 0;
   uint64_t descriptor_gpu_staged_h2d_bytes = 0;
   uint32_t planned_weight_blocks = 0;
@@ -2331,9 +2462,9 @@ void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
   out->descriptor_gpu_staged_h2d_bytes = session->descriptor_gpu_staged_h2d_bytes;
   out->resident_kv_bytes = session->kv_bytes;
   out->device_arena_bytes = session_device_footprint(session);
-  out->pinned_host_bytes = session->slots_bytes;
+  out->pinned_host_bytes = session->slots_bytes + session->load_staging_bytes;
   out->h2d_bytes = session->h2d_bytes;
-  out->sync_calls = 1;
+  out->sync_calls = session->setup_sync_calls + 1;
 }
 
 int fail(NervaCudaHfDecodeSequenceSessionCreateResult *out, cudaError_t err) {
@@ -2409,7 +2540,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   const uint64_t prompt_bytes =
       static_cast<uint64_t>(request->prompt_token_count) * sizeof(uint32_t);
   const bool descriptor_mode = request->planned_weight_blocks != 0;
-  const uint64_t host_weight_bytes = descriptor_mode ? resident_weight_bytes : arena_bytes;
+  const uint64_t host_weight_bytes =
+      descriptor_mode ? pinned_weight_staging_bytes(request, resident_weight_bytes)
+                      : arena_bytes;
+  uint64_t setup_sync_calls = 0;
 
   uint16_t *host_arena = nullptr;
   uint16_t *device_arena = nullptr;
@@ -2475,11 +2609,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   memset(host_slots, 0, slots_bytes);
   const uint64_t embedding_bytes = vocab_size * hidden * sizeof(uint16_t);
   const uint64_t scratch_gap_bytes = hidden * 2 * sizeof(uint16_t);
-  if (descriptor_mode) {
-    if (!copy_weight_descriptors(host_arena, request, host_weight_bytes)) {
-      err = cudaErrorInvalidValue;
-    }
-  } else {
+  if (!descriptor_mode) {
     memcpy(host_arena + arena_layout.embeddings, request->embeddings,
            vocab_size * hidden * sizeof(uint16_t));
     for (uint32_t index = 0; index < request->layer_count; ++index) {
@@ -2494,8 +2624,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
 
   if (err == cudaSuccess && descriptor_mode) {
     err = copy_weight_descriptors_to_device(
-        device_arena, host_arena, request, arena_bytes, embedding_bytes,
-        scratch_gap_bytes, stream, out);
+        device_arena, host_arena, host_weight_bytes, request, arena_bytes,
+        embedding_bytes, scratch_gap_bytes, stream, out, &setup_sync_calls);
   } else if (err == cudaSuccess) {
     err = cudaMemcpyAsync(device_arena, host_arena, arena_bytes,
                           cudaMemcpyHostToDevice, stream);
@@ -2592,7 +2722,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   }
   if (err == cudaSuccess) {
     err = cudaStreamSynchronize(stream);
-    out->sync_calls = 1;
+    out->sync_calls = setup_sync_calls + 1;
   }
   if (err == cudaSuccess) {
     float device_ms = 0.0f;
@@ -2808,7 +2938,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
 
   uint16_t *host_arena = nullptr;
   const uint64_t host_weight_bytes =
-      descriptor_mode ? session->resident_weight_bytes : session->arena_bytes;
+      descriptor_mode
+          ? pinned_weight_staging_bytes(request, session->resident_weight_bytes)
+          : session->arena_bytes;
+  uint64_t setup_sync_calls = 0;
   err = cudaHostAlloc(reinterpret_cast<void **>(&host_arena), host_weight_bytes,
                       cudaHostAllocDefault);
   if (err == cudaSuccess)
@@ -2872,11 +3005,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   memset(host_arena, 0, host_weight_bytes);
   const uint64_t embedding_bytes = vocab_size * hidden * sizeof(uint16_t);
   const uint64_t scratch_gap_bytes = hidden * 2 * sizeof(uint16_t);
-  if (descriptor_mode) {
-    if (!copy_weight_descriptors(host_arena, request, host_weight_bytes)) {
-      err = cudaErrorInvalidValue;
-    }
-  } else {
+  if (!descriptor_mode) {
     memcpy(host_arena + session->arena_layout.embeddings, request->embeddings,
            vocab_size * hidden * sizeof(uint16_t));
     for (uint32_t index = 0; index < request->layer_count; ++index) {
@@ -2890,8 +3019,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   }
   if (err == cudaSuccess && descriptor_mode) {
     err = copy_weight_descriptors_to_device(
-        session->device_arena, host_arena, request, session->arena_bytes,
-        embedding_bytes, scratch_gap_bytes, session->stream, out);
+        session->device_arena, host_arena, host_weight_bytes, request,
+        session->arena_bytes, embedding_bytes, scratch_gap_bytes,
+        session->stream, out, &setup_sync_calls);
   } else if (err == cudaSuccess) {
     err = cudaMemcpyAsync(session->device_arena, host_arena, session->arena_bytes,
                           cudaMemcpyHostToDevice, session->stream);
@@ -2922,6 +3052,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     return -1;
   }
   session->h2d_bytes = out->h2d_bytes;
+  session->load_staging_bytes = host_weight_bytes;
+  session->setup_sync_calls = setup_sync_calls;
   session->descriptor_gpu_resident_h2d_bytes =
       out->descriptor_gpu_resident_h2d_bytes;
   session->descriptor_gpu_staged_h2d_bytes =

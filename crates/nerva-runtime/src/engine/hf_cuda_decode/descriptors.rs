@@ -38,6 +38,7 @@ pub(super) fn cuda_weight_descriptors(
             bytes,
             strategy: cuda_weight_strategy(step.strategy)?,
             reserved: 0,
+            ..CudaHfDecodeSequenceWeightBlock::default()
         });
         offset_bytes =
             offset_bytes

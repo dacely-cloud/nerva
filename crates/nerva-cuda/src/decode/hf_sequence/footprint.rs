@@ -5,6 +5,7 @@ const U16_BYTES: u64 = 2;
 const F32_BYTES: u64 = 4;
 const LAYER_LAYOUT_BYTES: u64 = 13 * 8;
 const TOKEN_SLOT_BYTES: u64 = 40;
+const DESCRIPTOR_STREAM_STAGING_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct CudaHfDecodeSequenceFootprint {
@@ -66,12 +67,11 @@ pub fn estimate_sequence_footprint(
     let resident_weight_bytes = arena_bytes
         .checked_sub(scratch_gap_bytes)
         .ok_or_else(|| "CUDA HF decode resident weight byte underflow".to_string())?;
-    if let Some(plan) = request.weight_plan {
-        if plan.is_declared() && plan.weight_bytes != resident_weight_bytes {
-            return Err(
-                "CUDA HF decode declared weight bytes do not match packed layout".to_string(),
-            );
-        }
+    if request
+        .weight_plan
+        .is_some_and(|plan| plan.is_declared() && plan.weight_bytes != resident_weight_bytes)
+    {
+        return Err("CUDA HF decode declared weight bytes do not match packed layout".to_string());
     }
     let layout_bytes = checked_mul(layer_count, LAYER_LAYOUT_BYTES, "layout bytes")?;
     let scratch_bytes = scratch_bytes(
@@ -98,7 +98,7 @@ pub fn estimate_sequence_footprint(
         4,
     ])?;
     let host_weight_bytes = if request.weight_plan.is_some_and(|plan| plan.is_declared()) {
-        resident_weight_bytes
+        descriptor_host_staging_bytes(request, resident_weight_bytes)
     } else {
         arena_bytes
     };
@@ -113,6 +113,21 @@ pub fn estimate_sequence_footprint(
         token_slot_bytes,
         prompt_bytes,
     })
+}
+
+fn descriptor_host_staging_bytes(
+    request: &CudaHfDecodeSequenceRequest<'_>,
+    resident_weight_bytes: u64,
+) -> u64 {
+    if request
+        .weight_blocks
+        .iter()
+        .any(|block| !block.source_file.is_null() && block.source_file_len != 0)
+    {
+        resident_weight_bytes.min(DESCRIPTOR_STREAM_STAGING_BYTES)
+    } else {
+        U16_BYTES
+    }
 }
 
 fn arena_elements(

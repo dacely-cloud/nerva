@@ -110,7 +110,7 @@ pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session(
         tensors_loaded: weights.manifest.entries.len(),
         bytes_loaded: weights.manifest.total_weight_bytes,
         data_hash: weights.data_hash,
-        data_hash_available: true,
+        data_hash_available: weights.data_hash_available,
         create_summary: created.summary,
         resident_weights: resident_summary,
         session: created.session.unwrap(),

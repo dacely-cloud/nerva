@@ -1,3 +1,6 @@
+use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
+
 use nerva_core::types::error::{NervaError, Result};
 use nerva_cuda::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use nerva_cuda::decode::hf_sequence::weight_plan::{
@@ -21,6 +24,7 @@ const MARKER: [u16; 1] = [0];
 pub(super) struct ShardBackedResidentWeights {
     pub summary: HfCudaResidentWeightSummary,
     pub descriptors: Vec<CudaHfDecodeSequenceWeightBlock>,
+    pub _source_paths: Vec<CString>,
 }
 
 pub(super) fn descriptor_marker_layers(
@@ -66,7 +70,10 @@ pub(super) fn shard_backed_resident_weights(
         compute_capability,
     )?;
     let run = runtime.execute_resident_weight_execution_plan(&table, &plan)?;
-    let descriptors = cuda_weight_descriptors(weights, &plan)?;
+    let DescriptorTable {
+        descriptors,
+        source_paths,
+    } = cuda_weight_descriptors(weights, &plan)?;
     let descriptor_hash = hash_weight_blocks(&descriptors);
     let resident_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuResident);
     let staged_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuStaged);
@@ -98,13 +105,19 @@ pub(super) fn shard_backed_resident_weights(
             ..HfCudaResidentWeightSummary::default()
         },
         descriptors,
+        _source_paths: source_paths,
     })
+}
+
+struct DescriptorTable {
+    descriptors: Vec<CudaHfDecodeSequenceWeightBlock>,
+    source_paths: Vec<CString>,
 }
 
 fn cuda_weight_descriptors(
     weights: &ShardBackedWeights,
     plan: &crate::weights::execution::plan::ResidentWeightExecutionPlan,
-) -> Result<Vec<CudaHfDecodeSequenceWeightBlock>> {
+) -> Result<DescriptorTable> {
     if plan.steps.len() != weights.manifest.entries.len()
         || plan.steps.len() != weights.shard_plan.entries.len()
     {
@@ -114,6 +127,7 @@ fn cuda_weight_descriptors(
     }
     let mut offset_bytes = 0u64;
     let mut descriptors = Vec::with_capacity(plan.steps.len());
+    let mut source_paths = Vec::with_capacity(plan.steps.len());
     for ((step, manifest), shard) in plan
         .steps
         .iter()
@@ -125,9 +139,20 @@ fn cuda_weight_descriptors(
                 reason: "CUDA shard-backed descriptor order does not match manifest".to_string(),
             });
         }
-        let source = weights.source_bytes(shard)?;
+        let source_path = weights.source_path(shard)?;
+        let source_path = CString::new(source_path.as_os_str().as_bytes()).map_err(|_| {
+            NervaError::InvalidArgument {
+                reason: format!(
+                    "safetensors shard path for {} contains a nul byte",
+                    shard.tensor_name
+                ),
+            }
+        })?;
         descriptors.push(CudaHfDecodeSequenceWeightBlock {
-            host_source: source.as_ptr().cast::<u16>(),
+            host_source: std::ptr::null(),
+            source_file: source_path.as_ptr(),
+            source_file_len: source_path.as_bytes().len() as u64,
+            file_offset_begin: shard.file_offset_begin as u64,
             block_id: step.block_id.0,
             block_version: step.block_version,
             offset_bytes,
@@ -135,6 +160,7 @@ fn cuda_weight_descriptors(
             strategy: cuda_weight_strategy(step.strategy)?,
             reserved: 0,
         });
+        source_paths.push(source_path);
         offset_bytes = offset_bytes.checked_add(step.bytes as u64).ok_or_else(|| {
             NervaError::AllocationFailed {
                 bytes: step.bytes,
@@ -142,5 +168,8 @@ fn cuda_weight_descriptors(
             }
         })?;
     }
-    Ok(descriptors)
+    Ok(DescriptorTable {
+        descriptors,
+        source_paths,
+    })
 }
