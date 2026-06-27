@@ -21,7 +21,7 @@ pub struct HfWeightLayoutPlan {
 impl HfWeightLayoutPlan {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"architecture\":\"{}\",\"dtype\":\"{}\",\"blocks\":{},\"layers\":{},\"total_weight_bytes\":{},\"per_layer_weight_bytes\":{},\"static_weight_bytes\":{},\"hidden_size\":{},\"head_dim\":{},\"kv_hidden_size\":{},\"tie_word_embeddings\":{}}}",
+            "{{\"architecture\":\"{}\",\"dtype\":\"{}\",\"blocks\":{},\"layers\":{},\"total_weight_bytes\":{},\"per_layer_weight_bytes\":{},\"static_weight_bytes\":{},\"hidden_size\":{},\"attention_hidden_size\":{},\"head_dim\":{},\"kv_hidden_size\":{},\"tie_word_embeddings\":{}}}",
             self.metadata.architecture.as_str(),
             dtype_to_str(self.dtype),
             self.blocks.len(),
@@ -30,8 +30,9 @@ impl HfWeightLayoutPlan {
             self.per_layer_weight_bytes,
             self.static_weight_bytes,
             self.metadata.hidden_size,
+            self.metadata.attention_hidden(),
             self.metadata.head_dim(),
-            self.metadata.num_key_value_heads * self.metadata.head_dim(),
+            self.metadata.kv_hidden(),
             self.metadata.tie_word_embeddings,
         )
     }
@@ -45,6 +46,7 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
         metadata.num_hidden_layers,
         metadata.num_attention_heads,
         metadata.num_key_value_heads,
+        metadata.head_dim,
         metadata.intermediate_size,
         metadata.vocab_size,
     )?;
@@ -53,13 +55,8 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
         .ok_or_else(|| NervaError::InvalidArgument {
             reason: "HF weight layout requires torch_dtype".to_string(),
         })?;
-    let kv_hidden = metadata
-        .num_key_value_heads
-        .checked_mul(metadata.head_dim())
-        .ok_or_else(|| NervaError::AllocationFailed {
-            bytes: 0,
-            reason: "KV hidden size overflow".to_string(),
-        })?;
+    let attention_hidden = metadata.attention_hidden();
+    let kv_hidden = metadata.kv_hidden();
 
     let static_block_count = if metadata.tie_word_embeddings { 2 } else { 3 };
     let mut blocks =
@@ -77,7 +74,14 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
         let layer = u32::try_from(layer).map_err(|_| NervaError::InvalidArgument {
             reason: "layer index does not fit u32".to_string(),
         })?;
-        push_layer_weight_blocks(&mut blocks, metadata, kv_hidden, dtype, layer)?;
+        push_layer_weight_blocks(
+            &mut blocks,
+            metadata,
+            attention_hidden,
+            kv_hidden,
+            dtype,
+            layer,
+        )?;
     }
 
     blocks.push(WeightBlockSpec::new(
@@ -133,6 +137,7 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
 pub(crate) fn push_layer_weight_blocks(
     blocks: &mut Vec<WeightBlockSpec>,
     metadata: &HfModelMetadata,
+    attention_hidden: usize,
     kv_hidden: usize,
     dtype: DType,
     layer: u32,
@@ -141,10 +146,10 @@ pub(crate) fn push_layer_weight_blocks(
     let intermediate = metadata.intermediate_size;
     for (role, rows, cols) in [
         (WeightBlockRole::AttentionNorm, hidden, 1),
-        (WeightBlockRole::QueryProjection, hidden, hidden),
+        (WeightBlockRole::QueryProjection, attention_hidden, hidden),
         (WeightBlockRole::KeyProjection, kv_hidden, hidden),
         (WeightBlockRole::ValueProjection, kv_hidden, hidden),
-        (WeightBlockRole::OutputProjection, hidden, hidden),
+        (WeightBlockRole::OutputProjection, hidden, attention_hidden),
         (WeightBlockRole::MlpNorm, hidden, 1),
         (WeightBlockRole::GateProjection, intermediate, hidden),
         (WeightBlockRole::UpProjection, intermediate, hidden),
@@ -161,7 +166,7 @@ pub(crate) fn push_layer_weight_blocks(
     }
     if metadata.attention_bias {
         for (role, rows) in [
-            (WeightBlockRole::QueryBias, hidden),
+            (WeightBlockRole::QueryBias, attention_hidden),
             (WeightBlockRole::KeyBias, kv_hidden),
             (WeightBlockRole::ValueBias, kv_hidden),
             (WeightBlockRole::OutputBias, hidden),

@@ -3,6 +3,7 @@ mod causal_lm;
 mod causal_lm_bias;
 mod hf;
 mod hf_contract;
+mod hf_head_dim;
 mod precision;
 mod precision_bias;
 mod prompt;

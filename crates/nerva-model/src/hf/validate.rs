@@ -5,6 +5,7 @@ pub(crate) fn validate_hf_metadata(
     num_hidden_layers: usize,
     num_attention_heads: usize,
     num_key_value_heads: usize,
+    head_dim: usize,
     intermediate_size: usize,
     vocab_size: usize,
 ) -> Result<()> {
@@ -12,16 +13,12 @@ pub(crate) fn validate_hf_metadata(
         || num_hidden_layers == 0
         || num_attention_heads == 0
         || num_key_value_heads == 0
+        || head_dim == 0
         || intermediate_size == 0
         || vocab_size == 0
     {
         return Err(NervaError::InvalidArgument {
             reason: "HF model metadata dimensions must be non-zero".to_string(),
-        });
-    }
-    if !hidden_size.is_multiple_of(num_attention_heads) {
-        return Err(NervaError::InvalidArgument {
-            reason: "HF hidden size must be divisible by attention head count".to_string(),
         });
     }
     if num_key_value_heads > num_attention_heads {
@@ -34,5 +31,17 @@ pub(crate) fn validate_hf_metadata(
             reason: "HF attention head count must be divisible by KV head count".to_string(),
         });
     }
+    validate_attention_width(num_attention_heads, head_dim)?;
+    validate_attention_width(num_key_value_heads, head_dim)?;
     Ok(())
+}
+
+fn validate_attention_width(heads: usize, head_dim: usize) -> Result<()> {
+    heads
+        .checked_mul(head_dim)
+        .map(|_| ())
+        .ok_or_else(|| NervaError::AllocationFailed {
+            bytes: 0,
+            reason: "HF attention width overflow".to_string(),
+        })
 }

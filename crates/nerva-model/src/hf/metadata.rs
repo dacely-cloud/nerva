@@ -12,6 +12,7 @@ pub struct HfModelMetadata {
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
+    pub head_dim: usize,
     pub intermediate_size: usize,
     pub vocab_size: usize,
     pub max_position_embeddings: Option<usize>,
@@ -28,16 +29,25 @@ pub struct HfModelMetadata {
 
 impl HfModelMetadata {
     pub fn block_shape(&self) -> TransformerBlockShape {
-        TransformerBlockShape::new_with_kv_heads(
+        TransformerBlockShape::new_with_kv_heads_and_head_dim(
             self.hidden_size,
             self.num_attention_heads,
             self.num_key_value_heads,
+            self.head_dim,
             self.intermediate_size,
         )
     }
 
     pub const fn head_dim(&self) -> usize {
-        self.hidden_size / self.num_attention_heads
+        self.head_dim
+    }
+
+    pub const fn attention_hidden(&self) -> usize {
+        self.num_attention_heads * self.head_dim
+    }
+
+    pub const fn kv_hidden(&self) -> usize {
+        self.num_key_value_heads * self.head_dim
     }
 
     pub const fn kv_groups(&self) -> usize {
@@ -46,13 +56,15 @@ impl HfModelMetadata {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"architecture\":\"{}\",\"hidden_size\":{},\"num_hidden_layers\":{},\"num_attention_heads\":{},\"num_key_value_heads\":{},\"head_dim\":{},\"kv_groups\":{},\"intermediate_size\":{},\"vocab_size\":{},\"max_position_embeddings\":{},\"rope_theta\":{},\"rms_norm_eps\":{},\"bos_token_id\":{},\"eos_token_id\":{},\"tie_word_embeddings\":{},\"hidden_act\":{},\"attention_bias\":{},\"mlp_bias\":{},\"torch_dtype\":{}}}",
+            "{{\"architecture\":\"{}\",\"hidden_size\":{},\"num_hidden_layers\":{},\"num_attention_heads\":{},\"num_key_value_heads\":{},\"head_dim\":{},\"attention_hidden_size\":{},\"kv_hidden_size\":{},\"kv_groups\":{},\"intermediate_size\":{},\"vocab_size\":{},\"max_position_embeddings\":{},\"rope_theta\":{},\"rms_norm_eps\":{},\"bos_token_id\":{},\"eos_token_id\":{},\"tie_word_embeddings\":{},\"hidden_act\":{},\"attention_bias\":{},\"mlp_bias\":{},\"torch_dtype\":{}}}",
             self.architecture.as_str(),
             self.hidden_size,
             self.num_hidden_layers,
             self.num_attention_heads,
             self.num_key_value_heads,
             self.head_dim(),
+            self.attention_hidden(),
+            self.kv_hidden(),
             self.kv_groups(),
             self.intermediate_size,
             self.vocab_size,

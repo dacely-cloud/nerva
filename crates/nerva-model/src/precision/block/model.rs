@@ -59,7 +59,7 @@ impl PrecisionTransformerBlock {
         v_bias: Vec<u16>,
         o_bias: Vec<u16>,
     ) -> Result<Self> {
-        require_len("q_proj.bias", q_bias.len(), self.shape.hidden)?;
+        require_len("q_proj.bias", q_bias.len(), self.shape.attention_hidden())?;
         require_len("k_proj.bias", k_bias.len(), self.shape.kv_hidden())?;
         require_len("v_proj.bias", v_bias.len(), self.shape.kv_hidden())?;
         require_len("o_proj.bias", o_bias.len(), self.shape.hidden)?;

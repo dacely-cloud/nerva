@@ -20,8 +20,8 @@ pub fn exact_blockwise_attention_into(
 ) -> Result<()> {
     shape.validate()?;
     scratch.require_shape(shape)?;
-    require_len("attention query", query.len(), shape.hidden)?;
-    require_len("attention output", output.len(), shape.hidden)?;
+    require_len("attention query", query.len(), shape.attention_hidden())?;
+    require_len("attention output", output.len(), shape.attention_hidden())?;
 
     scratch.local_output.fill(0.0);
     scratch.global_m.fill(f32::NEG_INFINITY);

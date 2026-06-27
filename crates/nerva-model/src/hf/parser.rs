@@ -17,6 +17,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
     let num_attention_heads = required_usize(config_json, "num_attention_heads")?;
     let num_key_value_heads =
         optional_usize(config_json, "num_key_value_heads")?.unwrap_or(num_attention_heads);
+    let head_dim = parse_head_dim(config_json, hidden_size, num_attention_heads)?;
     let intermediate_size = required_usize(config_json, "intermediate_size")?;
     let vocab_size = required_usize(config_json, "vocab_size")?;
     let max_position_embeddings = optional_usize(config_json, "max_position_embeddings")?;
@@ -41,6 +42,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         num_hidden_layers,
         num_attention_heads,
         num_key_value_heads,
+        head_dim,
         intermediate_size,
         vocab_size,
     )?;
@@ -51,6 +53,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         num_hidden_layers,
         num_attention_heads,
         num_key_value_heads,
+        head_dim,
         intermediate_size,
         vocab_size,
         max_position_embeddings,
@@ -64,6 +67,22 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         mlp_bias,
         torch_dtype,
     })
+}
+
+fn parse_head_dim(
+    config_json: &str,
+    hidden_size: usize,
+    num_attention_heads: usize,
+) -> Result<usize> {
+    if let Some(head_dim) = optional_usize(config_json, "head_dim")? {
+        return Ok(head_dim);
+    }
+    if num_attention_heads == 0 || !hidden_size.is_multiple_of(num_attention_heads) {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF hidden size must be divisible by attention head count".to_string(),
+        });
+    }
+    Ok(hidden_size / num_attention_heads)
 }
 
 fn parse_rope_theta(config_json: &str) -> Result<Option<f32>> {

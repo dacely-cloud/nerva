@@ -23,10 +23,10 @@ pub(crate) fn validate_precision_block_layout(
     validate_dtype(dtype)?;
     require_len("rms_attn_weight", rms_attn_weight_len, shape.hidden)?;
     require_len("rms_mlp_weight", rms_mlp_weight_len, shape.hidden)?;
-    require_len("w_q", w_q_len, shape.hidden * shape.hidden)?;
+    require_len("w_q", w_q_len, shape.attention_hidden() * shape.hidden)?;
     require_len("w_k", w_k_len, shape.kv_hidden() * shape.hidden)?;
     require_len("w_v", w_v_len, shape.kv_hidden() * shape.hidden)?;
-    require_len("w_o", w_o_len, shape.hidden * shape.hidden)?;
+    require_len("w_o", w_o_len, shape.hidden * shape.attention_hidden())?;
     require_len("w_gate", w_gate_len, shape.intermediate * shape.hidden)?;
     require_len("w_up", w_up_len, shape.intermediate * shape.hidden)?;
     require_len("w_down", w_down_len, shape.hidden * shape.intermediate)?;

@@ -107,7 +107,7 @@ pub(crate) fn dense_attention_reference(
 ) -> Vec<f32> {
     let head_dim = shape.head_dim();
     let scale = (head_dim as f32).sqrt().recip();
-    let mut output = vec![0.0; shape.hidden];
+    let mut output = vec![0.0; shape.attention_hidden()];
     for head in 0..shape.heads {
         let head_start = head * head_dim;
         let head_end = head_start + head_dim;

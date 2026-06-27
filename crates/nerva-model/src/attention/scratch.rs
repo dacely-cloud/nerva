@@ -15,7 +15,7 @@ impl BlockwiseAttentionScratch {
         shape.validate()?;
         Ok(Self {
             shape,
-            local_output: vec![0.0; shape.hidden],
+            local_output: vec![0.0; shape.attention_hidden()],
             global_m: vec![f32::NEG_INFINITY; shape.heads],
             global_l: vec![0.0; shape.heads],
         })
