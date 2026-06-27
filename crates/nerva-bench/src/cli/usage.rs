@@ -36,6 +36,8 @@ const COMMANDS: &[&str] = &[
     "hf-decode checkpoint_dir [seed_token|ids:a,b,c|prompt_text] [steps]",
     "hf-cuda-decode checkpoint_dir [seed_token|ids:a,b,c|prompt_text] [steps]",
     "hf-cuda-decode-device-only checkpoint_dir [seed_token|ids:a,b,c|prompt_text] [steps]",
+    "hf-cuda-decode-device-session checkpoint_dir [max_context] [steps] [token|ids:a,b,c]...",
+    "hf-cuda-decode-device-session-loop checkpoint_dir [max_context] [chunk_steps] [chunks] [token|ids:a,b,c]",
     "vllm-parity vllm_tokens.json [steps]",
     "metadata [config.json]",
     "layout [config.json]",

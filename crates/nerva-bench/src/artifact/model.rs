@@ -1,4 +1,6 @@
-use crate::cli::model::{causal_lm, causal_lm_cuda, causal_lm_cuda_session};
+use crate::cli::model::{
+    causal_lm, causal_lm_cuda, causal_lm_cuda_session, causal_lm_cuda_session_loop,
+};
 use crate::parse::parse_optional_usize;
 
 pub(crate) fn run_model_artifact(command: &str, args: &[String]) -> Option<Result<String, String>> {
@@ -7,6 +9,7 @@ pub(crate) fn run_model_artifact(command: &str, args: &[String]) -> Option<Resul
         "hf-cuda-decode" => Some(run_hf_cuda_decode(args)),
         "hf-cuda-decode-device-only" => Some(run_hf_cuda_device_only_decode(args)),
         "hf-cuda-decode-device-session" => Some(run_hf_cuda_device_session_decode(args)),
+        "hf-cuda-decode-device-session-loop" => Some(run_hf_cuda_device_session_loop(args)),
         _ => None,
     }
 }
@@ -28,6 +31,19 @@ fn run_hf_cuda_device_session_decode(args: &[String]) -> Result<String, String> 
         max_context,
         steps,
         args.iter().skip(3).cloned().collect(),
+    )
+}
+
+fn run_hf_cuda_device_session_loop(args: &[String]) -> Result<String, String> {
+    let max_context = parse_optional_usize(args.get(1).cloned(), 8, "max_context_tokens")?;
+    let chunk_steps = parse_optional_usize(args.get(2).cloned(), 1, "chunk_steps")?;
+    let chunks = parse_optional_usize(args.get(3).cloned(), 1, "chunks")?;
+    causal_lm_cuda_session_loop::hf_causal_lm_cuda_device_session_loop_json(
+        args.first().cloned(),
+        max_context,
+        chunk_steps,
+        chunks,
+        args.get(4).cloned(),
     )
 }
 

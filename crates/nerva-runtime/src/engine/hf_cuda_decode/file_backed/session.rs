@@ -32,8 +32,9 @@ pub struct HfCudaShardBackedDeviceOnlySession {
     pub data_hash: u64,
     pub data_hash_available: bool,
     pub create_summary: CudaHfDecodeSequenceSessionCreateSummary,
-    resident_weights: HfCudaResidentWeightSummary,
-    session: CudaHfDecodeSequenceSession,
+    pub(in crate::engine::hf_cuda_decode::file_backed) resident_weights:
+        HfCudaResidentWeightSummary,
+    pub(in crate::engine::hf_cuda_decode::file_backed) session: CudaHfDecodeSequenceSession,
 }
 
 impl HfCudaShardBackedDeviceOnlySession {

@@ -126,6 +126,10 @@ impl CudaHfDecodeSequenceSession {
         &self.create_summary
     }
 
+    pub(super) fn raw_handle(&mut self) -> *mut NervaCudaHfDecodeSequenceSession {
+        self.handle
+    }
+
     pub fn run(
         &mut self,
         prompt_tokens: &[u32],

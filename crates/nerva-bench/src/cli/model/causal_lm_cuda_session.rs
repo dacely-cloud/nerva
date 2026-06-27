@@ -100,7 +100,7 @@ pub(crate) fn hf_causal_lm_cuda_device_session_json(
     ))
 }
 
-fn parse_prompt(value: &str) -> Result<Vec<u32>, String> {
+pub(crate) fn parse_prompt(value: &str) -> Result<Vec<u32>, String> {
     if let Some(rest) = value.strip_prefix("ids:") {
         return parse_token_ids(rest);
     }

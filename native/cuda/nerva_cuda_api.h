@@ -479,6 +479,21 @@ typedef struct NervaCudaHfDecodeSequenceSessionRunRequest {
   uint32_t output_token_capacity;
 } NervaCudaHfDecodeSequenceSessionRunRequest;
 
+typedef struct NervaCudaHfDecodeSequenceSessionStartRequest {
+  NervaCudaHfDecodeSequenceSession *session;
+  const uint32_t *prompt_tokens;
+  uint32_t prompt_token_count;
+  uint32_t has_eos_token;
+  uint32_t eos_token;
+} NervaCudaHfDecodeSequenceSessionStartRequest;
+
+typedef struct NervaCudaHfDecodeSequenceSessionAdvanceRequest {
+  NervaCudaHfDecodeSequenceSession *session;
+  uint32_t steps;
+  uint32_t *output_tokens;
+  uint32_t output_token_capacity;
+} NervaCudaHfDecodeSequenceSessionAdvanceRequest;
+
 typedef struct NervaCudaTinyDecodeResult {
   int32_t status;
   int32_t cuda_error;
@@ -601,6 +616,12 @@ int nerva_cuda_hf_decode_sequence_session_create(
     NervaCudaHfDecodeSequenceSession **session);
 int nerva_cuda_hf_decode_sequence_session_run(
     const NervaCudaHfDecodeSequenceSessionRunRequest *request,
+    NervaCudaHfDecodeSequenceResult *out);
+int nerva_cuda_hf_decode_sequence_session_start(
+    const NervaCudaHfDecodeSequenceSessionStartRequest *request,
+    NervaCudaHfDecodeSequenceResult *out);
+int nerva_cuda_hf_decode_sequence_session_advance(
+    const NervaCudaHfDecodeSequenceSessionAdvanceRequest *request,
     NervaCudaHfDecodeSequenceResult *out);
 int nerva_cuda_hf_decode_sequence_session_destroy(
     NervaCudaHfDecodeSequenceSession *session,

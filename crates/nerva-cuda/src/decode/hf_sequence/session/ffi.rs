@@ -83,6 +83,25 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionRunRequest {
     pub(crate) output_token_capacity: u32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaHfDecodeSequenceSessionStartRequest {
+    pub(crate) session: *mut NervaCudaHfDecodeSequenceSession,
+    pub(crate) prompt_tokens: *const u32,
+    pub(crate) prompt_token_count: u32,
+    pub(crate) has_eos_token: u32,
+    pub(crate) eos_token: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaHfDecodeSequenceSessionAdvanceRequest {
+    pub(crate) session: *mut NervaCudaHfDecodeSequenceSession,
+    pub(crate) steps: u32,
+    pub(crate) output_tokens: *mut u32,
+    pub(crate) output_token_capacity: u32,
+}
+
 unsafe extern "C" {
     fn nerva_cuda_hf_decode_sequence_session_create(
         request: *const NervaCudaHfDecodeSequenceSessionCreateRequest,
@@ -91,6 +110,14 @@ unsafe extern "C" {
     ) -> c_int;
     fn nerva_cuda_hf_decode_sequence_session_run(
         request: *const NervaCudaHfDecodeSequenceSessionRunRequest,
+        out: *mut NervaCudaHfDecodeSequenceResult,
+    ) -> c_int;
+    fn nerva_cuda_hf_decode_sequence_session_start(
+        request: *const NervaCudaHfDecodeSequenceSessionStartRequest,
+        out: *mut NervaCudaHfDecodeSequenceResult,
+    ) -> c_int;
+    fn nerva_cuda_hf_decode_sequence_session_advance(
+        request: *const NervaCudaHfDecodeSequenceSessionAdvanceRequest,
         out: *mut NervaCudaHfDecodeSequenceResult,
     ) -> c_int;
     fn nerva_cuda_hf_decode_sequence_session_destroy(
@@ -112,6 +139,20 @@ pub(crate) fn run_hf_decode_sequence_session(
     out: &mut NervaCudaHfDecodeSequenceResult,
 ) -> c_int {
     unsafe { nerva_cuda_hf_decode_sequence_session_run(request, out) }
+}
+
+pub(crate) fn start_hf_decode_sequence_session(
+    request: &NervaCudaHfDecodeSequenceSessionStartRequest,
+    out: &mut NervaCudaHfDecodeSequenceResult,
+) -> c_int {
+    unsafe { nerva_cuda_hf_decode_sequence_session_start(request, out) }
+}
+
+pub(crate) fn advance_hf_decode_sequence_session(
+    request: &NervaCudaHfDecodeSequenceSessionAdvanceRequest,
+    out: &mut NervaCudaHfDecodeSequenceResult,
+) -> c_int {
+    unsafe { nerva_cuda_hf_decode_sequence_session_advance(request, out) }
 }
 
 pub(crate) fn destroy_hf_decode_sequence_session(

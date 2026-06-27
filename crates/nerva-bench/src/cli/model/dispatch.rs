@@ -1,8 +1,8 @@
 use std::process::ExitCode;
 
 use crate::cli::model::{
-    attention, block, causal_lm, causal_lm_cuda, causal_lm_cuda_session, contracts, parity,
-    precision, prompt, tiny, warm,
+    attention, block, causal_lm, causal_lm_cuda, causal_lm_cuda_session,
+    causal_lm_cuda_session_loop, contracts, parity, precision, prompt, tiny, warm,
 };
 
 pub(crate) fn dispatch(
@@ -23,6 +23,9 @@ pub(crate) fn dispatch(
         ),
         Some("hf-cuda-decode-device-session") => {
             Some(causal_lm_cuda_session::run_hf_causal_lm_cuda_device_session_decode(args))
+        }
+        Some("hf-cuda-decode-device-session-loop") => {
+            Some(causal_lm_cuda_session_loop::run_hf_causal_lm_cuda_device_session_loop(args))
         }
         Some("vllm-parity") => Some(parity::run_vllm_parity(args)),
         Some("attention") => Some(attention::run_attention()),

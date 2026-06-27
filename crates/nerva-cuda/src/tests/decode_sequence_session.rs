@@ -1,6 +1,7 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::request::CUDA_HF_DECODE_SEQUENCE_DTYPE_F16;
 use crate::decode::hf_sequence::session::request::CudaHfDecodeSequenceSessionConfig;
+use crate::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use crate::smoke::status::SmokeStatus;
 
 #[test]
@@ -78,4 +79,25 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
     let create_json = session.create_summary().to_json();
     assert!(create_json.contains("\"H2D_bytes\":"));
     assert!(second.to_json().contains("\"graph_cache_hits\":1"));
+
+    let started = CudaHfDecodeSequenceLoop::start(&mut session, &[0], None);
+    assert_eq!(started.summary.status, SmokeStatus::Ok);
+    assert_eq!(
+        (started.summary.h2d_bytes, started.summary.d2h_bytes),
+        (4, 0)
+    );
+    let mut loop_state = started.loop_state.unwrap();
+    let first_step = loop_state.advance(1);
+    let second_step = loop_state.advance(1);
+    assert_eq!(first_step.tokens, vec![1]);
+    assert_eq!(second_step.tokens, vec![2]);
+    assert_eq!((first_step.h2d_bytes, second_step.h2d_bytes), (0, 0));
+    assert_eq!(
+        (first_step.graph_captures, first_step.graph_cache_hits),
+        (1, 0)
+    );
+    assert_eq!(
+        (second_step.graph_captures, second_step.graph_cache_hits),
+        (0, 1)
+    );
 }

@@ -857,6 +857,14 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t cached_has_eos_token = 0;
   uint32_t cached_eos_token = 0;
   uint64_t cached_graph_nodes = 0;
+  uint32_t active_prompt_token_count = 0;
+  uint32_t active_has_eos_token = 0;
+  uint32_t active_eos_token = 0;
+  uint32_t active_seed_token = 0;
+  uint32_t active_observed_tokens = 0;
+  uint32_t active_cursor = 0;
+  bool active_started = false;
+  bool active_finished = false;
 };
 
 namespace {
@@ -911,6 +919,133 @@ bool session_graph_matches(const NervaCudaHfDecodeSequenceSession *session,
          session->cached_prompt_token_count == prompt_token_count &&
          session->cached_has_eos_token == has_eos_token &&
          session->cached_eos_token == eos_token;
+}
+
+void fill_session_result_header(const NervaCudaHfDecodeSequenceSession *session,
+                                NervaCudaHfDecodeSequenceResult *out,
+                                uint32_t steps, uint32_t seed_token) {
+  out->device_count = 1;
+  out->dtype = session->dtype;
+  out->hidden = session->hidden;
+  out->heads = session->heads;
+  out->kv_heads = session->kv_heads;
+  out->head_dim = session->head_dim;
+  out->intermediate = session->intermediate;
+  out->vocab_size = session->vocab_size;
+  out->layer_count = session->layer_count;
+  out->steps = steps;
+  out->seed_token = seed_token;
+  out->resident_weight_bytes = session->resident_weight_bytes;
+  out->planned_weight_blocks = session->planned_weight_blocks;
+  out->planned_gpu_resident_blocks = session->planned_gpu_resident_blocks;
+  out->planned_gpu_staged_blocks = session->planned_gpu_staged_blocks;
+  out->planned_weight_bytes = session->planned_weight_bytes;
+  out->planned_gpu_resident_weight_bytes =
+      session->planned_gpu_resident_weight_bytes;
+  out->planned_gpu_staged_weight_bytes =
+      session->planned_gpu_staged_weight_bytes;
+  out->planned_weight_descriptor_count =
+      session->planned_weight_descriptor_count;
+  out->planned_weight_descriptor_hash =
+      session->planned_weight_descriptor_hash;
+}
+
+uint32_t observed_from_slot_range(uint32_t steps, uint32_t has_eos_token,
+                                  uint32_t eos_token,
+                                  const NervaCudaSyntheticTokenSlot *slots) {
+  uint32_t count = steps;
+  for (uint32_t index = 0; index < steps; ++index) {
+    if (slots[index].completion != kCompletionDeviceComplete) {
+      count = index;
+      break;
+    }
+    if (has_eos_token != 0 && slots[index].token == eos_token) {
+      count = index + 1;
+      break;
+    }
+  }
+  return count;
+}
+
+cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
+                                 uint32_t max_steps,
+                                 uint32_t prompt_token_count,
+                                 uint32_t has_eos_token,
+                                 uint32_t eos_token,
+                                 NervaCudaHfDecodeSequenceResult *out) {
+  if (session_graph_matches(session, max_steps, prompt_token_count,
+                            has_eos_token, eos_token)) {
+    out->graph_nodes = session->cached_graph_nodes;
+    out->graph_cache_hits = 1;
+    return cudaSuccess;
+  }
+  reset_session_graph(session);
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t graph_exec = nullptr;
+  bool capture_started = false;
+  cudaError_t err =
+      cudaStreamBeginCapture(session->stream, cudaStreamCaptureModeGlobal);
+  capture_started = err == cudaSuccess;
+  if (err == cudaSuccess) {
+    hf_decode_sequence_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+        session->device_arena, session->arena_layout, session->device_layouts,
+        session->layer_count, session->dtype, session->hidden, session->heads,
+        session->kv_heads, session->head_dim, session->intermediate, 0,
+        session->device_step, max_steps, session->device_prompt_tokens,
+        prompt_token_count, session->rms_eps, session->rope_theta,
+        session->device_scratch, session->device_kv_keys,
+        session->device_kv_values, session->device_slots);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    hf_decode_final_head_rows_kernel<<<session->vocab_size, kDecodeThreads, 0,
+                                       session->stream>>>(
+        session->device_arena, session->arena_layout, session->dtype,
+        session->hidden, session->vocab_size, session->device_step, max_steps,
+        session->device_scratch, device_logits);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    hf_decode_final_head_reduce_kernel<<<1, kDecodeThreads, 0,
+                                         session->stream>>>(
+        session->device_step, max_steps, has_eos_token, eos_token,
+        device_logits, session->vocab_size, session->device_slots);
+    err = cudaGetLastError();
+  }
+  if (capture_started) {
+    cudaError_t end_err = cudaStreamEndCapture(session->stream, &graph);
+    if (err == cudaSuccess) {
+      err = end_err;
+    } else if (graph != nullptr) {
+      cudaGraphDestroy(graph);
+      graph = nullptr;
+    }
+  }
+  if (err == cudaSuccess) {
+    size_t graph_nodes = 0;
+    err = cudaGraphGetNodes(graph, nullptr, &graph_nodes);
+    out->graph_nodes = static_cast<uint64_t>(graph_nodes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaGraphInstantiate(&graph_exec, graph, 0);
+  }
+  if (err == cudaSuccess) {
+    session->cached_graph = graph;
+    session->cached_graph_exec = graph_exec;
+    session->cached_context_steps = max_steps;
+    session->cached_prompt_token_count = prompt_token_count;
+    session->cached_has_eos_token = has_eos_token;
+    session->cached_eos_token = eos_token;
+    session->cached_graph_nodes = out->graph_nodes;
+    out->graph_captures = 1;
+    graph = nullptr;
+    graph_exec = nullptr;
+  }
+  if (graph_exec != nullptr) cudaGraphExecDestroy(graph_exec);
+  if (graph != nullptr) cudaGraphDestroy(graph);
+  return err;
 }
 
 void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
@@ -1690,6 +1825,187 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
           slot.token_index != output_start + index) {
         out->status = -1;
       }
+    }
+  } else {
+    fail(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_hf_decode_sequence_session_start(
+    const NervaCudaHfDecodeSequenceSessionStartRequest *request,
+    NervaCudaHfDecodeSequenceResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  if (request == nullptr || request->session == nullptr ||
+      request->prompt_tokens == nullptr || request->prompt_token_count == 0) {
+    return -1;
+  }
+  NervaCudaHfDecodeSequenceSession *session = request->session;
+  if (request->prompt_token_count > session->max_context_tokens) {
+    return -1;
+  }
+  for (uint32_t index = 0; index < request->prompt_token_count; ++index) {
+    if (request->prompt_tokens[index] >= session->vocab_size) {
+      return -1;
+    }
+  }
+
+  fill_session_result_header(
+      session, out, 0, request->prompt_tokens[request->prompt_token_count - 1u]);
+  cudaError_t err = cudaMemsetAsync(session->device_slots, 0,
+                                    session->slots_bytes, session->stream);
+  if (err == cudaSuccess)
+    err = cudaMemsetAsync(session->device_kv_keys, 0, session->kv_bytes / 2,
+                          session->stream);
+  if (err == cudaSuccess)
+    err = cudaMemsetAsync(session->device_kv_values, 0, session->kv_bytes / 2,
+                          session->stream);
+  if (err == cudaSuccess)
+    err = cudaMemsetAsync(session->device_step, 0, sizeof(uint32_t),
+                          session->stream);
+  const uint64_t prompt_bytes =
+      static_cast<uint64_t>(request->prompt_token_count) * sizeof(uint32_t);
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(session->device_prompt_tokens, request->prompt_tokens,
+                          prompt_bytes, cudaMemcpyHostToDevice, session->stream);
+    out->h2d_bytes = prompt_bytes;
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(session->stream);
+    out->sync_calls = 1;
+  }
+  if (err == cudaSuccess) {
+    session->active_prompt_token_count = request->prompt_token_count;
+    session->active_has_eos_token = request->has_eos_token;
+    session->active_eos_token = request->eos_token;
+    session->active_seed_token = request->prompt_tokens[request->prompt_token_count - 1u];
+    session->active_observed_tokens = 0;
+    session->active_cursor = 0;
+    session->active_started = true;
+    session->active_finished = false;
+    out->resident_kv_bytes = session->kv_bytes;
+    out->device_arena_bytes = session->arena_bytes + session->layout_bytes +
+                              session->scratch_bytes + session->kv_bytes +
+                              session->prompt_bytes + session->slots_bytes +
+                              sizeof(uint32_t);
+    out->pinned_host_bytes = session->slots_bytes;
+    out->status = 0;
+  } else {
+    fail(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
+    const NervaCudaHfDecodeSequenceSessionAdvanceRequest *request,
+    NervaCudaHfDecodeSequenceResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  if (request == nullptr || request->session == nullptr ||
+      request->output_tokens == nullptr || request->steps == 0 ||
+      request->output_token_capacity < request->steps) {
+    return -1;
+  }
+  NervaCudaHfDecodeSequenceSession *session = request->session;
+  if (!session->active_started || session->active_finished ||
+      session->active_prompt_token_count == 0) {
+    return -1;
+  }
+  const uint32_t prompt_count = session->active_prompt_token_count;
+  const uint32_t slot_start = prompt_count - 1u + session->active_observed_tokens;
+  const uint32_t target_cursor =
+      prompt_count + session->active_observed_tokens + request->steps - 1u;
+  if (target_cursor > session->max_context_tokens ||
+      target_cursor < session->active_cursor) {
+    return -1;
+  }
+  const uint32_t run_count = target_cursor - session->active_cursor;
+  const uint32_t seed_token =
+      session->active_observed_tokens == 0
+          ? session->active_seed_token
+          : session->host_slots[slot_start - 1u].token;
+  fill_session_result_header(session, out, request->steps, seed_token);
+
+  cudaError_t err =
+      ensure_session_graph(session, session->max_context_tokens, prompt_count,
+                           session->active_has_eos_token,
+                           session->active_eos_token, out);
+  if (err == cudaSuccess) err = cudaEventRecord(session->device_start, session->stream);
+  for (uint32_t step = 0; err == cudaSuccess && step < run_count; ++step) {
+    err = cudaGraphLaunch(session->cached_graph_exec, session->stream);
+    if (err == cudaSuccess) {
+      out->graph_replays += 1;
+      out->graph_launches += 1;
+      out->kernel_launches += out->graph_nodes == 0 ? 1 : out->graph_nodes;
+    }
+  }
+  if (err == cudaSuccess) err = cudaEventRecord(session->device_stop, session->stream);
+  const uint64_t slots_bytes =
+      static_cast<uint64_t>(request->steps) * sizeof(NervaCudaSyntheticTokenSlot);
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(session->host_slots + slot_start,
+                          session->device_slots + slot_start, slots_bytes,
+                          cudaMemcpyDeviceToHost, session->stream);
+    out->d2h_bytes = slots_bytes;
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(session->stream);
+    out->sync_calls = 1;
+  }
+  if (err == cudaSuccess) {
+    float device_ms = 0.0f;
+    err = cudaEventElapsedTime(&device_ms, session->device_start,
+                               session->device_stop);
+    if (err == cudaSuccess && device_ms > 0.0f) {
+      out->device_elapsed_ns = static_cast<uint64_t>(device_ms * 1000000.0f);
+      if (out->device_elapsed_ns == 0) out->device_elapsed_ns = 1;
+    }
+  }
+  if (err == cudaSuccess) {
+    NervaCudaSyntheticTokenSlot *observed_slots = session->host_slots + slot_start;
+    out->observed_tokens = observed_from_slot_range(
+        request->steps, session->active_has_eos_token, session->active_eos_token,
+        observed_slots);
+    for (uint32_t index = 0; index < out->observed_tokens; ++index) {
+      request->output_tokens[index] = observed_slots[index].token;
+    }
+    out->last_token = out->observed_tokens == 0
+                          ? 0
+                          : request->output_tokens[out->observed_tokens - 1];
+    out->observed_token_hash =
+        hash_tokens(request->output_tokens, out->observed_tokens);
+    out->resident_kv_bytes = session->kv_bytes;
+    out->kv_tokens = slot_start + out->observed_tokens;
+    out->device_arena_bytes = session->arena_bytes + session->layout_bytes +
+                              session->scratch_bytes + session->kv_bytes +
+                              session->prompt_bytes + session->slots_bytes +
+                              sizeof(uint32_t);
+    out->pinned_host_bytes = session->slots_bytes;
+    out->host_causality_edges = 0;
+    out->status = out->observed_tokens > 0 ? 0 : -1;
+    for (uint32_t index = 0; out->status == 0 && index < out->observed_tokens;
+         ++index) {
+      const NervaCudaSyntheticTokenSlot &slot = observed_slots[index];
+      if (slot.request_id != kRequestId || slot.sequence_id != kSequenceId ||
+          slot.completion != kCompletionDeviceComplete ||
+          slot.token_index != slot_start + index) {
+        out->status = -1;
+      }
+    }
+    if (out->status == 0) {
+      session->active_observed_tokens += out->observed_tokens;
+      session->active_cursor =
+          out->observed_tokens < request->steps ? session->max_context_tokens
+                                                : target_cursor;
+      session->active_finished = out->observed_tokens < request->steps ||
+                                 out->kv_tokens >= session->max_context_tokens;
     }
   } else {
     fail(out, err);

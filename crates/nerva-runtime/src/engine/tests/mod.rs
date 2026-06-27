@@ -10,6 +10,7 @@ mod hf_cuda;
 mod hf_cuda_contract;
 mod hf_cuda_qwen3;
 mod hf_cuda_session;
+mod hf_cuda_session_loop;
 mod hf_fixture;
 mod hot_path;
 mod kv;
