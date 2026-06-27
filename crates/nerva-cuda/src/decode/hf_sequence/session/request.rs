@@ -76,8 +76,14 @@ impl<'a> CudaHfDecodeSequenceSessionConfig<'a> {
         let mut handle = ptr::null_mut();
         let request = self.to_ffi(ffi_layers.as_ptr());
         let mut out = NervaCudaHfDecodeSequenceSessionCreateResult::default();
+        let admission_memory = crate::smoke::probe::smoke();
         let return_code = create_hf_decode_sequence_session(&request, &mut out, &mut handle);
-        let summary = create_summary_from_result(return_code, &out);
+        let summary = create_summary_from_result(
+            return_code,
+            &out,
+            admission_memory.device_total_memory_bytes,
+            admission_memory.device_free_memory_bytes,
+        );
         let session = (summary.status == SmokeStatus::Ok && !handle.is_null()).then(|| {
             CudaHfDecodeSequenceSession {
                 handle,
@@ -155,7 +161,7 @@ impl CudaHfDecodeSequenceSession {
         let mut out = NervaCudaHfDecodeSequenceResult::default();
         let return_code = run_hf_decode_sequence_session(&request, &mut out);
         tokens.truncate(out.observed_tokens.min(steps as u32) as usize);
-        summary_from_run(return_code, &out, tokens)
+        summary_from_run(return_code, &out, tokens, &self.create_summary)
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::decode::hf_sequence::session::ffi::NervaCudaHfDecodeSequenceSessionCreateResult;
-use crate::json::json_opt_str;
+use crate::json::{json_opt_bool, json_opt_str, json_opt_usize};
 use crate::smoke::status::SmokeStatus;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,6 +25,9 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
     pub planned_weight_descriptor_hash: u64,
     pub resident_kv_bytes: u64,
     pub device_arena_bytes: u64,
+    pub device_total_memory_bytes: Option<usize>,
+    pub device_free_memory_bytes: Option<usize>,
+    pub fits_device_free_memory: Option<bool>,
     pub pinned_host_bytes: u64,
     pub h2d_bytes: u64,
     pub sync_calls: u64,
@@ -35,7 +38,7 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
 impl CudaHfDecodeSequenceSessionCreateSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
             self.dtype,
             self.hidden,
@@ -57,6 +60,9 @@ impl CudaHfDecodeSequenceSessionCreateSummary {
             self.planned_weight_descriptor_hash,
             self.resident_kv_bytes,
             self.device_arena_bytes,
+            json_opt_usize(self.device_total_memory_bytes),
+            json_opt_usize(self.device_free_memory_bytes),
+            json_opt_bool(self.fits_device_free_memory),
             self.pinned_host_bytes,
             self.h2d_bytes,
             self.sync_calls,
@@ -69,7 +75,11 @@ impl CudaHfDecodeSequenceSessionCreateSummary {
 pub(crate) fn create_summary_from_result(
     return_code: i32,
     out: &NervaCudaHfDecodeSequenceSessionCreateResult,
+    device_total_memory_bytes: Option<usize>,
+    device_free_memory_bytes: Option<usize>,
 ) -> CudaHfDecodeSequenceSessionCreateSummary {
+    let fits_device_free_memory =
+        device_free_memory_bytes.map(|free| out.device_arena_bytes <= free as u64);
     CudaHfDecodeSequenceSessionCreateSummary {
         status: if return_code == 0 && out.status == 0 {
             SmokeStatus::Ok
@@ -96,6 +106,9 @@ pub(crate) fn create_summary_from_result(
         planned_weight_descriptor_hash: out.planned_weight_descriptor_hash,
         resident_kv_bytes: out.resident_kv_bytes,
         device_arena_bytes: out.device_arena_bytes,
+        device_total_memory_bytes,
+        device_free_memory_bytes,
+        fits_device_free_memory,
         pinned_host_bytes: out.pinned_host_bytes,
         h2d_bytes: out.h2d_bytes,
         sync_calls: out.sync_calls,

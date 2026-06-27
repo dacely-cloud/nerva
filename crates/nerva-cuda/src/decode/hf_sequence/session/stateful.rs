@@ -42,7 +42,7 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
         };
         let mut out = NervaCudaHfDecodeSequenceResult::default();
         let return_code = start_hf_decode_sequence_session(&request, &mut out);
-        let summary = summary_from_run(return_code, &out, Vec::new());
+        let summary = summary_from_run(return_code, &out, Vec::new(), &create_summary);
         let loop_state = (summary.status == SmokeStatus::Ok).then_some(Self {
             session,
             eos_token,
@@ -77,7 +77,7 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
         let mut out = NervaCudaHfDecodeSequenceResult::default();
         let return_code = advance_hf_decode_sequence_session(&request, &mut out);
         tokens.truncate(out.observed_tokens.min(steps as u32) as usize);
-        let summary = summary_from_run(return_code, &out, tokens);
+        let summary = summary_from_run(return_code, &out, tokens, &create_summary);
         self.finished = summary.status == SmokeStatus::Ok
             && (summary.tokens.len() < steps
                 || self

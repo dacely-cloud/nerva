@@ -3,6 +3,7 @@ use core::ptr;
 use crate::decode::ffi::CUDA_ERROR_NO_DEVICE;
 use crate::decode::hf_sequence::ffi::NervaCudaHfDecodeSequenceResult;
 use crate::decode::hf_sequence::footprint::CudaHfDecodeSequenceFootprint;
+use crate::decode::hf_sequence::session::summary::CudaHfDecodeSequenceSessionCreateSummary;
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{
     CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
@@ -43,6 +44,7 @@ pub(super) fn summary_from_run(
     return_code: i32,
     out: &NervaCudaHfDecodeSequenceResult,
     tokens: Vec<u32>,
+    create: &CudaHfDecodeSequenceSessionCreateSummary,
 ) -> CudaHfDecodeSequenceSummary {
     let footprint = CudaHfDecodeSequenceFootprint {
         context_tokens: out.graph_replays,
@@ -55,10 +57,6 @@ pub(super) fn summary_from_run(
         token_slot_bytes: out.d2h_bytes,
         prompt_bytes: out.h2d_bytes,
     };
-    let memory = crate::smoke::probe::smoke();
-    let fits = memory
-        .device_free_memory_bytes
-        .map(|free| footprint.device_arena_bytes <= free as u64);
     CudaHfDecodeSequenceSummary {
         status: run_status(return_code, out),
         dtype: out.dtype,
@@ -74,9 +72,9 @@ pub(super) fn summary_from_run(
         tokens,
         observed_token_hash: out.observed_token_hash,
         planned_footprint: footprint,
-        device_total_memory_bytes: memory.device_total_memory_bytes,
-        device_free_memory_bytes: memory.device_free_memory_bytes,
-        fits_device_free_memory: fits,
+        device_total_memory_bytes: create.device_total_memory_bytes,
+        device_free_memory_bytes: create.device_free_memory_bytes,
+        fits_device_free_memory: create.fits_device_free_memory,
         resident_weight_bytes: out.resident_weight_bytes,
         planned_weight_blocks: out.planned_weight_blocks,
         planned_gpu_resident_blocks: out.planned_gpu_resident_blocks,

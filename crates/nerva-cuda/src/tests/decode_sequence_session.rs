@@ -76,7 +76,16 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
         first.hot_path_allocations + second.hot_path_allocations + third.hot_path_allocations,
         0
     );
+    assert_eq!(
+        first.device_free_memory_bytes,
+        session.create_summary().device_free_memory_bytes
+    );
+    assert_eq!(
+        first.fits_device_free_memory,
+        session.create_summary().fits_device_free_memory
+    );
     let create_json = session.create_summary().to_json();
+    assert!(create_json.contains("\"fits_device_free_memory\":"));
     assert!(create_json.contains("\"H2D_bytes\":"));
     assert!(second.to_json().contains("\"graph_cache_hits\":1"));
 
