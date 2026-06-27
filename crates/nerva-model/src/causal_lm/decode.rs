@@ -9,7 +9,7 @@ use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
-use crate::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
+use crate::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel, HfCausalLmStopReason};
 use crate::common::token::greedy_argmax;
 use crate::precision::block::ops::{
     decode_vec_into, mat_vec_encoded_row_major, rms_norm_encoded_into,
@@ -70,6 +70,9 @@ impl HfCausalLmModel {
             ledger.require_zero_hot_path_allocations()?;
             tokens.push(next);
             ledgers.push(ledger);
+            if self.is_eos_token(next) {
+                break;
+            }
             current = next;
         }
         Ok((tokens, ledgers))
@@ -94,6 +97,22 @@ impl HfCausalLmModel {
             &mut scratch.logits,
         )?;
         greedy_argmax(&scratch.logits)
+    }
+
+    pub(crate) fn is_eos_token(&self, token: TokenId) -> bool {
+        self.metadata.eos_token_id == Some(token.0)
+    }
+
+    pub(crate) fn stop_reason_for_tokens(
+        &self,
+        tokens: &[TokenId],
+        steps: usize,
+    ) -> HfCausalLmStopReason {
+        match tokens.last().copied() {
+            Some(token) if self.is_eos_token(token) => HfCausalLmStopReason::EosToken,
+            _ if tokens.len() >= steps => HfCausalLmStopReason::MaxSteps,
+            _ => HfCausalLmStopReason::MaxSteps,
+        }
     }
 }
 

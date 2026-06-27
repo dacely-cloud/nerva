@@ -1,6 +1,8 @@
 use crate::causal_lm::smoke::hf_causal_lm_safetensors_smoke;
 use crate::causal_lm::summary::HfCausalLmSmokeStatus;
-use crate::causal_lm::types::{HfCausalLmContextMode, HfCausalLmDecodeScratch, HfCausalLmModel};
+use crate::causal_lm::types::{
+    HfCausalLmContextMode, HfCausalLmDecodeScratch, HfCausalLmModel, HfCausalLmStopReason,
+};
 use crate::tests::support::{remove_hf_checkpoint_dir, write_hf_checkpoint_dir};
 use crate::weights::layout::entry::WeightBlockRole;
 use nerva_core::types::id::token::TokenId;
@@ -48,6 +50,7 @@ fn hf_causal_lm_prompt_decode_without_context_uses_seed_only_mode() {
     assert_eq!(output.context_mode.as_str(), "last_token_seed_only");
     assert_eq!(output.prompt_tokens, prompt);
     assert_eq!(output.seed_token, TokenId(2));
+    assert_eq!(output.stop_reason, HfCausalLmStopReason::MaxSteps);
     assert_eq!(output.generated_tokens.len(), 2);
     assert_eq!(output.ledgers.len(), 2);
 
@@ -78,6 +81,7 @@ fn hf_causal_lm_prompt_decode_with_context_uses_prefill_kv_mode() {
     assert_eq!(output.context_mode.as_str(), "prompt_prefill_kv_decode");
     assert_eq!(output.prompt_tokens, prompt);
     assert_eq!(output.seed_token, TokenId(2));
+    assert_eq!(output.stop_reason, HfCausalLmStopReason::MaxSteps);
     assert_eq!(output.generated_tokens.len(), 2);
     assert_eq!(output.ledgers.len(), 2);
 
@@ -122,6 +126,7 @@ fn hf_causal_lm_loader_accepts_grouped_query_kv_tensors() {
         output.context_mode,
         HfCausalLmContextMode::PromptPrefillKvDecode
     );
+    assert_eq!(output.stop_reason, HfCausalLmStopReason::MaxSteps);
     assert_eq!(output.generated_tokens, [TokenId(0)]);
 
     remove_hf_checkpoint_dir(&dir);

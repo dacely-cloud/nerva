@@ -5,6 +5,7 @@ use nerva_model::weights::layout::entry::WeightBlockRole;
 use tokenizers::Tokenizer;
 
 use crate::cli::exit;
+use crate::cli::model::causal_lm_text::generated_text_json;
 use crate::json::json_escape;
 use crate::parse::{parse_optional_u32, parse_optional_usize};
 
@@ -26,17 +27,11 @@ pub(crate) fn hf_causal_lm_decode_input_json(
     let path = path.ok_or_else(|| "hf-decode requires checkpoint_dir".to_string())?;
     let input = input.unwrap_or_else(|| "0".to_string());
     if let Ok(seed) = parse_optional_u32(Some(input.clone()), 0, "seed_token") {
-        return hf_causal_lm_decode_with_tokens_json(
-            Some(path),
-            "token_id",
-            vec![seed],
-            None,
-            steps,
-        );
+        return hf_causal_lm_decode_with_tokens_json(path, "token_id", vec![seed], None, steps);
     }
     if let Some(rest) = input.strip_prefix("ids:") {
         return hf_causal_lm_decode_with_tokens_json(
-            Some(path),
+            path,
             "token_ids",
             parse_token_ids(rest)?,
             None,
@@ -49,7 +44,7 @@ pub(crate) fn hf_causal_lm_decode_input_json(
         .encode(input.as_str(), false)
         .map_err(|err| format!("HF tokenizer encode failed: {err}"))?;
     hf_causal_lm_decode_with_tokens_json(
-        Some(path),
+        path,
         "tokenizer_json",
         encoding.get_ids().to_vec(),
         Some(input),
@@ -58,13 +53,12 @@ pub(crate) fn hf_causal_lm_decode_input_json(
 }
 
 fn hf_causal_lm_decode_with_tokens_json(
-    path: Option<String>,
+    path: String,
     input_mode: &'static str,
     prompt_token_ids: Vec<u32>,
     prompt_text: Option<String>,
     steps: usize,
 ) -> Result<String, String> {
-    let path = path.ok_or_else(|| "hf-decode requires checkpoint_dir".to_string())?;
     let loaded = nerva_model::causal_lm::types::HfCausalLmModel::load_from_hf_dir(&path)
         .map_err(|err| format!("HF causal LM load failed: {err:?}"))?;
     let summary = loaded.summary;
@@ -106,12 +100,14 @@ fn hf_causal_lm_decode_with_tokens_json(
         .iter()
         .map(|ledger| ledger.hot_path_allocations)
         .sum();
+    let generated_text = generated_text_json(&path, &output.generated_tokens)?;
 
     Ok(format!(
-        "{{\"status\":\"ok\",\"path\":\"{}\",\"input_mode\":\"{}\",\"context_mode\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"seed_token\":{},\"steps\":{},\"tokens\":{},\"output_hash\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"final_norm_manifest\":{},\"tied_lm_head\":{},\"ledger_count\":{},\"ledger_events\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
+        "{{\"status\":\"ok\",\"path\":\"{}\",\"input_mode\":\"{}\",\"context_mode\":\"{}\",\"stop_reason\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"seed_token\":{},\"steps\":{},\"tokens\":{},\"generated_text\":{},\"output_hash\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"final_norm_manifest\":{},\"tied_lm_head\":{},\"ledger_count\":{},\"ledger_events\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
         json_escape(&path),
         input_mode,
         output.context_mode.as_str(),
+        output.stop_reason.as_str(),
         json_opt_string(prompt_text.as_deref()),
         u32s_json(&prompt_token_ids),
         output.prompt_tokens.len(),
@@ -122,6 +118,7 @@ fn hf_causal_lm_decode_with_tokens_json(
         output.seed_token.0,
         steps,
         token_ids_json(&output.generated_tokens),
+        generated_text,
         token_hash(&output.generated_tokens),
         summary.manifest.entries.len(),
         summary.shard_plan.entries.len(),
@@ -139,13 +136,13 @@ fn hf_causal_lm_decode_with_tokens_json(
 
 fn parse_token_ids(value: &str) -> Result<Vec<u32>, String> {
     let mut ids = Vec::new();
-    for part in value.split(',') {
-        if part.trim().is_empty() {
-            continue;
-        }
+    for part in value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         ids.push(
-            part.trim()
-                .parse::<u32>()
+            part.parse::<u32>()
                 .map_err(|_| "ids prompt must contain unsigned 32-bit integers".to_string())?,
         );
     }

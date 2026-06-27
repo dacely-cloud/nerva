@@ -18,6 +18,8 @@ fn parses_llama_hf_config_metadata() {
                 "max_position_embeddings": 4096,
                 "rms_norm_eps": 0.000001,
                 "rope_theta": 10000.0,
+                "bos_token_id": 1,
+                "eos_token_id": [2, 3],
                 "torch_dtype": "bfloat16"
             }"#,
     )
@@ -31,8 +33,11 @@ fn parses_llama_hf_config_metadata() {
     assert_eq!(metadata.head_dim(), 128);
     assert_eq!(metadata.kv_groups(), 4);
     assert_eq!(metadata.torch_dtype, Some(DType::BF16));
+    assert_eq!(metadata.bos_token_id, Some(1));
+    assert_eq!(metadata.eos_token_id, Some(2));
     assert!(!metadata.tie_word_embeddings);
     assert!(metadata.to_json().contains("\"architecture\":\"llama\""));
+    assert!(metadata.to_json().contains("\"eos_token_id\":2"));
 }
 
 #[test]
@@ -115,10 +120,23 @@ fn rejects_invalid_hf_metadata_shapes_and_dtypes() {
                 "tie_word_embeddings": "yes"
             }"#,
     );
+    let bad_eos_array = parse_hf_config_metadata(
+        r#"{
+                "model_type": "llama",
+                "hidden_size": 4096,
+                "intermediate_size": 11008,
+                "num_hidden_layers": 32,
+                "num_attention_heads": 32,
+                "num_key_value_heads": 8,
+                "vocab_size": 32000,
+                "eos_token_id": [2 "bad"]
+            }"#,
+    );
 
     assert!(bad_heads.is_err());
     assert!(bad_dtype.is_err());
     assert!(bad_tie_word_embeddings.is_err());
+    assert!(bad_eos_array.is_err());
 }
 
 #[test]

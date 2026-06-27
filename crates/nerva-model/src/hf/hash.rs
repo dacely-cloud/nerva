@@ -11,6 +11,8 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         metadata.intermediate_size as u64,
         metadata.vocab_size as u64,
         metadata.max_position_embeddings.unwrap_or_default() as u64,
+        metadata.bos_token_id.unwrap_or_default() as u64,
+        metadata.eos_token_id.unwrap_or_default() as u64,
         metadata.head_dim() as u64,
         metadata.kv_groups() as u64,
         u64::from(metadata.tie_word_embeddings),

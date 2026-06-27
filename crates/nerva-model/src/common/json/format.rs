@@ -9,6 +9,10 @@ pub(crate) fn json_opt_usize(value: Option<usize>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.to_string())
 }
 
+pub(crate) fn json_opt_u32(value: Option<u32>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
 pub(crate) fn json_opt_f32(value: Option<f32>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.to_string())
 }

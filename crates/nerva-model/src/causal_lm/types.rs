@@ -71,9 +71,25 @@ impl HfCausalLmContextMode {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum HfCausalLmStopReason {
+    MaxSteps,
+    EosToken,
+}
+
+impl HfCausalLmStopReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MaxSteps => "max_steps",
+            Self::EosToken => "eos_token",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HfCausalLmDecodeOutput {
     pub context_mode: HfCausalLmContextMode,
+    pub stop_reason: HfCausalLmStopReason,
     pub prompt_tokens: Vec<TokenId>,
     pub seed_token: TokenId,
     pub generated_tokens: Vec<TokenId>,

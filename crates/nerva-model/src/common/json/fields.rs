@@ -31,6 +31,13 @@ pub(crate) fn optional_usize(config_json: &str, key: &'static str) -> Result<Opt
         })
 }
 
+pub(crate) fn optional_u32_or_first(config_json: &str, key: &'static str) -> Result<Option<u32>> {
+    let Some(value) = find_top_level_json_value(config_json, key)? else {
+        return Ok(None);
+    };
+    parse_u32_or_first_array_value(value, key)
+}
+
 pub(crate) fn optional_f32(config_json: &str, key: &'static str) -> Result<Option<f32>> {
     let Some(value) = find_top_level_json_value(config_json, key)? else {
         return Ok(None);
@@ -46,6 +53,49 @@ pub(crate) fn optional_f32(config_json: &str, key: &'static str) -> Result<Optio
         });
     }
     Ok(Some(parsed))
+}
+
+fn parse_u32_or_first_array_value(value: &str, key: &'static str) -> Result<Option<u32>> {
+    let value = value.trim();
+    if value == "null" {
+        return Ok(None);
+    }
+    if !value.starts_with('[') {
+        return parse_u32_value(value, key).map(Some);
+    }
+    let mut index = skip_json_ws(value.as_bytes(), 1);
+    if index < value.len() && value.as_bytes()[index] == b']' {
+        return Ok(None);
+    }
+    let start = index;
+    while index < value.len() && value.as_bytes()[index].is_ascii_digit() {
+        index += 1;
+    }
+    if start == index {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must contain unsigned token ids"),
+        });
+    }
+    let next = skip_json_ws(value.as_bytes(), index);
+    if next >= value.len() || !matches!(value.as_bytes()[next], b',' | b']') {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} has malformed token id array"),
+        });
+    }
+    parse_u32_value(&value[start..index], key).map(Some)
+}
+
+fn parse_u32_value(value: &str, key: &'static str) -> Result<u32> {
+    if value.starts_with('-') {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be unsigned"),
+        });
+    }
+    value
+        .parse::<u32>()
+        .map_err(|_| NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must fit an unsigned 32-bit token id"),
+        })
 }
 
 pub(crate) fn optional_string(config_json: &str, key: &'static str) -> Result<Option<String>> {

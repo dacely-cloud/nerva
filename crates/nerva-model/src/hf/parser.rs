@@ -2,8 +2,8 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::json::fields::{
-    optional_bool, optional_f32, optional_first_string, optional_string, optional_usize,
-    required_usize,
+    optional_bool, optional_f32, optional_first_string, optional_string, optional_u32_or_first,
+    optional_usize, required_usize,
 };
 use crate::hf::architecture::{HfArchitectureKind, architecture_kind_from_str};
 use crate::hf::metadata::HfModelMetadata;
@@ -24,6 +24,8 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         Some(value) => Some(value),
         None => optional_f32(config_json, "layer_norm_eps")?,
     };
+    let bos_token_id = optional_u32_or_first(config_json, "bos_token_id")?;
+    let eos_token_id = optional_u32_or_first(config_json, "eos_token_id")?;
     let tie_word_embeddings = optional_bool(config_json, "tie_word_embeddings")?.unwrap_or(false);
     let torch_dtype = optional_string(config_json, "torch_dtype")?
         .as_deref()
@@ -50,6 +52,8 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         max_position_embeddings,
         rope_theta,
         rms_norm_eps,
+        bos_token_id,
+        eos_token_id,
         tie_word_embeddings,
         torch_dtype,
     })

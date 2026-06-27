@@ -27,8 +27,10 @@ impl HfCausalLmModel {
         }
         let (generated_tokens, ledgers) =
             self.decode_greedy_from_seed(seed_token, steps, scratch)?;
+        let stop_reason = self.stop_reason_for_tokens(&generated_tokens, steps);
         Ok(HfCausalLmDecodeOutput {
             context_mode: HfCausalLmContextMode::LastTokenSeedOnly,
+            stop_reason,
             prompt_tokens: prompt_tokens.to_vec(),
             seed_token,
             generated_tokens,
@@ -62,6 +64,16 @@ impl HfCausalLmModel {
         first_ledger.require_zero_hot_path_allocations()?;
         generated_tokens.push(current);
         ledgers.push(first_ledger);
+        if self.is_eos_token(current) {
+            return Ok(HfCausalLmDecodeOutput {
+                context_mode: HfCausalLmContextMode::PromptPrefillKvDecode,
+                stop_reason: self.stop_reason_for_tokens(&generated_tokens, steps),
+                prompt_tokens: prompt_tokens.to_vec(),
+                seed_token,
+                generated_tokens,
+                ledgers,
+            });
+        }
 
         for step in 1..steps {
             let mut ledger = TokenLedger::new(step as u64);
@@ -91,10 +103,14 @@ impl HfCausalLmModel {
             ledger.require_zero_hot_path_allocations()?;
             generated_tokens.push(current);
             ledgers.push(ledger);
+            if self.is_eos_token(current) {
+                break;
+            }
         }
 
         Ok(HfCausalLmDecodeOutput {
             context_mode: HfCausalLmContextMode::PromptPrefillKvDecode,
+            stop_reason: self.stop_reason_for_tokens(&generated_tokens, steps),
             prompt_tokens: prompt_tokens.to_vec(),
             seed_token,
             generated_tokens,

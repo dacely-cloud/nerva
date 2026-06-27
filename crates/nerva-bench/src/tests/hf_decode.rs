@@ -15,8 +15,10 @@ fn hf_decode_cli_loads_checkpoint_dir_and_reports_ledgers() {
     assert!(json.contains("\"status\":\"ok\""));
     assert!(json.contains("\"input_mode\":\"token_id\""));
     assert!(json.contains("\"context_mode\":\"prompt_prefill_kv_decode\""));
+    assert!(json.contains("\"stop_reason\":\"max_steps\""));
     assert!(json.contains("\"prompt_token_ids\":[0]"));
     assert!(json.contains("\"tokens\":[0,0,0]"));
+    assert!(json.contains("\"generated_text\":null"));
     assert!(json.contains("\"manifest_entries\":12"));
     assert!(json.contains("\"shard_plan_entries\":12"));
     assert!(json.contains("\"tensors_loaded\":12"));
@@ -41,6 +43,7 @@ fn hf_decode_cli_accepts_token_id_prompt_sequence() {
 
     assert!(json.contains("\"input_mode\":\"token_ids\""));
     assert!(json.contains("\"context_mode\":\"prompt_prefill_kv_decode\""));
+    assert!(json.contains("\"stop_reason\":\"max_steps\""));
     assert!(json.contains("\"prompt_token_ids\":[1,2]"));
     assert!(json.contains("\"prompt_tokens\":2"));
     assert!(json.contains("\"seed_token\":2"));
@@ -65,8 +68,37 @@ fn hf_decode_cli_uses_hf_tokenizer_json_for_text_prompt() {
     assert!(json.contains("\"context_mode\":\"prompt_prefill_kv_decode\""));
     assert!(json.contains("\"prompt_text\":\"one two\""));
     assert!(json.contains("\"prompt_token_ids\":[1,2]"));
+    assert!(json.contains("\"generated_text\":\"zero zero\""));
     assert!(json.contains("\"seed_token\":2"));
     assert!(json.contains("\"ledger_count\":2"));
+
+    remove_checkpoint_dir(&dir);
+}
+
+#[test]
+fn hf_decode_cli_stops_when_config_eos_token_is_generated() {
+    let config = r#"{
+            "model_type": "llama",
+            "hidden_size": 2,
+            "intermediate_size": 2,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "vocab_size": 4,
+            "eos_token_id": 0,
+            "torch_dtype": "float16"
+        }"#;
+    let dir = write_checkpoint_dir_with_config("nerva-hf-decode-eos-cli", config);
+    let json = hf_causal_lm_decode_input_json(
+        Some(dir.to_string_lossy().into_owned()),
+        Some("ids:0".to_string()),
+        4,
+    )
+    .unwrap();
+
+    assert!(json.contains("\"stop_reason\":\"eos_token\""));
+    assert!(json.contains("\"tokens\":[0]"));
+    assert!(json.contains("\"ledger_count\":1"));
 
     remove_checkpoint_dir(&dir);
 }
@@ -94,9 +126,9 @@ fn hf_decode_cli_rejects_prompt_token_outside_vocab() {
 }
 
 fn write_checkpoint_dir(prefix: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let config = r#"{
+    write_checkpoint_dir_with_config(
+        prefix,
+        r#"{
             "model_type": "llama",
             "hidden_size": 2,
             "intermediate_size": 2,
@@ -105,7 +137,13 @@ fn write_checkpoint_dir(prefix: &str) -> std::path::PathBuf {
             "num_key_value_heads": 1,
             "vocab_size": 4,
             "torch_dtype": "float16"
-        }"#;
+        }"#,
+    )
+}
+
+fn write_checkpoint_dir_with_config(prefix: &str, config: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("config.json"), config).unwrap();
     let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config).unwrap();
     let layout = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata).unwrap();
