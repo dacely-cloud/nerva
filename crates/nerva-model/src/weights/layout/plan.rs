@@ -3,6 +3,7 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::common::dtype::dtype_to_str;
+use crate::hf::contract::validate_exact_runtime_contract;
 use crate::hf::metadata::HfModelMetadata;
 use crate::hf::validate::validate_hf_metadata;
 use crate::weights::layout::entry::{WeightBlockRole, WeightBlockSpec};
@@ -37,6 +38,7 @@ impl HfWeightLayoutPlan {
 }
 
 pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayoutPlan> {
+    validate_exact_runtime_contract(metadata)?;
     metadata.block_shape().validate()?;
     validate_hf_metadata(
         metadata.hidden_size,

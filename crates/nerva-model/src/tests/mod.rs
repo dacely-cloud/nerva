@@ -1,6 +1,7 @@
 mod attention;
 mod causal_lm;
 mod hf;
+mod hf_contract;
 mod precision;
 mod prompt;
 mod reference;

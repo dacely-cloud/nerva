@@ -168,9 +168,8 @@ fn tied_word_embedding_manifest_omits_lm_head_tensor() {
 fn tensor_manifest_rejects_unsupported_architecture_names() {
     let mut metadata = hf_metadata_probe().unwrap().metadata;
     metadata.architecture = HfArchitectureKind::Gemma;
-    let plan = plan_hf_weight_layout(&metadata).unwrap();
 
-    assert!(build_hf_tensor_manifest(&plan).is_err());
+    assert!(plan_hf_weight_layout(&metadata).is_err());
 }
 
 #[test]

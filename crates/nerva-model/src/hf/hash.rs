@@ -16,6 +16,8 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         metadata.head_dim() as u64,
         metadata.kv_groups() as u64,
         u64::from(metadata.tie_word_embeddings),
+        u64::from(metadata.attention_bias),
+        u64::from(metadata.mlp_bias),
     ] {
         for byte in value.to_le_bytes() {
             hash ^= u64::from(byte);
@@ -25,6 +27,12 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
     for byte in metadata.architecture.as_str().as_bytes() {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    if let Some(hidden_act) = metadata.hidden_act.as_deref() {
+        for byte in hidden_act.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
     }
     if let Some(dtype) = metadata.torch_dtype {
         for byte in dtype_to_str(dtype).as_bytes() {

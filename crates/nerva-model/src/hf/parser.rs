@@ -28,6 +28,9 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
     let bos_token_id = optional_u32_or_first(config_json, "bos_token_id")?;
     let eos_token_id = optional_u32_or_first(config_json, "eos_token_id")?;
     let tie_word_embeddings = optional_bool(config_json, "tie_word_embeddings")?.unwrap_or(false);
+    let hidden_act = parse_hidden_act(config_json)?;
+    let attention_bias = parse_attention_bias(config_json)?;
+    let mlp_bias = optional_bool(config_json, "mlp_bias")?.unwrap_or(false);
     let torch_dtype = optional_string(config_json, "torch_dtype")?
         .as_deref()
         .map(dtype_from_hf_string)
@@ -56,6 +59,9 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         bos_token_id,
         eos_token_id,
         tie_word_embeddings,
+        hidden_act,
+        attention_bias,
+        mlp_bias,
         torch_dtype,
     })
 }
@@ -84,6 +90,22 @@ fn validate_default_rope_object(config_json: &str, key: &'static str) -> Result<
             reason: format!("unsupported HF {key} rope_type {rope_type} for exact runtime path"),
         }),
     }
+}
+
+fn parse_hidden_act(config_json: &str) -> Result<Option<String>> {
+    if let Some(value) = optional_string(config_json, "hidden_act")? {
+        return Ok(Some(value));
+    }
+    if let Some(value) = optional_string(config_json, "hidden_activation")? {
+        return Ok(Some(value));
+    }
+    optional_string(config_json, "activation_function")
+}
+
+fn parse_attention_bias(config_json: &str) -> Result<bool> {
+    let attention_bias = optional_bool(config_json, "attention_bias")?.unwrap_or(false);
+    let qkv_bias = optional_bool(config_json, "qkv_bias")?.unwrap_or(false);
+    Ok(attention_bias || qkv_bias)
 }
 
 pub(crate) fn architecture_from_config(config_json: &str) -> Result<HfArchitectureKind> {
