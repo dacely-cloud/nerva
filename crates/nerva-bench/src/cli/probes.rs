@@ -2,6 +2,7 @@ use std::process::ExitCode;
 
 use crate::cli::exit;
 use crate::parse::{parse_optional_u64, parse_optional_usize};
+use crate::perf;
 use crate::probes::{
     backend, compute, kv, measurements, memory_loop, mgpu, phase, queue, runtime, synthetic, token,
     transaction, transport,
@@ -54,6 +55,9 @@ pub(crate) fn dispatch(
             measurements::run_measured_planner_probe(),
         )),
         Some("memory-loop") => Some(exit::print_json_result(memory_loop::run_memory_loop_probe())),
+        Some("perf-baseline") => Some(exit::print_json_result(
+            perf::run::perf_baseline_json_from_args(&args.collect::<Vec<_>>()),
+        )),
         Some("kv") => Some(exit::print_json_result(kv::run_kv_probe())),
         Some("tiered-kv") => Some(exit::print_json_result(kv::run_tiered_kv_attention_probe())),
         Some("fabric-topology") => Some(exit::print_json_result(

@@ -36,3 +36,13 @@ pub(crate) fn parse_optional_usize(
         None => Ok(default),
     }
 }
+
+pub(crate) fn parse_required_f64(
+    value: Option<String>,
+    label: &'static str,
+) -> Result<f64, String> {
+    value
+        .ok_or_else(|| format!("{label} is required"))?
+        .parse::<f64>()
+        .map_err(|_| format!("{label} must be a number"))
+}

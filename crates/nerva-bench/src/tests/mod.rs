@@ -9,5 +9,6 @@ mod hf_decode;
 mod hygiene;
 mod json;
 mod parity;
+mod perf;
 mod safetensors;
 mod support;

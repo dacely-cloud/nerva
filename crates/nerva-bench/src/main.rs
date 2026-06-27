@@ -8,6 +8,7 @@ mod json;
 mod model_io;
 mod parity;
 mod parse;
+mod perf;
 mod probes;
 
 #[cfg(test)]

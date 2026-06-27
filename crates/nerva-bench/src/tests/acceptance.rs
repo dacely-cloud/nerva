@@ -55,6 +55,9 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"compute_near_data_resident_blocks\""));
     assert!(json.contains("\"measurement_table_bootstrap\""));
     assert!(json.contains("\"measured_planner_decision\""));
+    assert!(json.contains("\"perf_claim_gate\""));
+    assert!(json.contains("current_qwen_claim_allowed=false"));
+    assert!(json.contains("requires_vllm_and_rvllm=true"));
     assert!(json.contains("\"memory_fabric_loop\""));
     assert!(json.contains("\"fp16_bf16_precision_block\""));
     assert!(json.contains("\"safetensors_precision_block\""));

@@ -11,6 +11,7 @@ mod measurements;
 mod memory_loop;
 mod mgpu;
 mod model;
+mod perf;
 mod phase;
 mod production;
 mod queue;
