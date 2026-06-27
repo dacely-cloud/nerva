@@ -7,6 +7,7 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct CudaHfDecodeSequenceWeightBlock {
+    pub host_source: *const u16,
     pub block_id: u64,
     pub block_version: u64,
     pub offset_bytes: u64,
@@ -72,6 +73,13 @@ impl CudaHfDecodeSequenceWeightPlan {
         }
         if descriptors.len() != self.blocks as usize {
             return Some("CUDA HF decode sequence weight descriptor count is invalid".to_string());
+        }
+        if descriptors.iter().any(|descriptor| {
+            descriptor.host_source.is_null()
+                || descriptor.offset_bytes % 2 != 0
+                || descriptor.bytes % 2 != 0
+        }) {
+            return Some("CUDA HF decode sequence weight descriptor source is invalid".to_string());
         }
         if hash_weight_blocks(descriptors) != self.descriptor_hash {
             return Some("CUDA HF decode sequence weight descriptor hash is invalid".to_string());

@@ -1,11 +1,11 @@
-use nerva_core::types::error::{NervaError, Result};
+use nerva_core::types::error::Result;
 use nerva_cuda::decode::hf_sequence::weight_plan::{
-    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED,
     CudaHfDecodeSequenceWeightBlock, hash_weight_blocks,
 };
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::causal_lm::types::HfCausalLmLoaded;
 
+use crate::engine::hf_cuda_decode::descriptors::cuda_weight_descriptors;
 use crate::engine::hf_cuda_decode::summary::HfCudaResidentWeightSummary;
 use crate::engine::runtime::Runtime;
 use crate::residency::budget::ResidencyBudget;
@@ -37,7 +37,7 @@ pub(super) fn loaded_resident_weight_summary(
     let resident_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuResident);
     let staged_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuStaged);
     let fallback_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::CpuExactFallback);
-    let descriptors = cuda_weight_descriptors(&plan)?;
+    let descriptors = cuda_weight_descriptors(loaded, &plan)?;
     let descriptor_hash = hash_weight_blocks(&descriptors);
 
     let summary = HfCudaResidentWeightSummary {
@@ -73,46 +73,6 @@ pub(super) fn loaded_resident_weight_summary(
         summary,
         descriptors,
     })
-}
-
-fn cuda_weight_descriptors(
-    plan: &ResidentWeightExecutionPlan,
-) -> Result<Vec<CudaHfDecodeSequenceWeightBlock>> {
-    let mut offset_bytes = 0u64;
-    let mut descriptors = Vec::with_capacity(plan.steps.len());
-    for step in &plan.steps {
-        let bytes = step.bytes as u64;
-        let strategy = cuda_weight_strategy(step.strategy)?;
-        descriptors.push(CudaHfDecodeSequenceWeightBlock {
-            block_id: step.block_id.0,
-            block_version: step.block_version,
-            offset_bytes,
-            bytes,
-            strategy,
-            reserved: 0,
-        });
-        offset_bytes =
-            offset_bytes
-                .checked_add(bytes)
-                .ok_or_else(|| NervaError::AllocationFailed {
-                    bytes: step.bytes,
-                    reason: "CUDA HF weight descriptor offset overflow".to_string(),
-                })?;
-    }
-    Ok(descriptors)
-}
-
-fn cuda_weight_strategy(strategy: ResidentWeightExecutionStrategy) -> Result<u32> {
-    match strategy {
-        ResidentWeightExecutionStrategy::GpuResident => Ok(CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT),
-        ResidentWeightExecutionStrategy::GpuStaged => Ok(CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED),
-        other => Err(NervaError::InvalidArgument {
-            reason: format!(
-                "CUDA HF decode cannot consume resident weight strategy {}",
-                other.as_str()
-            ),
-        }),
-    }
 }
 
 fn strategy_bytes(

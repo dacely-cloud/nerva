@@ -91,7 +91,7 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
         w_down: &matrix,
     };
     let layers = [layer];
-    let weight_blocks = sequence_weight_blocks();
+    let weight_blocks = sequence_weight_blocks(&embeddings, &rms, &matrix, &lm_head);
     let summary = CudaHfDecodeSequenceRequest {
         dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
         hidden: 2,
@@ -149,19 +149,29 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
     assert!(summary.d2h_bytes > 0);
 }
 
-fn sequence_weight_blocks() -> Vec<CudaHfDecodeSequenceWeightBlock> {
+fn sequence_weight_blocks(
+    embeddings: &[u16],
+    rms: &[u16],
+    matrix: &[u16],
+    lm_head: &[u16],
+) -> Vec<CudaHfDecodeSequenceWeightBlock> {
     let bytes = [16, 4, 8, 8, 8, 8, 4, 8, 8, 8, 4, 16];
+    let sources = [
+        embeddings, rms, matrix, matrix, matrix, matrix, rms, matrix, matrix, matrix, rms, lm_head,
+    ];
     let mut offset_bytes = 0;
     bytes
         .iter()
+        .zip(sources)
         .enumerate()
-        .map(|(index, bytes)| {
+        .map(|(index, (bytes, source))| {
             let strategy = if index < 6 {
                 CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT
             } else {
                 CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED
             };
             let block = CudaHfDecodeSequenceWeightBlock {
+                host_source: source.as_ptr(),
                 block_id: index as u64 + 1,
                 block_version: 0,
                 offset_bytes,

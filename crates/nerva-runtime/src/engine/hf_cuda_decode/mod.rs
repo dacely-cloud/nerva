@@ -1,4 +1,5 @@
 mod contract;
+mod descriptors;
 mod hash;
 mod resident;
 mod sequence;

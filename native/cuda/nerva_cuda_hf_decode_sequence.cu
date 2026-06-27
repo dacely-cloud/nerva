@@ -435,7 +435,9 @@ bool validate_weight_descriptors(const NervaCudaHfDecodeSequenceRequest *request
   for (uint32_t index = 0; index < request->planned_weight_descriptor_count; ++index) {
     const auto &descriptor = request->planned_weight_descriptors[index];
     if (descriptor.bytes == 0 || descriptor.reserved != 0 ||
-        descriptor.offset_bytes != cursor) {
+        descriptor.host_source == nullptr || descriptor.offset_bytes != cursor ||
+        descriptor.offset_bytes % sizeof(uint16_t) != 0 ||
+        descriptor.bytes % sizeof(uint16_t) != 0) {
       return false;
     }
     const uint64_t next_cursor = cursor + descriptor.bytes;
@@ -519,6 +521,31 @@ void copy_layer(uint16_t *arena, const SequenceLayerLayout &layout,
   memcpy(arena + layout.w_gate, layer.w_gate, intermediate * hidden * sizeof(uint16_t));
   memcpy(arena + layout.w_up, layer.w_up, intermediate * hidden * sizeof(uint16_t));
   memcpy(arena + layout.w_down, layer.w_down, hidden * intermediate * sizeof(uint16_t));
+}
+
+bool copy_weight_descriptors(uint16_t *arena,
+                             const NervaCudaHfDecodeSequenceRequest *request,
+                             uint64_t arena_bytes, uint64_t embedding_bytes,
+                             uint64_t scratch_gap_bytes) {
+  for (uint32_t index = 0; index < request->planned_weight_descriptor_count; ++index) {
+    const auto &descriptor = request->planned_weight_descriptors[index];
+    if (descriptor.host_source == nullptr ||
+        descriptor.offset_bytes % sizeof(uint16_t) != 0 ||
+        descriptor.bytes % sizeof(uint16_t) != 0) {
+      return false;
+    }
+    uint64_t destination_bytes = descriptor.offset_bytes;
+    if (destination_bytes >= embedding_bytes) {
+      destination_bytes += scratch_gap_bytes;
+    }
+    if (destination_bytes > arena_bytes ||
+        descriptor.bytes > arena_bytes - destination_bytes) {
+      return false;
+    }
+    memcpy(arena + destination_bytes / sizeof(uint16_t), descriptor.host_source,
+           descriptor.bytes);
+  }
+  return true;
 }
 
 uint32_t observed_count(const NervaCudaHfDecodeSequenceRequest *request,
@@ -649,18 +676,30 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
 
   memset(host_arena, 0, arena_bytes);
   memset(host_slots, 0, slots_bytes);
-  memcpy(host_arena + arena_layout.embeddings, request->embeddings,
-         vocab_size * hidden * sizeof(uint16_t));
-  for (uint32_t index = 0; index < request->layer_count; ++index) {
-    copy_layer(host_arena, layouts[index], request->layers[index], hidden,
-               attention_hidden, kv_hidden, intermediate);
+  const uint64_t embedding_bytes = vocab_size * hidden * sizeof(uint16_t);
+  const uint64_t scratch_gap_bytes = hidden * 2 * sizeof(uint16_t);
+  if (request->planned_weight_blocks != 0) {
+    if (!copy_weight_descriptors(host_arena, request, arena_bytes,
+                                 embedding_bytes, scratch_gap_bytes)) {
+      err = cudaErrorInvalidValue;
+    }
+  } else {
+    memcpy(host_arena + arena_layout.embeddings, request->embeddings,
+           vocab_size * hidden * sizeof(uint16_t));
+    for (uint32_t index = 0; index < request->layer_count; ++index) {
+      copy_layer(host_arena, layouts[index], request->layers[index], hidden,
+                 attention_hidden, kv_hidden, intermediate);
+    }
+    memcpy(host_arena + arena_layout.final_norm, request->final_norm_weight,
+           hidden * sizeof(uint16_t));
+    memcpy(host_arena + arena_layout.lm_head, request->lm_head,
+           vocab_size * hidden * sizeof(uint16_t));
   }
-  memcpy(host_arena + arena_layout.final_norm, request->final_norm_weight,
-         hidden * sizeof(uint16_t));
-  memcpy(host_arena + arena_layout.lm_head, request->lm_head,
-         vocab_size * hidden * sizeof(uint16_t));
 
-  err = cudaMemcpyAsync(device_arena, host_arena, arena_bytes, cudaMemcpyHostToDevice, stream);
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(device_arena, host_arena, arena_bytes,
+                          cudaMemcpyHostToDevice, stream);
+  }
   if (err == cudaSuccess) {
     out->h2d_bytes = arena_bytes;
     err = cudaMemcpyAsync(device_layouts, layouts.data(), layout_bytes,
