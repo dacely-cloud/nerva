@@ -4,6 +4,8 @@ use crate::common::shape::TransformerBlockShape;
 
 mod constructor;
 mod forward;
+mod kv;
+mod kv_finish;
 
 #[derive(Clone, Debug)]
 pub struct PrecisionTransformerBlock {

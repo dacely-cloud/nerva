@@ -14,7 +14,7 @@ fn hf_decode_cli_loads_checkpoint_dir_and_reports_ledgers() {
 
     assert!(json.contains("\"status\":\"ok\""));
     assert!(json.contains("\"input_mode\":\"token_id\""));
-    assert!(json.contains("\"context_mode\":\"last_token_seed_only\""));
+    assert!(json.contains("\"context_mode\":\"prompt_prefill_kv_decode\""));
     assert!(json.contains("\"prompt_token_ids\":[0]"));
     assert!(json.contains("\"tokens\":[0,0,0]"));
     assert!(json.contains("\"manifest_entries\":12"));
@@ -22,8 +22,8 @@ fn hf_decode_cli_loads_checkpoint_dir_and_reports_ledgers() {
     assert!(json.contains("\"tensors_loaded\":12"));
     assert!(json.contains("\"final_norm_manifest\":true"));
     assert!(json.contains("\"ledger_count\":3"));
-    assert!(json.contains("\"ledger_events\":3"));
-    assert!(json.contains("\"execution_decisions\":3"));
+    assert!(json.contains("\"ledger_events\":6"));
+    assert!(json.contains("\"execution_decisions\":6"));
     assert!(json.contains("\"hot_path_allocations\":0"));
 
     remove_checkpoint_dir(&dir);
@@ -40,7 +40,7 @@ fn hf_decode_cli_accepts_token_id_prompt_sequence() {
     .unwrap();
 
     assert!(json.contains("\"input_mode\":\"token_ids\""));
-    assert!(json.contains("\"context_mode\":\"last_token_seed_only\""));
+    assert!(json.contains("\"context_mode\":\"prompt_prefill_kv_decode\""));
     assert!(json.contains("\"prompt_token_ids\":[1,2]"));
     assert!(json.contains("\"prompt_tokens\":2"));
     assert!(json.contains("\"seed_token\":2"));
@@ -62,7 +62,7 @@ fn hf_decode_cli_uses_hf_tokenizer_json_for_text_prompt() {
     .unwrap();
 
     assert!(json.contains("\"input_mode\":\"tokenizer_json\""));
-    assert!(json.contains("\"context_mode\":\"last_token_seed_only\""));
+    assert!(json.contains("\"context_mode\":\"prompt_prefill_kv_decode\""));
     assert!(json.contains("\"prompt_text\":\"one two\""));
     assert!(json.contains("\"prompt_token_ids\":[1,2]"));
     assert!(json.contains("\"seed_token\":2"));

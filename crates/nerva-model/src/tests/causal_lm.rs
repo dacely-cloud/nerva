@@ -29,7 +29,7 @@ fn hf_causal_lm_loads_safetensors_and_decodes_greedily() {
 }
 
 #[test]
-fn hf_causal_lm_prompt_decode_reports_context_and_seed() {
+fn hf_causal_lm_prompt_decode_without_context_uses_seed_only_mode() {
     let dir = write_hf_checkpoint_dir("nerva-hf-causal-lm-prompt", fixture_config());
     let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
     let model = loaded.model;
@@ -45,6 +45,36 @@ fn hf_causal_lm_prompt_decode_reports_context_and_seed() {
         HfCausalLmContextMode::LastTokenSeedOnly
     );
     assert_eq!(output.context_mode.as_str(), "last_token_seed_only");
+    assert_eq!(output.prompt_tokens, prompt);
+    assert_eq!(output.seed_token, TokenId(2));
+    assert_eq!(output.generated_tokens.len(), 2);
+    assert_eq!(output.ledgers.len(), 2);
+
+    remove_hf_checkpoint_dir(&dir);
+}
+
+#[test]
+fn hf_causal_lm_prompt_decode_with_context_uses_prefill_kv_mode() {
+    let dir = write_hf_checkpoint_dir("nerva-hf-causal-lm-context-prompt", fixture_config());
+    let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
+    let model = loaded.model;
+    let mut scratch = HfCausalLmDecodeScratch::new_with_context(
+        model.shape(),
+        model.metadata().vocab_size,
+        model.layer_count(),
+        4,
+    )
+    .unwrap();
+    let prompt = [TokenId(1), TokenId(2)];
+    let output = model
+        .decode_greedy_from_prompt_tokens(&prompt, 2, &mut scratch)
+        .unwrap();
+
+    assert_eq!(
+        output.context_mode,
+        HfCausalLmContextMode::PromptPrefillKvDecode
+    );
+    assert_eq!(output.context_mode.as_str(), "prompt_prefill_kv_decode");
     assert_eq!(output.prompt_tokens, prompt);
     assert_eq!(output.seed_token, TokenId(2));
     assert_eq!(output.generated_tokens.len(), 2);

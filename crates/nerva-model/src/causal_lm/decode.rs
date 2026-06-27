@@ -9,10 +9,8 @@ use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
-use crate::causal_lm::types::{
-    HfCausalLmContextMode, HfCausalLmDecodeOutput, HfCausalLmDecodeScratch, HfCausalLmModel,
-};
-use crate::common::token::{greedy_argmax, require_token_in_vocab};
+use crate::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
+use crate::common::token::greedy_argmax;
 use crate::precision::block::ops::{
     decode_vec_into, mat_vec_encoded_row_major, rms_norm_encoded_into,
 };
@@ -28,25 +26,7 @@ impl HfCausalLmModel {
         Ok((output.generated_tokens, output.ledgers))
     }
 
-    pub fn decode_greedy_from_prompt_tokens(
-        &self,
-        prompt_tokens: &[TokenId],
-        steps: usize,
-        scratch: &mut HfCausalLmDecodeScratch,
-    ) -> Result<HfCausalLmDecodeOutput> {
-        let seed_token = self.validate_prompt_tokens(prompt_tokens)?;
-        let (generated_tokens, ledgers) =
-            self.decode_greedy_from_seed(seed_token, steps, scratch)?;
-        Ok(HfCausalLmDecodeOutput {
-            context_mode: HfCausalLmContextMode::LastTokenSeedOnly,
-            prompt_tokens: prompt_tokens.to_vec(),
-            seed_token,
-            generated_tokens,
-            ledgers,
-        })
-    }
-
-    fn decode_greedy_from_seed(
+    pub(crate) fn decode_greedy_from_seed(
         &self,
         seed_token: TokenId,
         steps: usize,
@@ -80,22 +60,13 @@ impl HfCausalLmModel {
                 )?;
                 scratch.hidden_bits.copy_from_slice(&scratch.next_bits);
             }
-            decode_vec_into(self.dtype, &scratch.hidden_bits, &mut scratch.decoded)?;
-            rms_norm_encoded_into(
-                self.dtype,
-                &scratch.decoded,
-                &self.final_norm,
-                self.rms_eps,
-                &mut scratch.normed,
-            )?;
-            mat_vec_encoded_row_major(
-                self.dtype,
-                &self.lm_head,
-                &scratch.normed,
-                &mut scratch.logits,
-            )?;
-            let next = greedy_argmax(&scratch.logits)?;
-            record_decode_ledger(self, elapsed_ns(start), &mut ledger);
+            let next = self.sample_current_hidden(scratch)?;
+            record_decode_ledger(
+                self,
+                elapsed_ns(start),
+                "hf_causal_lm_greedy_decode",
+                &mut ledger,
+            );
             ledger.require_zero_hot_path_allocations()?;
             tokens.push(next);
             ledgers.push(ledger);
@@ -104,16 +75,25 @@ impl HfCausalLmModel {
         Ok((tokens, ledgers))
     }
 
-    fn validate_prompt_tokens(&self, prompt_tokens: &[TokenId]) -> Result<TokenId> {
-        let seed_token = *prompt_tokens
-            .last()
-            .ok_or_else(|| NervaError::InvalidArgument {
-                reason: "HF causal LM decode requires at least one prompt token".to_string(),
-            })?;
-        for token in prompt_tokens {
-            require_token_in_vocab(*token, self.metadata.vocab_size)?;
-        }
-        Ok(seed_token)
+    pub(crate) fn sample_current_hidden(
+        &self,
+        scratch: &mut HfCausalLmDecodeScratch,
+    ) -> Result<TokenId> {
+        decode_vec_into(self.dtype, &scratch.hidden_bits, &mut scratch.decoded)?;
+        rms_norm_encoded_into(
+            self.dtype,
+            &scratch.decoded,
+            &self.final_norm,
+            self.rms_eps,
+            &mut scratch.normed,
+        )?;
+        mat_vec_encoded_row_major(
+            self.dtype,
+            &self.lm_head,
+            &scratch.normed,
+            &mut scratch.logits,
+        )?;
+        greedy_argmax(&scratch.logits)
     }
 }
 
@@ -135,6 +115,15 @@ fn copy_embedding(
     token: TokenId,
     scratch: &mut HfCausalLmDecodeScratch,
 ) -> Result<()> {
+    copy_embedding_into(embeddings, hidden, token, &mut scratch.hidden_bits)
+}
+
+pub(crate) fn copy_embedding_into(
+    embeddings: &[u16],
+    hidden: usize,
+    token: TokenId,
+    output: &mut [u16],
+) -> Result<()> {
     let start = token.0 as usize * hidden;
     let end = start + hidden;
     if end > embeddings.len() {
@@ -142,15 +131,20 @@ fn copy_embedding(
             reason: "HF causal LM embedding token is outside vocabulary".to_string(),
         });
     }
-    scratch.hidden_bits.copy_from_slice(&embeddings[start..end]);
+    output.copy_from_slice(&embeddings[start..end]);
     Ok(())
 }
 
-fn record_decode_ledger(model: &HfCausalLmModel, elapsed_ns: u64, ledger: &mut TokenLedger) {
+pub(crate) fn record_decode_ledger(
+    model: &HfCausalLmModel,
+    elapsed_ns: u64,
+    operation: &'static str,
+    ledger: &mut TokenLedger,
+) {
     let hidden_bytes = model.metadata.hidden_size * model.metadata.num_hidden_layers.max(1) * 2;
     let bytes = (hidden_bytes + model.lm_head.len() * 2) as u64;
     ledger.record_execution_decision(ExecutionDecision {
-        operation: "hf_causal_lm_greedy_decode",
+        operation,
         executor_selected: ExecutionOwner::Cpu,
         candidate_costs: vec![
             CandidateCost::measured("cpu-exact-loaded-safetensors", elapsed_ns),
@@ -173,10 +167,10 @@ fn record_decode_ledger(model: &HfCausalLmModel, elapsed_ns: u64, ledger: &mut T
         to_tier: Some(MemoryTier::Dram),
         bytes: bytes as usize,
         latency_ns: elapsed_ns,
-        label: "hf_causal_lm_greedy_decode",
+        label: operation,
     });
 }
 
-fn elapsed_ns(start: Instant) -> u64 {
+pub(crate) fn elapsed_ns(start: Instant) -> u64 {
     start.elapsed().as_nanos().max(1).min(u64::MAX as u128) as u64
 }

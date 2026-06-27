@@ -71,9 +71,15 @@ fn hf_causal_lm_decode_with_tokens_json(
     let model = loaded.model;
     let dtype = nerva_model::precision::bits::dtype_label(model.dtype())
         .map_err(|err| format!("HF causal LM dtype failed: {err:?}"))?;
-    let mut scratch = nerva_model::causal_lm::types::HfCausalLmDecodeScratch::new(
+    let max_context = prompt_token_ids
+        .len()
+        .checked_add(steps)
+        .ok_or_else(|| "HF causal LM context length overflow".to_string())?;
+    let mut scratch = nerva_model::causal_lm::types::HfCausalLmDecodeScratch::new_with_context(
         model.shape(),
         model.metadata().vocab_size,
+        model.layer_count(),
+        max_context,
     )
     .map_err(|err| format!("HF causal LM scratch failed: {err:?}"))?;
     let prompt_tokens: Vec<TokenId> = prompt_token_ids.iter().copied().map(TokenId).collect();

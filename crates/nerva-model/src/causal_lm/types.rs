@@ -5,7 +5,9 @@ use nerva_ledger::types::token::ledger::TokenLedger;
 use crate::common::shape::TransformerBlockShape;
 use crate::hf::metadata::HfModelMetadata;
 use crate::precision::block::model::PrecisionTransformerBlock;
-use crate::precision::scratch::PrecisionTransformerBlockScratch;
+use crate::precision::scratch::{
+    PrecisionTransformerBlockKvScratch, PrecisionTransformerBlockScratch,
+};
 use crate::weights::manifest::HfTensorManifest;
 use crate::weights::safetensors::shard::SafetensorsShardPlan;
 
@@ -57,12 +59,14 @@ pub struct HfCausalLmLoaded {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum HfCausalLmContextMode {
     LastTokenSeedOnly,
+    PromptPrefillKvDecode,
 }
 
 impl HfCausalLmContextMode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::LastTokenSeedOnly => "last_token_seed_only",
+            Self::PromptPrefillKvDecode => "prompt_prefill_kv_decode",
         }
     }
 }
@@ -80,7 +84,11 @@ pub struct HfCausalLmDecodeOutput {
 pub struct HfCausalLmDecodeScratch {
     pub(crate) shape: TransformerBlockShape,
     pub(crate) vocab_size: usize,
+    pub(crate) max_context_tokens: usize,
     pub(crate) block: PrecisionTransformerBlockScratch,
+    pub(crate) kv_layers: Vec<PrecisionTransformerBlockKvScratch>,
+    pub(crate) sequence_bits: Vec<u16>,
+    pub(crate) sequence_next_bits: Vec<u16>,
     pub(crate) hidden_bits: Vec<u16>,
     pub(crate) next_bits: Vec<u16>,
     pub(crate) decoded: Vec<f32>,
@@ -93,11 +101,41 @@ impl HfCausalLmDecodeScratch {
         shape: TransformerBlockShape,
         vocab_size: usize,
     ) -> nerva_core::types::error::Result<Self> {
+        Self::with_context_capacity(shape, vocab_size, 0, 0)
+    }
+
+    pub fn new_with_context(
+        shape: TransformerBlockShape,
+        vocab_size: usize,
+        layer_count: usize,
+        max_context_tokens: usize,
+    ) -> nerva_core::types::error::Result<Self> {
+        Self::with_context_capacity(shape, vocab_size, layer_count, max_context_tokens)
+    }
+
+    fn with_context_capacity(
+        shape: TransformerBlockShape,
+        vocab_size: usize,
+        layer_count: usize,
+        max_context_tokens: usize,
+    ) -> nerva_core::types::error::Result<Self> {
         shape.validate()?;
+        let mut kv_layers = Vec::with_capacity(layer_count);
+        for _ in 0..layer_count {
+            kv_layers.push(PrecisionTransformerBlockKvScratch::new(
+                shape,
+                max_context_tokens,
+            )?);
+        }
+        let context_values = max_context_tokens * shape.hidden;
         Ok(Self {
             shape,
             vocab_size,
+            max_context_tokens,
             block: PrecisionTransformerBlockScratch::new(shape)?,
+            kv_layers,
+            sequence_bits: vec![0; context_values],
+            sequence_next_bits: vec![0; context_values],
             hidden_bits: vec![0; shape.hidden],
             next_bits: vec![0; shape.hidden],
             decoded: vec![0.0; shape.hidden],
