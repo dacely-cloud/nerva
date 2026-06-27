@@ -1,4 +1,5 @@
 mod descriptors;
+pub mod generate;
 mod load;
 pub mod run;
 pub mod session;

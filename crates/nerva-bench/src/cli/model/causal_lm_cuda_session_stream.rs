@@ -111,7 +111,7 @@ fn output_json(
     ))
 }
 
-fn queue_json(output: &HfCudaDeviceSessionStreamOutput) -> String {
+pub(crate) fn queue_json(output: &HfCudaDeviceSessionStreamOutput) -> String {
     format!(
         "{{\"capacity\":{},\"pushes\":{},\"drains\":{},\"high_watermark\":{},\"overflow_rejections\":{},\"host_causality_edges\":{}}}",
         output.queue.capacity,
@@ -123,7 +123,7 @@ fn queue_json(output: &HfCudaDeviceSessionStreamOutput) -> String {
     )
 }
 
-fn records_json(output: &HfCudaDeviceSessionStreamOutput) -> String {
+pub(crate) fn records_json(output: &HfCudaDeviceSessionStreamOutput) -> String {
     let mut out = String::from("[");
     for (index, record) in output.records.iter().enumerate() {
         if index > 0 {
@@ -145,7 +145,10 @@ fn records_json(output: &HfCudaDeviceSessionStreamOutput) -> String {
     out
 }
 
-fn chunks_json(path: &str, output: &HfCudaDeviceSessionStreamOutput) -> Result<String, String> {
+pub(crate) fn chunks_json(
+    path: &str,
+    output: &HfCudaDeviceSessionStreamOutput,
+) -> Result<String, String> {
     let mut out = String::from("[");
     for (index, chunk) in output.chunks.iter().enumerate() {
         if index > 0 {
@@ -162,7 +165,7 @@ fn chunks_json(path: &str, output: &HfCudaDeviceSessionStreamOutput) -> Result<S
     Ok(out)
 }
 
-fn u32s_json(values: &[u32]) -> String {
+pub(crate) fn u32s_json(values: &[u32]) -> String {
     let mut out = String::from("[");
     for (index, value) in values.iter().enumerate() {
         if index > 0 {

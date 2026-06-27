@@ -1,6 +1,6 @@
 use crate::cli::model::{
-    causal_lm, causal_lm_cuda, causal_lm_cuda_session, causal_lm_cuda_session_loop,
-    causal_lm_cuda_session_stream,
+    causal_lm, causal_lm_cuda, causal_lm_cuda_generate, causal_lm_cuda_session,
+    causal_lm_cuda_session_loop, causal_lm_cuda_session_stream,
 };
 use crate::parse::parse_optional_usize;
 
@@ -12,6 +12,7 @@ pub(crate) fn run_model_artifact(command: &str, args: &[String]) -> Option<Resul
         "hf-cuda-decode-device-session" => Some(run_hf_cuda_device_session_decode(args)),
         "hf-cuda-decode-device-session-loop" => Some(run_hf_cuda_device_session_loop(args)),
         "hf-cuda-decode-device-session-stream" => Some(run_hf_cuda_device_session_stream(args)),
+        "hf-cuda-generate" => Some(run_hf_cuda_generate(args)),
         _ => None,
     }
 }
@@ -61,6 +62,19 @@ fn run_hf_cuda_device_session_stream(args: &[String]) -> Result<String, String> 
         chunks,
         capacity,
         args.get(5).cloned(),
+    )
+}
+
+fn run_hf_cuda_generate(args: &[String]) -> Result<String, String> {
+    let max_context = parse_optional_usize(args.get(1).cloned(), 8, "max_context_tokens")?;
+    let max_new_tokens = parse_optional_usize(args.get(2).cloned(), 16, "max_new_tokens")?;
+    let capacity = parse_optional_usize(args.get(3).cloned(), 64, "queue_capacity")?;
+    causal_lm_cuda_generate::hf_causal_lm_cuda_generate_json(
+        args.first().cloned(),
+        max_context,
+        max_new_tokens,
+        capacity,
+        args.get(4).cloned(),
     )
 }
 

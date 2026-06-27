@@ -105,3 +105,30 @@ fn artifact_runs_external_hf_cuda_decode_checkpoint_with_metadata() {
 
     remove_tiny_hf_checkpoint_dir(&dir);
 }
+
+#[test]
+fn artifact_runs_external_hf_cuda_generate_checkpoint_with_metadata() {
+    let dir = write_tiny_hf_checkpoint_dir("nerva-artifact-hf-cuda-generate");
+    let json = run_artifact(
+        Some("hf-cuda-generate".to_string()),
+        vec![
+            dir.to_string_lossy().into_owned(),
+            "3".to_string(),
+            "2".to_string(),
+            "1".to_string(),
+            "0".to_string(),
+        ],
+    )
+    .unwrap();
+
+    assert!(json.contains("\"artifact_schema\":\"nerva-bench-v1\""));
+    assert!(json.contains("\"command\":\"hf-cuda-generate\""));
+    assert!(json.contains("\"summary\""));
+    assert!(json.contains("\"mode\":\"device_generate\""));
+    assert!(json.contains("\"max_new_tokens\":2"));
+    assert!(json.contains("\"stop_reason\":\"max_steps\""));
+    assert!(json.contains("\"host_causality_edges\":0"));
+    assert!(json.contains("\"graph_cache_hits\":1"));
+
+    remove_tiny_hf_checkpoint_dir(&dir);
+}

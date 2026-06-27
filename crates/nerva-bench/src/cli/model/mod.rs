@@ -3,6 +3,7 @@ pub(crate) mod block;
 pub(crate) mod causal_lm;
 pub(crate) mod causal_lm_cuda;
 pub(crate) mod causal_lm_cuda_device;
+pub(crate) mod causal_lm_cuda_generate;
 pub(crate) mod causal_lm_cuda_json;
 pub(crate) mod causal_lm_cuda_session;
 pub(crate) mod causal_lm_cuda_session_loop;
