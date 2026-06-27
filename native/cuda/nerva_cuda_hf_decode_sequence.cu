@@ -1,5 +1,6 @@
 #include "nerva_cuda_api.h"
 
+#include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -1146,6 +1147,70 @@ cudaError_t encoded_row_major_gemv(cublasHandle_t handle, const uint16_t *matrix
                                      0.0f, output);
 }
 
+void destroy_lt_descriptors(cublasLtMatmulDesc_t op_desc,
+                            cublasLtMatrixLayout_t a_desc,
+                            cublasLtMatrixLayout_t b_desc,
+                            cublasLtMatrixLayout_t c_desc,
+                            cublasLtMatrixLayout_t d_desc) {
+  if (d_desc != nullptr) cublasLtMatrixLayoutDestroy(d_desc);
+  if (c_desc != nullptr) cublasLtMatrixLayoutDestroy(c_desc);
+  if (b_desc != nullptr) cublasLtMatrixLayoutDestroy(b_desc);
+  if (a_desc != nullptr) cublasLtMatrixLayoutDestroy(a_desc);
+  if (op_desc != nullptr) cublasLtMatmulDescDestroy(op_desc);
+}
+
+cudaError_t encoded_row_major_gemv_lt(
+    cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
+    size_t workspace_bytes, const uint16_t *matrix, const uint16_t *input,
+    uint32_t rows, uint32_t cols, uint32_t dtype, float beta, float *output) {
+  if (handle == nullptr || rows == 0 || cols == 0) {
+    return cudaErrorInvalidValue;
+  }
+  const float alpha = 1.0f;
+  const cudaDataType_t data_type = encoded_cuda_type(dtype);
+  cublasLtMatmulDesc_t op_desc = nullptr;
+  cublasLtMatrixLayout_t a_desc = nullptr;
+  cublasLtMatrixLayout_t b_desc = nullptr;
+  cublasLtMatrixLayout_t c_desc = nullptr;
+  cublasLtMatrixLayout_t d_desc = nullptr;
+  cublasStatus_t status =
+      cublasLtMatmulDescCreate(&op_desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+  cublasOperation_t op = CUBLAS_OP_N;
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatmulDescSetAttribute(
+        op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op, sizeof(op));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatmulDescSetAttribute(
+        op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op, sizeof(op));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(&a_desc, data_type, rows, cols, cols);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(&b_desc, data_type, cols, 1, 1);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(&c_desc, CUDA_R_32F, rows, 1, 1);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(&d_desc, CUDA_R_32F, rows, 1, 1);
+  cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        a_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        b_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        c_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        d_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatmul(handle, op_desc, &alpha, matrix, a_desc, input,
+                            b_desc, &beta, output, c_desc, output, d_desc,
+                            nullptr, workspace, workspace_bytes, stream);
+  destroy_lt_descriptors(op_desc, a_desc, b_desc, c_desc, d_desc);
+  return cublas_to_cuda(status);
+}
+
 cudaError_t final_head_gemv(cublasHandle_t handle, uint16_t *arena,
                             SequenceArenaLayout arena_layout, uint32_t dtype,
                             uint32_t hidden, uint32_t vocab_size,
@@ -1376,6 +1441,7 @@ struct NervaCudaHfDecodeSequenceSession {
   void *cublas_workspace = nullptr;
   cudaStream_t stream = nullptr;
   cublasHandle_t cublas = nullptr;
+  cublasLtHandle_t cublas_lt = nullptr;
   cudaEvent_t device_start = nullptr;
   cudaEvent_t device_stop = nullptr;
   cudaGraph_t cached_graph = nullptr;
@@ -1419,6 +1485,7 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   }
   if (session->device_stop != nullptr) cudaEventDestroy(session->device_stop);
   if (session->device_start != nullptr) cudaEventDestroy(session->device_start);
+  if (session->cublas_lt != nullptr) cublasLtDestroy(session->cublas_lt);
   if (session->cublas != nullptr) cublasDestroy(session->cublas);
   if (session->stream != nullptr) cudaStreamDestroy(session->stream);
   cudaFree(session->cublas_workspace);
@@ -1662,13 +1729,14 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
-          session->cublas,
+      err = encoded_row_major_gemv_lt(
+          session->cublas_lt, session->stream, session->cublas_workspace,
+          kCublasWorkspaceBytes,
           session->device_gate_up_packed +
               packed_shape.gate_up_elements_per_layer * layer_index,
           session->device_projection_input,
           static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
-          session->dtype, scratch.gate);
+          session->dtype, 0.0f, scratch.gate);
     if (err == cudaSuccess) {
       const uint32_t ff_blocks =
           (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
@@ -1835,13 +1903,14 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
-          session->cublas,
+      err = encoded_row_major_gemv_lt(
+          session->cublas_lt, session->stream, session->cublas_workspace,
+          kCublasWorkspaceBytes,
           session->device_gate_up_packed +
               packed_shape.gate_up_elements_per_layer * layer_index,
           session->device_projection_input,
           static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
-          session->dtype, scratch.gate);
+          session->dtype, 0.0f, scratch.gate);
     if (err == cudaSuccess) err = profile_end(session, &gate_up_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
@@ -2602,6 +2671,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     err = cudaStreamCreateWithFlags(&session->stream, cudaStreamNonBlocking);
   if (err == cudaSuccess)
     err = cublas_to_cuda(cublasCreate(&session->cublas));
+  if (err == cudaSuccess)
+    err = cublas_to_cuda(cublasLtCreate(&session->cublas_lt));
   if (err == cudaSuccess)
     err = configure_cublas(session->cublas, session->stream,
                            session->cublas_workspace,

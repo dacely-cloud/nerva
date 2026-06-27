@@ -43,6 +43,7 @@ fn print_link_directives(out_dir: &PathBuf, cuda_root: Option<&PathBuf>) {
     }
     println!("cargo:rustc-link-lib=dylib=cudart");
     println!("cargo:rustc-link-lib=dylib=cublas");
+    println!("cargo:rustc-link-lib=dylib=cublasLt");
     println!("cargo:rustc-link-lib=dylib=cuda");
     println!("cargo:rustc-link-lib=dylib=stdc++");
 }

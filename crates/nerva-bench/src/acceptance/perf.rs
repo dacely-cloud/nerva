@@ -6,7 +6,7 @@ pub(crate) fn push_perf_claim_gate(report: &mut AcceptanceReport) {
     let rvllm_status = "compile_failed";
     let rvllm_evidence = "rvllm-bench build failed at /root/rvllm commit 17b1c85dff7cea3cc6259f19fce394d6cfea002e with CUDA_HOME=/usr/local/cuda-13.1: rvllm-loader missing Gemma4LayerWeights and Gemma4LoadedModel fields";
     push_rvllm_baseline_status(report, rvllm_status, rvllm_evidence);
-    let current_qwen_nerva_tps = 97.07;
+    let current_qwen_nerva_tps = 97.09;
     let current_qwen_nerva_p99_ms = 10.35;
     let current_qwen_vllm_tps = 89.33;
     let current_qwen_vllm_p99_ms = 11.66;
