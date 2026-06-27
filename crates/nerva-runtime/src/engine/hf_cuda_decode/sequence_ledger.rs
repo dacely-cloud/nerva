@@ -27,9 +27,9 @@ pub(super) fn sequence_ledgers(summary: &CudaHfDecodeSequenceSummary) -> Vec<Tok
         record_event(
             &mut ledger,
             LedgerEventKind::KernelLaunch,
-            0,
+            summary.graph_nodes.max(1),
             MetricSource::EstimatedModel,
-            "hf_cuda_sequence_kernel",
+            "hf_cuda_sequence_kernel_nodes",
         );
         let device_active_ns = device_active_ns(summary);
         let device_source = device_metric_source(summary);
