@@ -7,6 +7,8 @@ use crate::engine::hf_cuda_decode::hash::tokens_json;
 pub struct HfCudaResidentWeightSummary {
     pub plan_steps: u64,
     pub plan_weight_bytes: u64,
+    pub plan_descriptor_blocks: u64,
+    pub plan_descriptor_hash: u64,
     pub hotset_promoted_blocks: u64,
     pub hotset_promoted_bytes: u64,
     pub hotset_kept_dram_blocks: u64,
@@ -24,6 +26,8 @@ pub struct HfCudaResidentWeightSummary {
     pub run_block_version_dependencies: u64,
     pub cuda_contract_blocks: u64,
     pub cuda_contract_weight_bytes: u64,
+    pub cuda_contract_descriptor_blocks: u64,
+    pub cuda_contract_descriptor_hash: u64,
     pub cuda_contract_matched: bool,
     pub hot_path_allocations: u64,
 }
@@ -31,9 +35,11 @@ pub struct HfCudaResidentWeightSummary {
 impl HfCudaResidentWeightSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"plan_steps\":{},\"plan_weight_bytes\":{},\"hotset_promoted_blocks\":{},\"hotset_promoted_bytes\":{},\"hotset_kept_dram_blocks\":{},\"plan_gpu_resident_weight_bytes\":{},\"plan_gpu_staged_weight_bytes\":{},\"plan_fallback_weight_bytes\":{},\"plan_gpu_resident_steps\":{},\"plan_gpu_staged_steps\":{},\"plan_fallback_steps\":{},\"plan_block_version_dependencies\":{},\"run_steps\":{},\"run_gpu_resident_steps\":{},\"run_gpu_staged_steps\":{},\"run_fallback_steps\":{},\"run_block_version_dependencies\":{},\"cuda_contract_blocks\":{},\"cuda_contract_weight_bytes\":{},\"cuda_contract_matched\":{},\"hot_path_allocations\":{}}}",
+            "{{\"plan_steps\":{},\"plan_weight_bytes\":{},\"plan_descriptor_blocks\":{},\"plan_descriptor_hash\":{},\"hotset_promoted_blocks\":{},\"hotset_promoted_bytes\":{},\"hotset_kept_dram_blocks\":{},\"plan_gpu_resident_weight_bytes\":{},\"plan_gpu_staged_weight_bytes\":{},\"plan_fallback_weight_bytes\":{},\"plan_gpu_resident_steps\":{},\"plan_gpu_staged_steps\":{},\"plan_fallback_steps\":{},\"plan_block_version_dependencies\":{},\"run_steps\":{},\"run_gpu_resident_steps\":{},\"run_gpu_staged_steps\":{},\"run_fallback_steps\":{},\"run_block_version_dependencies\":{},\"cuda_contract_blocks\":{},\"cuda_contract_weight_bytes\":{},\"cuda_contract_descriptor_blocks\":{},\"cuda_contract_descriptor_hash\":{},\"cuda_contract_matched\":{},\"hot_path_allocations\":{}}}",
             self.plan_steps,
             self.plan_weight_bytes,
+            self.plan_descriptor_blocks,
+            self.plan_descriptor_hash,
             self.hotset_promoted_blocks,
             self.hotset_promoted_bytes,
             self.hotset_kept_dram_blocks,
@@ -51,6 +57,8 @@ impl HfCudaResidentWeightSummary {
             self.run_block_version_dependencies,
             self.cuda_contract_blocks,
             self.cuda_contract_weight_bytes,
+            self.cuda_contract_descriptor_blocks,
+            self.cuda_contract_descriptor_hash,
             self.cuda_contract_matched,
             self.hot_path_allocations,
         )

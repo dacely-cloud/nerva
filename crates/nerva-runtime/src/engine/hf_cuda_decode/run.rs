@@ -1,7 +1,9 @@
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
-use nerva_cuda::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
+use nerva_cuda::decode::hf_sequence::weight_plan::{
+    CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
+};
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmLoaded, HfCausalLmModel};
 
@@ -26,7 +28,7 @@ pub fn run_hf_causal_lm_cuda_prompt_decode(
     prompt_tokens: &[TokenId],
     steps: usize,
 ) -> Result<HfCudaSeedDecodeSummary> {
-    Ok(run_hf_causal_lm_cuda_prompt_decode_with_plan(model, prompt_tokens, steps, None)?.0)
+    Ok(run_hf_causal_lm_cuda_prompt_decode_with_plan(model, prompt_tokens, steps, None, &[])?.0)
 }
 
 fn run_hf_causal_lm_cuda_prompt_decode_with_plan(
@@ -34,6 +36,7 @@ fn run_hf_causal_lm_cuda_prompt_decode_with_plan(
     prompt_tokens: &[TokenId],
     steps: usize,
     weight_plan: Option<CudaHfDecodeSequenceWeightPlan>,
+    weight_blocks: &[CudaHfDecodeSequenceWeightBlock],
 ) -> Result<(HfCudaSeedDecodeSummary, CudaHfDecodeSequenceSummary)> {
     if steps == 0 {
         return Err(NervaError::InvalidArgument {
@@ -58,7 +61,7 @@ fn run_hf_causal_lm_cuda_prompt_decode_with_plan(
         context_tokens,
     )?;
     let output = model.decode_greedy_from_prompt_tokens(prompt_tokens, steps, &mut cpu_scratch)?;
-    let sequence = run_device_sequence(model, prompt_tokens, steps, weight_plan)?;
+    let sequence = run_device_sequence(model, prompt_tokens, steps, weight_plan, weight_blocks)?;
     let mut counters = CudaDecodeCounters::default();
     counters.record_sequence(&sequence);
     if sequence.status != SmokeStatus::Ok {
@@ -107,17 +110,18 @@ pub fn run_loaded_hf_causal_lm_cuda_prompt_decode(
     compute_capability: Option<u32>,
 ) -> Result<HfCudaSeedDecodeSummary> {
     let resident_weights = loaded_resident_weight_summary(runtime, loaded, compute_capability)?;
-    let weight_plan = cuda_weight_plan(&resident_weights)?;
+    let weight_plan = cuda_weight_plan(&resident_weights.summary, &resident_weights.descriptors)?;
     let (mut summary, sequence) = run_hf_causal_lm_cuda_prompt_decode_with_plan(
         &loaded.model,
         prompt_tokens,
         steps,
         Some(weight_plan),
+        &resident_weights.descriptors,
     )?;
-    let mut resident_weights = resident_weights;
-    attach_cuda_weight_contract(&mut resident_weights, &sequence)?;
-    summary.hot_path_allocations += resident_weights.hot_path_allocations;
-    summary.resident_weights = resident_weights;
+    let mut resident_summary = resident_weights.summary;
+    attach_cuda_weight_contract(&mut resident_summary, &sequence)?;
+    summary.hot_path_allocations += resident_summary.hot_path_allocations;
+    summary.resident_weights = resident_summary;
     Ok(summary)
 }
 

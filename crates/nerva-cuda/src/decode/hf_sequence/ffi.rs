@@ -1,6 +1,7 @@
 use std::os::raw::c_int;
 
 use crate::decode::hf_chain::ffi::NervaCudaHfDecodeChainLayer;
+use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightBlock;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -31,6 +32,9 @@ pub(crate) struct NervaCudaHfDecodeSequenceRequest {
     pub(crate) planned_weight_bytes: u64,
     pub(crate) planned_gpu_resident_weight_bytes: u64,
     pub(crate) planned_gpu_staged_weight_bytes: u64,
+    pub(crate) planned_weight_descriptors: *const CudaHfDecodeSequenceWeightBlock,
+    pub(crate) planned_weight_descriptor_count: u32,
+    pub(crate) planned_weight_descriptor_hash: u64,
     pub(crate) output_tokens: *mut u32,
     pub(crate) output_token_capacity: u32,
 }
@@ -61,6 +65,8 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) planned_weight_bytes: u64,
     pub(crate) planned_gpu_resident_weight_bytes: u64,
     pub(crate) planned_gpu_staged_weight_bytes: u64,
+    pub(crate) planned_weight_descriptor_count: u32,
+    pub(crate) planned_weight_descriptor_hash: u64,
     pub(crate) resident_kv_bytes: u64,
     pub(crate) kv_tokens: u64,
     pub(crate) device_arena_bytes: u64,

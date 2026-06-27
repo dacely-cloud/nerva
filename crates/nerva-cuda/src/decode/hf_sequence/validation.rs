@@ -49,7 +49,10 @@ fn validate_attention(request: &CudaHfDecodeSequenceRequest<'_>) -> Option<Strin
 }
 
 fn validate_weight_plan(request: &CudaHfDecodeSequenceRequest<'_>) -> Option<String> {
-    request.weight_plan.and_then(|plan| plan.validate())
+    request.weight_plan.and_then(|plan| {
+        plan.validate()
+            .or_else(|| plan.validate_descriptors(request.weight_blocks))
+    })
 }
 
 fn validate_lengths(request: &CudaHfDecodeSequenceRequest<'_>) -> Option<String> {

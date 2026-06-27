@@ -7,7 +7,9 @@ use nerva_cuda::decode::hf_sequence::request::{
     CudaHfDecodeSequenceRequest,
 };
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
-use nerva_cuda::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
+use nerva_cuda::decode::hf_sequence::weight_plan::{
+    CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
+};
 use nerva_model::causal_lm::types::HfCausalLmModel;
 
 pub(super) fn run_device_sequence(
@@ -15,6 +17,7 @@ pub(super) fn run_device_sequence(
     prompt_tokens: &[TokenId],
     steps: usize,
     weight_plan: Option<CudaHfDecodeSequenceWeightPlan>,
+    weight_blocks: &[CudaHfDecodeSequenceWeightBlock],
 ) -> Result<CudaHfDecodeSequenceSummary> {
     let seed = prompt_tokens
         .last()
@@ -50,6 +53,7 @@ pub(super) fn run_device_sequence(
         final_norm_weight: model.final_norm_weight(),
         lm_head: model.lm_head(),
         weight_plan,
+        weight_blocks,
     }
     .run())
 }

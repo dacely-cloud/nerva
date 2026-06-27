@@ -1,12 +1,23 @@
 use nerva_core::types::error::{NervaError, Result};
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
-use nerva_cuda::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
+use nerva_cuda::decode::hf_sequence::weight_plan::{
+    CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
+};
 
 use crate::engine::hf_cuda_decode::summary::HfCudaResidentWeightSummary;
 
 pub(super) fn cuda_weight_plan(
     summary: &HfCudaResidentWeightSummary,
+    descriptors: &[CudaHfDecodeSequenceWeightBlock],
 ) -> Result<CudaHfDecodeSequenceWeightPlan> {
+    let descriptor_hash = hash_weight_blocks(descriptors);
+    if descriptors.len() as u64 != summary.plan_descriptor_blocks
+        || descriptor_hash != summary.plan_descriptor_hash
+    {
+        return Err(NervaError::InvalidArgument {
+            reason: "CUDA HF weight descriptors do not match resident plan summary".to_string(),
+        });
+    }
     Ok(CudaHfDecodeSequenceWeightPlan {
         blocks: u32_from_u64("weight plan blocks", summary.plan_steps)?,
         gpu_resident_blocks: u32_from_u64(
@@ -20,6 +31,7 @@ pub(super) fn cuda_weight_plan(
         weight_bytes: summary.plan_weight_bytes,
         gpu_resident_weight_bytes: summary.plan_gpu_resident_weight_bytes,
         gpu_staged_weight_bytes: summary.plan_gpu_staged_weight_bytes,
+        descriptor_hash,
     })
 }
 
@@ -41,7 +53,11 @@ pub(super) fn attach_cuda_weight_contract(
     }
     summary.cuda_contract_blocks = sequence.planned_weight_blocks as u64;
     summary.cuda_contract_weight_bytes = sequence.planned_weight_bytes;
+    summary.cuda_contract_descriptor_blocks = sequence.planned_weight_descriptor_count as u64;
+    summary.cuda_contract_descriptor_hash = sequence.planned_weight_descriptor_hash;
     summary.cuda_contract_matched = sequence.planned_weight_blocks as u64 == summary.plan_steps
+        && sequence.planned_weight_descriptor_count as u64 == summary.plan_descriptor_blocks
+        && sequence.planned_weight_descriptor_hash == summary.plan_descriptor_hash
         && sequence.planned_gpu_resident_weight_bytes == summary.plan_gpu_resident_weight_bytes
         && sequence.planned_gpu_staged_weight_bytes == summary.plan_gpu_staged_weight_bytes;
     Ok(())

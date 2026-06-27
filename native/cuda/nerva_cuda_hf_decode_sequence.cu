@@ -15,6 +15,8 @@ constexpr uint32_t kDTypeBF16 = 1;
 constexpr uint32_t kRequestId = 1;
 constexpr uint32_t kSequenceId = 1;
 constexpr uint32_t kCompletionDeviceComplete = 1;
+constexpr uint32_t kWeightStrategyGpuResident = 1;
+constexpr uint32_t kWeightStrategyGpuStaged = 2;
 constexpr uint64_t kMissingOffset = UINT64_MAX;
 constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ull;
 constexpr uint64_t kFnvPrime = 0x00000100000001b3ull;
@@ -308,6 +310,29 @@ uint64_t hash_tokens(const uint32_t *tokens, uint32_t count) {
   return hash;
 }
 
+void hash_u32(uint64_t &hash, uint32_t value) {
+  for (uint32_t byte = 0; byte < 4; ++byte) {
+    hash ^= static_cast<uint64_t>((value >> (8u * byte)) & 0xffu);
+    hash *= kFnvPrime;
+  }
+}
+
+void hash_u64(uint64_t &hash, uint64_t value) {
+  for (uint32_t byte = 0; byte < 8; ++byte) {
+    hash ^= static_cast<uint64_t>((value >> (8u * byte)) & 0xffu);
+    hash *= kFnvPrime;
+  }
+}
+
+void hash_descriptor(uint64_t &hash,
+                     const NervaCudaHfDecodeSequenceWeightBlock &descriptor) {
+  hash_u64(hash, descriptor.block_id);
+  hash_u64(hash, descriptor.block_version);
+  hash_u64(hash, descriptor.offset_bytes);
+  hash_u64(hash, descriptor.bytes);
+  hash_u32(hash, descriptor.strategy);
+}
+
 bool valid_layer(const NervaCudaHfDecodeChainLayer &layer) {
   return layer.rms_attn_weight != nullptr && layer.rms_mlp_weight != nullptr &&
          layer.w_q != nullptr && layer.w_k != nullptr && layer.w_v != nullptr &&
@@ -344,6 +369,11 @@ bool valid_request(const NervaCudaHfDecodeSequenceRequest *request) {
   }
   if (request->planned_weight_blocks != 0 || request->planned_weight_bytes != 0) {
     if (request->planned_weight_blocks == 0 || request->planned_weight_bytes == 0) {
+      return false;
+    }
+    if (request->planned_weight_descriptors == nullptr ||
+        request->planned_weight_descriptor_count != request->planned_weight_blocks ||
+        request->planned_weight_descriptor_hash == 0) {
       return false;
     }
     if (request->planned_gpu_resident_blocks > request->planned_weight_blocks ||
@@ -383,7 +413,65 @@ void clear_result(const NervaCudaHfDecodeSequenceRequest *request,
         request->planned_gpu_resident_weight_bytes;
     out->planned_gpu_staged_weight_bytes =
         request->planned_gpu_staged_weight_bytes;
+    out->planned_weight_descriptor_count =
+        request->planned_weight_descriptor_count;
+    out->planned_weight_descriptor_hash =
+        request->planned_weight_descriptor_hash;
   }
+}
+
+bool validate_weight_descriptors(const NervaCudaHfDecodeSequenceRequest *request,
+                                 uint64_t resident_weight_bytes,
+                                 NervaCudaHfDecodeSequenceResult *out) {
+  if (request->planned_weight_blocks == 0) {
+    return true;
+  }
+  uint64_t cursor = 0;
+  uint64_t descriptor_hash = kFnvOffset;
+  uint64_t resident_bytes = 0;
+  uint64_t staged_bytes = 0;
+  uint32_t resident_blocks = 0;
+  uint32_t staged_blocks = 0;
+  for (uint32_t index = 0; index < request->planned_weight_descriptor_count; ++index) {
+    const auto &descriptor = request->planned_weight_descriptors[index];
+    if (descriptor.bytes == 0 || descriptor.reserved != 0 ||
+        descriptor.offset_bytes != cursor) {
+      return false;
+    }
+    const uint64_t next_cursor = cursor + descriptor.bytes;
+    if (next_cursor < cursor) {
+      return false;
+    }
+    cursor = next_cursor;
+    hash_descriptor(descriptor_hash, descriptor);
+    if (descriptor.strategy == kWeightStrategyGpuResident) {
+      resident_blocks += 1;
+      const uint64_t next_resident_bytes = resident_bytes + descriptor.bytes;
+      if (next_resident_bytes < resident_bytes) {
+        return false;
+      }
+      resident_bytes = next_resident_bytes;
+    } else if (descriptor.strategy == kWeightStrategyGpuStaged) {
+      staged_blocks += 1;
+      const uint64_t next_staged_bytes = staged_bytes + descriptor.bytes;
+      if (next_staged_bytes < staged_bytes) {
+        return false;
+      }
+      staged_bytes = next_staged_bytes;
+    } else {
+      return false;
+    }
+  }
+  if (cursor != resident_weight_bytes || cursor != request->planned_weight_bytes ||
+      descriptor_hash != request->planned_weight_descriptor_hash ||
+      resident_blocks != request->planned_gpu_resident_blocks ||
+      staged_blocks != request->planned_gpu_staged_blocks ||
+      resident_bytes != request->planned_gpu_resident_weight_bytes ||
+      staged_bytes != request->planned_gpu_staged_weight_bytes) {
+    return false;
+  }
+  out->planned_weight_descriptor_hash = descriptor_hash;
+  return true;
 }
 
 int fail(NervaCudaHfDecodeSequenceResult *out, cudaError_t err) {
@@ -395,18 +483,18 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
                 const NervaCudaHfDecodeChainLayer &layer, uint64_t hidden,
                 uint64_t attention_hidden, uint64_t kv_hidden, uint64_t intermediate) {
   layout.rms_attn = push(cursor, hidden);
-  layout.rms_mlp = push(cursor, hidden);
   layout.w_q = push(cursor, attention_hidden * hidden);
   layout.w_k = push(cursor, kv_hidden * hidden);
   layout.w_v = push(cursor, kv_hidden * hidden);
   layout.w_o = push(cursor, hidden * attention_hidden);
+  layout.rms_mlp = push(cursor, hidden);
+  layout.w_gate = push(cursor, intermediate * hidden);
+  layout.w_up = push(cursor, intermediate * hidden);
+  layout.w_down = push(cursor, hidden * intermediate);
   layout.q_bias = push_optional(cursor, attention_hidden, layer.q_bias);
   layout.k_bias = push_optional(cursor, kv_hidden, layer.k_bias);
   layout.v_bias = push_optional(cursor, kv_hidden, layer.v_bias);
   layout.o_bias = push_optional(cursor, hidden, layer.o_bias);
-  layout.w_gate = push(cursor, intermediate * hidden);
-  layout.w_up = push(cursor, intermediate * hidden);
-  layout.w_down = push(cursor, hidden * intermediate);
 }
 
 void copy_optional(uint16_t *arena, uint64_t offset, const uint16_t *src, uint64_t elements) {
@@ -496,6 +584,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   const uint64_t resident_weight_bytes = arena_bytes - (hidden * 2 * sizeof(uint16_t));
   if (request->planned_weight_blocks != 0 &&
       request->planned_weight_bytes != resident_weight_bytes) {
+    out->status = -1;
+    return -1;
+  }
+  if (!validate_weight_descriptors(request, resident_weight_bytes, out)) {
     out->status = -1;
     return -1;
   }

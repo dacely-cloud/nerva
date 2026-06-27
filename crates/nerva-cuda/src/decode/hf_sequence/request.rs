@@ -5,7 +5,9 @@ use crate::decode::hf_sequence::ffi::{
 use crate::decode::hf_sequence::status::{sequence_failure_reason, sequence_status_from_result};
 use crate::decode::hf_sequence::summary::{CudaHfDecodeSequenceSummary, empty_summary};
 use crate::decode::hf_sequence::validation::validate_request;
-use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
+use crate::decode::hf_sequence::weight_plan::{
+    CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
+};
 use crate::smoke::status::SmokeStatus;
 
 pub const CUDA_HF_DECODE_SEQUENCE_DTYPE_F16: u32 = 0;
@@ -31,6 +33,7 @@ pub struct CudaHfDecodeSequenceRequest<'a> {
     pub final_norm_weight: &'a [u16],
     pub lm_head: &'a [u16],
     pub weight_plan: Option<CudaHfDecodeSequenceWeightPlan>,
+    pub weight_blocks: &'a [CudaHfDecodeSequenceWeightBlock],
 }
 
 impl<'a> CudaHfDecodeSequenceRequest<'a> {
@@ -79,6 +82,8 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             planned_weight_bytes: out.planned_weight_bytes,
             planned_gpu_resident_weight_bytes: out.planned_gpu_resident_weight_bytes,
             planned_gpu_staged_weight_bytes: out.planned_gpu_staged_weight_bytes,
+            planned_weight_descriptor_count: out.planned_weight_descriptor_count,
+            planned_weight_descriptor_hash: out.planned_weight_descriptor_hash,
             resident_kv_bytes: out.resident_kv_bytes,
             kv_tokens: out.kv_tokens,
             device_arena_bytes: out.device_arena_bytes,
@@ -102,6 +107,11 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
         output_tokens: *mut u32,
     ) -> NervaCudaHfDecodeSequenceRequest {
         let plan = self.weight_plan.unwrap_or_default();
+        let descriptors = if self.weight_blocks.is_empty() {
+            core::ptr::null()
+        } else {
+            self.weight_blocks.as_ptr()
+        };
         NervaCudaHfDecodeSequenceRequest {
             dtype: self.dtype,
             hidden: self.hidden as u32,
@@ -129,6 +139,9 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             planned_weight_bytes: plan.weight_bytes,
             planned_gpu_resident_weight_bytes: plan.gpu_resident_weight_bytes,
             planned_gpu_staged_weight_bytes: plan.gpu_staged_weight_bytes,
+            planned_weight_descriptors: descriptors,
+            planned_weight_descriptor_count: self.weight_blocks.len() as u32,
+            planned_weight_descriptor_hash: plan.descriptor_hash,
             output_tokens,
             output_token_capacity: self.steps as u32,
         }

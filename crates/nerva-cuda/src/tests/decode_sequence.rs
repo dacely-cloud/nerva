@@ -3,7 +3,10 @@ use crate::decode::hf_sequence::request::{
     CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
-use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
+use crate::decode::hf_sequence::weight_plan::{
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED,
+    CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
+};
 use crate::smoke::status::SmokeStatus;
 
 #[test]
@@ -29,6 +32,8 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         planned_weight_bytes: 128,
         planned_gpu_resident_weight_bytes: 64,
         planned_gpu_staged_weight_bytes: 64,
+        planned_weight_descriptor_count: 12,
+        planned_weight_descriptor_hash: 123,
         resident_kv_bytes: 64,
         kv_tokens: 4,
         device_arena_bytes: 240,
@@ -53,6 +58,7 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
     assert!(json.contains("\"resident_kv_bytes\":64"));
     assert!(json.contains("\"planned_weight_blocks\":12"));
     assert!(json.contains("\"planned_gpu_staged_weight_bytes\":64"));
+    assert!(json.contains("\"planned_weight_descriptor_count\":12"));
     assert!(json.contains("\"kv_tokens\":4"));
     assert!(json.contains("\"graph_nodes\":1"));
     assert!(json.contains("\"graph_launches\":4"));
@@ -85,6 +91,7 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
         w_down: &matrix,
     };
     let layers = [layer];
+    let weight_blocks = sequence_weight_blocks();
     let summary = CudaHfDecodeSequenceRequest {
         dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
         hidden: 2,
@@ -108,9 +115,11 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
             gpu_resident_blocks: 6,
             gpu_staged_blocks: 6,
             weight_bytes: 100,
-            gpu_resident_weight_bytes: 48,
-            gpu_staged_weight_bytes: 52,
+            gpu_resident_weight_bytes: 52,
+            gpu_staged_weight_bytes: 48,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
         }),
+        weight_blocks: &weight_blocks,
     }
     .run();
 
@@ -129,8 +138,39 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
     assert_eq!(summary.hot_path_allocations, 0);
     assert_eq!(summary.planned_weight_blocks, 12);
     assert_eq!(summary.planned_weight_bytes, summary.resident_weight_bytes);
-    assert_eq!(summary.planned_gpu_resident_weight_bytes, 48);
-    assert_eq!(summary.planned_gpu_staged_weight_bytes, 52);
+    assert_eq!(summary.planned_gpu_resident_weight_bytes, 52);
+    assert_eq!(summary.planned_gpu_staged_weight_bytes, 48);
+    assert_eq!(summary.planned_weight_descriptor_count, 12);
+    assert_eq!(
+        summary.planned_weight_descriptor_hash,
+        hash_weight_blocks(&weight_blocks)
+    );
     assert!(summary.h2d_bytes >= summary.resident_weight_bytes);
     assert!(summary.d2h_bytes > 0);
+}
+
+fn sequence_weight_blocks() -> Vec<CudaHfDecodeSequenceWeightBlock> {
+    let bytes = [16, 4, 8, 8, 8, 8, 4, 8, 8, 8, 4, 16];
+    let mut offset_bytes = 0;
+    bytes
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| {
+            let strategy = if index < 6 {
+                CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT
+            } else {
+                CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED
+            };
+            let block = CudaHfDecodeSequenceWeightBlock {
+                block_id: index as u64 + 1,
+                block_version: 0,
+                offset_bytes,
+                bytes: *bytes,
+                strategy,
+                reserved: 0,
+            };
+            offset_bytes += *bytes;
+            block
+        })
+        .collect()
 }

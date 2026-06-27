@@ -28,6 +28,14 @@ fn loaded_hf_cuda_decode_passes_resident_weight_contract_to_native() {
         summary.resident_weights.cuda_contract_weight_bytes,
         summary.resident_weights.plan_weight_bytes,
     );
+    assert_eq!(
+        summary.resident_weights.cuda_contract_descriptor_blocks,
+        summary.resident_weights.plan_descriptor_blocks,
+    );
+    assert_eq!(
+        summary.resident_weights.cuda_contract_descriptor_hash,
+        summary.resident_weights.plan_descriptor_hash,
+    );
     assert!(summary.resident_weights.cuda_contract_matched);
     assert!(summary.resident_weights.plan_gpu_resident_weight_bytes > 0);
     assert!(summary.resident_weights.plan_gpu_staged_weight_bytes > 0);

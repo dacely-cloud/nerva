@@ -313,6 +313,15 @@ typedef struct NervaCudaHfDecodeChainResult {
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeChainResult;
 
+typedef struct NervaCudaHfDecodeSequenceWeightBlock {
+  uint64_t block_id;
+  uint64_t block_version;
+  uint64_t offset_bytes;
+  uint64_t bytes;
+  uint32_t strategy;
+  uint32_t reserved;
+} NervaCudaHfDecodeSequenceWeightBlock;
+
 typedef struct NervaCudaHfDecodeSequenceRequest {
   uint32_t dtype;
   uint32_t hidden;
@@ -340,6 +349,9 @@ typedef struct NervaCudaHfDecodeSequenceRequest {
   uint64_t planned_weight_bytes;
   uint64_t planned_gpu_resident_weight_bytes;
   uint64_t planned_gpu_staged_weight_bytes;
+  const NervaCudaHfDecodeSequenceWeightBlock *planned_weight_descriptors;
+  uint32_t planned_weight_descriptor_count;
+  uint64_t planned_weight_descriptor_hash;
   uint32_t *output_tokens;
   uint32_t output_token_capacity;
 } NervaCudaHfDecodeSequenceRequest;
@@ -368,6 +380,8 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t planned_weight_bytes;
   uint64_t planned_gpu_resident_weight_bytes;
   uint64_t planned_gpu_staged_weight_bytes;
+  uint32_t planned_weight_descriptor_count;
+  uint64_t planned_weight_descriptor_hash;
   uint64_t resident_kv_bytes;
   uint64_t kv_tokens;
   uint64_t device_arena_bytes;
