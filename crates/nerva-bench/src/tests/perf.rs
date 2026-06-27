@@ -5,13 +5,13 @@ use crate::perf::run::{compare_perf_baseline, perf_baseline_json_from_args};
 fn perf_baseline_rejects_slow_nerva_claims() {
     let summary = compare_perf_baseline(
         "qwen3_8b_bf16_decode".to_string(),
-        "single_gpu_resident_current".to_string(),
-        0.39,
-        40.0,
-        35.0,
-        2584.0,
+        "single_gpu_resident_external_baseline_required".to_string(),
+        71.76,
         80.0,
-        95.0,
+        75.0,
+        14.10,
+        12.0,
+        13.0,
     )
     .unwrap();
 

@@ -218,4 +218,4 @@ add_library(nerva_cuda STATIC
 )
 
 target_include_directories(nerva_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(nerva_cuda PUBLIC CUDA::cudart)
+target_link_libraries(nerva_cuda PUBLIC CUDA::cudart CUDA::cublas)
