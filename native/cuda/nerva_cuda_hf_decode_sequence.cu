@@ -589,43 +589,48 @@ __global__ void hf_layer_attention_encode_kernel(
   const uint32_t kv_hidden = kv_heads * head_dim;
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const uint32_t head = blockIdx.x;
+  if (head >= heads) {
+    return;
+  }
   const float scale = rsqrtf(static_cast<float>(head_dim));
-  for (uint32_t head = threadIdx.x; head < heads; head += blockDim.x) {
-    const uint32_t kv_head = head / (heads / kv_heads);
-    const uint32_t head_start = head * head_dim;
-    float local_m = -INFINITY;
-    float local_l = 0.0f;
-    for (uint32_t offset = 0; offset < head_dim; ++offset) {
-      s.attn[head_start + offset] = 0.0f;
-    }
-    for (uint32_t token = 0; token <= current_position; ++token) {
-      const uint64_t token_base =
-          (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
-          kv_head * head_dim;
-      float score = 0.0f;
-      for (uint32_t offset = 0; offset < head_dim; ++offset) {
-        score += s.q[head_start + offset] * kv_keys[token_base + offset];
-      }
-      score *= scale;
-      const float next_m = fmaxf(local_m, score);
-      const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
-      const float new_scale = expf(score - next_m);
-      for (uint32_t offset = 0; offset < head_dim; ++offset) {
-        const uint32_t out = head_start + offset;
-        s.attn[out] =
-            s.attn[out] * old_scale + kv_values[token_base + offset] * new_scale;
-      }
-      local_l = local_l * old_scale + new_scale;
-      local_m = next_m;
-    }
-    if (local_l > 0.0f && isfinite(local_l)) {
-      for (uint32_t offset = 0; offset < head_dim; ++offset) {
-        s.attn[head_start + offset] /= local_l;
-      }
-    }
+  const uint32_t kv_head = head / (heads / kv_heads);
+  const uint32_t head_start = head * head_dim;
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+    s.attn[head_start + offset] = 0.0f;
   }
   __syncthreads();
-  f32_slice_to_encoded(s.attn, projection_input, attention_hidden, dtype);
+
+  float local_m = -INFINITY;
+  float local_l = 0.0f;
+  for (uint32_t token = 0; token <= current_position; ++token) {
+    const uint64_t token_base =
+        (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
+        kv_head * head_dim;
+    float partial = 0.0f;
+    for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+      partial += s.q[head_start + offset] * kv_keys[token_base + offset];
+    }
+    const float score = block_sum(partial) * scale;
+    const float next_m = fmaxf(local_m, score);
+    const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+    const float new_scale = expf(score - next_m);
+    for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+      const uint32_t out = head_start + offset;
+      s.attn[out] =
+          s.attn[out] * old_scale + kv_values[token_base + offset] * new_scale;
+    }
+    local_l = local_l * old_scale + new_scale;
+    local_m = next_m;
+  }
+  const bool normalize = local_l > 0.0f && isfinite(local_l);
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+    const uint32_t out = head_start + offset;
+    if (normalize) {
+      s.attn[out] /= local_l;
+    }
+    projection_input[out] = f32_to_encoded(s.attn[out], dtype);
+  }
 }
 
 __global__ void hf_layer_qkv_prepare_kernel(
@@ -1634,7 +1639,8 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess) {
-      hf_layer_attention_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+      hf_layer_attention_encode_kernel<<<session->heads, kDecodeThreads, 0,
+                                         session->stream>>>(
           layer_index, session->dtype, session->hidden, session->heads,
           session->kv_heads, session->head_dim, session->intermediate,
           session->device_step, max_steps, session->device_scratch,
@@ -1795,7 +1801,8 @@ cudaError_t profile_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess) {
-      hf_layer_attention_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+      hf_layer_attention_encode_kernel<<<session->heads, kDecodeThreads, 0,
+                                         session->stream>>>(
           layer_index, session->dtype, session->hidden, session->heads,
           session->kv_heads, session->head_dim, session->intermediate,
           session->device_step, max_steps, session->device_scratch,

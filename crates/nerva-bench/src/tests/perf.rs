@@ -2,20 +2,20 @@ use crate::artifact::run::run_artifact;
 use crate::perf::run::{compare_perf_baseline, perf_baseline_json_from_args};
 
 #[test]
-fn perf_baseline_rejects_slow_nerva_claims() {
+fn perf_baseline_rejects_claims_without_beating_all_baselines() {
     let summary = compare_perf_baseline(
         "qwen3_8b_bf16_decode".to_string(),
         "single_gpu_resident_external_baseline_required".to_string(),
-        85.07,
+        97.07,
         89.33,
-        88.0,
-        11.99,
+        100.0,
+        10.35,
         11.66,
-        11.80,
+        9.90,
     )
     .unwrap();
 
-    assert!(!summary.beats_vllm);
+    assert!(summary.beats_vllm);
     assert!(!summary.beats_rvllm);
     assert!(!summary.claim_allowed);
     assert!(summary.throughput_speedup_vs_best_baseline < 1.0);
