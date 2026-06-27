@@ -211,6 +211,61 @@ __device__ void per_head_rms_norm(uint16_t *arena, uint64_t offset, float *value
   }
 }
 
+__device__ void add_optional_head_bias(const uint16_t *arena, uint64_t offset,
+                                       uint32_t head, uint32_t head_dim,
+                                       uint32_t dtype, float *values) {
+  if (offset != kMissingOffset) {
+    const uint16_t *bias = arena + offset + static_cast<uint64_t>(head) * head_dim;
+    for (uint32_t index = threadIdx.x; index < head_dim; index += blockDim.x) {
+      values[index] += encoded_to_f32(bias[index], dtype);
+    }
+  }
+  __syncthreads();
+}
+
+__device__ void per_head_rms_norm_block(uint16_t *arena, uint64_t offset,
+                                        float *values, uint32_t head_dim,
+                                        uint32_t dtype, float eps) {
+  if (offset == kMissingOffset) {
+    __syncthreads();
+    return;
+  }
+  const uint16_t *weight = arena + offset;
+  float mean_square = 0.0f;
+  for (uint32_t index = threadIdx.x; index < head_dim; index += blockDim.x) {
+    mean_square += values[index] * values[index];
+  }
+  mean_square = block_sum(mean_square);
+  const float scale = rsqrtf(mean_square / static_cast<float>(head_dim) + eps);
+  for (uint32_t index = threadIdx.x; index < head_dim; index += blockDim.x) {
+    values[index] *= scale * encoded_to_f32(weight[index], dtype);
+  }
+  __syncthreads();
+}
+
+__device__ void apply_rope_head(float *values, uint32_t head_dim,
+                                uint32_t position, float theta) {
+  if (theta <= 0.0f) {
+    __syncthreads();
+    return;
+  }
+  const uint32_t half = head_dim / 2;
+  for (uint32_t offset = threadIdx.x; offset < half; offset += blockDim.x) {
+    const uint32_t second = offset + half;
+    const float exponent =
+        static_cast<float>(2 * offset) / static_cast<float>(head_dim);
+    float angle = static_cast<float>(position) / powf(theta, exponent);
+    float sin_value = 0.0f;
+    float cos_value = 0.0f;
+    sincosf(angle, &sin_value, &cos_value);
+    const float left = values[offset];
+    const float right = values[second];
+    values[offset] = left * cos_value - right * sin_value;
+    values[second] = right * cos_value + left * sin_value;
+  }
+  __syncthreads();
+}
+
 __device__ void apply_rope(float *values, uint32_t heads, uint32_t head_dim,
                            uint32_t position, float theta) {
   if (theta <= 0.0f) {
@@ -517,10 +572,9 @@ __global__ void hf_layer_attn_norm_encode_kernel(
 }
 
 __global__ void hf_layer_attention_encode_kernel(
-    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
-    uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
-    uint32_t head_dim, uint32_t intermediate, uint32_t *step_cursor,
-    uint32_t max_steps, float rms_eps, float rope_theta, float *scratch,
+    uint32_t layer_index, uint32_t dtype, uint32_t hidden, uint32_t heads,
+    uint32_t kv_heads, uint32_t head_dim, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, float *scratch,
     float *kv_keys, float *kv_values, uint16_t *projection_input) {
   __shared__ uint32_t current_position_shared;
   if (threadIdx.x == 0) {
@@ -535,22 +589,6 @@ __global__ void hf_layer_attention_encode_kernel(
   const uint32_t kv_hidden = kv_heads * head_dim;
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
-  add_bias(arena, layout.q_bias, attention_hidden, dtype, s.q);
-  add_bias(arena, layout.k_bias, kv_hidden, dtype, s.k);
-  add_bias(arena, layout.v_bias, kv_hidden, dtype, s.v);
-  per_head_rms_norm(arena, layout.q_norm, s.q, heads, head_dim, dtype, rms_eps);
-  per_head_rms_norm(arena, layout.k_norm, s.k, kv_heads, head_dim, dtype, rms_eps);
-  apply_rope(s.q, heads, head_dim, current_position, rope_theta);
-  apply_rope(s.k, kv_heads, head_dim, current_position, rope_theta);
-
-  const uint64_t kv_base =
-      (static_cast<uint64_t>(layer_index) * max_steps + current_position) * kv_hidden;
-  for (uint32_t index = threadIdx.x; index < kv_hidden; index += blockDim.x) {
-    kv_keys[kv_base + index] = s.k[index];
-    kv_values[kv_base + index] = s.v[index];
-  }
-  __syncthreads();
-
   const float scale = rsqrtf(static_cast<float>(head_dim));
   for (uint32_t head = threadIdx.x; head < heads; head += blockDim.x) {
     const uint32_t kv_head = head / (heads / kv_heads);
@@ -588,6 +626,50 @@ __global__ void hf_layer_attention_encode_kernel(
   }
   __syncthreads();
   f32_slice_to_encoded(s.attn, projection_input, attention_hidden, dtype);
+}
+
+__global__ void hf_layer_qkv_prepare_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
+    uint32_t head_dim, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, float rms_eps, float rope_theta, float *scratch,
+    float *kv_keys, float *kv_values) {
+  __shared__ uint32_t current_position_shared;
+  if (threadIdx.x == 0) {
+    current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
+  }
+  __syncthreads();
+  const uint32_t current_position = current_position_shared;
+  if (current_position >= max_steps) {
+    return;
+  }
+  const uint32_t attention_hidden = heads * head_dim;
+  const uint32_t kv_hidden = kv_heads * head_dim;
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const uint32_t head = blockIdx.x;
+  if (head < heads) {
+    float *q = s.q + head * head_dim;
+    add_optional_head_bias(arena, layout.q_bias, head, head_dim, dtype, q);
+    per_head_rms_norm_block(arena, layout.q_norm, q, head_dim, dtype, rms_eps);
+    apply_rope_head(q, head_dim, current_position, rope_theta);
+  }
+  if (head < kv_heads) {
+    float *k = s.k + head * head_dim;
+    float *v = s.v + head * head_dim;
+    add_optional_head_bias(arena, layout.k_bias, head, head_dim, dtype, k);
+    add_optional_head_bias(arena, layout.v_bias, head, head_dim, dtype, v);
+    per_head_rms_norm_block(arena, layout.k_norm, k, head_dim, dtype, rms_eps);
+    apply_rope_head(k, head_dim, current_position, rope_theta);
+    const uint64_t kv_base =
+        (static_cast<uint64_t>(layer_index) * max_steps + current_position) *
+            kv_hidden +
+        static_cast<uint64_t>(head) * head_dim;
+    for (uint32_t index = threadIdx.x; index < head_dim; index += blockDim.x) {
+      kv_keys[kv_base + index] = k[index];
+      kv_values[kv_base + index] = v[index];
+    }
+  }
 }
 
 __global__ void hf_layer_mlp_norm_encode_kernel(
@@ -655,7 +737,7 @@ __global__ void hf_layer_finish_next_attn_norm_encode_kernel(
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
-    const float value = s.down[index] + s.residual[index];
+    const float value = s.residual[index];
     s.input[index] = value;
     arena[output_offset + index] = f32_to_encoded(value, dtype);
   }
@@ -676,7 +758,7 @@ __global__ void hf_layer_finish_final_norm_encode_kernel(
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
-    s.input[index] = s.down[index] + s.residual[index];
+    s.input[index] = s.residual[index];
   }
   __syncthreads();
   rms_norm(s.input, arena + arena_layout.final_norm, hidden, dtype, rms_eps,
@@ -1033,15 +1115,14 @@ cudaError_t configure_cublas(cublasHandle_t handle, cudaStream_t stream,
   return cublas_to_cuda(status);
 }
 
-cudaError_t encoded_row_major_gemv(cublasHandle_t handle, const uint16_t *matrix,
-                                   const uint16_t *input, uint32_t rows,
-                                   uint32_t cols, uint32_t dtype,
-                                   float *output) {
+cudaError_t encoded_row_major_gemv_beta(
+    cublasHandle_t handle, const uint16_t *matrix, const uint16_t *input,
+    uint32_t rows, uint32_t cols, uint32_t dtype, float beta,
+    float *output) {
   if (rows == 0 || cols == 0 || rows > INT32_MAX || cols > INT32_MAX) {
     return cudaErrorInvalidValue;
   }
   const float alpha = 1.0f;
-  const float beta = 0.0f;
   const cudaDataType_t data_type = encoded_cuda_type(dtype);
   cublasStatus_t status = cublasGemmEx(
       handle, CUBLAS_OP_T, CUBLAS_OP_N, static_cast<int>(rows), 1,
@@ -1050,6 +1131,14 @@ cudaError_t encoded_row_major_gemv(cublasHandle_t handle, const uint16_t *matrix
       static_cast<int>(rows), CUBLAS_COMPUTE_32F,
       CUBLAS_GEMM_DEFAULT_TENSOR_OP);
   return cublas_to_cuda(status);
+}
+
+cudaError_t encoded_row_major_gemv(cublasHandle_t handle, const uint16_t *matrix,
+                                   const uint16_t *input, uint32_t rows,
+                                   uint32_t cols, uint32_t dtype,
+                                   float *output) {
+  return encoded_row_major_gemv_beta(handle, matrix, input, rows, cols, dtype,
+                                     0.0f, output);
 }
 
 cudaError_t final_head_gemv(cublasHandle_t handle, uint16_t *arena,
@@ -1510,6 +1599,8 @@ cudaError_t launch_cublas_layer_session_step(
   LayerScratch scratch = layer_scratch_ptrs(
       session->device_scratch, session->hidden, attention_hidden, kv_hidden,
       session->intermediate);
+  const uint32_t qkv_prepare_blocks =
+      session->heads > session->kv_heads ? session->heads : session->kv_heads;
   const PackedProjectionShape packed_shape = packed_projection_shape(
       session->hidden, attention_hidden, kv_hidden, session->intermediate);
   if (err == cudaSuccess && session->layer_count > 0) {
@@ -1533,11 +1624,20 @@ cudaError_t launch_cublas_layer_session_step(
           static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
           session->dtype, scratch.q);
     if (err == cudaSuccess) {
-      hf_layer_attention_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+      hf_layer_qkv_prepare_kernel<<<qkv_prepare_blocks, kDecodeThreads, 0,
+                                    session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
           session->hidden, session->heads, session->kv_heads, session->head_dim,
           session->intermediate, session->device_step, max_steps,
           session->rms_eps, session->rope_theta, session->device_scratch,
+          session->device_kv_keys, session->device_kv_values);
+      err = cudaGetLastError();
+    }
+    if (err == cudaSuccess) {
+      hf_layer_attention_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+          layer_index, session->dtype, session->hidden, session->heads,
+          session->kv_heads, session->head_dim, session->intermediate,
+          session->device_step, max_steps, session->device_scratch,
           session->device_kv_keys, session->device_kv_values,
           session->device_projection_input);
       err = cudaGetLastError();
@@ -1574,10 +1674,10 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
+      err = encoded_row_major_gemv_beta(
           session->cublas, session->device_arena + layout.w_down,
           session->device_projection_input, session->hidden,
-          session->intermediate, session->dtype, scratch.down);
+          session->intermediate, session->dtype, 1.0f, scratch.residual);
     if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
       const SequenceLayerLayout next_layout =
           session->host_layouts[layer_index + 1];
@@ -1640,6 +1740,8 @@ cudaError_t profile_cublas_layer_session_step(
   LayerScratch scratch = layer_scratch_ptrs(
       session->device_scratch, session->hidden, attention_hidden, kv_hidden,
       session->intermediate);
+  const uint32_t qkv_prepare_blocks =
+      session->heads > session->kv_heads ? session->heads : session->kv_heads;
 
   hf_decode_set_step_kernel<<<1, 1, 0, session->stream>>>(session->device_step,
                                                           cursor);
@@ -1683,11 +1785,20 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess) {
-      hf_layer_attention_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+      hf_layer_qkv_prepare_kernel<<<qkv_prepare_blocks, kDecodeThreads, 0,
+                                    session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
           session->hidden, session->heads, session->kv_heads, session->head_dim,
           session->intermediate, session->device_step, max_steps,
           session->rms_eps, session->rope_theta, session->device_scratch,
+          session->device_kv_keys, session->device_kv_values);
+      err = cudaGetLastError();
+    }
+    if (err == cudaSuccess) {
+      hf_layer_attention_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+          layer_index, session->dtype, session->hidden, session->heads,
+          session->kv_heads, session->head_dim, session->intermediate,
+          session->device_step, max_steps, session->device_scratch,
           session->device_kv_keys, session->device_kv_values,
           session->device_projection_input);
       err = cudaGetLastError();
@@ -1741,10 +1852,10 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv(
+      err = encoded_row_major_gemv_beta(
           session->cublas, session->device_arena + layout.w_down,
           session->device_projection_input, session->hidden,
-          session->intermediate, session->dtype, scratch.down);
+          session->intermediate, session->dtype, 1.0f, scratch.residual);
     if (err == cudaSuccess) err = profile_end(session, &down_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);

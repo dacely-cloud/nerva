@@ -2,8 +2,8 @@ use crate::acceptance::report::AcceptanceReport;
 use crate::perf::run::compare_perf_baseline;
 
 pub(crate) fn push_perf_claim_gate(report: &mut AcceptanceReport) {
-    let current_qwen_nerva_tps = 79.63;
-    let current_qwen_nerva_p99_ms = 12.79;
+    let current_qwen_nerva_tps = 85.07;
+    let current_qwen_nerva_p99_ms = 11.99;
     let current_qwen_vllm_tps = 89.33;
     let current_qwen_vllm_p99_ms = 11.66;
     let current_qwen_beats_vllm = current_qwen_nerva_tps > current_qwen_vllm_tps

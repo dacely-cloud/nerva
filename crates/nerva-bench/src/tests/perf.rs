@@ -6,12 +6,12 @@ fn perf_baseline_rejects_slow_nerva_claims() {
     let summary = compare_perf_baseline(
         "qwen3_8b_bf16_decode".to_string(),
         "single_gpu_resident_external_baseline_required".to_string(),
-        71.76,
-        80.0,
-        75.0,
-        14.10,
-        12.0,
-        13.0,
+        85.07,
+        89.33,
+        88.0,
+        11.99,
+        11.66,
+        11.80,
     )
     .unwrap();
 
