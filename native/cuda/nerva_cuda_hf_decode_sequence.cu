@@ -673,6 +673,157 @@ __global__ void hf_layer_attention_encode_kernel(
   }
 }
 
+__global__ void hf_layer_qkv_attention_encode_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
+    uint32_t head_dim, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, float rms_eps, float rope_theta, float *scratch,
+    float *kv_keys, float *kv_values, uint16_t *projection_input) {
+  __shared__ uint32_t current_position_shared;
+  if (threadIdx.x == 0) {
+    current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
+  }
+  __syncthreads();
+  const uint32_t current_position = current_position_shared;
+  if (current_position >= max_steps) {
+    return;
+  }
+  const uint32_t attention_hidden = heads * head_dim;
+  const uint32_t kv_hidden = kv_heads * head_dim;
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const uint32_t head = blockIdx.x;
+  if (head >= heads) {
+    return;
+  }
+  const uint32_t group = heads / kv_heads;
+  const uint32_t kv_head = head / group;
+  const uint32_t head_start = head * head_dim;
+  const uint32_t kv_start = kv_head * head_dim;
+
+  float q_mean_square = 0.0f;
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+    const uint32_t index = head_start + offset;
+    float value = s.q[index];
+    if (layout.q_bias != kMissingOffset) {
+      value += encoded_to_f32(arena[layout.q_bias + index], dtype);
+    }
+    s.q[index] = value;
+    q_mean_square += value * value;
+  }
+  q_mean_square = block_sum(q_mean_square);
+  if (layout.q_norm != kMissingOffset) {
+    const float scale = rsqrtf(q_mean_square / static_cast<float>(head_dim) + rms_eps);
+    for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+      const uint32_t index = head_start + offset;
+      s.q[index] *= scale * encoded_to_f32(arena[layout.q_norm + offset], dtype);
+    }
+  }
+  __syncthreads();
+  apply_rope_head(s.q + head_start, head_dim, current_position, rope_theta);
+
+  float k_mean_square = 0.0f;
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+    float value = s.k[kv_start + offset];
+    if (layout.k_bias != kMissingOffset) {
+      value += encoded_to_f32(arena[layout.k_bias + kv_start + offset], dtype);
+    }
+    k_mean_square += value * value;
+  }
+  k_mean_square = block_sum(k_mean_square);
+  const bool has_k_norm = layout.k_norm != kMissingOffset;
+  const float k_scale =
+      has_k_norm ? rsqrtf(k_mean_square / static_cast<float>(head_dim) + rms_eps) : 1.0f;
+  const uint32_t half = head_dim / 2;
+  const bool publish_kv = head % group == 0;
+  const uint64_t kv_base =
+      (static_cast<uint64_t>(layer_index) * max_steps + current_position) *
+          kv_hidden +
+      kv_start;
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+    const uint32_t rope_offset = offset < half ? offset : offset - half;
+    const uint32_t left_index = kv_start + rope_offset;
+    const uint32_t right_index = left_index + half;
+    float left = s.k[left_index];
+    float right = s.k[right_index];
+    if (layout.k_bias != kMissingOffset) {
+      left += encoded_to_f32(arena[layout.k_bias + left_index], dtype);
+      right += encoded_to_f32(arena[layout.k_bias + right_index], dtype);
+    }
+    if (has_k_norm) {
+      left *= k_scale * encoded_to_f32(arena[layout.k_norm + rope_offset], dtype);
+      right *= k_scale *
+               encoded_to_f32(arena[layout.k_norm + rope_offset + half], dtype);
+    }
+    float current_k = left;
+    if (rope_theta > 0.0f) {
+      const float exponent =
+          static_cast<float>(2 * rope_offset) / static_cast<float>(head_dim);
+      const float angle = static_cast<float>(current_position) / powf(rope_theta, exponent);
+      float sin_value = 0.0f;
+      float cos_value = 0.0f;
+      sincosf(angle, &sin_value, &cos_value);
+      const float rotated_left = left * cos_value - right * sin_value;
+      const float rotated_right = right * cos_value + left * sin_value;
+      current_k = offset < half ? rotated_left : rotated_right;
+    }
+    float current_v = s.v[kv_start + offset];
+    if (layout.v_bias != kMissingOffset) {
+      current_v += encoded_to_f32(arena[layout.v_bias + kv_start + offset], dtype);
+    }
+    s.residual[head_start + offset] = current_k;
+    s.mlp_norm[head_start + offset] = current_v;
+    if (publish_kv) {
+      kv_keys[kv_base + offset] = current_k;
+      kv_values[kv_base + offset] = current_v;
+    }
+  }
+  __syncthreads();
+
+  const float scale = rsqrtf(static_cast<float>(head_dim));
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+    s.attn[head_start + offset] = 0.0f;
+  }
+  __syncthreads();
+  float local_m = -INFINITY;
+  float local_l = 0.0f;
+  for (uint32_t token = 0; token <= current_position; ++token) {
+    float partial = 0.0f;
+    const uint64_t token_base =
+        (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
+        kv_start;
+    for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+      float key_value = kv_keys[token_base + offset];
+      if (token == current_position) {
+        key_value = s.residual[head_start + offset];
+      }
+      partial += s.q[head_start + offset] * key_value;
+    }
+    const float score = block_sum(partial) * scale;
+    const float next_m = fmaxf(local_m, score);
+    const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+    const float new_scale = expf(score - next_m);
+    for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+      const uint32_t out = head_start + offset;
+      float value_value = kv_values[token_base + offset];
+      if (token == current_position) {
+        value_value = s.mlp_norm[head_start + offset];
+      }
+      s.attn[out] = s.attn[out] * old_scale + value_value * new_scale;
+    }
+    local_l = local_l * old_scale + new_scale;
+    local_m = next_m;
+  }
+  const bool normalize = local_l > 0.0f && isfinite(local_l);
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+    const uint32_t out = head_start + offset;
+    if (normalize) {
+      s.attn[out] /= local_l;
+    }
+    projection_input[out] = f32_to_encoded(s.attn[out], dtype);
+  }
+}
+
 __global__ void hf_layer_qkv_prepare_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
@@ -1704,8 +1855,6 @@ cudaError_t launch_cublas_layer_session_step(
   LayerScratch scratch = layer_scratch_ptrs(
       session->device_scratch, session->hidden, attention_hidden, kv_hidden,
       session->intermediate);
-  const uint32_t qkv_prepare_blocks =
-      session->heads > session->kv_heads ? session->heads : session->kv_heads;
   const PackedProjectionShape packed_shape = packed_projection_shape(
       session->hidden, attention_hidden, kv_hidden, session->intermediate);
   if (err == cudaSuccess && session->layer_count > 0) {
@@ -1739,21 +1888,12 @@ cudaError_t launch_cublas_layer_session_step(
         static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
         session->dtype, 0.0f, scratch.q);
     if (err == cudaSuccess) {
-      hf_layer_qkv_prepare_kernel<<<qkv_prepare_blocks, kDecodeThreads, 0,
-                                    session->stream>>>(
+      hf_layer_qkv_attention_encode_kernel<<<session->heads, kDecodeThreads, 0,
+                                             session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
           session->hidden, session->heads, session->kv_heads, session->head_dim,
           session->intermediate, session->device_step, max_steps,
           session->rms_eps, session->rope_theta, session->device_scratch,
-          session->device_kv_keys, session->device_kv_values);
-      err = cudaGetLastError();
-    }
-    if (err == cudaSuccess) {
-      hf_layer_attention_encode_kernel<<<session->heads, kDecodeThreads, 0,
-                                         session->stream>>>(
-          layer_index, session->dtype, session->hidden, session->heads,
-          session->kv_heads, session->head_dim, session->intermediate,
-          session->device_step, max_steps, session->device_scratch,
           session->device_kv_keys, session->device_kv_values,
           session->device_projection_input);
       err = cudaGetLastError();
@@ -1861,8 +2001,6 @@ cudaError_t profile_cublas_layer_session_step(
   LayerScratch scratch = layer_scratch_ptrs(
       session->device_scratch, session->hidden, attention_hidden, kv_hidden,
       session->intermediate);
-  const uint32_t qkv_prepare_blocks =
-      session->heads > session->kv_heads ? session->heads : session->kv_heads;
 
   hf_decode_set_step_kernel<<<1, 1, 0, session->stream>>>(session->device_step,
                                                           cursor);
@@ -1908,21 +2046,12 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess) {
-      hf_layer_qkv_prepare_kernel<<<qkv_prepare_blocks, kDecodeThreads, 0,
-                                    session->stream>>>(
+      hf_layer_qkv_attention_encode_kernel<<<session->heads, kDecodeThreads, 0,
+                                             session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
           session->hidden, session->heads, session->kv_heads, session->head_dim,
           session->intermediate, session->device_step, max_steps,
           session->rms_eps, session->rope_theta, session->device_scratch,
-          session->device_kv_keys, session->device_kv_values);
-      err = cudaGetLastError();
-    }
-    if (err == cudaSuccess) {
-      hf_layer_attention_encode_kernel<<<session->heads, kDecodeThreads, 0,
-                                         session->stream>>>(
-          layer_index, session->dtype, session->hidden, session->heads,
-          session->kv_heads, session->head_dim, session->intermediate,
-          session->device_step, max_steps, session->device_scratch,
           session->device_kv_keys, session->device_kv_values,
           session->device_projection_input);
       err = cudaGetLastError();
