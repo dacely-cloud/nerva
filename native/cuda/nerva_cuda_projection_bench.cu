@@ -298,6 +298,80 @@ cudaError_t time_cublaslt(cublasLtHandle_t handle,
   return cudaSuccess;
 }
 
+cudaError_t time_cublaslt_graph(cublasLtHandle_t handle,
+                                cublasLtMatmulDesc_t op_desc,
+                                cublasLtMatrixLayout_t a_desc,
+                                cublasLtMatrixLayout_t b_desc,
+                                cublasLtMatrixLayout_t c_desc,
+                                cublasLtMatrixLayout_t d_desc,
+                                const NervaCudaProjectionBenchRequest *request,
+                                const uint16_t *matrix,
+                                const uint16_t *input,
+                                float *output,
+                                void *workspace,
+                                cudaStream_t stream,
+                                cudaEvent_t start,
+                                cudaEvent_t stop,
+                                uint64_t *total_ns,
+                                uint64_t *graph_nodes,
+                                uint64_t *graph_replays,
+                                const cublasLtMatmulAlgo_t *algo) {
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t graph_exec = nullptr;
+
+  cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+  if (err != cudaSuccess) return err;
+  err = launch_cublaslt(handle, op_desc, a_desc, b_desc, c_desc, d_desc,
+                        matrix, input, output, workspace, stream, algo);
+  cudaError_t end_err = cudaStreamEndCapture(stream, &graph);
+  if (err != cudaSuccess) {
+    if (end_err == cudaSuccess && graph != nullptr) cudaGraphDestroy(graph);
+    return err;
+  }
+  if (end_err != cudaSuccess) {
+    if (graph != nullptr) cudaGraphDestroy(graph);
+    return end_err;
+  }
+
+  size_t node_count = 0;
+  err = cudaGraphGetNodes(graph, nullptr, &node_count);
+  if (err == cudaSuccess) {
+    err = cudaGraphInstantiate(&graph_exec, graph, 0);
+  }
+  if (err != cudaSuccess) {
+    if (graph_exec != nullptr) cudaGraphExecDestroy(graph_exec);
+    if (graph != nullptr) cudaGraphDestroy(graph);
+    return err;
+  }
+
+  uint64_t launches = 0;
+  for (uint32_t index = 0; index < request->warmup_iterations; ++index) {
+    err = cudaGraphLaunch(graph_exec, stream);
+    if (err != cudaSuccess) break;
+    launches += 1;
+  }
+  if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+  if (err == cudaSuccess) err = cudaEventRecord(start, stream);
+  for (uint32_t index = 0; err == cudaSuccess && index < request->iterations;
+       ++index) {
+    err = cudaGraphLaunch(graph_exec, stream);
+    if (err == cudaSuccess) launches += 1;
+  }
+  if (err == cudaSuccess) err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) err = cudaEventSynchronize(stop);
+  if (err == cudaSuccess) {
+    *total_ns = elapsed_ns(start, stop);
+    *graph_nodes = static_cast<uint64_t>(node_count);
+    *graph_replays = launches;
+  }
+
+  cudaError_t cleanup_err = cudaGraphExecDestroy(graph_exec);
+  if (err == cudaSuccess && cleanup_err != cudaSuccess) err = cleanup_err;
+  cleanup_err = cudaGraphDestroy(graph);
+  if (err == cudaSuccess && cleanup_err != cudaSuccess) err = cleanup_err;
+  return err;
+}
+
 cudaError_t find_cublaslt_heuristics(
     cublasLtHandle_t handle,
     cublasLtMatmulDesc_t op_desc,
@@ -364,6 +438,74 @@ cudaError_t time_custom(const NervaCudaProjectionBenchRequest *request,
   if (err != cudaSuccess) return err;
   *total_ns = elapsed_ns(start, stop);
   return cudaSuccess;
+}
+
+cudaError_t time_custom_graph(const NervaCudaProjectionBenchRequest *request,
+                              const uint16_t *matrix,
+                              const uint16_t *input,
+                              float *output,
+                              cudaStream_t stream,
+                              cudaEvent_t start,
+                              cudaEvent_t stop,
+                              uint64_t *total_ns,
+                              uint64_t *graph_nodes,
+                              uint64_t *graph_replays) {
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t graph_exec = nullptr;
+  const dim3 grid(request->rows);
+
+  cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+  if (err != cudaSuccess) return err;
+  row_major_gemv_kernel<<<grid, kThreads, 0, stream>>>(
+      matrix, input, request->rows, request->cols, request->dtype, output);
+  err = cudaGetLastError();
+  cudaError_t end_err = cudaStreamEndCapture(stream, &graph);
+  if (err != cudaSuccess) {
+    if (end_err == cudaSuccess && graph != nullptr) cudaGraphDestroy(graph);
+    return err;
+  }
+  if (end_err != cudaSuccess) {
+    if (graph != nullptr) cudaGraphDestroy(graph);
+    return end_err;
+  }
+
+  size_t node_count = 0;
+  err = cudaGraphGetNodes(graph, nullptr, &node_count);
+  if (err == cudaSuccess) {
+    err = cudaGraphInstantiate(&graph_exec, graph, 0);
+  }
+  if (err != cudaSuccess) {
+    if (graph_exec != nullptr) cudaGraphExecDestroy(graph_exec);
+    if (graph != nullptr) cudaGraphDestroy(graph);
+    return err;
+  }
+
+  uint64_t launches = 0;
+  for (uint32_t index = 0; index < request->warmup_iterations; ++index) {
+    err = cudaGraphLaunch(graph_exec, stream);
+    if (err != cudaSuccess) break;
+    launches += 1;
+  }
+  if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+  if (err == cudaSuccess) err = cudaEventRecord(start, stream);
+  for (uint32_t index = 0; err == cudaSuccess && index < request->iterations;
+       ++index) {
+    err = cudaGraphLaunch(graph_exec, stream);
+    if (err == cudaSuccess) launches += 1;
+  }
+  if (err == cudaSuccess) err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) err = cudaEventSynchronize(stop);
+  if (err == cudaSuccess) {
+    *total_ns = elapsed_ns(start, stop);
+    *graph_nodes = static_cast<uint64_t>(node_count);
+    *graph_replays = launches;
+  }
+
+  cudaError_t cleanup_err = cudaGraphExecDestroy(graph_exec);
+  if (err == cudaSuccess && cleanup_err != cudaSuccess) err = cleanup_err;
+  cleanup_err = cudaGraphDestroy(graph);
+  if (err == cudaSuccess && cleanup_err != cudaSuccess) err = cleanup_err;
+  return err;
 }
 
 }  // namespace
@@ -542,6 +684,59 @@ extern "C" int nerva_cuda_projection_bench(
   if (out->custom_total_ns > 0) {
     out->custom_avg_ns = out->custom_total_ns / request->iterations;
   }
+  uint64_t graph_replays = 0;
+  err = time_cublaslt_graph(
+      lt, op_desc, a_desc, b_desc, c_desc, d_desc, request, matrix, input,
+      cublas_output, workspace, stream, start, stop,
+      &out->cublaslt_default_graph_total_ns, &out->cublaslt_graph_nodes,
+      &graph_replays, nullptr);
+  if (err != cudaSuccess) return fail_with_cleanup(err);
+  out->graph_captures += 1;
+  out->graph_replays += graph_replays;
+  out->sync_calls += 2;
+  out->cublaslt_default_graph_avg_ns =
+      out->cublaslt_default_graph_total_ns / request->iterations;
+  out->cublaslt_graph_total_ns = out->cublaslt_default_graph_total_ns;
+  out->cublaslt_graph_avg_ns = out->cublaslt_default_graph_avg_ns;
+
+  if (out->cublaslt_best_heuristic_index != kNoHeuristicIndex &&
+      out->cublaslt_best_heuristic_index < heuristic_count) {
+    uint64_t best_graph_nodes = 0;
+    graph_replays = 0;
+    err = time_cublaslt_graph(
+        lt, op_desc, a_desc, b_desc, c_desc, d_desc, request, matrix, input,
+        cublas_output, workspace, stream, start, stop,
+        &out->cublaslt_best_heuristic_graph_total_ns, &best_graph_nodes,
+        &graph_replays, &heuristics[out->cublaslt_best_heuristic_index].algo);
+    if (err != cudaSuccess) return fail_with_cleanup(err);
+    out->graph_captures += 1;
+    out->graph_replays += graph_replays;
+    out->sync_calls += 2;
+    out->cublaslt_best_heuristic_graph_avg_ns =
+        out->cublaslt_best_heuristic_graph_total_ns / request->iterations;
+    if (out->cublaslt_best_heuristic_graph_avg_ns > 0 &&
+        out->cublaslt_best_heuristic_graph_avg_ns < out->cublaslt_graph_avg_ns) {
+      out->cublaslt_graph_total_ns =
+          out->cublaslt_best_heuristic_graph_total_ns;
+      out->cublaslt_graph_avg_ns = out->cublaslt_best_heuristic_graph_avg_ns;
+      out->cublaslt_graph_nodes = best_graph_nodes;
+    }
+  }
+
+  graph_replays = 0;
+  err = time_custom_graph(request, matrix, input, custom_output, stream, start,
+                          stop, &out->custom_graph_total_ns,
+                          &out->custom_graph_nodes, &graph_replays);
+  if (err != cudaSuccess) return fail_with_cleanup(err);
+  out->graph_captures += 1;
+  out->graph_replays += graph_replays;
+  out->sync_calls += 2;
+  out->custom_graph_avg_ns = out->custom_graph_total_ns / request->iterations;
+  out->selected_graph_strategy =
+      out->custom_graph_avg_ns > 0 &&
+              out->custom_graph_avg_ns < out->cublaslt_graph_avg_ns
+          ? kStrategyCustom
+          : kStrategyCublasLt;
   const uint64_t bytes_per_projection =
       out->matrix_bytes + out->input_bytes + out->output_bytes;
   out->cublaslt_effective_bandwidth_bps = effective_bandwidth(

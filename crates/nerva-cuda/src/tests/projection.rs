@@ -26,6 +26,19 @@ fn projection_bench_summary_reports_selected_strategy() {
         cublaslt_best_heuristic_avg_ns: 2_000,
         custom_total_ns: 4_000,
         custom_avg_ns: 1_000,
+        cublaslt_graph_total_ns: 7_200,
+        cublaslt_graph_avg_ns: 1_800,
+        cublaslt_default_graph_total_ns: 8_000,
+        cublaslt_default_graph_avg_ns: 2_000,
+        cublaslt_best_heuristic_graph_total_ns: 7_200,
+        cublaslt_best_heuristic_graph_avg_ns: 1_800,
+        custom_graph_total_ns: 4_400,
+        custom_graph_avg_ns: 1_100,
+        cublaslt_graph_nodes: 1,
+        custom_graph_nodes: 1,
+        graph_replays: 15,
+        graph_captures: 3,
+        selected_graph_strategy: PROJECTION_STRATEGY_CUSTOM,
         cublaslt_effective_bandwidth_bps: 8_000_000,
         custom_effective_bandwidth_bps: 16_000_000,
         selected_strategy: PROJECTION_STRATEGY_CUSTOM,
@@ -42,10 +55,16 @@ fn projection_bench_summary_reports_selected_strategy() {
 
     assert!(summary.passed());
     assert_eq!(summary.selected_strategy_name(), "custom_row_major");
+    assert_eq!(summary.selected_graph_strategy_name(), "custom_row_major");
     assert!(
         summary
             .to_json()
             .contains("\"selected_strategy\":\"custom_row_major\"")
+    );
+    assert!(
+        summary
+            .to_json()
+            .contains("\"selected_graph_strategy\":\"custom_row_major\"")
     );
 }
 
@@ -73,6 +92,19 @@ fn projection_bench_summary_rejects_mismatches_and_unfreed_allocations() {
         cublaslt_best_heuristic_avg_ns: 0,
         custom_total_ns: 12_000,
         custom_avg_ns: 3_000,
+        cublaslt_graph_total_ns: 8_000,
+        cublaslt_graph_avg_ns: 2_000,
+        cublaslt_default_graph_total_ns: 8_000,
+        cublaslt_default_graph_avg_ns: 2_000,
+        cublaslt_best_heuristic_graph_total_ns: 0,
+        cublaslt_best_heuristic_graph_avg_ns: 0,
+        custom_graph_total_ns: 12_000,
+        custom_graph_avg_ns: 3_000,
+        cublaslt_graph_nodes: 1,
+        custom_graph_nodes: 1,
+        graph_replays: 10,
+        graph_captures: 2,
+        selected_graph_strategy: PROJECTION_STRATEGY_CUBLASLT,
         cublaslt_effective_bandwidth_bps: 8_000_000,
         custom_effective_bandwidth_bps: 5_000_000,
         selected_strategy: PROJECTION_STRATEGY_CUBLASLT,

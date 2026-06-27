@@ -1,4 +1,4 @@
-use crate::json::{json_opt_i32, json_opt_str};
+use crate::projection::summary_json::summary_to_json;
 use crate::smoke::status::SmokeStatus;
 
 pub const PROJECTION_STRATEGY_CUBLASLT: u32 = 1;
@@ -27,6 +27,19 @@ pub struct CudaProjectionBenchSummary {
     pub cublaslt_best_heuristic_avg_ns: u64,
     pub custom_total_ns: u64,
     pub custom_avg_ns: u64,
+    pub cublaslt_graph_total_ns: u64,
+    pub cublaslt_graph_avg_ns: u64,
+    pub cublaslt_default_graph_total_ns: u64,
+    pub cublaslt_default_graph_avg_ns: u64,
+    pub cublaslt_best_heuristic_graph_total_ns: u64,
+    pub cublaslt_best_heuristic_graph_avg_ns: u64,
+    pub custom_graph_total_ns: u64,
+    pub custom_graph_avg_ns: u64,
+    pub cublaslt_graph_nodes: u64,
+    pub custom_graph_nodes: u64,
+    pub graph_replays: u64,
+    pub graph_captures: u64,
+    pub selected_graph_strategy: u32,
     pub cublaslt_effective_bandwidth_bps: u64,
     pub custom_effective_bandwidth_bps: u64,
     pub selected_strategy: u32,
@@ -72,6 +85,19 @@ impl CudaProjectionBenchSummary {
             cublaslt_best_heuristic_avg_ns: 0,
             custom_total_ns: 0,
             custom_avg_ns: 0,
+            cublaslt_graph_total_ns: 0,
+            cublaslt_graph_avg_ns: 0,
+            cublaslt_default_graph_total_ns: 0,
+            cublaslt_default_graph_avg_ns: 0,
+            cublaslt_best_heuristic_graph_total_ns: 0,
+            cublaslt_best_heuristic_graph_avg_ns: 0,
+            custom_graph_total_ns: 0,
+            custom_graph_avg_ns: 0,
+            cublaslt_graph_nodes: 0,
+            custom_graph_nodes: 0,
+            graph_replays: 0,
+            graph_captures: 0,
+            selected_graph_strategy: 0,
             cublaslt_effective_bandwidth_bps: 0,
             custom_effective_bandwidth_bps: 0,
             selected_strategy: 0,
@@ -108,8 +134,18 @@ impl CudaProjectionBenchSummary {
             && self.iterations > 0
             && self.cublaslt_avg_ns > 0
             && self.custom_avg_ns > 0
+            && self.cublaslt_graph_avg_ns > 0
+            && self.custom_graph_avg_ns > 0
+            && self.cublaslt_graph_nodes > 0
+            && self.custom_graph_nodes > 0
+            && self.graph_replays > 0
+            && self.graph_captures > 0
             && matches!(
                 self.selected_strategy,
+                PROJECTION_STRATEGY_CUBLASLT | PROJECTION_STRATEGY_CUSTOM
+            )
+            && matches!(
+                self.selected_graph_strategy,
                 PROJECTION_STRATEGY_CUBLASLT | PROJECTION_STRATEGY_CUSTOM
             )
             && self.mismatch_count == 0
@@ -126,48 +162,15 @@ impl CudaProjectionBenchSummary {
         }
     }
 
+    pub fn selected_graph_strategy_name(&self) -> &'static str {
+        match self.selected_graph_strategy {
+            PROJECTION_STRATEGY_CUBLASLT => "cublaslt",
+            PROJECTION_STRATEGY_CUSTOM => "custom_row_major",
+            _ => "none",
+        }
+    }
+
     pub fn to_json(&self) -> String {
-        let status = match self.status {
-            SmokeStatus::Ok => "ok",
-            SmokeStatus::Unavailable => "unavailable",
-            SmokeStatus::Failed => "failed",
-        };
-        format!(
-            "{{\"status\":\"{}\",\"dtype\":{},\"rows\":{},\"cols\":{},\"iterations\":{},\"warmup_iterations\":{},\"compute_capability_major\":{},\"compute_capability_minor\":{},\"matrix_bytes\":{},\"input_bytes\":{},\"output_bytes\":{},\"cublaslt_total_ns\":{},\"cublaslt_avg_ns\":{},\"cublaslt_default_total_ns\":{},\"cublaslt_default_avg_ns\":{},\"cublaslt_heuristic_count\":{},\"cublaslt_best_heuristic_index\":{},\"cublaslt_best_heuristic_total_ns\":{},\"cublaslt_best_heuristic_avg_ns\":{},\"custom_total_ns\":{},\"custom_avg_ns\":{},\"cublaslt_effective_bandwidth_bps\":{},\"custom_effective_bandwidth_bps\":{},\"selected_strategy\":\"{}\",\"selected_strategy_id\":{},\"mismatch_count\":{},\"max_abs_diff\":{},\"kernel_launches\":{},\"sync_calls\":{},\"device_allocations\":{},\"device_frees\":{},\"device_arena_bytes\":{},\"hot_path_allocations\":{},\"error\":{}}}",
-            status,
-            self.dtype,
-            self.rows,
-            self.cols,
-            self.iterations,
-            self.warmup_iterations,
-            json_opt_i32(self.compute_capability_major),
-            json_opt_i32(self.compute_capability_minor),
-            self.matrix_bytes,
-            self.input_bytes,
-            self.output_bytes,
-            self.cublaslt_total_ns,
-            self.cublaslt_avg_ns,
-            self.cublaslt_default_total_ns,
-            self.cublaslt_default_avg_ns,
-            self.cublaslt_heuristic_count,
-            self.cublaslt_best_heuristic_index,
-            self.cublaslt_best_heuristic_total_ns,
-            self.cublaslt_best_heuristic_avg_ns,
-            self.custom_total_ns,
-            self.custom_avg_ns,
-            self.cublaslt_effective_bandwidth_bps,
-            self.custom_effective_bandwidth_bps,
-            self.selected_strategy_name(),
-            self.selected_strategy,
-            self.mismatch_count,
-            self.max_abs_diff,
-            self.kernel_launches,
-            self.sync_calls,
-            self.device_allocations,
-            self.device_frees,
-            self.device_arena_bytes,
-            self.hot_path_allocations,
-            json_opt_str(self.error.as_deref()),
-        )
+        summary_to_json(self)
     }
 }
