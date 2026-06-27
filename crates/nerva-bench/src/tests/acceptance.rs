@@ -77,6 +77,7 @@ fn acceptance_probe_reports_current_invariants() {
     assert!(json.contains("\"safetensors_file_header\""));
     assert!(json.contains("\"safetensors_file_prefetch\""));
     assert!(json.contains("\"vllm_token_identity_parity\""));
+    assert!(json.contains("\"qwen3_vllm_nerva_token_parity\""));
     assert!(json.contains("\"cuda_tiered_attention\""));
     assert!(json.contains("\"kv_residency_tiering\""));
     assert!(json.contains("\"tiered_kv_attention_execution\""));

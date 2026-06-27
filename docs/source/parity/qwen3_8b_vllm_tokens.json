@@ -1,0 +1,11 @@
+{
+  "schema": "nerva-vllm-token-artifact-v1",
+  "engine": "vllm",
+  "workload": "qwen3_8b_bf16_greedy_decode",
+  "model": "Qwen3-8B local safetensors snapshot",
+  "prompt_token_ids": [0],
+  "max_tokens": 2,
+  "token_ids": [50994, 67],
+  "measurement_date": "2026-06-27",
+  "source": "tools/vllm_token_artifact.py with vLLM 0.23.1rc1.dev455+g27da2a2ac"
+}

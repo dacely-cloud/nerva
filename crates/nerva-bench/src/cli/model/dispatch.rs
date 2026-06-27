@@ -35,6 +35,7 @@ pub(crate) fn dispatch(
             args,
         )),
         Some("vllm-parity") => Some(parity::run_vllm_parity(args)),
+        Some("token-parity") => Some(parity::run_token_parity(args)),
         Some("attention") => Some(attention::run_attention()),
         Some("warm") => Some(warm::run_warm_compute()),
         Some("contracts") => Some(contracts::run_kernel_contracts()),

@@ -7,6 +7,7 @@ use crate::parity::json::{json_opt_usize, token_ids_to_json};
 pub(crate) struct TokenIdentityParitySummary {
     pub status: TokenIdentityParityStatus,
     pub source_format: &'static str,
+    pub candidate_source_format: &'static str,
     pub steps: usize,
     pub seed_token: TokenId,
     pub vllm_tokens: Vec<TokenId>,
@@ -37,9 +38,10 @@ impl TokenIdentityParitySummary {
             TokenIdentityParityStatus::Mismatch => "mismatch",
         };
         format!(
-            "{{\"status\":\"{}\",\"source_format\":\"{}\",\"steps\":{},\"seed_token\":{},\"vllm_tokens\":{},\"nerva_tokens\":{},\"matched_tokens\":{},\"mismatched_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"first_mismatch_index\":{},\"vllm_token_hash\":{},\"nerva_token_hash\":{},\"hot_path_allocations\":{}}}",
+            "{{\"status\":\"{}\",\"source_format\":\"{}\",\"candidate_source_format\":\"{}\",\"steps\":{},\"seed_token\":{},\"vllm_tokens\":{},\"nerva_tokens\":{},\"matched_tokens\":{},\"mismatched_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"first_mismatch_index\":{},\"vllm_token_hash\":{},\"nerva_token_hash\":{},\"hot_path_allocations\":{}}}",
             status,
             json_escape(self.source_format),
+            json_escape(self.candidate_source_format),
             self.steps,
             self.seed_token.0,
             token_ids_to_json(&self.vllm_tokens),

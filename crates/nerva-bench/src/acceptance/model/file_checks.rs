@@ -9,6 +9,11 @@ pub(crate) fn push_manifest_and_file_checks(report: &mut AcceptanceReport) {
         Err(err) => report.push("vllm_token_identity_parity", false, err),
     }
 
+    match vllm::qwen3_vllm_nerva_token_acceptance() {
+        Ok((passed, details)) => report.push("qwen3_vllm_nerva_token_parity", passed, details),
+        Err(err) => report.push("qwen3_vllm_nerva_token_parity", false, err),
+    }
+
     match manifest::model_manifest_acceptance() {
         Ok((passed, details)) => report.push("hf_model_manifest", passed, details),
         Err(err) => report.push("hf_model_manifest", false, err),

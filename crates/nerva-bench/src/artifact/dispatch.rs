@@ -10,7 +10,7 @@ use crate::{
         },
         safetensors::{run_safetensors_probe, run_safetensors_shard_probe},
     },
-    parity::run::run_vllm_token_identity_parity,
+    parity::run::{run_token_identity_artifact_parity, run_vllm_token_identity_parity},
     parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize},
     perf::{external::external_baseline_json_from_args, run::perf_baseline_json_from_args},
     probes::{
@@ -111,6 +111,9 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "vllm-parity" => {
             let steps = parse_optional_usize(args.get(1).cloned(), 8, "steps")?;
             run_vllm_token_identity_parity(args.first().cloned(), steps)
+        }
+        "token-parity" => {
+            run_token_identity_artifact_parity(args.first().cloned(), args.get(1).cloned())
         }
         "perf-baseline" => perf_baseline_json_from_args(args),
         "external-baseline" => external_baseline_json_from_args(args),

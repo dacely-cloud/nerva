@@ -1,4 +1,4 @@
-use crate::parity::run::compare_vllm_token_identity;
+use crate::parity::run::{compare_token_identity_artifacts, compare_vllm_token_identity};
 use crate::parity::summary::TokenIdentityParityStatus;
 
 #[test]
@@ -47,4 +47,38 @@ fn rejects_missing_or_invalid_token_arrays() {
     assert!(compare_vllm_token_identity(r#"{"text":"hello"}"#, 4).is_err());
     assert!(compare_vllm_token_identity(r#"{"token_ids":[1,-2]}"#, 4).is_err());
     assert!(compare_vllm_token_identity(r#"{"token_ids":["1"]}"#, 4).is_err());
+}
+
+#[test]
+fn compares_external_token_artifacts_without_tiny_model_substitution() {
+    let baseline = r#"{"engine":"vllm","outputs":[{"token_ids":[50994,67]}]}"#;
+    let candidate = r#"{"engine":"nerva","tokens":[50994,67],"hot_path_allocations":0}"#;
+
+    let summary = compare_token_identity_artifacts(baseline, candidate).unwrap();
+
+    assert!(summary.passed());
+    assert_eq!(summary.source_format, "token_ids");
+    assert_eq!(summary.candidate_source_format, "tokens");
+    assert_eq!(summary.vllm_tokens, summary.nerva_tokens);
+    assert_eq!(summary.steps, 2);
+    assert!(
+        summary
+            .to_json()
+            .contains("\"candidate_source_format\":\"tokens\"")
+    );
+}
+
+#[test]
+fn external_token_artifact_parity_rejects_mismatch_or_hot_path_allocations() {
+    let baseline = r#"{"token_ids":[1,2]}"#;
+    let mismatch = r#"{"tokens":[1,3],"hot_path_allocations":0}"#;
+    let allocated = r#"{"tokens":[1,2],"hot_path_allocations":1}"#;
+
+    let mismatch = compare_token_identity_artifacts(baseline, mismatch).unwrap();
+    assert_eq!(mismatch.status, TokenIdentityParityStatus::Mismatch);
+    assert_eq!(mismatch.first_mismatch_index, Some(1));
+
+    let allocated = compare_token_identity_artifacts(baseline, allocated).unwrap();
+    assert_eq!(allocated.status, TokenIdentityParityStatus::Mismatch);
+    assert_eq!(allocated.hot_path_allocations, 1);
 }
