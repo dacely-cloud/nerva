@@ -11,6 +11,7 @@ publish.workspace = true
 nerva-core.workspace = true
 nerva-cuda.workspace = true
 nerva-kernel-contracts.workspace = true
+nerva-ledger.workspace = true
 nerva-model.workspace = true
 nerva-runtime.workspace = true
 tokenizers = "0.20"

@@ -1,3 +1,4 @@
+use crate::block::forward::request::{CUDA_BLOCK_DTYPE_F16, CudaBlockForwardRequest};
 use crate::block::summary::{CudaLoadedTinyBlockSummary, CudaTinyBlockSummary};
 use crate::smoke::status::SmokeStatus;
 
@@ -51,4 +52,55 @@ fn loaded_tiny_block_summary_serializes_residency_fields() {
     assert!(json.contains("\"D2H_bytes\":4"));
     assert!(json.contains("\"kernel_launches\":1"));
     assert!(json.contains("\"hot_path_allocations\":0"));
+}
+
+#[test]
+fn generic_block_forward_runs_loaded_tiny_weights() {
+    let zero = 0x0000;
+    let half = 0x3800;
+    let one = 0x3c00;
+    let two = 0x4000;
+    let input = [one, two];
+    let rms = [one, one];
+    let identity = [one, zero, zero, one];
+    let gate = [half, zero, zero, half];
+    let request = CudaBlockForwardRequest {
+        dtype: CUDA_BLOCK_DTYPE_F16,
+        hidden: 2,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 2,
+        position: 0,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        input: &input,
+        rms_attn_weight: &rms,
+        rms_mlp_weight: &rms,
+        w_q: &identity,
+        w_k: &identity,
+        w_v: &identity,
+        w_o: &identity,
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &gate,
+        w_up: &identity,
+        w_down: &identity,
+    };
+
+    let summary = request.run();
+
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+    assert_eq!(summary.status, SmokeStatus::Ok);
+    assert_eq!(summary.output, [16126, 17299]);
+    assert_eq!(summary.output_hash, 17766510782028265595);
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert!(summary.h2d_bytes >= summary.resident_weight_bytes);
+    assert!(summary.to_json().contains("\"status\":\"ok\""));
 }

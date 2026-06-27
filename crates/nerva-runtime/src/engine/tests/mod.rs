@@ -4,6 +4,7 @@ mod capabilities;
 mod compute_near_data;
 mod correctness;
 mod critical_path;
+mod cuda_block;
 mod graph;
 mod hot_path;
 mod kv;

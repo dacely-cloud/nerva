@@ -346,6 +346,7 @@ dependencies = [
  "nerva-core",
  "nerva-cuda",
  "nerva-kernel-contracts",
+ "nerva-ledger",
  "nerva-model",
  "nerva-runtime",
  "tokenizers",

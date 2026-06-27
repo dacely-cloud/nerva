@@ -14,6 +14,7 @@ impl NativeCudaSources {
             "nerva_cuda_backend_contract.cu",
             "nerva_cuda_synthetic_graph.cu",
             "nerva_cuda_tiny_block.cu",
+            "nerva_cuda_block_forward.cu",
             "nerva_cuda_greedy_sampler.cu",
             "nerva_cuda_tiny_decode.cu",
             "nerva_cuda_tiered_attention.cu",

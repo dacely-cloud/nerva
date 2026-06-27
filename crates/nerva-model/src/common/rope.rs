@@ -10,7 +10,7 @@ pub(crate) fn apply_rotary_to_query_key(
     query: &mut [f32],
     key: &mut [f32],
 ) -> Result<()> {
-    require_len("RoPE query", query.len(), shape.hidden)?;
+    require_len("RoPE query", query.len(), shape.attention_hidden())?;
     require_len("RoPE key", key.len(), shape.kv_hidden())?;
     apply_rotary_to_query(shape, position, theta, query)?;
     apply_rotary_to_key(shape, position, theta, key)
@@ -22,7 +22,7 @@ pub(crate) fn apply_rotary_to_query(
     theta: f32,
     query: &mut [f32],
 ) -> Result<()> {
-    require_len("RoPE query", query.len(), shape.hidden)?;
+    require_len("RoPE query", query.len(), shape.attention_hidden())?;
     apply_rotary_to_heads(shape.head_dim(), shape.heads, position, theta, query)
 }
 

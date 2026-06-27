@@ -6,6 +6,7 @@ mod hf_contract;
 mod hf_head_dim;
 mod precision;
 mod precision_bias;
+mod precision_rope;
 mod prompt;
 mod reference;
 mod safetensors;

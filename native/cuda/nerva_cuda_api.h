@@ -96,6 +96,54 @@ typedef struct NervaCudaLoadedTinyBlockResult {
   uint64_t hot_path_allocations;
 } NervaCudaLoadedTinyBlockResult;
 
+typedef struct NervaCudaBlockForwardRequest {
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint32_t position;
+  float rms_eps;
+  float rope_theta;
+  const uint16_t *input;
+  const uint16_t *rms_attn_weight;
+  const uint16_t *rms_mlp_weight;
+  const uint16_t *w_q;
+  const uint16_t *w_k;
+  const uint16_t *w_v;
+  const uint16_t *w_o;
+  const uint16_t *q_bias;
+  const uint16_t *k_bias;
+  const uint16_t *v_bias;
+  const uint16_t *o_bias;
+  const uint16_t *w_gate;
+  const uint16_t *w_up;
+  const uint16_t *w_down;
+  uint16_t *output;
+} NervaCudaBlockForwardRequest;
+
+typedef struct NervaCudaBlockForwardResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t dtype;
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint64_t output_hash;
+  uint64_t resident_weight_bytes;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaBlockForwardResult;
+
 typedef struct NervaCudaGreedySamplerResult {
   int32_t status;
   int32_t cuda_error;
@@ -217,6 +265,8 @@ int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      NervaCudaSyntheticGraphResult *out);
 int nerva_cuda_tiny_block_smoke(NervaCudaTinyBlockResult *out);
 int nerva_cuda_loaded_tiny_block_smoke(NervaCudaLoadedTinyBlockResult *out);
+int nerva_cuda_block_forward_u16(const NervaCudaBlockForwardRequest *request,
+                                 NervaCudaBlockForwardResult *out);
 int nerva_cuda_greedy_sampler_smoke(NervaCudaGreedySamplerResult *out);
 int nerva_cuda_tiny_decode_smoke(uint32_t steps,
                                  uint32_t ring_capacity,
