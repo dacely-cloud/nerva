@@ -20,6 +20,9 @@ fn hf_cuda_decode_cli_loads_checkpoint_dir_and_reports_cuda_ledgers() {
     assert!(json.contains("\"ledger_count\":2"));
     assert!(json.contains("\"device_events\":2"));
     assert!(json.contains("\"resident_kv_bytes\":"));
+    assert!(json.contains("\"resident_weight_plan\""));
+    assert!(json.contains("\"plan_steps\":12"));
+    assert!(json.contains("\"run_steps\":12"));
     assert!(json.contains("\"kv_tokens\":2"));
     assert!(json.contains("\"graph_replays\":2"));
     assert!(json.contains("\"graph_launches\":2"));
@@ -55,6 +58,7 @@ fn hf_cuda_decode_cli_accepts_token_id_prompt_sequence() {
     assert!(json.contains("\"prompt_tokens\":2"));
     assert!(json.contains("\"seed_token\":1"));
     assert!(json.contains("\"kv_tokens\":3"));
+    assert!(json.contains("\"plan_gpu_staged_steps\":12"));
     assert!(json.contains("\"graph_replays\":3"));
     assert!(json.contains("\"parity\":true"));
 
@@ -78,6 +82,7 @@ fn hf_cuda_decode_cli_uses_hf_tokenizer_json_for_text_prompt() {
     assert!(json.contains("\"generated_text\":\"zero zero\""));
     assert!(json.contains("\"seed_token\":2"));
     assert!(json.contains("\"kv_tokens\":3"));
+    assert!(json.contains("\"run_gpu_staged_steps\":12"));
     assert!(json.contains("\"parity\":true"));
 
     remove_checkpoint_dir(&dir);

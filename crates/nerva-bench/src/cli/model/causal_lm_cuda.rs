@@ -2,8 +2,9 @@ use std::process::ExitCode;
 
 use nerva_core::types::id::token::TokenId;
 use nerva_runtime::engine::hf_cuda_decode::run::{
-    run_hf_causal_lm_cuda_prompt_decode, run_hf_causal_lm_cuda_seed_decode,
+    run_loaded_hf_causal_lm_cuda_prompt_decode, run_loaded_hf_causal_lm_cuda_seed_decode,
 };
+use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 use tokenizers::Tokenizer;
 
 use crate::cli::exit;
@@ -79,20 +80,22 @@ fn hf_causal_lm_cuda_decode_with_tokens_json(
 ) -> Result<String, String> {
     let loaded = nerva_model::causal_lm::types::HfCausalLmModel::load_from_hf_dir(&path)
         .map_err(|err| format!("HF causal LM load failed: {err:?}"))?;
-    let model = loaded.model;
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let model = &loaded.model;
     let dtype = nerva_model::precision::bits::dtype_label(model.dtype())
         .map_err(|err| format!("HF causal LM dtype failed: {err:?}"))?;
     let prompt_tokens: Vec<TokenId> = prompt_token_ids.iter().copied().map(TokenId).collect();
     let summary = if prompt_tokens.len() == 1 {
-        run_hf_causal_lm_cuda_seed_decode(&model, prompt_tokens[0], steps)
+        run_loaded_hf_causal_lm_cuda_seed_decode(&runtime, &loaded, prompt_tokens[0], steps, None)
     } else {
-        run_hf_causal_lm_cuda_prompt_decode(&model, &prompt_tokens, steps)
+        run_loaded_hf_causal_lm_cuda_prompt_decode(&runtime, &loaded, &prompt_tokens, steps, None)
     }
     .map_err(|err| format!("HF CUDA causal LM decode failed: {err:?}"))?;
     let generated_text = generated_text_json(&path, &summary.tokens)?;
 
     Ok(format!(
-        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"seed_token\":{},\"steps\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"tokens\":{},\"expected_tokens\":{},\"generated_text\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"error\":{}}}",
+        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"seed_token\":{},\"steps\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"tokens\":{},\"expected_tokens\":{},\"generated_text\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"error\":{}}}",
         status_json(&summary.status),
         json_escape(&path),
         input_mode,
@@ -129,6 +132,7 @@ fn hf_causal_lm_cuda_decode_with_tokens_json(
         summary.hot_path_allocations,
         summary.output_hash,
         summary.expected_hash,
+        summary.resident_weights.to_json(),
         json_opt_string(summary.error.as_deref()),
     ))
 }

@@ -1,12 +1,14 @@
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
 use nerva_cuda::smoke::status::SmokeStatus;
-use nerva_model::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
+use nerva_model::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmLoaded, HfCausalLmModel};
 
+use crate::engine::hf_cuda_decode::resident::loaded_resident_weight_summary;
 use crate::engine::hf_cuda_decode::sequence::run_device_sequence;
 use crate::engine::hf_cuda_decode::sequence_ledger::sequence_ledgers;
 use crate::engine::hf_cuda_decode::summary::HfCudaSeedDecodeSummary;
 use crate::engine::hf_cuda_decode::totals::{CudaDecodeCounters, DecodeParts, build_summary};
+use crate::engine::runtime::Runtime;
 
 pub fn run_hf_causal_lm_cuda_seed_decode(
     model: &HfCausalLmModel,
@@ -82,4 +84,28 @@ pub fn run_hf_causal_lm_cuda_prompt_decode(
         counters,
         error,
     ))
+}
+
+pub fn run_loaded_hf_causal_lm_cuda_prompt_decode(
+    runtime: &Runtime,
+    loaded: &HfCausalLmLoaded,
+    prompt_tokens: &[TokenId],
+    steps: usize,
+    compute_capability: Option<u32>,
+) -> Result<HfCudaSeedDecodeSummary> {
+    let resident_weights = loaded_resident_weight_summary(runtime, loaded, compute_capability)?;
+    let mut summary = run_hf_causal_lm_cuda_prompt_decode(&loaded.model, prompt_tokens, steps)?;
+    summary.hot_path_allocations += resident_weights.hot_path_allocations;
+    summary.resident_weights = resident_weights;
+    Ok(summary)
+}
+
+pub fn run_loaded_hf_causal_lm_cuda_seed_decode(
+    runtime: &Runtime,
+    loaded: &HfCausalLmLoaded,
+    seed: TokenId,
+    steps: usize,
+    compute_capability: Option<u32>,
+) -> Result<HfCudaSeedDecodeSummary> {
+    run_loaded_hf_causal_lm_cuda_prompt_decode(runtime, loaded, &[seed], steps, compute_capability)
 }

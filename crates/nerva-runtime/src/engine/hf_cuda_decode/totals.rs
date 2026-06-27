@@ -6,7 +6,9 @@ use nerva_ledger::types::sync::SyncClass;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::engine::hf_cuda_decode::hash::hash_tokens;
-use crate::engine::hf_cuda_decode::summary::HfCudaSeedDecodeSummary;
+use crate::engine::hf_cuda_decode::summary::{
+    HfCudaResidentWeightSummary, HfCudaSeedDecodeSummary,
+};
 
 #[derive(Default)]
 pub(super) struct CudaDecodeCounters {
@@ -46,6 +48,7 @@ pub(super) struct DecodeParts {
     tokens: Vec<TokenId>,
     expected_tokens: Vec<TokenId>,
     ledgers: Vec<TokenLedger>,
+    resident_weights: HfCudaResidentWeightSummary,
 }
 
 impl DecodeParts {
@@ -60,8 +63,10 @@ impl DecodeParts {
             tokens,
             expected_tokens,
             ledgers,
+            resident_weights: HfCudaResidentWeightSummary::default(),
         }
     }
+
 }
 
 pub(super) fn build_summary(
@@ -99,6 +104,7 @@ pub(super) fn build_summary(
             + hot_path_allocations(cpu_ledgers),
         output_hash,
         expected_hash,
+        resident_weights: parts.resident_weights,
         tokens: parts.tokens,
         expected_tokens: parts.expected_tokens,
         error,

@@ -3,6 +3,42 @@ use nerva_cuda::smoke::status::SmokeStatus;
 
 use crate::engine::hf_cuda_decode::hash::tokens_json;
 
+#[derive(Clone, Debug, Default)]
+pub struct HfCudaResidentWeightSummary {
+    pub plan_steps: u64,
+    pub plan_weight_bytes: u64,
+    pub plan_gpu_resident_steps: u64,
+    pub plan_gpu_staged_steps: u64,
+    pub plan_fallback_steps: u64,
+    pub plan_block_version_dependencies: u64,
+    pub run_steps: u64,
+    pub run_gpu_resident_steps: u64,
+    pub run_gpu_staged_steps: u64,
+    pub run_fallback_steps: u64,
+    pub run_block_version_dependencies: u64,
+    pub hot_path_allocations: u64,
+}
+
+impl HfCudaResidentWeightSummary {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"plan_steps\":{},\"plan_weight_bytes\":{},\"plan_gpu_resident_steps\":{},\"plan_gpu_staged_steps\":{},\"plan_fallback_steps\":{},\"plan_block_version_dependencies\":{},\"run_steps\":{},\"run_gpu_resident_steps\":{},\"run_gpu_staged_steps\":{},\"run_fallback_steps\":{},\"run_block_version_dependencies\":{},\"hot_path_allocations\":{}}}",
+            self.plan_steps,
+            self.plan_weight_bytes,
+            self.plan_gpu_resident_steps,
+            self.plan_gpu_staged_steps,
+            self.plan_fallback_steps,
+            self.plan_block_version_dependencies,
+            self.run_steps,
+            self.run_gpu_resident_steps,
+            self.run_gpu_staged_steps,
+            self.run_fallback_steps,
+            self.run_block_version_dependencies,
+            self.hot_path_allocations,
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HfCudaSeedDecodeSummary {
     pub status: SmokeStatus,
@@ -30,6 +66,7 @@ pub struct HfCudaSeedDecodeSummary {
     pub hot_path_allocations: u64,
     pub output_hash: u64,
     pub expected_hash: u64,
+    pub resident_weights: HfCudaResidentWeightSummary,
     pub error: Option<String>,
 }
 
@@ -40,7 +77,7 @@ impl HfCudaSeedDecodeSummary {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"error\":{}}}",
             status_json(&self.status),
             self.steps_requested,
             tokens_json(&self.tokens),
@@ -66,6 +103,7 @@ impl HfCudaSeedDecodeSummary {
             self.hot_path_allocations,
             self.output_hash,
             self.expected_hash,
+            self.resident_weights.to_json(),
             json_string(self.error.as_deref()),
         )
     }

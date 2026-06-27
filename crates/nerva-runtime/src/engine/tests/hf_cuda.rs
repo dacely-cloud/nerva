@@ -6,7 +6,9 @@ use nerva_model::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
 use crate::engine::hf_cuda::run_loaded_hf_layer_on_cuda;
 use crate::engine::hf_cuda_decode::run::{
     run_hf_causal_lm_cuda_prompt_decode, run_hf_causal_lm_cuda_seed_decode,
+    run_loaded_hf_causal_lm_cuda_prompt_decode,
 };
+use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::engine::tests::hf_fixture::{
     remove_hf_checkpoint_dir, write_cycle_hf_checkpoint_dir, write_kv_hf_checkpoint_dir,
 };
@@ -154,4 +156,29 @@ fn cuda_loaded_hf_prompt_decode_uses_full_prompt_context() {
     assert_eq!(summary.kv_tokens, 4);
     assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.hot_path_allocations, 0);
+}
+
+#[test]
+fn cuda_loaded_hf_prompt_decode_reports_resident_weight_plan() {
+    let dir = write_kv_hf_checkpoint_dir("nerva-hf-cuda-resident-plan");
+    let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let prompt = [TokenId(0), TokenId(1)];
+    let summary =
+        run_loaded_hf_causal_lm_cuda_prompt_decode(&runtime, &loaded, &prompt, 3, Some(120))
+            .unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert!(summary.passed());
+    assert_eq!(summary.tokens, summary.expected_tokens);
+    assert_eq!(summary.resident_weights.plan_steps, 12);
+    assert_eq!(summary.resident_weights.run_steps, 12);
+    assert_eq!(summary.resident_weights.plan_gpu_staged_steps, 12);
+    assert_eq!(summary.resident_weights.run_gpu_staged_steps, 12);
+    assert_eq!(summary.resident_weights.hot_path_allocations, 0);
+    assert!(summary.to_json().contains("\"resident_weight_plan\""));
 }
