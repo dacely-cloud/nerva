@@ -293,13 +293,46 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
   f32_slice_to_encoded(down, arena + output_offset, hidden, dtype);
 }
 
-__device__ uint32_t block_argmax(const float *values, uint32_t len) {
+__global__ void hf_decode_final_head_rows_kernel(
+    uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t dtype,
+    uint32_t hidden, uint32_t vocab_size, const uint32_t *step_cursor,
+    uint32_t max_steps, const float *scratch, float *scores) {
+  const uint32_t row = blockIdx.x;
+  if (row >= vocab_size || (step_cursor != nullptr && *step_cursor >= max_steps)) {
+    return;
+  }
+  const uint16_t *lm_head = arena + arena_layout.lm_head;
+  const float *final_norm = scratch + hidden;
+  float sum = 0.0f;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    sum += encoded_to_f32(lm_head[static_cast<uint64_t>(row) * hidden + col], dtype) *
+           final_norm[col];
+  }
+  sum = block_sum(sum);
+  if (threadIdx.x == 0) {
+    scores[row] = sum;
+  }
+}
+
+__global__ void hf_decode_final_head_reduce_kernel(
+    uint32_t *step_cursor, uint32_t max_steps, uint32_t has_eos_token,
+    uint32_t eos_token, const float *scores, uint32_t vocab_size,
+    NervaCudaSyntheticTokenSlot *slots) {
   __shared__ float best_values[kDecodeThreads];
   __shared__ uint32_t best_indices[kDecodeThreads];
+  __shared__ uint32_t current_position_shared;
+  if (threadIdx.x == 0) {
+    current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
+  }
+  __syncthreads();
+  const uint32_t current_position = current_position_shared;
+  if (current_position >= max_steps) {
+    return;
+  }
   float best_value = -INFINITY;
   uint32_t best_index = 0;
-  for (uint32_t index = threadIdx.x; index < len; index += blockDim.x) {
-    const float value = values[index];
+  for (uint32_t index = threadIdx.x; index < vocab_size; index += blockDim.x) {
+    const float value = scores[index];
     if (isfinite(value) && (value > best_value ||
                             (value == best_value && index < best_index))) {
       best_value = value;
@@ -322,18 +355,31 @@ __device__ uint32_t block_argmax(const float *values, uint32_t len) {
     }
     __syncthreads();
   }
-  return best_indices[0];
+  if (threadIdx.x == 0) {
+    const uint32_t best_index = best_indices[0];
+    NervaCudaSyntheticTokenSlot *slot = slots + current_position;
+    slot->request_id = kRequestId;
+    slot->sequence_id = kSequenceId;
+    slot->token_index = current_position;
+    slot->token = best_index;
+    slot->version = current_position + 1;
+    slot->completion = kCompletionDeviceComplete;
+    slot->host_copied = 0;
+    if (step_cursor != nullptr) {
+      *step_cursor = has_eos_token != 0 && best_index == eos_token
+                         ? max_steps
+                         : current_position + 1;
+    }
+  }
 }
 
 __global__ void hf_decode_sequence_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, SequenceLayerLayout *layers,
     uint32_t layer_count, uint32_t dtype, uint32_t hidden, uint32_t heads,
-    uint32_t kv_heads, uint32_t head_dim, uint32_t intermediate, uint32_t vocab_size,
-    uint32_t position, uint32_t *step_cursor, uint32_t max_steps,
-    const uint32_t *prompt_tokens, uint32_t prompt_token_count,
-    uint32_t has_eos_token, uint32_t eos_token, float rms_eps, float rope_theta,
-    float *scratch, float *kv_keys, float *kv_values,
-    NervaCudaSyntheticTokenSlot *slots) {
+    uint32_t kv_heads, uint32_t head_dim, uint32_t intermediate, uint32_t position,
+    uint32_t *step_cursor, uint32_t max_steps, const uint32_t *prompt_tokens,
+    uint32_t prompt_token_count, float rms_eps, float rope_theta, float *scratch,
+    float *kv_keys, float *kv_values, const NervaCudaSyntheticTokenSlot *slots) {
   if (blockIdx.x != 0) {
     return;
   }
@@ -372,27 +418,8 @@ __global__ void hf_decode_sequence_kernel(
 
   float *decoded = scratch;
   float *final_norm = decoded + hidden;
-  float *logits = final_norm + hidden;
   encoded_slice_to_f32(arena + input_offset, hidden, dtype, decoded);
   rms_norm(decoded, arena + arena_layout.final_norm, hidden, dtype, rms_eps, final_norm);
-  mat_vec(arena + arena_layout.lm_head, final_norm, vocab_size, hidden, dtype, logits);
-  const uint32_t best_index = block_argmax(logits, vocab_size);
-
-  if (threadIdx.x == 0) {
-    NervaCudaSyntheticTokenSlot *slot = slots + current_position;
-    slot->request_id = kRequestId;
-    slot->sequence_id = kSequenceId;
-    slot->token_index = current_position;
-    slot->token = best_index;
-    slot->version = current_position + 1;
-    slot->completion = kCompletionDeviceComplete;
-    slot->host_copied = 0;
-    if (step_cursor != nullptr) {
-      *step_cursor = has_eos_token != 0 && best_index == eos_token
-                         ? max_steps
-                         : current_position + 1;
-    }
-  }
 }
 
 uint64_t push(uint64_t &cursor, uint64_t len) {
@@ -917,10 +944,24 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     hf_decode_sequence_kernel<<<1, kDecodeThreads, 0, stream>>>(
         device_arena, arena_layout, device_layouts, request->layer_count, request->dtype,
         request->hidden, request->heads, request->kv_heads, request->head_dim,
-        request->intermediate, request->vocab_size, 0, device_step, context_steps,
-        device_prompt_tokens, request->prompt_token_count, request->has_eos_token,
-        request->eos_token, request->rms_eps, request->rope_theta, device_scratch,
-        device_kv_keys, device_kv_values, device_slots);
+        request->intermediate, 0, device_step, context_steps, device_prompt_tokens,
+        request->prompt_token_count, request->rms_eps, request->rope_theta,
+        device_scratch, device_kv_keys, device_kv_values, device_slots);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) {
+    float *device_logits = device_scratch + hidden * 2;
+    hf_decode_final_head_rows_kernel<<<request->vocab_size, kDecodeThreads, 0, stream>>>(
+        device_arena, arena_layout, request->dtype, request->hidden,
+        request->vocab_size, device_step, context_steps, device_scratch,
+        device_logits);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) {
+    float *device_logits = device_scratch + hidden * 2;
+    hf_decode_final_head_reduce_kernel<<<1, kDecodeThreads, 0, stream>>>(
+        device_step, context_steps, request->has_eos_token, request->eos_token,
+        device_logits, request->vocab_size, device_slots);
     err = cudaGetLastError();
   }
   if (capture_started) {
@@ -948,7 +989,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     if (err == cudaSuccess) {
       out->graph_replays += 1;
       out->graph_launches += 1;
-      out->kernel_launches += 1;
+      out->kernel_launches += out->graph_nodes == 0 ? 1 : out->graph_nodes;
     }
   }
   if (err == cudaSuccess) {

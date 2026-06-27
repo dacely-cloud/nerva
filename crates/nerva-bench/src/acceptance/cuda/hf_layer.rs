@@ -101,7 +101,7 @@ pub(crate) fn push_loaded_hf_seed_decode(report: &mut AcceptanceReport) {
             && summary.graph_nodes > 0
             && summary.resident_kv_bytes > 0
             && summary.kv_tokens == summary.steps_requested as u64
-            && summary.kernel_launches == summary.steps_requested as u64
+            && summary.kernel_launches == summary.graph_launches * summary.graph_nodes
             && summary.sync_calls == 1
             && summary.host_causality_edges == 0
             && gpu_event_timing,

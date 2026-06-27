@@ -58,7 +58,7 @@ fn cuda_loaded_hf_seed_decode_matches_cpu_exact_decode() {
     assert!(summary.graph_nodes > 0);
     assert_eq!(summary.graph_launches, 4);
     assert_eq!(summary.graph_replay_events, 4);
-    assert_eq!(summary.kernel_launches, 4);
+    assert_eq!((summary.graph_nodes, summary.kernel_launches), (3, 12));
     assert_eq!(summary.sync_calls, 1);
     assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.cuda_footprint.context_tokens, summary.kv_tokens);
