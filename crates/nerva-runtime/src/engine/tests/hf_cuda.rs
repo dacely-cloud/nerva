@@ -175,6 +175,7 @@ fn cuda_loaded_hf_prompt_decode_reports_resident_weight_plan() {
 
     assert!(summary.passed());
     assert_eq!(summary.tokens, summary.expected_tokens);
+    assert_eq!(summary.copy_events, 4);
     assert_eq!(summary.resident_weights.plan_steps, 12);
     assert_eq!(summary.resident_weights.run_steps, 12);
     assert!(summary.resident_weights.hotset_promoted_blocks > 0);

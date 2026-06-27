@@ -15,13 +15,7 @@ pub(super) fn sequence_ledgers(summary: &CudaHfDecodeSequenceSummary) -> Vec<Tok
         let mut ledger = TokenLedger::new(step as u64);
         record_decision(&mut ledger, summary, step);
         if step == 0 {
-            record_copy(
-                &mut ledger,
-                MemoryTier::PinnedDram,
-                MemoryTier::Vram,
-                summary.h2d_bytes,
-                "hf_cuda_sequence_bootstrap_h2d",
-            );
+            record_bootstrap_copies(&mut ledger, summary);
         }
         record_event(
             &mut ledger,
@@ -54,6 +48,42 @@ pub(super) fn sequence_ledgers(summary: &CudaHfDecodeSequenceSummary) -> Vec<Tok
         ledgers.push(ledger);
     }
     ledgers
+}
+
+fn record_bootstrap_copies(ledger: &mut TokenLedger, summary: &CudaHfDecodeSequenceSummary) {
+    let descriptor_bytes =
+        summary.descriptor_gpu_resident_h2d_bytes + summary.descriptor_gpu_staged_h2d_bytes;
+    if descriptor_bytes == 0 {
+        record_copy(
+            ledger,
+            MemoryTier::PinnedDram,
+            MemoryTier::Vram,
+            summary.h2d_bytes,
+            "hf_cuda_sequence_bootstrap_h2d",
+        );
+        return;
+    }
+    record_copy(
+        ledger,
+        MemoryTier::PinnedDram,
+        MemoryTier::Vram,
+        summary.descriptor_gpu_resident_h2d_bytes,
+        "hf_cuda_sequence_descriptor_resident_h2d",
+    );
+    record_copy(
+        ledger,
+        MemoryTier::PinnedDram,
+        MemoryTier::Vram,
+        summary.descriptor_gpu_staged_h2d_bytes,
+        "hf_cuda_sequence_descriptor_staged_h2d",
+    );
+    record_copy(
+        ledger,
+        MemoryTier::PinnedDram,
+        MemoryTier::Vram,
+        summary.h2d_bytes.saturating_sub(descriptor_bytes),
+        "hf_cuda_sequence_metadata_h2d",
+    );
 }
 
 fn record_decision(ledger: &mut TokenLedger, summary: &CudaHfDecodeSequenceSummary, _step: usize) {

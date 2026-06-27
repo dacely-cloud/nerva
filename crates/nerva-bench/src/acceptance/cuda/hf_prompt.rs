@@ -54,6 +54,7 @@ pub(crate) fn push_loaded_hf_prompt_kv_decode(report: &mut AcceptanceReport) {
                 && summary.resident_weights.cuda_contract_gpu_staged_h2d_bytes
                     == summary.resident_weights.plan_gpu_staged_weight_bytes
                 && summary.resident_weights.cuda_contract_matched
+                && summary.copy_events == 4
                 && summary.resident_weights.run_gpu_resident_steps
                     == summary.resident_weights.plan_gpu_resident_steps
                 && summary.resident_weights.run_gpu_staged_steps
@@ -61,7 +62,7 @@ pub(crate) fn push_loaded_hf_prompt_kv_decode(report: &mut AcceptanceReport) {
                 && summary.host_causality_edges == 0
                 && summary.hot_path_allocations == 0,
             format!(
-                "status={:?} steps={} parity={} tokens={} expected={} graph_replays={} graph_replay_events={} resident_kv_bytes={} kv_tokens={} hotset_promoted={} hotset_kept_dram={} plan_steps={} run_steps={} plan_gpu_resident={} plan_gpu_staged={} contract_blocks={} contract_bytes={} descriptor_blocks={} descriptor_hash={} descriptor_resident_H2D={} descriptor_staged_H2D={} contract_matched={} run_gpu_resident={} run_gpu_staged={} host_causality_edges={} hot_path_allocations={} output_hash={} expected_hash={} error={}",
+                "status={:?} steps={} parity={} tokens={} expected={} graph_replays={} graph_replay_events={} copy_events={} resident_kv_bytes={} kv_tokens={} hotset_promoted={} hotset_kept_dram={} plan_steps={} run_steps={} plan_gpu_resident={} plan_gpu_staged={} contract_blocks={} contract_bytes={} descriptor_blocks={} descriptor_hash={} descriptor_resident_H2D={} descriptor_staged_H2D={} contract_matched={} run_gpu_resident={} run_gpu_staged={} host_causality_edges={} hot_path_allocations={} output_hash={} expected_hash={} error={}",
                 summary.status,
                 summary.steps_requested,
                 summary.parity,
@@ -69,6 +70,7 @@ pub(crate) fn push_loaded_hf_prompt_kv_decode(report: &mut AcceptanceReport) {
                 summary.expected_tokens.len(),
                 summary.graph_replays,
                 summary.graph_replay_events,
+                summary.copy_events,
                 summary.resident_kv_bytes,
                 summary.kv_tokens,
                 summary.resident_weights.hotset_promoted_blocks,
