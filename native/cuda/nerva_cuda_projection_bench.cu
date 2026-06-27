@@ -15,6 +15,8 @@ constexpr uint32_t kStrategyCublasLt = 1;
 constexpr uint32_t kStrategyCustom = 2;
 constexpr uint32_t kThreads = 256;
 constexpr uint32_t kInitBlocks = 4096;
+constexpr uint32_t kMaxHeuristics = 8;
+constexpr uint32_t kNoHeuristicIndex = 0xffffffffu;
 constexpr size_t kWorkspaceBytes = 16ull * 1024ull * 1024ull;
 
 __device__ uint16_t f32_to_encoded(float value, uint32_t dtype) {
@@ -246,12 +248,13 @@ cudaError_t launch_cublaslt(cublasLtHandle_t handle,
                             const uint16_t *input,
                             float *output,
                             void *workspace,
-                            cudaStream_t stream) {
+                            cudaStream_t stream,
+                            const cublasLtMatmulAlgo_t *algo) {
   const float alpha = 1.0f;
   const float beta = 0.0f;
   const cublasStatus_t status =
       cublasLtMatmul(handle, op_desc, &alpha, matrix, a_desc, input, b_desc,
-                     &beta, output, c_desc, output, d_desc, nullptr, workspace,
+                     &beta, output, c_desc, output, d_desc, algo, workspace,
                      kWorkspaceBytes, stream);
   return cublas_to_cuda(status);
 }
@@ -270,11 +273,12 @@ cudaError_t time_cublaslt(cublasLtHandle_t handle,
                           cudaStream_t stream,
                           cudaEvent_t start,
                           cudaEvent_t stop,
-                          uint64_t *total_ns) {
+                          uint64_t *total_ns,
+                          const cublasLtMatmulAlgo_t *algo) {
   for (uint32_t index = 0; index < request->warmup_iterations; ++index) {
     cudaError_t err = launch_cublaslt(handle, op_desc, a_desc, b_desc, c_desc,
                                       d_desc, matrix, input, output, workspace,
-                                      stream);
+                                      stream, algo);
     if (err != cudaSuccess) return err;
   }
   cudaError_t err = cudaStreamSynchronize(stream);
@@ -283,7 +287,7 @@ cudaError_t time_cublaslt(cublasLtHandle_t handle,
   if (err != cudaSuccess) return err;
   for (uint32_t index = 0; index < request->iterations; ++index) {
     err = launch_cublaslt(handle, op_desc, a_desc, b_desc, c_desc, d_desc,
-                          matrix, input, output, workspace, stream);
+                          matrix, input, output, workspace, stream, algo);
     if (err != cudaSuccess) return err;
   }
   err = cudaEventRecord(stop, stream);
@@ -291,6 +295,41 @@ cudaError_t time_cublaslt(cublasLtHandle_t handle,
   err = cudaEventSynchronize(stop);
   if (err != cudaSuccess) return err;
   *total_ns = elapsed_ns(start, stop);
+  return cudaSuccess;
+}
+
+cudaError_t find_cublaslt_heuristics(
+    cublasLtHandle_t handle,
+    cublasLtMatmulDesc_t op_desc,
+    cublasLtMatrixLayout_t a_desc,
+    cublasLtMatrixLayout_t b_desc,
+    cublasLtMatrixLayout_t c_desc,
+    cublasLtMatrixLayout_t d_desc,
+    cublasLtMatmulHeuristicResult_t *heuristics,
+    uint32_t *heuristic_count) {
+  *heuristic_count = 0;
+  cublasLtMatmulPreference_t preference = nullptr;
+  cublasStatus_t status = cublasLtMatmulPreferenceCreate(&preference);
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    return cublas_to_cuda(status);
+  }
+  size_t workspace_bytes = kWorkspaceBytes;
+  status = cublasLtMatmulPreferenceSetAttribute(
+      preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace_bytes,
+      sizeof(workspace_bytes));
+  int returned_count = 0;
+  if (status == CUBLAS_STATUS_SUCCESS) {
+    status = cublasLtMatmulAlgoGetHeuristic(
+        handle, op_desc, a_desc, b_desc, c_desc, d_desc, preference,
+        kMaxHeuristics, heuristics, &returned_count);
+  }
+  cublasLtMatmulPreferenceDestroy(preference);
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    return cublas_to_cuda(status);
+  }
+  if (returned_count > 0) {
+    *heuristic_count = static_cast<uint32_t>(returned_count);
+  }
   return cudaSuccess;
 }
 
@@ -450,10 +489,49 @@ extern "C" int nerva_cuda_projection_bench(
 
   err = time_cublaslt(lt, op_desc, a_desc, b_desc, c_desc, d_desc, request,
                       matrix, input, cublas_output, workspace, stream, start,
-                      stop, &out->cublaslt_total_ns);
+                      stop, &out->cublaslt_default_total_ns, nullptr);
   if (err != cudaSuccess) return fail_with_cleanup(err);
   out->sync_calls += 2;
   out->kernel_launches += request->warmup_iterations + request->iterations;
+  out->cublaslt_default_avg_ns =
+      out->cublaslt_default_total_ns / request->iterations;
+  out->cublaslt_total_ns = out->cublaslt_default_total_ns;
+  out->cublaslt_avg_ns = out->cublaslt_default_avg_ns;
+  out->cublaslt_best_heuristic_index = kNoHeuristicIndex;
+
+  cublasLtMatmulHeuristicResult_t heuristics[kMaxHeuristics]{};
+  uint32_t heuristic_count = 0;
+  cudaError_t heuristic_err = find_cublaslt_heuristics(
+      lt, op_desc, a_desc, b_desc, c_desc, d_desc, heuristics,
+      &heuristic_count);
+  if (heuristic_err == cudaSuccess) {
+    out->cublaslt_heuristic_count = heuristic_count;
+    for (uint32_t index = 0; index < heuristic_count; ++index) {
+      uint64_t heuristic_total_ns = 0;
+      heuristic_err = time_cublaslt(
+          lt, op_desc, a_desc, b_desc, c_desc, d_desc, request, matrix, input,
+          cublas_output, workspace, stream, start, stop, &heuristic_total_ns,
+          &heuristics[index].algo);
+      if (heuristic_err != cudaSuccess || heuristic_total_ns == 0) {
+        continue;
+      }
+      out->sync_calls += 2;
+      out->kernel_launches +=
+          request->warmup_iterations + request->iterations;
+      const uint64_t heuristic_avg_ns =
+          heuristic_total_ns / request->iterations;
+      if (out->cublaslt_best_heuristic_avg_ns == 0 ||
+          heuristic_avg_ns < out->cublaslt_best_heuristic_avg_ns) {
+        out->cublaslt_best_heuristic_index = index;
+        out->cublaslt_best_heuristic_total_ns = heuristic_total_ns;
+        out->cublaslt_best_heuristic_avg_ns = heuristic_avg_ns;
+      }
+      if (heuristic_avg_ns < out->cublaslt_avg_ns) {
+        out->cublaslt_total_ns = heuristic_total_ns;
+        out->cublaslt_avg_ns = heuristic_avg_ns;
+      }
+    }
+  }
 
   err = time_custom(request, matrix, input, custom_output, stream, start, stop,
                     &out->custom_total_ns);
@@ -461,9 +539,6 @@ extern "C" int nerva_cuda_projection_bench(
   out->sync_calls += 2;
   out->kernel_launches += request->warmup_iterations + request->iterations;
 
-  if (out->cublaslt_total_ns > 0) {
-    out->cublaslt_avg_ns = out->cublaslt_total_ns / request->iterations;
-  }
   if (out->custom_total_ns > 0) {
     out->custom_avg_ns = out->custom_total_ns / request->iterations;
   }

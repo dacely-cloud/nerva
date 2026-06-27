@@ -626,6 +626,12 @@ typedef struct NervaCudaProjectionBenchResult {
   uint64_t output_bytes;
   uint64_t cublaslt_total_ns;
   uint64_t cublaslt_avg_ns;
+  uint64_t cublaslt_default_total_ns;
+  uint64_t cublaslt_default_avg_ns;
+  uint32_t cublaslt_heuristic_count;
+  uint32_t cublaslt_best_heuristic_index;
+  uint64_t cublaslt_best_heuristic_total_ns;
+  uint64_t cublaslt_best_heuristic_avg_ns;
   uint64_t custom_total_ns;
   uint64_t custom_avg_ns;
   uint64_t cublaslt_effective_bandwidth_bps;
