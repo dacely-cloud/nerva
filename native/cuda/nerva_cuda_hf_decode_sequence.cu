@@ -122,10 +122,12 @@ __device__ void apply_rope(float *values, uint32_t heads, uint32_t head_dim,
 }
 
 __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
-                          uint64_t input_offset, uint64_t output_offset, uint32_t dtype,
-                          uint32_t hidden, uint32_t heads, uint32_t kv_heads,
-                          uint32_t head_dim, uint32_t intermediate, uint32_t position,
-                          float rms_eps, float rope_theta, float *scratch) {
+                          uint32_t layer_index, uint64_t input_offset,
+                          uint64_t output_offset, uint32_t dtype, uint32_t hidden,
+                          uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
+                          uint32_t intermediate, uint32_t position, uint32_t max_steps,
+                          float rms_eps, float rope_theta, float *scratch,
+                          float *kv_keys, float *kv_values) {
   const uint32_t attention_hidden = heads * head_dim;
   const uint32_t kv_hidden = kv_heads * head_dim;
   float *input = scratch;
@@ -154,10 +156,45 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
   apply_rope(q, heads, head_dim, position, rope_theta);
   apply_rope(k, kv_heads, head_dim, position, rope_theta);
 
+  const uint64_t kv_base =
+      (static_cast<uint64_t>(layer_index) * max_steps + position) * kv_hidden;
+  for (uint32_t index = 0; index < kv_hidden; ++index) {
+    kv_keys[kv_base + index] = k[index];
+    kv_values[kv_base + index] = v[index];
+  }
+
+  const float scale = rsqrtf(static_cast<float>(head_dim));
   for (uint32_t head = 0; head < heads; ++head) {
     const uint32_t kv_head = head / (heads / kv_heads);
+    const uint32_t head_start = head * head_dim;
+    float local_m = -INFINITY;
+    float local_l = 0.0f;
     for (uint32_t offset = 0; offset < head_dim; ++offset) {
-      attn[head * head_dim + offset] = v[kv_head * head_dim + offset];
+      attn[head_start + offset] = 0.0f;
+    }
+    for (uint32_t token = 0; token <= position; ++token) {
+      const uint64_t token_base =
+          (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
+          kv_head * head_dim;
+      float score = 0.0f;
+      for (uint32_t offset = 0; offset < head_dim; ++offset) {
+        score += q[head_start + offset] * kv_keys[token_base + offset];
+      }
+      score *= scale;
+      const float next_m = fmaxf(local_m, score);
+      const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+      const float new_scale = expf(score - next_m);
+      for (uint32_t offset = 0; offset < head_dim; ++offset) {
+        const uint32_t out = head_start + offset;
+        attn[out] = attn[out] * old_scale + kv_values[token_base + offset] * new_scale;
+      }
+      local_l = local_l * old_scale + new_scale;
+      local_m = next_m;
+    }
+    if (local_l > 0.0f && isfinite(local_l)) {
+      for (uint32_t offset = 0; offset < head_dim; ++offset) {
+        attn[head_start + offset] /= local_l;
+      }
     }
   }
   mat_vec(arena + layout.w_o, attn, hidden, attention_hidden, dtype, residual);
@@ -184,7 +221,8 @@ __global__ void hf_decode_sequence_kernel(
     uint32_t kv_heads, uint32_t head_dim, uint32_t intermediate, uint32_t vocab_size,
     uint32_t position, uint32_t *step_cursor, uint32_t max_steps,
     uint32_t seed_token, float rms_eps, float rope_theta,
-    float *scratch, NervaCudaSyntheticTokenSlot *slots) {
+    float *scratch, float *kv_keys, float *kv_values,
+    NervaCudaSyntheticTokenSlot *slots) {
   if (blockIdx.x != 0 || threadIdx.x != 0) {
     return;
   }
@@ -203,9 +241,10 @@ __global__ void hf_decode_sequence_kernel(
   uint64_t input_offset = arena_layout.input;
   uint64_t output_offset = arena_layout.scratch;
   for (uint32_t layer_index = 0; layer_index < layer_count; ++layer_index) {
-    run_layer(arena, layers[layer_index], input_offset, output_offset, dtype, hidden,
-              heads, kv_heads, head_dim, intermediate, current_position, rms_eps,
-              rope_theta, scratch);
+    run_layer(arena, layers[layer_index], layer_index, input_offset, output_offset,
+              dtype, hidden, heads, kv_heads, head_dim, intermediate,
+              current_position, max_steps, rms_eps, rope_theta, scratch, kv_keys,
+              kv_values);
     const uint64_t next_input = output_offset;
     output_offset = input_offset;
     input_offset = next_input;
@@ -419,14 +458,21 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   const uint64_t arena_bytes = elements * sizeof(uint16_t);
   const uint64_t layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);
   const uint64_t block_scratch =
-      hidden * 4 + attention_hidden * 2 + kv_hidden * 2 + intermediate * 4;
-  const uint64_t scratch_bytes = (block_scratch + hidden + vocab_size) * sizeof(float);
+      hidden * 5 + attention_hidden * 2 + kv_hidden * 2 + intermediate * 3;
+  const uint64_t final_scratch = hidden * 2 + vocab_size;
+  const uint64_t scratch_elements =
+      block_scratch > final_scratch ? block_scratch : final_scratch;
+  const uint64_t scratch_bytes = scratch_elements * sizeof(float);
+  const uint64_t kv_bytes =
+      request->layer_count * request->steps * kv_hidden * sizeof(float) * 2;
   const uint64_t slots_bytes = request->steps * sizeof(NervaCudaSyntheticTokenSlot);
 
   uint16_t *host_arena = nullptr;
   uint16_t *device_arena = nullptr;
   SequenceLayerLayout *device_layouts = nullptr;
   float *device_scratch = nullptr;
+  float *device_kv_keys = nullptr;
+  float *device_kv_values = nullptr;
   NervaCudaSyntheticTokenSlot *host_slots = nullptr;
   NervaCudaSyntheticTokenSlot *device_slots = nullptr;
   uint32_t *device_step = nullptr;
@@ -441,6 +487,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_arena), arena_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_layouts), layout_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_scratch), scratch_bytes);
+  if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_kv_keys), kv_bytes / 2);
+  if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_kv_values), kv_bytes / 2);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_slots), slots_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_step), sizeof(uint32_t));
   if (err == cudaSuccess) err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
@@ -448,6 +496,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     fail(out, err);
     cudaFree(device_step);
     cudaFree(device_slots);
+    cudaFree(device_kv_values);
+    cudaFree(device_kv_keys);
     cudaFree(device_scratch);
     cudaFree(device_layouts);
     cudaFree(device_arena);
@@ -480,6 +530,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     err = cudaMemsetAsync(device_slots, 0, slots_bytes, stream);
   }
   if (err == cudaSuccess) {
+    err = cudaMemsetAsync(device_kv_keys, 0, kv_bytes / 2, stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMemsetAsync(device_kv_values, 0, kv_bytes / 2, stream);
+  }
+  if (err == cudaSuccess) {
     err = cudaMemsetAsync(device_step, 0, sizeof(uint32_t), stream);
   }
   bool capture_started = false;
@@ -493,7 +549,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
         request->hidden, request->heads, request->kv_heads, request->head_dim,
         request->intermediate, request->vocab_size, 0, device_step, request->steps,
         request->seed_token, request->rms_eps, request->rope_theta, device_scratch,
-        device_slots);
+        device_kv_keys, device_kv_values, device_slots);
     err = cudaGetLastError();
   }
   if (capture_started) {
@@ -541,8 +597,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
                           : request->output_tokens[out->observed_tokens - 1];
     out->observed_token_hash = hash_tokens(request->output_tokens, out->observed_tokens);
     out->resident_weight_bytes = arena_bytes - (hidden * 2 * sizeof(uint16_t));
+    out->resident_kv_bytes = kv_bytes;
+    out->kv_tokens = request->steps;
     out->device_arena_bytes =
-        arena_bytes + layout_bytes + scratch_bytes + slots_bytes + sizeof(uint32_t);
+        arena_bytes + layout_bytes + scratch_bytes + kv_bytes + slots_bytes + sizeof(uint32_t);
     out->pinned_host_bytes = arena_bytes + slots_bytes;
     out->host_causality_edges = 0;
     out->status = out->observed_tokens > 0 ? 0 : -1;
@@ -566,6 +624,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   cudaStreamDestroy(stream);
   cudaFree(device_step);
   cudaFree(device_slots);
+  cudaFree(device_kv_values);
+  cudaFree(device_kv_keys);
   cudaFree(device_scratch);
   cudaFree(device_layouts);
   cudaFree(device_arena);

@@ -1,11 +1,13 @@
 use nerva_core::types::id::token::TokenId;
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::causal_lm::smoke::load_hf_causal_lm_smoke_fixture;
-use nerva_model::causal_lm::types::HfCausalLmModel;
+use nerva_model::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
 
 use crate::engine::hf_cuda::run_loaded_hf_layer_on_cuda;
 use crate::engine::hf_cuda_decode::run::run_hf_causal_lm_cuda_seed_decode;
-use crate::engine::tests::hf_fixture::{remove_hf_checkpoint_dir, write_cycle_hf_checkpoint_dir};
+use crate::engine::tests::hf_fixture::{
+    remove_hf_checkpoint_dir, write_cycle_hf_checkpoint_dir, write_kv_hf_checkpoint_dir,
+};
 
 #[test]
 fn cuda_loaded_hf_layer_matches_cpu_exact_layer() {
@@ -54,6 +56,8 @@ fn cuda_loaded_hf_seed_decode_matches_cpu_exact_decode() {
     assert_eq!(summary.kernel_launches, 4);
     assert_eq!(summary.sync_calls, 1);
     assert_eq!(summary.host_causality_edges, 0);
+    assert!(summary.resident_kv_bytes > 0);
+    assert_eq!(summary.kv_tokens, 4);
     assert_eq!(summary.hot_path_allocations, 0);
     assert_eq!(summary.output_hash, summary.expected_hash);
     assert!(summary.h2d_bytes >= summary.resident_weight_bytes);
@@ -87,6 +91,37 @@ fn cuda_loaded_hf_seed_decode_uses_chain_for_multi_layer_model() {
     assert_eq!(summary.kernel_launches, 4);
     assert_eq!(summary.sync_calls, 1);
     assert_eq!(summary.host_causality_edges, 0);
+    assert!(summary.resident_kv_bytes > 0);
+    assert_eq!(summary.kv_tokens, 4);
     assert_eq!(summary.hot_path_allocations, 0);
     assert_eq!(summary.output_hash, summary.expected_hash);
+}
+
+#[test]
+fn cuda_loaded_hf_seed_decode_matches_kv_context_model() {
+    let dir = write_kv_hf_checkpoint_dir("nerva-hf-cuda-kv");
+    let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
+    let mut seed_scratch =
+        HfCausalLmDecodeScratch::new(loaded.model.shape(), loaded.model.metadata().vocab_size)
+            .unwrap();
+    let (seed_only_tokens, _) = loaded
+        .model
+        .decode_greedy(TokenId(0), 4, &mut seed_scratch)
+        .unwrap();
+    let summary = run_hf_causal_lm_cuda_seed_decode(&loaded.model, TokenId(0), 4).unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert!(summary.passed());
+    assert_eq!(summary.tokens, summary.expected_tokens);
+    assert_ne!(summary.expected_tokens, seed_only_tokens);
+    assert_eq!(summary.graph_replays, 4);
+    assert_eq!(summary.graph_replay_events, 4);
+    assert!(summary.resident_kv_bytes > 0);
+    assert_eq!(summary.kv_tokens, 4);
+    assert_eq!(summary.host_causality_edges, 0);
+    assert_eq!(summary.hot_path_allocations, 0);
 }

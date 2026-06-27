@@ -11,6 +11,8 @@ use crate::engine::hf_cuda_decode::summary::HfCudaSeedDecodeSummary;
 #[derive(Default)]
 pub(super) struct CudaDecodeCounters {
     resident_weight_bytes: u64,
+    resident_kv_bytes: u64,
+    kv_tokens: u64,
     h2d_bytes: u64,
     d2h_bytes: u64,
     graph_replays: u64,
@@ -25,6 +27,8 @@ pub(super) struct CudaDecodeCounters {
 impl CudaDecodeCounters {
     pub(super) fn record_sequence(&mut self, cuda: &CudaHfDecodeSequenceSummary) {
         self.resident_weight_bytes += cuda.resident_weight_bytes;
+        self.resident_kv_bytes += cuda.resident_kv_bytes;
+        self.kv_tokens = self.kv_tokens.max(cuda.kv_tokens);
         self.h2d_bytes += cuda.h2d_bytes;
         self.d2h_bytes += cuda.d2h_bytes;
         self.graph_replays += cuda.graph_replays;
@@ -79,6 +83,8 @@ pub(super) fn build_summary(
         hard_syncs: sync_count(&parts.ledgers, SyncClass::HardSync),
         execution_decisions: execution_decisions(&parts.ledgers),
         resident_weight_bytes: counters.resident_weight_bytes,
+        resident_kv_bytes: counters.resident_kv_bytes,
+        kv_tokens: counters.kv_tokens,
         h2d_bytes: counters.h2d_bytes,
         d2h_bytes: counters.d2h_bytes,
         graph_replays: counters.graph_replays,

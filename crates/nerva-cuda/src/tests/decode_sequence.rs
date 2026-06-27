@@ -22,6 +22,8 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         tokens: vec![1, 2, 3, 0],
         observed_token_hash: 7,
         resident_weight_bytes: 128,
+        resident_kv_bytes: 64,
+        kv_tokens: 4,
         device_arena_bytes: 240,
         pinned_host_bytes: 180,
         h2d_bytes: 160,
@@ -41,6 +43,8 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
     assert!(json.contains("\"steps\":4"));
     assert!(json.contains("\"tokens\":[1,2,3,0]"));
     assert!(json.contains("\"graph_replays\":4"));
+    assert!(json.contains("\"resident_kv_bytes\":64"));
+    assert!(json.contains("\"kv_tokens\":4"));
     assert!(json.contains("\"graph_nodes\":1"));
     assert!(json.contains("\"graph_launches\":4"));
     assert!(json.contains("\"sync_calls\":1"));
@@ -97,6 +101,8 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
     }
     assert_eq!(summary.tokens, vec![1, 2, 3, 0]);
     assert_eq!(summary.graph_replays, 4);
+    assert!(summary.resident_kv_bytes > 0);
+    assert_eq!(summary.kv_tokens, 4);
     assert!(summary.graph_nodes > 0);
     assert_eq!(summary.graph_launches, 4);
     assert_eq!(summary.kernel_launches, 4);

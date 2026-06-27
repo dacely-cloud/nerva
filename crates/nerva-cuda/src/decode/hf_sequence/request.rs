@@ -69,6 +69,8 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             tokens,
             observed_token_hash: out.observed_token_hash,
             resident_weight_bytes: out.resident_weight_bytes,
+            resident_kv_bytes: out.resident_kv_bytes,
+            kv_tokens: out.kv_tokens,
             device_arena_bytes: out.device_arena_bytes,
             pinned_host_bytes: out.pinned_host_bytes,
             h2d_bytes: out.h2d_bytes,

@@ -47,6 +47,8 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) last_token: u32,
     pub(crate) observed_token_hash: u64,
     pub(crate) resident_weight_bytes: u64,
+    pub(crate) resident_kv_bytes: u64,
+    pub(crate) kv_tokens: u64,
     pub(crate) device_arena_bytes: u64,
     pub(crate) pinned_host_bytes: u64,
     pub(crate) h2d_bytes: u64,

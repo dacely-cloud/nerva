@@ -354,6 +354,8 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint32_t last_token;
   uint64_t observed_token_hash;
   uint64_t resident_weight_bytes;
+  uint64_t resident_kv_bytes;
+  uint64_t kv_tokens;
   uint64_t device_arena_bytes;
   uint64_t pinned_host_bytes;
   uint64_t h2d_bytes;

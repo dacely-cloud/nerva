@@ -43,6 +43,7 @@ pub(crate) fn build_acceptance_report() -> Result<AcceptanceReport, String> {
 
     model::reference::push_reference_block(&mut report);
     model::precision::push_precision_and_cuda_blocks(&mut report);
+    cuda::hf_kv::push_loaded_hf_kv_seed_decode(&mut report);
     model::tiny::push_tiny_model_and_cuda_decode(&mut report);
     model::prompt::push_prompt_model(&mut report);
     model::file_checks::push_manifest_and_file_checks(&mut report);

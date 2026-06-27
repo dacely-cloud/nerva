@@ -17,6 +17,8 @@ pub struct CudaHfDecodeSequenceSummary {
     pub tokens: Vec<u32>,
     pub observed_token_hash: u64,
     pub resident_weight_bytes: u64,
+    pub resident_kv_bytes: u64,
+    pub kv_tokens: u64,
     pub device_arena_bytes: u64,
     pub pinned_host_bytes: u64,
     pub h2d_bytes: u64,
@@ -34,7 +36,7 @@ pub struct CudaHfDecodeSequenceSummary {
 impl CudaHfDecodeSequenceSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"resident_weight_bytes\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"resident_weight_bytes\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
             self.dtype,
             self.hidden,
@@ -50,6 +52,8 @@ impl CudaHfDecodeSequenceSummary {
             self.tokens.len(),
             self.observed_token_hash,
             self.resident_weight_bytes,
+            self.resident_kv_bytes,
+            self.kv_tokens,
             self.device_arena_bytes,
             self.pinned_host_bytes,
             self.h2d_bytes,
@@ -90,6 +94,8 @@ pub(crate) fn empty_summary(
         tokens: Vec::new(),
         observed_token_hash: 0,
         resident_weight_bytes: 0,
+        resident_kv_bytes: 0,
+        kv_tokens: 0,
         device_arena_bytes: 0,
         pinned_host_bytes: 0,
         h2d_bytes: 0,

@@ -16,6 +16,8 @@ pub struct HfCudaSeedDecodeSummary {
     pub hard_syncs: u64,
     pub execution_decisions: u64,
     pub resident_weight_bytes: u64,
+    pub resident_kv_bytes: u64,
+    pub kv_tokens: u64,
     pub h2d_bytes: u64,
     pub d2h_bytes: u64,
     pub graph_replays: u64,
@@ -38,7 +40,7 @@ impl HfCudaSeedDecodeSummary {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"error\":{}}}",
             status_json(&self.status),
             self.steps_requested,
             tokens_json(&self.tokens),
@@ -50,6 +52,8 @@ impl HfCudaSeedDecodeSummary {
             self.hard_syncs,
             self.execution_decisions,
             self.resident_weight_bytes,
+            self.resident_kv_bytes,
+            self.kv_tokens,
             self.h2d_bytes,
             self.d2h_bytes,
             self.graph_replays,

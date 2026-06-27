@@ -18,7 +18,17 @@ pub fn run_hf_causal_lm_cuda_seed_decode(
             reason: "HF CUDA seed decode steps must be non-zero".to_string(),
         });
     }
-    let mut cpu_scratch = HfCausalLmDecodeScratch::new(model.shape(), model.metadata().vocab_size)?;
+    let context_tokens = steps
+        .checked_add(1)
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "HF CUDA seed decode context length overflow".to_string(),
+        })?;
+    let mut cpu_scratch = HfCausalLmDecodeScratch::new_with_context(
+        model.shape(),
+        model.metadata().vocab_size,
+        model.layer_count(),
+        context_tokens,
+    )?;
     let (expected_tokens, cpu_ledgers) = model.decode_greedy(seed, steps, &mut cpu_scratch)?;
     let sequence = run_device_sequence(model, seed, steps)?;
     let mut counters = CudaDecodeCounters::default();
