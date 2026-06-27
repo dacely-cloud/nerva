@@ -5,6 +5,8 @@ use nerva_model::causal_lm::types::HfCausalLmLoaded;
 use crate::engine::hf_cuda_decode::summary::HfCudaResidentWeightSummary;
 use crate::engine::runtime::Runtime;
 use crate::residency::budget::ResidencyBudget;
+use crate::weights::execution::plan::ResidentWeightExecutionPlan;
+use crate::weights::execution::strategy::ResidentWeightExecutionStrategy;
 
 pub(super) fn loaded_resident_weight_summary(
     runtime: &Runtime,
@@ -23,6 +25,9 @@ pub(super) fn loaded_resident_weight_summary(
         compute_capability,
     )?;
     let run = runtime.execute_resident_weight_execution_plan(&table, &plan)?;
+    let resident_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuResident);
+    let staged_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuStaged);
+    let fallback_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::CpuExactFallback);
 
     Ok(HfCudaResidentWeightSummary {
         plan_steps: plan.steps.len() as u64,
@@ -30,6 +35,9 @@ pub(super) fn loaded_resident_weight_summary(
         hotset_promoted_blocks: hotset.promoted_blocks as u64,
         hotset_promoted_bytes: hotset.promoted_bytes as u64,
         hotset_kept_dram_blocks: hotset.kept_dram_blocks as u64,
+        plan_gpu_resident_weight_bytes: resident_bytes,
+        plan_gpu_staged_weight_bytes: staged_bytes,
+        plan_fallback_weight_bytes: fallback_bytes,
         plan_gpu_resident_steps: plan.gpu_resident_steps,
         plan_gpu_staged_steps: plan.gpu_staged_steps,
         plan_fallback_steps: plan.fallback_steps,
@@ -39,10 +47,24 @@ pub(super) fn loaded_resident_weight_summary(
         run_gpu_staged_steps: run.gpu_staged_steps,
         run_fallback_steps: run.fallback_steps,
         run_block_version_dependencies: run.block_version_dependencies,
+        cuda_contract_blocks: 0,
+        cuda_contract_weight_bytes: 0,
+        cuda_contract_matched: false,
         hot_path_allocations: hotset.hot_path_allocations
             + run.hot_path_allocations
             + plan.ledger.hot_path_allocations,
     })
+}
+
+fn strategy_bytes(
+    plan: &ResidentWeightExecutionPlan,
+    strategy: ResidentWeightExecutionStrategy,
+) -> u64 {
+    plan.steps
+        .iter()
+        .filter(|step| step.strategy == strategy)
+        .map(|step| step.bytes as u64)
+        .sum()
 }
 
 fn default_hotset_bytes(total_weight_bytes: usize) -> usize {

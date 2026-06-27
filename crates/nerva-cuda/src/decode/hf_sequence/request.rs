@@ -1,9 +1,11 @@
-use crate::decode::ffi::CUDA_ERROR_NO_DEVICE;
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::ffi::{
     NervaCudaHfDecodeSequenceRequest, NervaCudaHfDecodeSequenceResult, run_hf_decode_sequence_u16,
 };
+use crate::decode::hf_sequence::status::{sequence_failure_reason, sequence_status_from_result};
 use crate::decode::hf_sequence::summary::{CudaHfDecodeSequenceSummary, empty_summary};
+use crate::decode::hf_sequence::validation::validate_request;
+use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 use crate::smoke::status::SmokeStatus;
 
 pub const CUDA_HF_DECODE_SEQUENCE_DTYPE_F16: u32 = 0;
@@ -28,11 +30,12 @@ pub struct CudaHfDecodeSequenceRequest<'a> {
     pub layers: &'a [CudaHfDecodeChainLayer<'a>],
     pub final_norm_weight: &'a [u16],
     pub lm_head: &'a [u16],
+    pub weight_plan: Option<CudaHfDecodeSequenceWeightPlan>,
 }
 
 impl<'a> CudaHfDecodeSequenceRequest<'a> {
     pub fn run(&self) -> CudaHfDecodeSequenceSummary {
-        if let Some(error) = self.validate() {
+        if let Some(error) = validate_request(self) {
             return empty_summary(
                 SmokeStatus::Failed,
                 self.dtype,
@@ -52,9 +55,9 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
         let ffi_request = self.to_ffi(ffi_layers.as_ptr(), tokens.as_mut_ptr());
         let mut out = NervaCudaHfDecodeSequenceResult::default();
         let return_code = run_hf_decode_sequence_u16(&ffi_request, &mut out);
-        let status = status_from_result(return_code, &out);
+        let status = sequence_status_from_result(return_code, &out);
         tokens.truncate(out.observed_tokens.min(self.steps as u32) as usize);
-        let error = (status != SmokeStatus::Ok).then(|| failure_reason(return_code, &out));
+        let error = (status != SmokeStatus::Ok).then(|| sequence_failure_reason(return_code, &out));
         CudaHfDecodeSequenceSummary {
             status,
             dtype: out.dtype,
@@ -70,6 +73,12 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             tokens,
             observed_token_hash: out.observed_token_hash,
             resident_weight_bytes: out.resident_weight_bytes,
+            planned_weight_blocks: out.planned_weight_blocks,
+            planned_gpu_resident_blocks: out.planned_gpu_resident_blocks,
+            planned_gpu_staged_blocks: out.planned_gpu_staged_blocks,
+            planned_weight_bytes: out.planned_weight_bytes,
+            planned_gpu_resident_weight_bytes: out.planned_gpu_resident_weight_bytes,
+            planned_gpu_staged_weight_bytes: out.planned_gpu_staged_weight_bytes,
             resident_kv_bytes: out.resident_kv_bytes,
             kv_tokens: out.kv_tokens,
             device_arena_bytes: out.device_arena_bytes,
@@ -86,75 +95,13 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             error,
         }
     }
-    fn validate(&self) -> Option<String> {
-        if self.hidden == 0 || self.heads == 0 || self.kv_heads == 0 || self.head_dim == 0 {
-            return Some("CUDA HF decode sequence dimensions must be non-zero".to_string());
-        }
-        if self.vocab_size == 0 || self.intermediate == 0 || self.steps == 0 {
-            return Some(
-                "CUDA HF decode sequence steps and vocabulary must be non-zero".to_string(),
-            );
-        }
-        if self.layers.is_empty() {
-            return Some("CUDA HF decode sequence requires at least one layer".to_string());
-        }
-        if self.seed_token as usize >= self.vocab_size {
-            return Some("CUDA HF decode sequence seed token is outside vocabulary".to_string());
-        }
-        if self.prompt_tokens.is_empty() {
-            return Some("CUDA HF decode sequence requires prompt tokens".to_string());
-        }
-        if self
-            .prompt_tokens
-            .iter()
-            .any(|token| *token as usize >= self.vocab_size)
-        {
-            return Some("CUDA HF decode sequence prompt token is outside vocabulary".to_string());
-        }
-        if self.kv_heads > self.heads || !self.heads.is_multiple_of(self.kv_heads) {
-            return Some(
-                "CUDA HF decode sequence KV heads must divide attention heads".to_string(),
-            );
-        }
-        if self.dtype > CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16 {
-            return Some("CUDA HF decode sequence dtype is unsupported".to_string());
-        }
-        if self.rope_theta.is_some() && !self.head_dim.is_multiple_of(2) {
-            return Some(
-                "CUDA HF decode sequence RoPE requires an even head dimension".to_string(),
-            );
-        }
-        self.validate_lengths()
-    }
-
-    fn validate_lengths(&self) -> Option<String> {
-        if self.embeddings.len() != self.vocab_size * self.hidden {
-            return Some(
-                "CUDA HF decode sequence embeddings length does not match shape".to_string(),
-            );
-        }
-        if self.final_norm_weight.len() != self.hidden {
-            return Some(
-                "CUDA HF decode sequence final norm length does not match hidden".to_string(),
-            );
-        }
-        if self.lm_head.len() != self.vocab_size * self.hidden {
-            return Some("CUDA HF decode sequence LM head length does not match shape".to_string());
-        }
-        let attention_hidden = self.heads * self.head_dim;
-        let kv_hidden = self.kv_heads * self.head_dim;
-        self.layers.iter().enumerate().find_map(|(index, layer)| {
-            layer
-                .validate(self.hidden, attention_hidden, kv_hidden, self.intermediate)
-                .map(|error| format!("layer {index}: {error}"))
-        })
-    }
 
     fn to_ffi(
         &self,
         layers: *const crate::decode::hf_chain::ffi::NervaCudaHfDecodeChainLayer,
         output_tokens: *mut u32,
     ) -> NervaCudaHfDecodeSequenceRequest {
+        let plan = self.weight_plan.unwrap_or_default();
         NervaCudaHfDecodeSequenceRequest {
             dtype: self.dtype,
             hidden: self.hidden as u32,
@@ -176,25 +123,14 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             layers,
             final_norm_weight: self.final_norm_weight.as_ptr(),
             lm_head: self.lm_head.as_ptr(),
+            planned_weight_blocks: plan.blocks,
+            planned_gpu_resident_blocks: plan.gpu_resident_blocks,
+            planned_gpu_staged_blocks: plan.gpu_staged_blocks,
+            planned_weight_bytes: plan.weight_bytes,
+            planned_gpu_resident_weight_bytes: plan.gpu_resident_weight_bytes,
+            planned_gpu_staged_weight_bytes: plan.gpu_staged_weight_bytes,
             output_tokens,
             output_token_capacity: self.steps as u32,
         }
     }
-}
-
-fn status_from_result(return_code: i32, out: &NervaCudaHfDecodeSequenceResult) -> SmokeStatus {
-    if return_code == 0 && out.status == 0 {
-        SmokeStatus::Ok
-    } else if out.cuda_error == CUDA_ERROR_NO_DEVICE || out.device_count == 0 {
-        SmokeStatus::Unavailable
-    } else {
-        SmokeStatus::Failed
-    }
-}
-
-fn failure_reason(return_code: i32, out: &NervaCudaHfDecodeSequenceResult) -> String {
-    format!(
-        "CUDA HF decode sequence failed: return_code={return_code} status={} cuda_error={}",
-        out.status, out.cuda_error,
-    )
 }

@@ -342,6 +342,21 @@ bool valid_request(const NervaCudaHfDecodeSequenceRequest *request) {
       return false;
     }
   }
+  if (request->planned_weight_blocks != 0 || request->planned_weight_bytes != 0) {
+    if (request->planned_weight_blocks == 0 || request->planned_weight_bytes == 0) {
+      return false;
+    }
+    if (request->planned_gpu_resident_blocks > request->planned_weight_blocks ||
+        request->planned_gpu_staged_blocks >
+            request->planned_weight_blocks - request->planned_gpu_resident_blocks) {
+      return false;
+    }
+    if (request->planned_gpu_resident_weight_bytes > request->planned_weight_bytes ||
+        request->planned_gpu_staged_weight_bytes >
+            request->planned_weight_bytes - request->planned_gpu_resident_weight_bytes) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -360,6 +375,14 @@ void clear_result(const NervaCudaHfDecodeSequenceRequest *request,
     out->layer_count = request->layer_count;
     out->steps = request->steps;
     out->seed_token = request->seed_token;
+    out->planned_weight_blocks = request->planned_weight_blocks;
+    out->planned_gpu_resident_blocks = request->planned_gpu_resident_blocks;
+    out->planned_gpu_staged_blocks = request->planned_gpu_staged_blocks;
+    out->planned_weight_bytes = request->planned_weight_bytes;
+    out->planned_gpu_resident_weight_bytes =
+        request->planned_gpu_resident_weight_bytes;
+    out->planned_gpu_staged_weight_bytes =
+        request->planned_gpu_staged_weight_bytes;
   }
 }
 
@@ -470,6 +493,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   arena_layout.final_norm = push(elements, hidden);
   arena_layout.lm_head = push(elements, vocab_size * hidden);
   const uint64_t arena_bytes = elements * sizeof(uint16_t);
+  const uint64_t resident_weight_bytes = arena_bytes - (hidden * 2 * sizeof(uint16_t));
+  if (request->planned_weight_blocks != 0 &&
+      request->planned_weight_bytes != resident_weight_bytes) {
+    out->status = -1;
+    return -1;
+  }
   const uint64_t layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);
   const uint64_t block_scratch =
       hidden * 5 + attention_hidden * 2 + kv_hidden * 2 + intermediate * 3;
@@ -623,7 +652,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
                           ? 0
                           : request->output_tokens[out->observed_tokens - 1];
     out->observed_token_hash = hash_tokens(request->output_tokens, out->observed_tokens);
-    out->resident_weight_bytes = arena_bytes - (hidden * 2 * sizeof(uint16_t));
+    out->resident_weight_bytes = resident_weight_bytes;
     out->resident_kv_bytes = kv_bytes;
     out->kv_tokens = context_steps;
     out->device_arena_bytes =

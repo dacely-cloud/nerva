@@ -1,3 +1,4 @@
+mod contract;
 mod hash;
 mod resident;
 mod sequence;

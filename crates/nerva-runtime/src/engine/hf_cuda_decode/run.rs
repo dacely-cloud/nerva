@@ -1,8 +1,11 @@
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
+use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
+use nerva_cuda::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmLoaded, HfCausalLmModel};
 
+use crate::engine::hf_cuda_decode::contract::{attach_cuda_weight_contract, cuda_weight_plan};
 use crate::engine::hf_cuda_decode::resident::loaded_resident_weight_summary;
 use crate::engine::hf_cuda_decode::sequence::run_device_sequence;
 use crate::engine::hf_cuda_decode::sequence_ledger::sequence_ledgers;
@@ -23,6 +26,15 @@ pub fn run_hf_causal_lm_cuda_prompt_decode(
     prompt_tokens: &[TokenId],
     steps: usize,
 ) -> Result<HfCudaSeedDecodeSummary> {
+    Ok(run_hf_causal_lm_cuda_prompt_decode_with_plan(model, prompt_tokens, steps, None)?.0)
+}
+
+fn run_hf_causal_lm_cuda_prompt_decode_with_plan(
+    model: &HfCausalLmModel,
+    prompt_tokens: &[TokenId],
+    steps: usize,
+    weight_plan: Option<CudaHfDecodeSequenceWeightPlan>,
+) -> Result<(HfCudaSeedDecodeSummary, CudaHfDecodeSequenceSummary)> {
     if steps == 0 {
         return Err(NervaError::InvalidArgument {
             reason: "HF CUDA seed decode steps must be non-zero".to_string(),
@@ -46,7 +58,7 @@ pub fn run_hf_causal_lm_cuda_prompt_decode(
         context_tokens,
     )?;
     let output = model.decode_greedy_from_prompt_tokens(prompt_tokens, steps, &mut cpu_scratch)?;
-    let sequence = run_device_sequence(model, prompt_tokens, steps)?;
+    let sequence = run_device_sequence(model, prompt_tokens, steps, weight_plan)?;
     let mut counters = CudaDecodeCounters::default();
     counters.record_sequence(&sequence);
     if sequence.status != SmokeStatus::Ok {
@@ -77,13 +89,14 @@ pub fn run_hf_causal_lm_cuda_prompt_decode(
     let error = (status != SmokeStatus::Ok)
         .then(|| "CUDA HF device sequence tokens did not match CPU reference".to_string());
 
-    Ok(build_summary(
+    let summary = build_summary(
         status,
         DecodeParts::new(steps, tokens, expected_tokens, ledgers),
         &cpu_ledgers,
         counters,
         error,
-    ))
+    );
+    Ok((summary, sequence))
 }
 
 pub fn run_loaded_hf_causal_lm_cuda_prompt_decode(
@@ -94,7 +107,15 @@ pub fn run_loaded_hf_causal_lm_cuda_prompt_decode(
     compute_capability: Option<u32>,
 ) -> Result<HfCudaSeedDecodeSummary> {
     let resident_weights = loaded_resident_weight_summary(runtime, loaded, compute_capability)?;
-    let mut summary = run_hf_causal_lm_cuda_prompt_decode(&loaded.model, prompt_tokens, steps)?;
+    let weight_plan = cuda_weight_plan(&resident_weights)?;
+    let (mut summary, sequence) = run_hf_causal_lm_cuda_prompt_decode_with_plan(
+        &loaded.model,
+        prompt_tokens,
+        steps,
+        Some(weight_plan),
+    )?;
+    let mut resident_weights = resident_weights;
+    attach_cuda_weight_contract(&mut resident_weights, &sequence)?;
     summary.hot_path_allocations += resident_weights.hot_path_allocations;
     summary.resident_weights = resident_weights;
     Ok(summary)
