@@ -79,6 +79,7 @@ pub(super) fn build_summary(
 ) -> HfCudaSeedDecodeSummary {
     let output_hash = hash_tokens(&parts.tokens);
     let expected_hash = hash_tokens(&parts.expected_tokens);
+    let critical_paths = critical_paths(&parts.ledgers);
     HfCudaSeedDecodeSummary {
         status,
         steps_requested: parts.steps_requested,
@@ -107,7 +108,8 @@ pub(super) fn build_summary(
         output_hash,
         expected_hash,
         resident_weights: parts.resident_weights,
-        critical_paths: critical_paths(&parts.ledgers),
+        critical_paths,
+        token_ledgers: parts.ledgers,
         tokens: parts.tokens,
         expected_tokens: parts.expected_tokens,
         error,

@@ -95,6 +95,8 @@ fn artifact_runs_external_hf_cuda_decode_checkpoint_with_metadata() {
     assert!(json.contains("\"hot_path_allocations\":0"));
     assert!(json.contains("\"critical_paths\":["));
     assert!(json.contains("\"proves_host_wait_not_gpu_idle\":true"));
+    assert!(json.contains("\"token_ledgers\":["));
+    assert!(json.contains("\"hf_cuda_sequence_device_timeline\""));
 
     remove_tiny_hf_checkpoint_dir(&dir);
 }

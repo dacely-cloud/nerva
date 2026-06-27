@@ -43,6 +43,8 @@ fn hf_cuda_decode_cli_loads_checkpoint_dir_and_reports_cuda_ledgers() {
     assert!(json.contains("\"hot_path_allocations\":0"));
     assert!(json.contains("\"critical_paths\":["));
     assert!(json.contains("\"proves_host_wait_not_gpu_idle\":true"));
+    assert!(json.contains("\"token_ledgers\":["));
+    assert!(json.contains("\"device_timeline\":["));
 
     remove_checkpoint_dir(&dir);
 }
@@ -76,6 +78,7 @@ fn hf_cuda_decode_cli_accepts_token_id_prompt_sequence() {
     assert!(json.contains("\"graph_replays\":3"));
     assert!(json.contains("\"parity\":true"));
     assert!(json.contains("\"critical_paths\":["));
+    assert!(json.contains("\"token_ledgers\":["));
 
     remove_checkpoint_dir(&dir);
 }

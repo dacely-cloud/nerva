@@ -8,3 +8,4 @@ mod totals;
 
 pub mod run;
 pub mod summary;
+mod summary_arrays;

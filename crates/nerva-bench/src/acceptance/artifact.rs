@@ -75,7 +75,7 @@ fn hf_checkpoint_artifact_result() -> Result<(bool, String), String> {
     Ok((
         artifact_has_hf_cpu_fields(&cpu) && artifact_has_hf_cuda_fields(&cuda),
         format!(
-            "cpu_schema={} cpu_command={} cpu_summary={} cuda_schema={} cuda_command={} cuda_summary={} cuda_contract={} cuda_host_causality_zero={} cuda_hot_path_zero={}",
+            "cpu_schema={} cpu_command={} cpu_summary={} cuda_schema={} cuda_command={} cuda_summary={} cuda_contract={} cuda_host_causality_zero={} cuda_hot_path_zero={} cuda_token_ledgers={} cuda_device_timeline={}",
             cpu.contains("\"artifact_schema\":\"nerva-bench-v1\""),
             cpu.contains("\"command\":\"hf-decode\""),
             cpu.contains("\"context_mode\":\"prompt_prefill_kv_decode\""),
@@ -85,6 +85,8 @@ fn hf_checkpoint_artifact_result() -> Result<(bool, String), String> {
             cuda.contains("\"cuda_contract_matched\":true"),
             cuda.contains("\"host_causality_edges\":0"),
             cuda.contains("\"hot_path_allocations\":0"),
+            cuda.contains("\"token_ledgers\":["),
+            cuda.contains("\"hf_cuda_sequence_device_timeline\""),
         ),
     ))
 }
@@ -114,6 +116,8 @@ fn artifact_has_hf_cuda_fields(artifact: &str) -> bool {
         && artifact.contains("\"hot_path_allocations\":0")
         && artifact.contains("\"critical_paths\":[")
         && artifact.contains("\"proves_host_wait_not_gpu_idle\":true")
+        && artifact.contains("\"token_ledgers\":[")
+        && artifact.contains("\"hf_cuda_sequence_device_timeline\"")
 }
 
 fn write_tiny_hf_checkpoint_dir(prefix: &str) -> Result<PathBuf, String> {
