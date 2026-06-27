@@ -58,6 +58,8 @@ pub(super) struct DecodeParts {
     steps_requested: usize,
     tokens: Vec<TokenId>,
     expected_tokens: Vec<TokenId>,
+    reference_mode: &'static str,
+    reference_verified: bool,
     ledgers: Vec<TokenLedger>,
     resident_weights: HfCudaResidentWeightSummary,
 }
@@ -67,12 +69,16 @@ impl DecodeParts {
         steps_requested: usize,
         tokens: Vec<TokenId>,
         expected_tokens: Vec<TokenId>,
+        reference_mode: &'static str,
+        reference_verified: bool,
         ledgers: Vec<TokenLedger>,
     ) -> Self {
         Self {
             steps_requested,
             tokens,
             expected_tokens,
+            reference_mode,
+            reference_verified,
             ledgers,
             resident_weights: HfCudaResidentWeightSummary::default(),
         }
@@ -92,7 +98,9 @@ pub(super) fn build_summary(
     HfCudaSeedDecodeSummary {
         status,
         steps_requested: parts.steps_requested,
-        parity: parts.tokens == parts.expected_tokens,
+        parity: parts.reference_verified && parts.tokens == parts.expected_tokens,
+        reference_mode: parts.reference_mode,
+        reference_verified: parts.reference_verified,
         ledger_count: parts.ledgers.len() as u64,
         device_events: event_count(&parts.ledgers, LedgerEventKind::DeviceActivity),
         copy_events: event_count(&parts.ledgers, LedgerEventKind::Copy),

@@ -5,8 +5,18 @@ pub(crate) fn run_model_artifact(command: &str, args: &[String]) -> Option<Resul
     match command {
         "hf-decode" => Some(run_hf_decode(args)),
         "hf-cuda-decode" => Some(run_hf_cuda_decode(args)),
+        "hf-cuda-decode-device-only" => Some(run_hf_cuda_device_only_decode(args)),
         _ => None,
     }
+}
+
+fn run_hf_cuda_device_only_decode(args: &[String]) -> Result<String, String> {
+    let steps = parse_optional_usize(args.get(2).cloned(), 8, "steps")?;
+    causal_lm_cuda::hf_causal_lm_cuda_device_only_decode_input_json(
+        args.first().cloned(),
+        args.get(1).cloned(),
+        steps,
+    )
 }
 
 fn run_hf_decode(args: &[String]) -> Result<String, String> {

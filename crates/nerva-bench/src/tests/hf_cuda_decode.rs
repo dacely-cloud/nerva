@@ -1,5 +1,6 @@
 use crate::cli::model::causal_lm_cuda::{
     hf_causal_lm_cuda_decode_input_json, hf_causal_lm_cuda_decode_json,
+    hf_causal_lm_cuda_device_only_decode_input_json,
 };
 use crate::tests::support::{synthetic_header_for_entries, write_safetensors_header};
 
@@ -114,6 +115,28 @@ fn hf_cuda_decode_cli_uses_hf_tokenizer_json_for_text_prompt() {
     assert!(json.contains("\"run_gpu_staged_steps\":"));
     assert!(json.contains("\"cuda_contract_weight_bytes\":"));
     assert!(json.contains("\"parity\":true"));
+
+    remove_checkpoint_dir(&dir);
+}
+
+#[test]
+fn hf_cuda_decode_device_only_reports_unverified_reference_mode() {
+    let dir = write_checkpoint_dir("nerva-hf-cuda-device-only-cli");
+    let json = hf_causal_lm_cuda_device_only_decode_input_json(
+        Some(dir.to_string_lossy().into_owned()),
+        Some("ids:0,1".to_string()),
+        2,
+    )
+    .unwrap();
+
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"reference_mode\":\"device_only_unverified\""));
+    assert!(json.contains("\"reference_verified\":false"));
+    assert!(json.contains("\"expected_tokens\":[]"));
+    assert!(json.contains("\"parity\":false"));
+    assert!(json.contains("\"tokens\":["));
+    assert!(json.contains("\"host_causality_edges\":0"));
+    assert!(json.contains("\"hot_path_allocations\":0"));
 
     remove_checkpoint_dir(&dir);
 }

@@ -79,6 +79,8 @@ pub struct HfCudaSeedDecodeSummary {
     pub steps_requested: usize,
     pub tokens: Vec<TokenId>,
     pub expected_tokens: Vec<TokenId>,
+    pub reference_mode: &'static str,
+    pub reference_verified: bool,
     pub parity: bool,
     pub ledger_count: u64,
     pub device_events: u64,
@@ -113,7 +115,10 @@ pub struct HfCudaSeedDecodeSummary {
 
 impl HfCudaSeedDecodeSummary {
     pub fn passed(&self) -> bool {
-        self.status == SmokeStatus::Ok && self.parity && self.hot_path_allocations == 0
+        self.status == SmokeStatus::Ok
+            && self.reference_verified
+            && self.parity
+            && self.hot_path_allocations == 0
     }
 
     pub fn critical_paths_json(&self) -> String {
@@ -126,11 +131,13 @@ impl HfCudaSeedDecodeSummary {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"soft_visibility_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"cuda_footprint\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_device_free_memory_bytes\":{},\"cuda_fits_device_free_memory\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"critical_paths\":{},\"token_ledgers\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"steps_requested\":{},\"tokens\":{},\"expected_tokens\":{},\"reference_mode\":\"{}\",\"reference_verified\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"soft_visibility_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"cuda_footprint\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_device_free_memory_bytes\":{},\"cuda_fits_device_free_memory\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"critical_paths\":{},\"token_ledgers\":{},\"error\":{}}}",
             status_json(&self.status),
             self.steps_requested,
             tokens_json(&self.tokens),
             tokens_json(&self.expected_tokens),
+            self.reference_mode,
+            self.reference_verified,
             self.parity,
             self.ledger_count,
             self.device_events,

@@ -35,6 +35,7 @@ const COMMANDS: &[&str] = &[
     "precision-model [steps]",
     "hf-decode checkpoint_dir [seed_token|ids:a,b,c|prompt_text] [steps]",
     "hf-cuda-decode checkpoint_dir [seed_token|ids:a,b,c|prompt_text] [steps]",
+    "hf-cuda-decode-device-only checkpoint_dir [seed_token|ids:a,b,c|prompt_text] [steps]",
     "vllm-parity vllm_tokens.json [steps]",
     "metadata [config.json]",
     "layout [config.json]",

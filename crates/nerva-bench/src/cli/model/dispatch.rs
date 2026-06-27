@@ -17,6 +17,9 @@ pub(crate) fn dispatch(
         Some("precision-model") => Some(precision::run_tiny_precision_model(args)),
         Some("hf-decode") => Some(causal_lm::run_hf_causal_lm_decode(args)),
         Some("hf-cuda-decode") => Some(causal_lm_cuda::run_hf_causal_lm_cuda_decode(args)),
+        Some("hf-cuda-decode-device-only") => Some(
+            causal_lm_cuda::run_hf_causal_lm_cuda_device_only_decode(args),
+        ),
         Some("vllm-parity") => Some(parity::run_vllm_parity(args)),
         Some("attention") => Some(attention::run_attention()),
         Some("warm") => Some(warm::run_warm_compute()),

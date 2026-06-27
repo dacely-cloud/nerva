@@ -22,7 +22,7 @@ pub(crate) struct HfCudaDecodeJson<'a> {
 pub(crate) fn hf_cuda_decode_json(input: HfCudaDecodeJson<'_>) -> String {
     let summary = input.summary;
     format!(
-        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"seed_token\":{},\"steps\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"tokens\":{},\"expected_tokens\":{},\"generated_text\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"soft_visibility_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"cuda_footprint\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_device_free_memory_bytes\":{},\"cuda_fits_device_free_memory\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"critical_paths\":{},\"token_ledgers\":{},\"error\":{}}}",
+        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"seed_token\":{},\"steps\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"tokens\":{},\"expected_tokens\":{},\"reference_mode\":\"{}\",\"reference_verified\":{},\"generated_text\":{},\"parity\":{},\"ledger_count\":{},\"device_events\":{},\"copy_events\":{},\"hard_syncs\":{},\"soft_visibility_syncs\":{},\"execution_decisions\":{},\"resident_weight_bytes\":{},\"cuda_footprint\":{},\"cuda_device_total_memory_bytes\":{},\"cuda_device_free_memory_bytes\":{},\"cuda_fits_device_free_memory\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_replay_events\":{},\"kernel_launches\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"output_hash\":{},\"expected_hash\":{},\"resident_weight_plan\":{},\"critical_paths\":{},\"token_ledgers\":{},\"error\":{}}}",
         status_json(&summary.status),
         json_escape(input.path),
         input.input_mode,
@@ -37,6 +37,8 @@ pub(crate) fn hf_cuda_decode_json(input: HfCudaDecodeJson<'_>) -> String {
         input.vocab_size,
         token_ids_json(&summary.tokens),
         token_ids_json(&summary.expected_tokens),
+        summary.reference_mode,
+        summary.reference_verified,
         input.generated_text,
         summary.parity,
         summary.ledger_count,
