@@ -25,6 +25,8 @@ fn hf_cuda_device_session_cli_reports_create_once_and_multiple_runs() {
     assert!(json.contains("\"input\":\"1\""));
     assert!(json.contains("\"reference_mode\":\"device_only_unverified\""));
     assert!(json.contains("\"H2D_bytes\":4"));
+    assert!(json.contains("\"graph_captures\":1"));
+    assert!(json.contains("\"graph_cache_hits\":1"));
     assert!(json.contains("\"host_causality_edges\":0"));
     assert!(json.contains("\"hot_path_allocations\":0"));
 

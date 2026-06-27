@@ -850,6 +850,13 @@ struct NervaCudaHfDecodeSequenceSession {
   cudaStream_t stream = nullptr;
   cudaEvent_t device_start = nullptr;
   cudaEvent_t device_stop = nullptr;
+  cudaGraph_t cached_graph = nullptr;
+  cudaGraphExec_t cached_graph_exec = nullptr;
+  uint32_t cached_context_steps = 0;
+  uint32_t cached_prompt_token_count = 0;
+  uint32_t cached_has_eos_token = 0;
+  uint32_t cached_eos_token = 0;
+  uint64_t cached_graph_nodes = 0;
 };
 
 namespace {
@@ -857,6 +864,12 @@ namespace {
 void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   if (session == nullptr) {
     return;
+  }
+  if (session->cached_graph_exec != nullptr) {
+    cudaGraphExecDestroy(session->cached_graph_exec);
+  }
+  if (session->cached_graph != nullptr) {
+    cudaGraphDestroy(session->cached_graph);
   }
   if (session->device_stop != nullptr) cudaEventDestroy(session->device_stop);
   if (session->device_start != nullptr) cudaEventDestroy(session->device_start);
@@ -870,6 +883,34 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_layouts);
   cudaFree(session->device_arena);
   cudaFreeHost(session->host_slots);
+}
+
+void reset_session_graph(NervaCudaHfDecodeSequenceSession *session) {
+  if (session->cached_graph_exec != nullptr) {
+    cudaGraphExecDestroy(session->cached_graph_exec);
+    session->cached_graph_exec = nullptr;
+  }
+  if (session->cached_graph != nullptr) {
+    cudaGraphDestroy(session->cached_graph);
+    session->cached_graph = nullptr;
+  }
+  session->cached_context_steps = 0;
+  session->cached_prompt_token_count = 0;
+  session->cached_has_eos_token = 0;
+  session->cached_eos_token = 0;
+  session->cached_graph_nodes = 0;
+}
+
+bool session_graph_matches(const NervaCudaHfDecodeSequenceSession *session,
+                           uint32_t context_steps,
+                           uint32_t prompt_token_count,
+                           uint32_t has_eos_token,
+                           uint32_t eos_token) {
+  return session->cached_graph_exec != nullptr &&
+         session->cached_context_steps == context_steps &&
+         session->cached_prompt_token_count == prompt_token_count &&
+         session->cached_has_eos_token == has_eos_token &&
+         session->cached_eos_token == eos_token;
 }
 
 void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
@@ -1123,6 +1164,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     size_t graph_nodes = 0;
     err = cudaGraphGetNodes(graph, nullptr, &graph_nodes);
     out->graph_nodes = static_cast<uint64_t>(graph_nodes);
+    out->graph_captures = 1;
   }
   if (err == cudaSuccess) {
     err = cudaGraphInstantiate(&graph_exec, graph, 0);
@@ -1510,59 +1552,84 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
     out->h2d_bytes = prompt_bytes;
   }
 
-  cudaGraph_t graph = nullptr;
-  cudaGraphExec_t graph_exec = nullptr;
-  bool capture_started = false;
-  if (err == cudaSuccess) {
+  const bool graph_hit = err == cudaSuccess &&
+                         session_graph_matches(session, context_steps,
+                                               request->prompt_token_count,
+                                               request->has_eos_token,
+                                               request->eos_token);
+  if (graph_hit) {
+    out->graph_nodes = session->cached_graph_nodes;
+    out->graph_cache_hits = 1;
+  }
+  if (err == cudaSuccess && !graph_hit) {
+    reset_session_graph(session);
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t graph_exec = nullptr;
+    bool capture_started = false;
     err = cudaStreamBeginCapture(session->stream, cudaStreamCaptureModeGlobal);
     capture_started = err == cudaSuccess;
-  }
-  if (err == cudaSuccess) {
-    hf_decode_sequence_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
-        session->device_arena, session->arena_layout, session->device_layouts,
-        session->layer_count, session->dtype, session->hidden, session->heads,
-        session->kv_heads, session->head_dim, session->intermediate, 0,
-        session->device_step, context_steps, session->device_prompt_tokens,
-        request->prompt_token_count, session->rms_eps, session->rope_theta,
-        session->device_scratch, session->device_kv_keys,
-        session->device_kv_values, session->device_slots);
-    err = cudaGetLastError();
-  }
-  if (err == cudaSuccess) {
-    float *device_logits = session->device_scratch + session->hidden * 2;
-    hf_decode_final_head_rows_kernel<<<session->vocab_size, kDecodeThreads, 0,
-                                       session->stream>>>(
-        session->device_arena, session->arena_layout, session->dtype,
-        session->hidden, session->vocab_size, session->device_step,
-        context_steps, session->device_scratch, device_logits);
-    err = cudaGetLastError();
-  }
-  if (err == cudaSuccess) {
-    float *device_logits = session->device_scratch + session->hidden * 2;
-    hf_decode_final_head_reduce_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
-        session->device_step, context_steps, request->has_eos_token,
-        request->eos_token, device_logits, session->vocab_size,
-        session->device_slots);
-    err = cudaGetLastError();
-  }
-  if (capture_started) {
-    cudaError_t end_err = cudaStreamEndCapture(session->stream, &graph);
     if (err == cudaSuccess) {
-      err = end_err;
-    } else if (graph != nullptr) {
-      cudaGraphDestroy(graph);
-      graph = nullptr;
+      hf_decode_sequence_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+          session->device_arena, session->arena_layout, session->device_layouts,
+          session->layer_count, session->dtype, session->hidden, session->heads,
+          session->kv_heads, session->head_dim, session->intermediate, 0,
+          session->device_step, context_steps, session->device_prompt_tokens,
+          request->prompt_token_count, session->rms_eps, session->rope_theta,
+          session->device_scratch, session->device_kv_keys,
+          session->device_kv_values, session->device_slots);
+      err = cudaGetLastError();
     }
+    if (err == cudaSuccess) {
+      float *device_logits = session->device_scratch + session->hidden * 2;
+      hf_decode_final_head_rows_kernel<<<session->vocab_size, kDecodeThreads, 0,
+                                         session->stream>>>(
+          session->device_arena, session->arena_layout, session->dtype,
+          session->hidden, session->vocab_size, session->device_step,
+          context_steps, session->device_scratch, device_logits);
+      err = cudaGetLastError();
+    }
+    if (err == cudaSuccess) {
+      float *device_logits = session->device_scratch + session->hidden * 2;
+      hf_decode_final_head_reduce_kernel<<<1, kDecodeThreads, 0,
+                                           session->stream>>>(
+          session->device_step, context_steps, request->has_eos_token,
+          request->eos_token, device_logits, session->vocab_size,
+          session->device_slots);
+      err = cudaGetLastError();
+    }
+    if (capture_started) {
+      cudaError_t end_err = cudaStreamEndCapture(session->stream, &graph);
+      if (err == cudaSuccess) {
+        err = end_err;
+      } else if (graph != nullptr) {
+        cudaGraphDestroy(graph);
+        graph = nullptr;
+      }
+    }
+    if (err == cudaSuccess) {
+      size_t graph_nodes = 0;
+      err = cudaGraphGetNodes(graph, nullptr, &graph_nodes);
+      out->graph_nodes = static_cast<uint64_t>(graph_nodes);
+    }
+    if (err == cudaSuccess) err = cudaGraphInstantiate(&graph_exec, graph, 0);
+    if (err == cudaSuccess) {
+      session->cached_graph = graph;
+      session->cached_graph_exec = graph_exec;
+      session->cached_context_steps = context_steps;
+      session->cached_prompt_token_count = request->prompt_token_count;
+      session->cached_has_eos_token = request->has_eos_token;
+      session->cached_eos_token = request->eos_token;
+      session->cached_graph_nodes = out->graph_nodes;
+      out->graph_captures = 1;
+      graph = nullptr;
+      graph_exec = nullptr;
+    }
+    if (graph_exec != nullptr) cudaGraphExecDestroy(graph_exec);
+    if (graph != nullptr) cudaGraphDestroy(graph);
   }
-  if (err == cudaSuccess) {
-    size_t graph_nodes = 0;
-    err = cudaGraphGetNodes(graph, nullptr, &graph_nodes);
-    out->graph_nodes = static_cast<uint64_t>(graph_nodes);
-  }
-  if (err == cudaSuccess) err = cudaGraphInstantiate(&graph_exec, graph, 0);
   if (err == cudaSuccess) err = cudaEventRecord(session->device_start, session->stream);
   for (uint32_t step = 0; err == cudaSuccess && step < context_steps; ++step) {
-    err = cudaGraphLaunch(graph_exec, session->stream);
+    err = cudaGraphLaunch(session->cached_graph_exec, session->stream);
     if (err == cudaSuccess) {
       out->graph_replays += 1;
       out->graph_launches += 1;
@@ -1627,8 +1694,6 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
   } else {
     fail(out, err);
   }
-  if (graph_exec != nullptr) cudaGraphExecDestroy(graph_exec);
-  if (graph != nullptr) cudaGraphDestroy(graph);
   return out->status == 0 ? 0 : -1;
 }
 

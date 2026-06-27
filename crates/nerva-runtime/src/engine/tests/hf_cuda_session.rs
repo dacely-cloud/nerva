@@ -29,4 +29,6 @@ fn file_backed_hf_cuda_session_reuses_weight_uploads_across_runs() {
     assert_eq!(first.host_causality_edges + second.host_causality_edges, 0);
     assert_eq!(first.hot_path_allocations + second.hot_path_allocations, 0);
     assert_eq!((first.graph_nodes, first.kernel_launches), (3, 6));
+    assert_eq!((first.graph_captures, first.graph_cache_hits), (1, 0));
+    assert_eq!((second.graph_captures, second.graph_cache_hits), (0, 1));
 }

@@ -97,6 +97,8 @@ pub(super) fn summary_from_run(
         graph_replays: out.graph_replays,
         graph_nodes: out.graph_nodes,
         graph_launches: out.graph_launches,
+        graph_captures: out.graph_captures,
+        graph_cache_hits: out.graph_cache_hits,
         kernel_launches: out.kernel_launches,
         device_elapsed_ns: out.device_elapsed_ns,
         sync_calls: out.sync_calls,

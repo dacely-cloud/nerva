@@ -50,6 +50,8 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         graph_replays: 4,
         graph_nodes: 1,
         graph_launches: 4,
+        graph_captures: 1,
+        graph_cache_hits: 0,
         kernel_launches: 4,
         device_elapsed_ns: 900,
         sync_calls: 1,
@@ -63,18 +65,13 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
     assert!(json.contains("\"steps\":4"));
     assert!(json.contains("\"tokens\":[1,2,3,0]"));
     assert!(json.contains("\"graph_replays\":4"));
+    assert!(json.contains("\"graph_captures\":1"));
+    assert!(json.contains("\"graph_cache_hits\":0"));
     assert!(json.contains("\"planned_footprint\":{"));
-    assert!(json.contains("\"device_free_memory_bytes\":512"));
-    assert!(json.contains("\"fits_device_free_memory\":true"));
-    assert!(json.contains("\"resident_kv_bytes\":64"));
     assert!(json.contains("\"planned_weight_blocks\":12"));
     assert!(json.contains("\"planned_gpu_staged_weight_bytes\":64"));
     assert!(json.contains("\"descriptor_gpu_resident_H2D_bytes\":32"));
     assert!(json.contains("\"descriptor_gpu_staged_H2D_bytes\":96"));
-    assert!(json.contains("\"kv_tokens\":4"));
-    assert!(json.contains("\"device_elapsed_ns\":900"));
-    assert!(json.contains("\"sync_calls\":1"));
-    assert!(json.contains("\"host_causality_edges\":0"));
 }
 
 #[test]

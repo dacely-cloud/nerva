@@ -56,14 +56,26 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
     let mut session = created.session.unwrap();
     let first = session.run(&[0], 2, None);
     let second = session.run(&[1], 2, None);
+    let third = session.run(&[0, 1], 1, None);
 
     assert!(session.create_summary().h2d_bytes > first.h2d_bytes);
     assert_eq!(first.tokens, vec![1, 2]);
     assert_eq!(second.tokens, vec![2, 3]);
-    assert_eq!((first.h2d_bytes, second.h2d_bytes), (4, 4));
+    assert_eq!(third.tokens, vec![2]);
+    assert_eq!(
+        (first.h2d_bytes, second.h2d_bytes, third.h2d_bytes),
+        (4, 4, 8)
+    );
     assert_eq!((first.graph_nodes, first.kernel_launches), (3, 6));
+    assert_eq!((first.graph_captures, first.graph_cache_hits), (1, 0));
+    assert_eq!((second.graph_captures, second.graph_cache_hits), (0, 1));
+    assert_eq!((third.graph_captures, third.graph_cache_hits), (1, 0));
     assert_eq!(first.host_causality_edges + second.host_causality_edges, 0);
-    assert_eq!(first.hot_path_allocations + second.hot_path_allocations, 0);
+    assert_eq!(
+        first.hot_path_allocations + second.hot_path_allocations + third.hot_path_allocations,
+        0
+    );
     let create_json = session.create_summary().to_json();
     assert!(create_json.contains("\"H2D_bytes\":"));
+    assert!(second.to_json().contains("\"graph_cache_hits\":1"));
 }

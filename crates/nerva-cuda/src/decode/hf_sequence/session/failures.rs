@@ -82,6 +82,8 @@ pub(super) fn failed_run_summary(
         graph_replays: 0,
         graph_nodes: 0,
         graph_launches: 0,
+        graph_captures: 0,
+        graph_cache_hits: 0,
         kernel_launches: 0,
         device_elapsed_ns: 0,
         sync_calls: 0,
