@@ -331,7 +331,7 @@ __global__ void hf_decode_sequence_kernel(
     uint32_t kv_heads, uint32_t head_dim, uint32_t intermediate, uint32_t vocab_size,
     uint32_t position, uint32_t *step_cursor, uint32_t max_steps,
     const uint32_t *prompt_tokens, uint32_t prompt_token_count,
-    float rms_eps, float rope_theta,
+    uint32_t has_eos_token, uint32_t eos_token, float rms_eps, float rope_theta,
     float *scratch, float *kv_keys, float *kv_values,
     NervaCudaSyntheticTokenSlot *slots) {
   if (blockIdx.x != 0) {
@@ -388,7 +388,9 @@ __global__ void hf_decode_sequence_kernel(
     slot->completion = kCompletionDeviceComplete;
     slot->host_copied = 0;
     if (step_cursor != nullptr) {
-      *step_cursor = current_position + 1;
+      *step_cursor = has_eos_token != 0 && best_index == eos_token
+                         ? max_steps
+                         : current_position + 1;
     }
   }
 }
@@ -910,9 +912,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
         device_arena, arena_layout, device_layouts, request->layer_count, request->dtype,
         request->hidden, request->heads, request->kv_heads, request->head_dim,
         request->intermediate, request->vocab_size, 0, device_step, context_steps,
-        device_prompt_tokens, request->prompt_token_count, request->rms_eps,
-        request->rope_theta, device_scratch, device_kv_keys, device_kv_values,
-        device_slots);
+        device_prompt_tokens, request->prompt_token_count, request->has_eos_token,
+        request->eos_token, request->rms_eps, request->rope_theta, device_scratch,
+        device_kv_keys, device_kv_values, device_slots);
     err = cudaGetLastError();
   }
   if (capture_started) {
@@ -962,7 +964,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     out->observed_token_hash = hash_tokens(request->output_tokens, out->observed_tokens);
     out->resident_weight_bytes = resident_weight_bytes;
     out->resident_kv_bytes = kv_bytes;
-    out->kv_tokens = context_steps;
+    out->kv_tokens = output_start + out->observed_tokens;
     out->device_arena_bytes =
         arena_bytes + layout_bytes + scratch_bytes + kv_bytes + prompt_bytes +
         slots_bytes + sizeof(uint32_t);

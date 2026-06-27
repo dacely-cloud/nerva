@@ -115,7 +115,7 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
         steps: 4,
         seed_token: 0,
         prompt_tokens: &[0],
-        eos_token: None,
+        eos_token: Some(2),
         rms_eps: 1e-5,
         rope_theta: None,
         embeddings: &embeddings,
@@ -138,14 +138,14 @@ fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
     if summary.status != SmokeStatus::Ok {
         return;
     }
-    assert_eq!(summary.tokens, vec![1, 2, 3, 0]);
+    assert_eq!(summary.tokens, vec![1, 2]);
     assert_eq!(summary.graph_replays, 4);
     assert!(summary.resident_kv_bytes > 0);
-    assert_eq!(summary.kv_tokens, 4);
+    assert_eq!(summary.kv_tokens, 2);
     assert_eq!(summary.graph_launches, 4);
     assert_eq!(summary.kernel_launches, 4);
     assert_eq!(summary.sync_calls, 1);
-    assert_eq!(summary.planned_footprint.context_tokens, summary.kv_tokens);
+    assert!(summary.planned_footprint.context_tokens >= summary.kv_tokens);
     assert_eq!(summary.fits_device_free_memory, Some(true));
     assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.hot_path_allocations, 0);
