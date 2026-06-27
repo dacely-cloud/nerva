@@ -9,7 +9,9 @@ use nerva_ledger::types::event::{LedgerEvent, LedgerEventKind};
 use nerva_ledger::types::metric::MetricSource;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
-use crate::causal_lm::types::{HfCausalLmDecodeScratch, HfCausalLmModel};
+use crate::causal_lm::types::{
+    HfCausalLmContextMode, HfCausalLmDecodeOutput, HfCausalLmDecodeScratch, HfCausalLmModel,
+};
 use crate::common::token::{greedy_argmax, require_token_in_vocab};
 use crate::precision::block::ops::{
     decode_vec_into, mat_vec_encoded_row_major, rms_norm_encoded_into,
@@ -22,13 +24,40 @@ impl HfCausalLmModel {
         steps: usize,
         scratch: &mut HfCausalLmDecodeScratch,
     ) -> Result<(Vec<TokenId>, Vec<TokenLedger>)> {
+        let output = self.decode_greedy_from_prompt_tokens(&[seed_token], steps, scratch)?;
+        Ok((output.generated_tokens, output.ledgers))
+    }
+
+    pub fn decode_greedy_from_prompt_tokens(
+        &self,
+        prompt_tokens: &[TokenId],
+        steps: usize,
+        scratch: &mut HfCausalLmDecodeScratch,
+    ) -> Result<HfCausalLmDecodeOutput> {
+        let seed_token = self.validate_prompt_tokens(prompt_tokens)?;
+        let (generated_tokens, ledgers) =
+            self.decode_greedy_from_seed(seed_token, steps, scratch)?;
+        Ok(HfCausalLmDecodeOutput {
+            context_mode: HfCausalLmContextMode::LastTokenSeedOnly,
+            prompt_tokens: prompt_tokens.to_vec(),
+            seed_token,
+            generated_tokens,
+            ledgers,
+        })
+    }
+
+    fn decode_greedy_from_seed(
+        &self,
+        seed_token: TokenId,
+        steps: usize,
+        scratch: &mut HfCausalLmDecodeScratch,
+    ) -> Result<(Vec<TokenId>, Vec<TokenLedger>)> {
         if steps == 0 {
             return Err(NervaError::InvalidArgument {
                 reason: "HF causal LM greedy decode steps must be non-zero".to_string(),
             });
         }
         scratch.require_shape(self)?;
-        require_token_in_vocab(seed_token, self.metadata.vocab_size)?;
 
         let mut current = seed_token;
         let mut tokens = Vec::with_capacity(steps);
@@ -73,6 +102,18 @@ impl HfCausalLmModel {
             current = next;
         }
         Ok((tokens, ledgers))
+    }
+
+    fn validate_prompt_tokens(&self, prompt_tokens: &[TokenId]) -> Result<TokenId> {
+        let seed_token = *prompt_tokens
+            .last()
+            .ok_or_else(|| NervaError::InvalidArgument {
+                reason: "HF causal LM decode requires at least one prompt token".to_string(),
+            })?;
+        for token in prompt_tokens {
+            require_token_in_vocab(*token, self.metadata.vocab_size)?;
+        }
+        Ok(seed_token)
     }
 }
 

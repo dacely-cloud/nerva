@@ -1,4 +1,6 @@
 use nerva_core::types::dtype::DType;
+use nerva_core::types::id::token::TokenId;
+use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::shape::TransformerBlockShape;
 use crate::hf::metadata::HfModelMetadata;
@@ -50,6 +52,28 @@ pub struct HfCausalLmLoadSummary {
 pub struct HfCausalLmLoaded {
     pub model: HfCausalLmModel,
     pub summary: HfCausalLmLoadSummary,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum HfCausalLmContextMode {
+    LastTokenSeedOnly,
+}
+
+impl HfCausalLmContextMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LastTokenSeedOnly => "last_token_seed_only",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct HfCausalLmDecodeOutput {
+    pub context_mode: HfCausalLmContextMode,
+    pub prompt_tokens: Vec<TokenId>,
+    pub seed_token: TokenId,
+    pub generated_tokens: Vec<TokenId>,
+    pub ledgers: Vec<TokenLedger>,
 }
 
 #[derive(Clone, Debug)]

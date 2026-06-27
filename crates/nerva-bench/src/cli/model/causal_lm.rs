@@ -65,9 +65,6 @@ fn hf_causal_lm_decode_with_tokens_json(
     steps: usize,
 ) -> Result<String, String> {
     let path = path.ok_or_else(|| "hf-decode requires checkpoint_dir".to_string())?;
-    let seed_token = *prompt_token_ids
-        .last()
-        .ok_or_else(|| "hf-decode requires at least one input token".to_string())?;
     let loaded = nerva_model::causal_lm::types::HfCausalLmModel::load_from_hf_dir(&path)
         .map_err(|err| format!("HF causal LM load failed: {err:?}"))?;
     let summary = loaded.summary;
@@ -79,39 +76,47 @@ fn hf_causal_lm_decode_with_tokens_json(
         model.metadata().vocab_size,
     )
     .map_err(|err| format!("HF causal LM scratch failed: {err:?}"))?;
-    let (tokens, ledgers) = model
-        .decode_greedy(TokenId(seed_token), steps, &mut scratch)
+    let prompt_tokens: Vec<TokenId> = prompt_token_ids.iter().copied().map(TokenId).collect();
+    let output = model
+        .decode_greedy_from_prompt_tokens(&prompt_tokens, steps, &mut scratch)
         .map_err(|err| format!("HF causal LM decode failed: {err:?}"))?;
     let final_norm_manifest = summary
         .manifest
         .entries
         .iter()
         .any(|entry| entry.role == WeightBlockRole::FinalNorm);
-    let ledger_events: usize = ledgers.iter().map(|ledger| ledger.events.len()).sum();
-    let execution_decisions: u64 = ledgers
+    let ledger_events: usize = output
+        .ledgers
+        .iter()
+        .map(|ledger| ledger.events.len())
+        .sum();
+    let execution_decisions: u64 = output
+        .ledgers
         .iter()
         .map(|ledger| ledger.execution_decisions.len() as u64)
         .sum();
-    let hot_path_allocations: u64 = ledgers
+    let hot_path_allocations: u64 = output
+        .ledgers
         .iter()
         .map(|ledger| ledger.hot_path_allocations)
         .sum();
 
     Ok(format!(
-        "{{\"status\":\"ok\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"seed_token\":{},\"steps\":{},\"tokens\":{},\"output_hash\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"final_norm_manifest\":{},\"tied_lm_head\":{},\"ledger_count\":{},\"ledger_events\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
+        "{{\"status\":\"ok\",\"path\":\"{}\",\"input_mode\":\"{}\",\"context_mode\":\"{}\",\"prompt_text\":{},\"prompt_token_ids\":{},\"prompt_tokens\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"seed_token\":{},\"steps\":{},\"tokens\":{},\"output_hash\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"final_norm_manifest\":{},\"tied_lm_head\":{},\"ledger_count\":{},\"ledger_events\":{},\"execution_decisions\":{},\"hot_path_allocations\":{}}}",
         json_escape(&path),
         input_mode,
+        output.context_mode.as_str(),
         json_opt_string(prompt_text.as_deref()),
         u32s_json(&prompt_token_ids),
-        prompt_token_ids.len(),
+        output.prompt_tokens.len(),
         dtype,
         model.layer_count(),
         model.metadata().hidden_size,
         model.metadata().vocab_size,
-        seed_token,
+        output.seed_token.0,
         steps,
-        token_ids_json(&tokens),
-        token_hash(&tokens),
+        token_ids_json(&output.generated_tokens),
+        token_hash(&output.generated_tokens),
         summary.manifest.entries.len(),
         summary.shard_plan.entries.len(),
         summary.tensors_loaded,
@@ -119,7 +124,7 @@ fn hf_causal_lm_decode_with_tokens_json(
         summary.data_hash,
         final_norm_manifest,
         summary.tied_lm_head,
-        ledgers.len(),
+        output.ledgers.len(),
         ledger_events,
         execution_decisions,
         hot_path_allocations,

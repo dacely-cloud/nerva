@@ -14,6 +14,7 @@ fn hf_decode_cli_loads_checkpoint_dir_and_reports_ledgers() {
 
     assert!(json.contains("\"status\":\"ok\""));
     assert!(json.contains("\"input_mode\":\"token_id\""));
+    assert!(json.contains("\"context_mode\":\"last_token_seed_only\""));
     assert!(json.contains("\"prompt_token_ids\":[0]"));
     assert!(json.contains("\"tokens\":[0,0,0]"));
     assert!(json.contains("\"manifest_entries\":12"));
@@ -39,6 +40,7 @@ fn hf_decode_cli_accepts_token_id_prompt_sequence() {
     .unwrap();
 
     assert!(json.contains("\"input_mode\":\"token_ids\""));
+    assert!(json.contains("\"context_mode\":\"last_token_seed_only\""));
     assert!(json.contains("\"prompt_token_ids\":[1,2]"));
     assert!(json.contains("\"prompt_tokens\":2"));
     assert!(json.contains("\"seed_token\":2"));
@@ -60,6 +62,7 @@ fn hf_decode_cli_uses_hf_tokenizer_json_for_text_prompt() {
     .unwrap();
 
     assert!(json.contains("\"input_mode\":\"tokenizer_json\""));
+    assert!(json.contains("\"context_mode\":\"last_token_seed_only\""));
     assert!(json.contains("\"prompt_text\":\"one two\""));
     assert!(json.contains("\"prompt_token_ids\":[1,2]"));
     assert!(json.contains("\"seed_token\":2"));
@@ -73,6 +76,21 @@ fn hf_decode_cli_requires_checkpoint_dir() {
     let err = hf_causal_lm_decode_input_json(None, Some("0".to_string()), 1).unwrap_err();
 
     assert_eq!(err, "hf-decode requires checkpoint_dir");
+}
+
+#[test]
+fn hf_decode_cli_rejects_prompt_token_outside_vocab() {
+    let dir = write_checkpoint_dir("nerva-hf-decode-bad-token-cli");
+    let err = hf_causal_lm_decode_input_json(
+        Some(dir.to_string_lossy().into_owned()),
+        Some("ids:1,99".to_string()),
+        1,
+    )
+    .unwrap_err();
+
+    assert!(err.contains("token id 99 is outside model vocabulary 4"));
+
+    remove_checkpoint_dir(&dir);
 }
 
 fn write_checkpoint_dir(prefix: &str) -> std::path::PathBuf {

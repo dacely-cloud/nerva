@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use crate::common::json::format::json_escape;
 use crate::common::math::dot;
 use crate::common::shape::TransformerBlockShape;
@@ -41,6 +43,36 @@ pub(crate) fn synthetic_header_for_entries(
         manifest_hash: 0,
     };
     synthetic_safetensors_header_for_manifest(&manifest).unwrap()
+}
+
+pub(crate) fn write_hf_checkpoint_dir(prefix: &str, config: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.json"), config).unwrap();
+    let metadata = parse_hf_config_metadata(config).unwrap();
+    let layout = plan_hf_weight_layout(&metadata).unwrap();
+    let manifest = build_hf_tensor_manifest(&layout).unwrap();
+    let header = synthetic_header_for_entries(manifest.architecture, &manifest.entries);
+    write_safetensors_header(
+        &dir.join("model.safetensors"),
+        &header,
+        manifest.total_weight_bytes,
+    );
+    dir
+}
+
+pub(crate) fn remove_hf_checkpoint_dir(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join("model.safetensors"));
+    let _ = std::fs::remove_file(dir.join("config.json"));
+    let _ = std::fs::remove_dir(dir);
+}
+
+fn write_safetensors_header(path: &Path, header: &str, payload_bytes: usize) {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(header.as_bytes());
+    bytes.resize(8 + header.len() + payload_bytes, 0);
+    std::fs::write(path, bytes).unwrap();
 }
 
 pub(crate) fn synthetic_sharded_index_json(manifest: &HfTensorManifest, split_at: usize) -> String {
