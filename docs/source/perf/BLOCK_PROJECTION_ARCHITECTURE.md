@@ -104,17 +104,35 @@ target verification can help a single request, but only if the draft acceptance
 rate is high enough. Structure planning is safe but should be expected to fail
 for normal dense transformer matrices.
 
-## Next Runtime Patch
+## Runtime Wiring
 
-The next patch should introduce a projection execution interface that can carry
-`tokens > 1` through decode:
+The CUDA session path now has a single projection dispatch interface:
 
 ```text
-input:  cols * block_tokens
-output: rows * block_tokens
+project_encoded_rows(
+    rows,
+    cols,
+    tokens,
+    input,
+    output,
+)
 ```
 
-Then integrate it first where correctness is simplest:
+For `tokens == 1`, this preserves the existing autotuned GEMV path. For
+`tokens > 1`, it routes through the cached token-GEMM plan:
+
+```text
+single-token decode: W * x
+block projection:    W * X
+```
+
+Prefill and single-token decode both call this same dispatcher now. This does
+not make single-request decode faster by itself, because single-request decode
+still only has one exact hidden vector at each projection point. It removes the
+projection-kernel split so the next runtime patch can focus on creating valid
+multi-vector decode blocks.
+
+The remaining runtime integration target is:
 
 ```text
 continuous batched decode over multiple resident sessions
