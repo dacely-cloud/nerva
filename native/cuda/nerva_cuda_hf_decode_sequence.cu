@@ -39,6 +39,11 @@ constexpr uint32_t kGroupedGqaThreads =
     kGroupedGqaHeads * kGroupedGqaThreadsPerHead;
 constexpr uint32_t kGroupedGqaHeadDimMax =
     kGroupedGqaThreadsPerHead * kHeadThreadElements;
+constexpr uint32_t kSharedWarpGqaThreadsPerHead = 32;
+constexpr uint32_t kSharedWarpGqaThreads =
+    kGroupedGqaHeads * kSharedWarpGqaThreadsPerHead;
+constexpr uint32_t kSharedWarpGqaHeadDimMax =
+    kSharedWarpGqaThreadsPerHead * kHeadThreadElements;
 constexpr uint32_t kLtGemvMaxHeuristics = 8;
 constexpr uint32_t kLtGemvAutotuneWarmups = 1;
 constexpr uint32_t kLtGemvAutotuneIterations = 3;
@@ -1283,6 +1288,132 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
 #pragma unroll
   for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
     const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
+    if (offset < head_dim) {
+      partial_values[slot * head_dim + offset] = acc[item];
+    }
+  }
+}
+
+template <uint32_t DType>
+__global__ void hf_layer_shared_warp_gqa_attention_chunk_kernel(
+    uint32_t layer_index, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
+    uint32_t head_dim, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, uint32_t attention_chunks, float *scratch,
+    const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
+    float *partial_m, float *partial_l, uint32_t kv_block_count,
+    const uint32_t *kv_block_table) {
+  __shared__ uint32_t current_position_shared;
+  __shared__ float shared_k[kSharedWarpGqaHeadDimMax];
+  __shared__ float shared_v[kSharedWarpGqaHeadDimMax];
+  if (threadIdx.x == 0) {
+    current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
+  }
+  __syncthreads();
+  const uint32_t current_position = current_position_shared;
+  if (current_position >= max_steps || kv_heads == 0 ||
+      heads / kv_heads != kGroupedGqaHeads || heads % kv_heads != 0 ||
+      head_dim > kSharedWarpGqaHeadDimMax ||
+      blockDim.x != kSharedWarpGqaThreads) {
+    return;
+  }
+  const uint32_t kv_head = blockIdx.x;
+  const uint32_t chunk = blockIdx.y;
+  if (kv_head >= kv_heads || chunk >= attention_chunks) {
+    return;
+  }
+  const uint32_t q_in_group = threadIdx.x / kSharedWarpGqaThreadsPerHead;
+  const uint32_t lane = threadIdx.x - q_in_group * kSharedWarpGqaThreadsPerHead;
+  const uint32_t head = kv_head * kGroupedGqaHeads + q_in_group;
+  const uint64_t slot =
+      (static_cast<uint64_t>(head) * attention_chunks + chunk);
+  const uint32_t chunk_start = chunk * kDecodeAttentionChunkTokens;
+  if (chunk_start > current_position) {
+    if (lane == 0) {
+      partial_m[slot] = -INFINITY;
+      partial_l[slot] = 0.0f;
+    }
+    return;
+  }
+  const uint32_t chunk_limit = chunk_start + kDecodeAttentionChunkTokens;
+  const uint32_t position_limit = current_position + 1u;
+  const uint32_t chunk_end =
+      chunk_limit < position_limit ? chunk_limit : position_limit;
+  const uint32_t attention_hidden = heads * head_dim;
+  const uint32_t kv_hidden = kv_heads * head_dim;
+  const uint32_t kv_start = kv_head * head_dim;
+  const uint32_t head_start = head * head_dim;
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const float scale = rsqrtf(static_cast<float>(head_dim));
+  float local_m = -INFINITY;
+  float local_l = 0.0f;
+  float q_frag[kHeadThreadElements];
+  float acc[kHeadThreadElements];
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+    q_frag[item] = offset < head_dim ? s.q[head_start + offset] : 0.0f;
+    acc[item] = 0.0f;
+  }
+  for (uint32_t token = chunk_start; token < chunk_end;) {
+    const uint32_t logical_block = token / kKvCacheBlockTokens;
+    const uint32_t logical_block_end =
+        (logical_block + 1u) * kKvCacheBlockTokens;
+    const uint32_t block_limit =
+        logical_block_end < chunk_end ? logical_block_end : chunk_end;
+    uint64_t token_base = kv_cache_page_offset(
+        layer_index, kv_block_count, kv_block_table[logical_block],
+        token - logical_block * kKvCacheBlockTokens, kv_hidden, kv_start);
+    for (; token < block_limit; ++token, token_base += kv_hidden) {
+      for (uint32_t offset = threadIdx.x; offset < head_dim;
+           offset += blockDim.x) {
+        shared_k[offset] =
+            encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+        shared_v[offset] =
+            encoded_to_f32_typed<DType>(kv_values[token_base + offset]);
+      }
+      __syncthreads();
+      float partial = 0.0f;
+#pragma unroll
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+        if (offset < head_dim) {
+          partial += q_frag[item] * shared_k[offset];
+        }
+      }
+      const float score = warp_sum(partial) * scale;
+      float old_scale = 0.0f;
+      float new_scale = 0.0f;
+      float next_m_value = local_m;
+      float next_l_value = local_l;
+      if (lane == 0) {
+        const float next_m = fmaxf(local_m, score);
+        old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+        new_scale = expf(score - next_m);
+        next_l_value = local_l * old_scale + new_scale;
+        next_m_value = next_m;
+      }
+      old_scale = __shfl_sync(0xffffffffu, old_scale, 0);
+      new_scale = __shfl_sync(0xffffffffu, new_scale, 0);
+      local_l = __shfl_sync(0xffffffffu, next_l_value, 0);
+      local_m = __shfl_sync(0xffffffffu, next_m_value, 0);
+#pragma unroll
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+        if (offset < head_dim) {
+          acc[item] = acc[item] * old_scale + shared_v[offset] * new_scale;
+        }
+      }
+      __syncthreads();
+    }
+  }
+  if (lane == 0) {
+    partial_m[slot] = local_m;
+    partial_l[slot] = local_l;
+  }
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
     if (offset < head_dim) {
       partial_values[slot * head_dim + offset] = acc[item];
     }
@@ -3581,13 +3712,31 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
       if (err == cudaSuccess) {
         const uint32_t query_group = session->heads / session->kv_heads;
+        const bool use_shared_warp_gqa =
+            query_group == kGroupedGqaHeads &&
+            session->heads % session->kv_heads == 0 &&
+            session->head_dim <= kSharedWarpGqaHeadDimMax;
         const bool use_grouped_gqa =
             query_group == kGroupedGqaHeads &&
             session->heads % session->kv_heads == 0 &&
             session->head_dim <= kGroupedGqaHeadDimMax;
-        const dim3 grid(use_grouped_gqa ? session->kv_heads : session->heads,
+        const dim3 grid((use_shared_warp_gqa || use_grouped_gqa)
+                            ? session->kv_heads
+                            : session->heads,
                         attention_chunks);
-        if (session->dtype == kDTypeBF16 && use_grouped_gqa) {
+        if (session->dtype == kDTypeBF16 && use_shared_warp_gqa) {
+          hf_layer_shared_warp_gqa_attention_chunk_kernel<kDTypeBF16>
+              <<<grid, kSharedWarpGqaThreads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else if (session->dtype == kDTypeBF16 && use_grouped_gqa) {
           hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeBF16>
               <<<grid, kGroupedGqaThreads, 0, session->stream>>>(
                   layer_index, session->hidden, session->heads,
@@ -3602,6 +3751,18 @@ cudaError_t launch_cublas_layer_session_step(
         } else if (session->dtype == kDTypeBF16) {
           hf_layer_attention_chunk_kernel<kDTypeBF16>
               <<<grid, session->head_threads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else if (use_shared_warp_gqa) {
+          hf_layer_shared_warp_gqa_attention_chunk_kernel<kDTypeF16>
+              <<<grid, kSharedWarpGqaThreads, 0, session->stream>>>(
                   layer_index, session->hidden, session->heads,
                   session->kv_heads, session->head_dim, session->intermediate,
                   session->device_step, max_steps, attention_chunks,
@@ -3823,13 +3984,31 @@ cudaError_t profile_cublas_layer_session_step(
       err = cudaGetLastError();
       if (err == cudaSuccess) {
         const uint32_t query_group = session->heads / session->kv_heads;
+        const bool use_shared_warp_gqa =
+            query_group == kGroupedGqaHeads &&
+            session->heads % session->kv_heads == 0 &&
+            session->head_dim <= kSharedWarpGqaHeadDimMax;
         const bool use_grouped_gqa =
             query_group == kGroupedGqaHeads &&
             session->heads % session->kv_heads == 0 &&
             session->head_dim <= kGroupedGqaHeadDimMax;
-        const dim3 grid(use_grouped_gqa ? session->kv_heads : session->heads,
+        const dim3 grid((use_shared_warp_gqa || use_grouped_gqa)
+                            ? session->kv_heads
+                            : session->heads,
                         attention_chunks);
-        if (session->dtype == kDTypeBF16 && use_grouped_gqa) {
+        if (session->dtype == kDTypeBF16 && use_shared_warp_gqa) {
+          hf_layer_shared_warp_gqa_attention_chunk_kernel<kDTypeBF16>
+              <<<grid, kSharedWarpGqaThreads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else if (session->dtype == kDTypeBF16 && use_grouped_gqa) {
           hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeBF16>
               <<<grid, kGroupedGqaThreads, 0, session->stream>>>(
                   layer_index, session->hidden, session->heads,
@@ -3844,6 +4023,18 @@ cudaError_t profile_cublas_layer_session_step(
         } else if (session->dtype == kDTypeBF16) {
           hf_layer_attention_chunk_kernel<kDTypeBF16>
               <<<grid, session->head_threads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else if (use_shared_warp_gqa) {
+          hf_layer_shared_warp_gqa_attention_chunk_kernel<kDTypeF16>
+              <<<grid, kSharedWarpGqaThreads, 0, session->stream>>>(
                   layer_index, session->hidden, session->heads,
                   session->kv_heads, session->head_dim, session->intermediate,
                   session->device_step, max_steps, attention_chunks,
