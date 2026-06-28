@@ -31,6 +31,7 @@ constexpr uint32_t kHeadThreadElements = 4;
 constexpr uint32_t kPrefillChunkBaseTokens = 1024;
 constexpr uint32_t kPrefillChunkMaxTokens = 8192;
 constexpr uint32_t kVerifyMaxDraftTokens = 128;
+constexpr uint32_t kKvCacheBlockTokens = 16;
 constexpr uint32_t kDecodeAttentionChunkTokens = 64;
 constexpr uint32_t kChunkedDecodeAttentionThreshold = 128;
 constexpr uint64_t kMissingOffset = UINT64_MAX;
@@ -144,20 +145,61 @@ __host__ __device__ LayerScratch layer_scratch_ptrs(
   return out;
 }
 
-__device__ float encoded_to_f32(uint16_t value, uint32_t dtype) {
+__device__ __forceinline__ float encoded_to_f32(uint16_t value, uint32_t dtype) {
   if (dtype == kDTypeBF16) {
     return __uint_as_float(static_cast<uint32_t>(value) << 16);
   }
   return __half2float(__ushort_as_half(value));
 }
 
-__device__ uint16_t f32_to_encoded(float value, uint32_t dtype) {
+template <uint32_t DType>
+__device__ __forceinline__ float encoded_to_f32_typed(uint16_t value) {
+  if (DType == kDTypeBF16) {
+    return __uint_as_float(static_cast<uint32_t>(value) << 16);
+  }
+  return __half2float(__ushort_as_half(value));
+}
+
+__device__ __forceinline__ uint16_t f32_to_encoded(float value, uint32_t dtype) {
   if (dtype == kDTypeBF16) {
     uint32_t bits = __float_as_uint(value);
     uint32_t lsb = (bits >> 16) & 1u;
     return static_cast<uint16_t>((bits + 0x7fffu + lsb) >> 16);
   }
   return __half_as_ushort(__float2half_rn(value));
+}
+
+__host__ __device__ __forceinline__ uint64_t kv_cache_page_offset(
+    uint32_t layer_index, uint32_t kv_block_count, uint32_t physical_block,
+    uint32_t block_offset, uint32_t kv_hidden, uint32_t kv_offset) {
+  return (((static_cast<uint64_t>(layer_index) * kv_block_count +
+            physical_block) *
+               kKvCacheBlockTokens +
+           block_offset) *
+              kv_hidden +
+          kv_offset);
+}
+
+__device__ __forceinline__ uint64_t kv_cache_token_offset(
+    uint32_t layer_index, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint32_t token, uint32_t kv_hidden,
+    uint32_t kv_offset) {
+  const uint32_t logical_block = token / kKvCacheBlockTokens;
+  const uint32_t block_offset = token - logical_block * kKvCacheBlockTokens;
+  const uint32_t physical_block = kv_block_table[logical_block];
+  return kv_cache_page_offset(layer_index, kv_block_count, physical_block,
+                              block_offset, kv_hidden, kv_offset);
+}
+
+__device__ __forceinline__ uint64_t kv_cache_token_base(
+    uint32_t layer_index, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint32_t token, uint32_t kv_hidden,
+    uint32_t kv_offset) {
+  const uint32_t logical_block = token / kKvCacheBlockTokens;
+  const uint32_t block_offset = token - logical_block * kKvCacheBlockTokens;
+  const uint32_t physical_block = kv_block_table[logical_block];
+  return kv_cache_page_offset(layer_index, kv_block_count, physical_block,
+                              block_offset, kv_hidden, kv_offset);
 }
 
 __device__ float silu(float value) {
@@ -367,7 +409,9 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
                           uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
                           uint32_t intermediate, uint32_t position, uint32_t max_steps,
                           float rms_eps, float rope_theta, float *scratch,
-                          float *kv_keys, float *kv_values) {
+                          uint16_t *kv_keys, uint16_t *kv_values,
+                          uint32_t kv_block_count,
+                          const uint32_t *kv_block_table) {
   const uint32_t attention_hidden = heads * head_dim;
   const uint32_t kv_hidden = kv_heads * head_dim;
   float *input = scratch;
@@ -396,11 +440,11 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
   apply_rope(q, heads, head_dim, position, rope_theta);
   apply_rope(k, kv_heads, head_dim, position, rope_theta);
 
-  const uint64_t kv_base =
-      (static_cast<uint64_t>(layer_index) * max_steps + position) * kv_hidden;
+  const uint64_t write_base = kv_cache_token_base(
+      layer_index, kv_block_count, kv_block_table, position, kv_hidden, 0);
   for (uint32_t index = threadIdx.x; index < kv_hidden; index += blockDim.x) {
-    kv_keys[kv_base + index] = k[index];
-    kv_values[kv_base + index] = v[index];
+    kv_keys[write_base + index] = f32_to_encoded(k[index], dtype);
+    kv_values[write_base + index] = f32_to_encoded(v[index], dtype);
   }
   __syncthreads();
 
@@ -414,12 +458,13 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
       attn[head_start + offset] = 0.0f;
     }
     for (uint32_t token = 0; token <= position; ++token) {
-      const uint64_t token_base =
-          (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
-          kv_head * head_dim;
+      const uint64_t token_base = kv_cache_token_base(
+          layer_index, kv_block_count, kv_block_table, token, kv_hidden,
+          kv_head * head_dim);
       float score = 0.0f;
       for (uint32_t offset = 0; offset < head_dim; ++offset) {
-        score += q[head_start + offset] * kv_keys[token_base + offset];
+        score += q[head_start + offset] *
+                 encoded_to_f32(kv_keys[token_base + offset], dtype);
       }
       score *= scale;
       const float next_m = fmaxf(local_m, score);
@@ -427,7 +472,9 @@ __device__ void run_layer(uint16_t *arena, SequenceLayerLayout layout,
       const float new_scale = expf(score - next_m);
       for (uint32_t offset = 0; offset < head_dim; ++offset) {
         const uint32_t out = head_start + offset;
-        attn[out] = attn[out] * old_scale + kv_values[token_base + offset] * new_scale;
+        attn[out] =
+            attn[out] * old_scale +
+            encoded_to_f32(kv_values[token_base + offset], dtype) * new_scale;
       }
       local_l = local_l * old_scale + new_scale;
       local_m = next_m;
@@ -547,7 +594,9 @@ __global__ void hf_decode_sequence_kernel(
     uint32_t kv_heads, uint32_t head_dim, uint32_t intermediate, uint32_t position,
     uint32_t *step_cursor, uint32_t max_steps, const uint32_t *prompt_tokens,
     uint32_t prompt_token_count, float rms_eps, float rope_theta, float *scratch,
-    float *kv_keys, float *kv_values, const NervaCudaSyntheticTokenSlot *slots) {
+    uint16_t *kv_keys, uint16_t *kv_values,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    const NervaCudaSyntheticTokenSlot *slots) {
   if (blockIdx.x != 0) {
     return;
   }
@@ -578,7 +627,7 @@ __global__ void hf_decode_sequence_kernel(
     run_layer(arena, layers[layer_index], layer_index, input_offset, output_offset,
               dtype, hidden, heads, kv_heads, head_dim, intermediate,
               current_position, max_steps, rms_eps, rope_theta, scratch, kv_keys,
-              kv_values);
+              kv_values, kv_block_count, kv_block_table);
     const uint64_t next_input = output_offset;
     output_offset = input_offset;
     input_offset = next_input;
@@ -621,6 +670,14 @@ __global__ void hf_decode_set_step_kernel(uint32_t *step_cursor,
                                           uint32_t value) {
   if (threadIdx.x == 0) {
     *step_cursor = value;
+  }
+}
+
+__global__ void hf_init_identity_kv_block_table_kernel(uint32_t *block_table,
+                                                       uint32_t block_count) {
+  for (uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+       index < block_count; index += blockDim.x * gridDim.x) {
+    block_table[index] = index;
   }
 }
 
@@ -682,7 +739,9 @@ __global__ void hf_layer_attention_encode_kernel(
     uint32_t layer_index, uint32_t dtype, uint32_t hidden, uint32_t heads,
     uint32_t kv_heads, uint32_t head_dim, uint32_t intermediate,
     uint32_t *step_cursor, uint32_t max_steps, float *scratch,
-    float *kv_keys, float *kv_values, uint16_t *projection_input) {
+    const uint16_t *kv_keys, const uint16_t *kv_values,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint16_t *projection_input) {
   __shared__ uint32_t current_position_shared;
   if (threadIdx.x == 0) {
     current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
@@ -711,12 +770,13 @@ __global__ void hf_layer_attention_encode_kernel(
   float local_m = -INFINITY;
   float local_l = 0.0f;
   for (uint32_t token = 0; token <= current_position; ++token) {
-    const uint64_t token_base =
-        (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
-        kv_head * head_dim;
+    const uint64_t token_base = kv_cache_token_base(
+        layer_index, kv_block_count, kv_block_table, token, kv_hidden,
+        kv_head * head_dim);
     float partial = 0.0f;
     for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
-      partial += s.q[head_start + offset] * kv_keys[token_base + offset];
+      partial += s.q[head_start + offset] *
+                 encoded_to_f32(kv_keys[token_base + offset], dtype);
     }
     const float score = block_sum(partial) * scale;
     const float next_m = fmaxf(local_m, score);
@@ -725,7 +785,8 @@ __global__ void hf_layer_attention_encode_kernel(
     for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
       const uint32_t out = head_start + offset;
       s.attn[out] =
-          s.attn[out] * old_scale + kv_values[token_base + offset] * new_scale;
+          s.attn[out] * old_scale +
+          encoded_to_f32(kv_values[token_base + offset], dtype) * new_scale;
     }
     local_l = local_l * old_scale + new_scale;
     local_m = next_m;
@@ -745,7 +806,8 @@ __global__ void hf_layer_qkv_attention_encode_kernel(
     uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
     uint32_t head_dim, uint32_t intermediate, uint32_t *step_cursor,
     uint32_t max_steps, float rms_eps, float rope_theta, float *scratch,
-    float *kv_keys, float *kv_values, uint16_t *projection_input) {
+    uint16_t *kv_keys, uint16_t *kv_values, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint16_t *projection_input) {
   __shared__ uint32_t current_position_shared;
   if (threadIdx.x == 0) {
     current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
@@ -803,10 +865,11 @@ __global__ void hf_layer_qkv_attention_encode_kernel(
       has_k_norm ? rsqrtf(k_mean_square / static_cast<float>(head_dim) + rms_eps) : 1.0f;
   const uint32_t half = head_dim / 2;
   const bool publish_kv = head % group == 0;
-  const uint64_t kv_base =
-      (static_cast<uint64_t>(layer_index) * max_steps + current_position) *
-          kv_hidden +
-      kv_start;
+  const uint64_t publish_base =
+      publish_kv
+          ? kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
+                                current_position, kv_hidden, kv_start)
+          : 0;
   for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
     const uint32_t rope_offset = offset < half ? offset : offset - half;
     const uint32_t left_index = kv_start + rope_offset;
@@ -841,8 +904,8 @@ __global__ void hf_layer_qkv_attention_encode_kernel(
     s.residual[head_start + offset] = current_k;
     s.mlp_norm[head_start + offset] = current_v;
     if (publish_kv) {
-      kv_keys[kv_base + offset] = current_k;
-      kv_values[kv_base + offset] = current_v;
+      kv_keys[publish_base + offset] = f32_to_encoded(current_k, dtype);
+      kv_values[publish_base + offset] = f32_to_encoded(current_v, dtype);
     }
   }
   __syncthreads();
@@ -855,15 +918,13 @@ __global__ void hf_layer_qkv_attention_encode_kernel(
   float local_m = -INFINITY;
   float local_l = 0.0f;
   for (uint32_t token = 0; token <= current_position; ++token) {
+    const uint64_t token_base = kv_cache_token_base(
+        layer_index, kv_block_count, kv_block_table, token, kv_hidden,
+        kv_start);
     float partial = 0.0f;
-    const uint64_t token_base =
-        (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
-        kv_start;
     for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
-      float key_value = kv_keys[token_base + offset];
-      if (token == current_position) {
-        key_value = s.residual[head_start + offset];
-      }
+      const float key_value =
+          encoded_to_f32(kv_keys[token_base + offset], dtype);
       partial += s.q[head_start + offset] * key_value;
     }
     const float score = block_sum(partial) * scale;
@@ -872,10 +933,8 @@ __global__ void hf_layer_qkv_attention_encode_kernel(
     const float new_scale = expf(score - next_m);
     for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
       const uint32_t out = head_start + offset;
-      float value_value = kv_values[token_base + offset];
-      if (token == current_position) {
-        value_value = s.mlp_norm[head_start + offset];
-      }
+      const float value_value =
+          encoded_to_f32(kv_values[token_base + offset], dtype);
       s.attn[out] = s.attn[out] * old_scale + value_value * new_scale;
     }
     local_l = local_l * old_scale + new_scale;
@@ -896,7 +955,8 @@ __global__ void hf_layer_qkv_prepare_kernel(
     uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
     uint32_t head_dim, uint32_t intermediate, uint32_t *step_cursor,
     uint32_t max_steps, float rms_eps, float rope_theta, float *scratch,
-    float *kv_keys, float *kv_values) {
+    uint16_t *kv_keys, uint16_t *kv_values, uint32_t kv_block_count,
+    const uint32_t *kv_block_table) {
   __shared__ uint32_t current_position_shared;
   if (threadIdx.x == 0) {
     current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
@@ -924,23 +984,24 @@ __global__ void hf_layer_qkv_prepare_kernel(
     add_optional_head_bias(arena, layout.v_bias, head, head_dim, dtype, v);
     per_head_rms_norm_block(arena, layout.k_norm, k, head_dim, dtype, rms_eps);
     apply_rope_head(k, head_dim, current_position, rope_theta);
-    const uint64_t kv_base =
-        (static_cast<uint64_t>(layer_index) * max_steps + current_position) *
-            kv_hidden +
-        static_cast<uint64_t>(head) * head_dim;
+    const uint64_t token_base = kv_cache_token_base(
+        layer_index, kv_block_count, kv_block_table, current_position,
+        kv_hidden, static_cast<uint32_t>(head) * head_dim);
     for (uint32_t index = threadIdx.x; index < head_dim; index += blockDim.x) {
-      kv_keys[kv_base + index] = k[index];
-      kv_values[kv_base + index] = v[index];
+      kv_keys[token_base + index] = f32_to_encoded(k[index], dtype);
+      kv_values[token_base + index] = f32_to_encoded(v[index], dtype);
     }
   }
 }
 
+template <uint32_t DType>
 __global__ void hf_layer_attention_chunk_kernel(
     uint32_t layer_index, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
     uint32_t head_dim, uint32_t intermediate, uint32_t *step_cursor,
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
-    float *kv_keys, float *kv_values, float *partial_values, float *partial_m,
-    float *partial_l) {
+    const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
+    float *partial_m, float *partial_l, uint32_t kv_block_count,
+    const uint32_t *kv_block_table) {
   __shared__ uint32_t current_position_shared;
   if (threadIdx.x == 0) {
     current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
@@ -987,15 +1048,16 @@ __global__ void hf_layer_attention_chunk_kernel(
     acc[item] = 0.0f;
   }
   for (uint32_t token = chunk_start; token < chunk_end; ++token) {
-    const uint64_t token_base =
-        (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
-        kv_start;
+    const uint64_t token_base = kv_cache_token_base(
+        layer_index, kv_block_count, kv_block_table, token, kv_hidden,
+        kv_start);
     float partial = 0.0f;
 #pragma unroll
     for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
       const uint32_t offset = threadIdx.x + item * blockDim.x;
       if (offset < head_dim) {
-        partial += s.q[head_start + offset] * kv_keys[token_base + offset];
+        partial += s.q[head_start + offset] *
+                   encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
       }
     }
     const float score = block_sum(partial) * scale;
@@ -1007,7 +1069,8 @@ __global__ void hf_layer_attention_chunk_kernel(
       const uint32_t offset = threadIdx.x + item * blockDim.x;
       if (offset < head_dim) {
         acc[item] = acc[item] * old_scale +
-                    kv_values[token_base + offset] * new_scale;
+                    encoded_to_f32_typed<DType>(kv_values[token_base + offset]) *
+                        new_scale;
       }
     }
     local_l = local_l * old_scale + new_scale;
@@ -1253,8 +1316,9 @@ __global__ void hf_prefill_qkv_publish_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
     uint32_t max_steps, uint32_t chunk_start, uint32_t chunk_tokens,
-    float rms_eps, float rope_theta, float *qkv, float *kv_keys,
-    float *kv_values) {
+    float rms_eps, float rope_theta, float *qkv, uint16_t *kv_keys,
+    uint16_t *kv_values, uint32_t kv_block_count,
+    const uint32_t *kv_block_table) {
   const uint32_t local_token = blockIdx.x;
   const uint32_t lane = blockIdx.y;
   if (local_token >= chunk_tokens) {
@@ -1315,18 +1379,17 @@ __global__ void hf_prefill_qkv_publish_kernel(
     }
     __syncthreads();
     apply_rope_head(k + kv_start, head_dim, global_pos, rope_theta);
-    const uint64_t kv_base =
-        (static_cast<uint64_t>(layer_index) * max_steps + global_pos) *
-            kv_hidden +
-        kv_start;
+    const uint64_t token_base = kv_cache_token_base(
+        layer_index, kv_block_count, kv_block_table, global_pos, kv_hidden,
+        kv_start);
     for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
       float value = v[kv_start + offset];
       if (layout.v_bias != kMissingOffset) {
         value += encoded_to_f32(arena[layout.v_bias + kv_start + offset], dtype);
       }
       v[kv_start + offset] = value;
-      kv_keys[kv_base + offset] = k[kv_start + offset];
-      kv_values[kv_base + offset] = value;
+      kv_keys[token_base + offset] = f32_to_encoded(k[kv_start + offset], dtype);
+      kv_values[token_base + offset] = f32_to_encoded(value, dtype);
     }
   }
 }
@@ -1334,8 +1397,9 @@ __global__ void hf_prefill_qkv_publish_kernel(
 __global__ void hf_prefill_attention_kernel(
     uint32_t layer_index, uint32_t dtype, uint32_t heads, uint32_t kv_heads,
     uint32_t head_dim, uint32_t max_steps, uint32_t chunk_start,
-    uint32_t chunk_tokens, const float *qkv, const float *kv_keys,
-    const float *kv_values, uint16_t *attn_out) {
+    uint32_t chunk_tokens, const float *qkv, const uint16_t *kv_keys,
+    const uint16_t *kv_values, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint16_t *attn_out) {
   const uint32_t local_token = blockIdx.x;
   const uint32_t head = blockIdx.y;
   if (local_token >= chunk_tokens || head >= heads) {
@@ -1360,12 +1424,13 @@ __global__ void hf_prefill_attention_kernel(
   float local_m = -INFINITY;
   float local_l = 0.0f;
   for (uint32_t token = 0; token <= global_pos; ++token) {
-    const uint64_t token_base =
-        (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
-        kv_start;
+    const uint64_t token_base = kv_cache_token_base(
+        layer_index, kv_block_count, kv_block_table, token, kv_hidden,
+        kv_start);
     float partial = 0.0f;
     for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
-      partial += q[head_start + offset] * kv_keys[token_base + offset];
+      partial += q[head_start + offset] *
+                 encoded_to_f32(kv_keys[token_base + offset], dtype);
     }
     const float score = block_sum(partial) * scale;
     const float next_m = fmaxf(local_m, score);
@@ -1373,7 +1438,8 @@ __global__ void hf_prefill_attention_kernel(
     const float new_scale = expf(score - next_m);
     for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
       shared_attn[offset] =
-          shared_attn[offset] * old_scale + kv_values[token_base + offset] * new_scale;
+          shared_attn[offset] * old_scale +
+          encoded_to_f32(kv_values[token_base + offset], dtype) * new_scale;
     }
     local_l = local_l * old_scale + new_scale;
     local_m = next_m;
@@ -1978,6 +2044,57 @@ void destroy_lt_descriptors(cublasLtMatmulDesc_t op_desc,
   if (op_desc != nullptr) cublasLtMatmulDescDestroy(op_desc);
 }
 
+cudaError_t create_lt_gemv_descriptors(
+    uint32_t rows, uint32_t cols, uint32_t dtype,
+    cublasLtMatmulDesc_t *op_desc, cublasLtMatrixLayout_t *a_desc,
+    cublasLtMatrixLayout_t *b_desc, cublasLtMatrixLayout_t *c_desc,
+    cublasLtMatrixLayout_t *d_desc) {
+  if (rows == 0 || cols == 0 || op_desc == nullptr || a_desc == nullptr ||
+      b_desc == nullptr || c_desc == nullptr || d_desc == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  const cudaDataType_t data_type = encoded_cuda_type(dtype);
+  cublasStatus_t status =
+      cublasLtMatmulDescCreate(op_desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+  cublasOperation_t op = CUBLAS_OP_N;
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatmulDescSetAttribute(
+        *op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op, sizeof(op));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatmulDescSetAttribute(
+        *op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op, sizeof(op));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(a_desc, data_type, rows, cols, cols);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(b_desc, data_type, cols, 1, 1);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(c_desc, CUDA_R_32F, rows, 1, 1);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(d_desc, CUDA_R_32F, rows, 1, 1);
+  cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        *a_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        *b_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        *c_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        *d_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    destroy_lt_descriptors(*op_desc, *a_desc, *b_desc, *c_desc, *d_desc);
+    *op_desc = nullptr;
+    *a_desc = nullptr;
+    *b_desc = nullptr;
+    *c_desc = nullptr;
+    *d_desc = nullptr;
+  }
+  return cublas_to_cuda(status);
+}
+
 cudaError_t encoded_row_major_gemv_lt(
     cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
     size_t workspace_bytes, const uint16_t *matrix, const uint16_t *input,
@@ -1986,48 +2103,20 @@ cudaError_t encoded_row_major_gemv_lt(
     return cudaErrorInvalidValue;
   }
   const float alpha = 1.0f;
-  const cudaDataType_t data_type = encoded_cuda_type(dtype);
   cublasLtMatmulDesc_t op_desc = nullptr;
   cublasLtMatrixLayout_t a_desc = nullptr;
   cublasLtMatrixLayout_t b_desc = nullptr;
   cublasLtMatrixLayout_t c_desc = nullptr;
   cublasLtMatrixLayout_t d_desc = nullptr;
-  cublasStatus_t status =
-      cublasLtMatmulDescCreate(&op_desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
-  cublasOperation_t op = CUBLAS_OP_N;
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatmulDescSetAttribute(
-        op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op, sizeof(op));
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatmulDescSetAttribute(
-        op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op, sizeof(op));
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutCreate(&a_desc, data_type, rows, cols, cols);
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutCreate(&b_desc, data_type, cols, 1, 1);
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutCreate(&c_desc, CUDA_R_32F, rows, 1, 1);
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutCreate(&d_desc, CUDA_R_32F, rows, 1, 1);
-  cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutSetAttribute(
-        a_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutSetAttribute(
-        b_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutSetAttribute(
-        c_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-  if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutSetAttribute(
-        d_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-  if (status == CUBLAS_STATUS_SUCCESS)
+  cudaError_t err = create_lt_gemv_descriptors(
+      rows, cols, dtype, &op_desc, &a_desc, &b_desc, &c_desc, &d_desc);
+  cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
+  if (err == cudaSuccess)
     status = cublasLtMatmul(handle, op_desc, &alpha, matrix, a_desc, input,
                             b_desc, &beta, output, c_desc, output, d_desc,
                             nullptr, workspace, workspace_bytes, stream);
   destroy_lt_descriptors(op_desc, a_desc, b_desc, c_desc, d_desc);
-  return cublas_to_cuda(status);
+  return err == cudaSuccess ? cublas_to_cuda(status) : err;
 }
 
 cudaError_t encoded_row_major_gemm_tokens(
@@ -2382,6 +2471,8 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t vocab_size = 0;
   uint32_t layer_count = 0;
   uint32_t max_context_tokens = 0;
+  uint32_t kv_block_count = 0;
+  uint32_t kv_token_capacity = 0;
   uint32_t prefill_chunk_tokens = 0;
   uint32_t detailed_profile = 0;
   float rms_eps = 0.0f;
@@ -2407,6 +2498,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint64_t packed_qkv_bytes = 0;
   uint64_t packed_gate_up_bytes = 0;
   uint64_t kv_bytes = 0;
+  uint64_t kv_block_table_bytes = 0;
   uint64_t slots_bytes = 0;
   uint64_t prompt_bytes = 0;
   uint64_t h2d_bytes = 0;
@@ -2442,8 +2534,9 @@ struct NervaCudaHfDecodeSequenceSession {
   float *device_verify_logits = nullptr;
   uint16_t *device_qkv_packed = nullptr;
   uint16_t *device_gate_up_packed = nullptr;
-  float *device_kv_keys = nullptr;
-  float *device_kv_values = nullptr;
+  uint16_t *device_kv_keys = nullptr;
+  uint16_t *device_kv_values = nullptr;
+  uint32_t *device_kv_block_table = nullptr;
   uint32_t *device_prompt_tokens = nullptr;
   NervaCudaSyntheticTokenSlot *host_slots = nullptr;
   NervaCudaSyntheticTokenSlot *device_slots = nullptr;
@@ -2510,6 +2603,7 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_step);
   cudaFree(session->device_slots);
   cudaFree(session->device_prompt_tokens);
+  cudaFree(session->device_kv_block_table);
   cudaFree(session->device_kv_values);
   cudaFree(session->device_kv_keys);
   cudaFree(session->device_gate_up_packed);
@@ -2572,6 +2666,7 @@ uint64_t session_device_footprint(
          session->decode_attention_stats_bytes * 2 +
          session->verify_logits_bytes + session->packed_qkv_bytes +
          session->packed_gate_up_bytes + session->kv_bytes +
+         session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes + sizeof(uint32_t) +
          kCublasWorkspaceBytes;
 }
@@ -2584,6 +2679,7 @@ uint64_t session_fixed_footprint_without_prefill_chunk(
          session->decode_attention_stats_bytes * 2 +
          session->verify_logits_bytes + session->packed_qkv_bytes +
          session->packed_gate_up_bytes + session->kv_bytes +
+         session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes + sizeof(uint32_t) +
          kCublasWorkspaceBytes;
 }
@@ -2846,7 +2942,9 @@ cudaError_t launch_monolithic_session_step(
       session->device_step, max_steps, session->device_prompt_tokens,
       prompt_token_count, session->rms_eps, session->rope_theta,
       session->device_scratch, session->device_kv_keys,
-      session->device_kv_values, session->device_slots);
+      session->device_kv_values, session->kv_block_count,
+      session->device_kv_block_table,
+      session->device_slots);
   cudaError_t err = cudaGetLastError();
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
@@ -2917,6 +3015,7 @@ cudaError_t launch_cublas_layer_session_step(
           session->intermediate, session->device_step, max_steps,
           session->rms_eps, session->rope_theta, session->device_scratch,
           session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table,
           session->device_projection_input);
       err = cudaGetLastError();
     } else if (err == cudaSuccess) {
@@ -2926,19 +3025,36 @@ cudaError_t launch_cublas_layer_session_step(
           session->hidden, session->heads, session->kv_heads, session->head_dim,
           session->intermediate, session->device_step, max_steps,
           session->rms_eps, session->rope_theta, session->device_scratch,
-          session->device_kv_keys, session->device_kv_values);
+          session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table);
       err = cudaGetLastError();
       if (err == cudaSuccess) {
         const dim3 grid(session->heads, attention_chunks);
-        hf_layer_attention_chunk_kernel<<<grid, session->head_threads, 0,
-                                          session->stream>>>(
-            layer_index, session->hidden, session->heads, session->kv_heads,
-            session->head_dim, session->intermediate, session->device_step,
-            max_steps, attention_chunks, session->device_scratch,
-            session->device_kv_keys, session->device_kv_values,
-            session->device_decode_attention_values,
-            session->device_decode_attention_m,
-            session->device_decode_attention_l);
+        if (session->dtype == kDTypeBF16) {
+          hf_layer_attention_chunk_kernel<kDTypeBF16>
+              <<<grid, session->head_threads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else {
+          hf_layer_attention_chunk_kernel<kDTypeF16>
+              <<<grid, session->head_threads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        }
         err = cudaGetLastError();
       }
       if (err == cudaSuccess) {
@@ -3109,6 +3225,7 @@ cudaError_t profile_cublas_layer_session_step(
           session->intermediate, session->device_step, max_steps,
           session->rms_eps, session->rope_theta, session->device_scratch,
           session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table,
           session->device_projection_input);
       err = cudaGetLastError();
     } else if (err == cudaSuccess) {
@@ -3118,19 +3235,36 @@ cudaError_t profile_cublas_layer_session_step(
           session->hidden, session->heads, session->kv_heads, session->head_dim,
           session->intermediate, session->device_step, max_steps,
           session->rms_eps, session->rope_theta, session->device_scratch,
-          session->device_kv_keys, session->device_kv_values);
+          session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table);
       err = cudaGetLastError();
       if (err == cudaSuccess) {
         const dim3 grid(session->heads, attention_chunks);
-        hf_layer_attention_chunk_kernel<<<grid, session->head_threads, 0,
-                                          session->stream>>>(
-            layer_index, session->hidden, session->heads, session->kv_heads,
-            session->head_dim, session->intermediate, session->device_step,
-            max_steps, attention_chunks, session->device_scratch,
-            session->device_kv_keys, session->device_kv_values,
-            session->device_decode_attention_values,
-            session->device_decode_attention_m,
-            session->device_decode_attention_l);
+        if (session->dtype == kDTypeBF16) {
+          hf_layer_attention_chunk_kernel<kDTypeBF16>
+              <<<grid, session->head_threads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else {
+          hf_layer_attention_chunk_kernel<kDTypeF16>
+              <<<grid, session->head_threads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        }
         err = cudaGetLastError();
       }
       if (err == cudaSuccess) {
@@ -3345,7 +3479,8 @@ cudaError_t launch_cublas_session_prefill(
             session->heads, session->kv_heads, session->head_dim,
             session->max_context_tokens, chunk_start, chunk_tokens,
             session->rms_eps, session->rope_theta, session->device_prefill_qkv,
-            session->device_kv_keys, session->device_kv_values);
+            session->device_kv_keys, session->device_kv_values,
+            session->kv_block_count, session->device_kv_block_table);
         err = cudaGetLastError();
         out->kernel_launches += 1;
       }
@@ -3357,7 +3492,8 @@ cudaError_t launch_cublas_session_prefill(
             layer_index, session->dtype, session->heads, session->kv_heads,
             session->head_dim, session->max_context_tokens, chunk_start,
             chunk_tokens, session->device_prefill_qkv, session->device_kv_keys,
-            session->device_kv_values, session->device_prefill_attn);
+            session->device_kv_values, session->kv_block_count,
+            session->device_kv_block_table, session->device_prefill_attn);
         err = cudaGetLastError();
         out->kernel_launches += 1;
       }
@@ -3531,7 +3667,8 @@ cudaError_t launch_cublas_session_verify_draft(
           session->heads, session->kv_heads, session->head_dim,
           session->max_context_tokens, chunk_start, draft_token_count,
           session->rms_eps, session->rope_theta, session->device_prefill_qkv,
-          session->device_kv_keys, session->device_kv_values);
+          session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table);
       err = cudaGetLastError();
       out->kernel_launches += 1;
     }
@@ -3544,6 +3681,7 @@ cudaError_t launch_cublas_session_verify_draft(
           session->head_dim, session->max_context_tokens, chunk_start,
           draft_token_count, session->device_prefill_qkv,
           session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table,
           session->device_prefill_attn);
       err = cudaGetLastError();
       out->kernel_launches += 1;
@@ -3891,8 +4029,14 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   const uint64_t scratch_elements =
       block_scratch > final_scratch ? block_scratch : final_scratch;
   const uint64_t scratch_bytes = scratch_elements * sizeof(float);
+  const uint32_t kv_block_count =
+      ceil_div_u32(context_steps, kKvCacheBlockTokens);
+  const uint32_t kv_token_capacity = kv_block_count * kKvCacheBlockTokens;
   const uint64_t kv_bytes =
-      request->layer_count * static_cast<uint64_t>(context_steps) * kv_hidden * sizeof(float) * 2;
+      request->layer_count * static_cast<uint64_t>(kv_token_capacity) * kv_hidden *
+      sizeof(uint16_t) * 2;
+  const uint64_t kv_block_table_bytes =
+      static_cast<uint64_t>(kv_block_count) * sizeof(uint32_t);
   const uint64_t slots_bytes =
       static_cast<uint64_t>(context_steps) * sizeof(NervaCudaSyntheticTokenSlot);
   const uint64_t prompt_bytes =
@@ -3907,8 +4051,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   uint16_t *device_arena = nullptr;
   SequenceLayerLayout *device_layouts = nullptr;
   float *device_scratch = nullptr;
-  float *device_kv_keys = nullptr;
-  float *device_kv_values = nullptr;
+  uint16_t *device_kv_keys = nullptr;
+  uint16_t *device_kv_values = nullptr;
+  uint32_t *device_kv_block_table = nullptr;
   uint32_t *device_prompt_tokens = nullptr;
   NervaCudaSyntheticTokenSlot *host_slots = nullptr;
   NervaCudaSyntheticTokenSlot *device_slots = nullptr;
@@ -3931,6 +4076,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_scratch), scratch_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_kv_keys), kv_bytes / 2);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_kv_values), kv_bytes / 2);
+  if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_kv_block_table), kv_block_table_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_prompt_tokens), prompt_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_slots), slots_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_step), sizeof(uint32_t));
@@ -3953,6 +4099,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     cudaFree(device_step);
     cudaFree(device_slots);
     cudaFree(device_prompt_tokens);
+    cudaFree(device_kv_block_table);
     cudaFree(device_kv_values);
     cudaFree(device_kv_keys);
     cudaFree(device_scratch);
@@ -4009,6 +4156,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     err = cudaMemsetAsync(device_kv_values, 0, kv_bytes / 2, stream);
   }
   if (err == cudaSuccess) {
+    const uint32_t blocks = (kv_block_count + kDecodeThreads - 1u) / kDecodeThreads;
+    hf_init_identity_kv_block_table_kernel<<<blocks, kDecodeThreads, 0, stream>>>(
+        device_kv_block_table, kv_block_count);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) {
     err = cudaMemsetAsync(device_step, 0, sizeof(uint32_t), stream);
   }
   if (err == cudaSuccess) {
@@ -4026,7 +4179,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
         request->hidden, request->heads, request->kv_heads, request->head_dim,
         request->intermediate, 0, device_step, context_steps, device_prompt_tokens,
         request->prompt_token_count, request->rms_eps, request->rope_theta,
-        device_scratch, device_kv_keys, device_kv_values, device_slots);
+        device_scratch, device_kv_keys, device_kv_values, kv_block_count,
+        device_kv_block_table, device_slots);
     err = cudaGetLastError();
   }
   if (err == cudaSuccess) {
@@ -4107,8 +4261,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     out->resident_kv_bytes = kv_bytes;
     out->kv_tokens = output_start + out->observed_tokens;
     out->device_arena_bytes =
-        arena_bytes + layout_bytes + scratch_bytes + kv_bytes + prompt_bytes +
-        slots_bytes + sizeof(uint32_t) + kCublasWorkspaceBytes;
+        arena_bytes + layout_bytes + scratch_bytes + kv_bytes +
+        kv_block_table_bytes + prompt_bytes + slots_bytes + sizeof(uint32_t) +
+        kCublasWorkspaceBytes;
     out->pinned_host_bytes = host_weight_bytes + slots_bytes;
     out->host_causality_edges = 0;
     out->status = out->observed_tokens > 0 ? 0 : -1;
@@ -4144,6 +4299,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   cudaFree(device_step);
   cudaFree(device_slots);
   cudaFree(device_prompt_tokens);
+  cudaFree(device_kv_block_table);
   cudaFree(device_kv_values);
   cudaFree(device_kv_keys);
   cudaFree(device_scratch);
@@ -4286,6 +4442,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->vocab_size = request->vocab_size;
   session->layer_count = request->layer_count;
   session->max_context_tokens = request->max_context_tokens;
+  session->kv_block_count =
+      ceil_div_u32(request->max_context_tokens, kKvCacheBlockTokens);
+  session->kv_token_capacity = session->kv_block_count * kKvCacheBlockTokens;
   session->detailed_profile = request->detailed_profile == 0 ? 0u : 1u;
   session->rms_eps = request->rms_eps;
   session->rope_theta = request->rope_theta;
@@ -4314,8 +4473,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
         sizeof(uint16_t);
   }
   session->kv_bytes =
-      request->layer_count * static_cast<uint64_t>(request->max_context_tokens) *
-      kv_hidden * sizeof(float) * 2;
+      request->layer_count * static_cast<uint64_t>(session->kv_token_capacity) *
+      kv_hidden * sizeof(uint16_t) * 2;
+  session->kv_block_table_bytes =
+      static_cast<uint64_t>(session->kv_block_count) * sizeof(uint32_t);
   session->slots_bytes =
       static_cast<uint64_t>(request->max_context_tokens) *
       sizeof(NervaCudaSyntheticTokenSlot);
@@ -4468,6 +4629,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
                      session->kv_bytes / 2);
   }
   if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_block_table),
+                     session->kv_block_table_bytes);
+  }
+  if (err == cudaSuccess) {
     failure_stage = kCreateStagePromptTokensAlloc;
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prompt_tokens),
                      session->prompt_bytes);
@@ -4553,6 +4718,14 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
                           session->layout_bytes, cudaMemcpyHostToDevice,
                           session->stream);
     out->h2d_bytes += session->layout_bytes;
+  }
+  if (err == cudaSuccess) {
+    const uint32_t blocks =
+        (session->kv_block_count + kDecodeThreads - 1u) / kDecodeThreads;
+    hf_init_identity_kv_block_table_kernel<<<blocks, kDecodeThreads, 0,
+                                             session->stream>>>(
+        session->device_kv_block_table, session->kv_block_count);
+    err = cudaGetLastError();
   }
   if (err == cudaSuccess) {
     failure_stage = kCreateStagePackReplicas;
@@ -4683,7 +4856,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
           session->device_step, context_steps, session->device_prompt_tokens,
           request->prompt_token_count, session->rms_eps, session->rope_theta,
           session->device_scratch, session->device_kv_keys,
-          session->device_kv_values, session->device_slots);
+          session->device_kv_values, session->kv_block_count,
+          session->device_kv_block_table,
+          session->device_slots);
       err = cudaGetLastError();
     }
     if (err == cudaSuccess) {

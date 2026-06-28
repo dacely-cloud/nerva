@@ -6,6 +6,7 @@ const F32_BYTES: u64 = 4;
 const LAYER_LAYOUT_BYTES: u64 = 13 * 8;
 const TOKEN_SLOT_BYTES: u64 = 40;
 const DESCRIPTOR_STREAM_STAGING_BYTES: u64 = 64 * 1024 * 1024;
+const KV_CACHE_BLOCK_TOKENS: u64 = 16;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct CudaHfDecodeSequenceFootprint {
@@ -81,11 +82,18 @@ pub fn estimate_sequence_footprint(
         intermediate,
         vocab_size,
     )?;
+    let kv_block_count = context_tokens.div_ceil(KV_CACHE_BLOCK_TOKENS);
+    let kv_token_capacity = checked_mul(
+        kv_block_count,
+        KV_CACHE_BLOCK_TOKENS,
+        "KV token capacity",
+    )?;
     let resident_kv_bytes = checked_mul(
-        checked_mul(layer_count, context_tokens, "KV layer tokens")?,
-        checked_mul(kv_hidden, F32_BYTES * 2, "KV token bytes")?,
+        checked_mul(layer_count, kv_token_capacity, "KV layer tokens")?,
+        checked_mul(kv_hidden, U16_BYTES * 2, "KV token bytes")?,
         "resident KV bytes",
     )?;
+    let kv_block_table_bytes = checked_mul(kv_block_count, 4, "KV block table bytes")?;
     let token_slot_bytes = checked_mul(context_tokens, TOKEN_SLOT_BYTES, "token slot bytes")?;
     let prompt_bytes = checked_mul(prompt_count, 4, "prompt bytes")?;
     let device_arena_bytes = sum_bytes(&[
@@ -93,6 +101,7 @@ pub fn estimate_sequence_footprint(
         layout_bytes,
         scratch_bytes,
         resident_kv_bytes,
+        kv_block_table_bytes,
         prompt_bytes,
         token_slot_bytes,
         4,
