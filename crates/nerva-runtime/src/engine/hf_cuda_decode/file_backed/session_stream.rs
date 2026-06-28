@@ -211,7 +211,7 @@ fn current_token_mode_steps(
     let context_steps = max_context_tokens
         .saturating_sub(used_context)
         .saturating_add(1);
-    let advance_cap = token_mode_advance_cap(generated_tokens, remaining_tokens, stop_tokens_known);
+    let advance_cap = token_mode_advance_cap(generated_tokens, stop_tokens_known);
     let max_steps = advance_cap
         .min(remaining_tokens)
         .min(context_steps)
@@ -222,15 +222,8 @@ fn current_token_mode_steps(
     max_steps
 }
 
-fn token_mode_advance_cap(
-    generated_tokens: usize,
-    remaining_tokens: usize,
-    stop_tokens_known: bool,
-) -> usize {
-    if !stop_tokens_known
-        || remaining_tokens < TOKEN_MODE_MAX_ADVANCE_STEPS
-        || generated_tokens >= TOKEN_MODE_EOS_RAMP_TOKENS
-    {
+fn token_mode_advance_cap(generated_tokens: usize, stop_tokens_known: bool) -> usize {
+    if !stop_tokens_known || generated_tokens >= TOKEN_MODE_EOS_RAMP_TOKENS {
         return TOKEN_MODE_MAX_ADVANCE_STEPS;
     }
     if generated_tokens == 0 {
@@ -351,7 +344,8 @@ mod tests {
         );
         assert_eq!(
             current_token_mode_steps(3965, 0, 512, 8192, 2048, true),
-            512
+            128
         );
+        assert_eq!(current_token_mode_steps(3965, 0, 64, 8192, 2048, true), 64);
     }
 }
