@@ -614,6 +614,7 @@ typedef struct NervaCudaProjectionBenchRequest {
   uint32_t cols;
   uint32_t iterations;
   uint32_t warmup_iterations;
+  uint32_t block_tokens;
 } NervaCudaProjectionBenchRequest;
 
 typedef struct NervaCudaProjectionBenchResult {
@@ -626,6 +627,7 @@ typedef struct NervaCudaProjectionBenchResult {
   uint32_t dtype;
   uint32_t rows;
   uint32_t cols;
+  uint32_t block_tokens;
   uint32_t iterations;
   uint32_t warmup_iterations;
   uint64_t matrix_bytes;
@@ -665,6 +667,16 @@ typedef struct NervaCudaProjectionBenchResult {
   uint64_t device_frees;
   uint64_t device_arena_bytes;
   uint64_t hot_path_allocations;
+  uint64_t block_cublaslt_total_ns;
+  uint64_t block_cublaslt_avg_ns;
+  uint64_t block_cublaslt_per_token_ns;
+  uint64_t block_cublaslt_graph_total_ns;
+  uint64_t block_cublaslt_graph_avg_ns;
+  uint64_t block_cublaslt_graph_per_token_ns;
+  uint64_t block_cublaslt_graph_nodes;
+  uint64_t block_cublaslt_speedup_x1000;
+  uint64_t block_cublaslt_graph_speedup_x1000;
+  uint64_t block_cublaslt_effective_bandwidth_bps;
 } NervaCudaProjectionBenchResult;
 
 int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out);

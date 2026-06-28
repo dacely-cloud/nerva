@@ -11,6 +11,7 @@ pub fn projection_bench(
     cols: u32,
     iterations: u32,
     warmup_iterations: u32,
+    block_tokens: u32,
 ) -> CudaProjectionBenchSummary {
     let request = NervaCudaProjectionBenchRequest {
         dtype,
@@ -18,6 +19,7 @@ pub fn projection_bench(
         cols,
         iterations,
         warmup_iterations,
+        block_tokens,
     };
     let mut out = NervaCudaProjectionBenchResult::default();
     let return_code = run_projection_bench(&request, &mut out);
@@ -27,6 +29,7 @@ pub fn projection_bench(
             dtype: out.dtype,
             rows: out.rows,
             cols: out.cols,
+            block_tokens: out.block_tokens,
             iterations: out.iterations,
             warmup_iterations: out.warmup_iterations,
             compute_capability_major: (out.compute_capability_major > 0)
@@ -70,6 +73,16 @@ pub fn projection_bench(
             device_frees: out.device_frees,
             device_arena_bytes: out.device_arena_bytes,
             hot_path_allocations: out.hot_path_allocations,
+            block_cublaslt_total_ns: out.block_cublaslt_total_ns,
+            block_cublaslt_avg_ns: out.block_cublaslt_avg_ns,
+            block_cublaslt_per_token_ns: out.block_cublaslt_per_token_ns,
+            block_cublaslt_graph_total_ns: out.block_cublaslt_graph_total_ns,
+            block_cublaslt_graph_avg_ns: out.block_cublaslt_graph_avg_ns,
+            block_cublaslt_graph_per_token_ns: out.block_cublaslt_graph_per_token_ns,
+            block_cublaslt_graph_nodes: out.block_cublaslt_graph_nodes,
+            block_cublaslt_speedup_x1000: out.block_cublaslt_speedup_x1000,
+            block_cublaslt_graph_speedup_x1000: out.block_cublaslt_graph_speedup_x1000,
+            block_cublaslt_effective_bandwidth_bps: out.block_cublaslt_effective_bandwidth_bps,
             error: None,
         };
     }

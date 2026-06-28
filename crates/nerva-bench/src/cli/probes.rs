@@ -121,8 +121,17 @@ fn run_projection_bench_command(args: &mut impl Iterator<Item = String>) -> Exit
         Ok(warmups) => warmups,
         Err(reason) => return exit::parse_error(reason),
     };
+    let block_tokens = match parse_optional_u32(args.next(), 1, "block_tokens") {
+        Ok(block_tokens) => block_tokens,
+        Err(reason) => return exit::parse_error(reason),
+    };
     exit::print_json_result(projection::run_projection_bench(
-        rows, cols, dtype, iterations, warmups,
+        rows,
+        cols,
+        dtype,
+        iterations,
+        warmups,
+        block_tokens,
     ))
 }
 

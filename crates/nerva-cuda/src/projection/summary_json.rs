@@ -9,11 +9,12 @@ pub(crate) fn summary_to_json(summary: &CudaProjectionBenchSummary) -> String {
         SmokeStatus::Failed => "failed",
     };
     format!(
-        "{{\"status\":\"{}\",\"dtype\":{},\"rows\":{},\"cols\":{},\"iterations\":{},\"warmup_iterations\":{},\"compute_capability_major\":{},\"compute_capability_minor\":{},\"matrix_bytes\":{},\"input_bytes\":{},\"output_bytes\":{},\"cublaslt_total_ns\":{},\"cublaslt_avg_ns\":{},\"cublaslt_default_total_ns\":{},\"cublaslt_default_avg_ns\":{},\"cublaslt_heuristic_count\":{},\"cublaslt_best_heuristic_index\":{},\"cublaslt_best_heuristic_total_ns\":{},\"cublaslt_best_heuristic_avg_ns\":{},\"custom_total_ns\":{},\"custom_avg_ns\":{},\"cublaslt_graph_total_ns\":{},\"cublaslt_graph_avg_ns\":{},\"cublaslt_default_graph_total_ns\":{},\"cublaslt_default_graph_avg_ns\":{},\"cublaslt_best_heuristic_graph_total_ns\":{},\"cublaslt_best_heuristic_graph_avg_ns\":{},\"custom_graph_total_ns\":{},\"custom_graph_avg_ns\":{},\"cublaslt_graph_nodes\":{},\"custom_graph_nodes\":{},\"graph_replays\":{},\"graph_captures\":{},\"selected_graph_strategy\":\"{}\",\"selected_graph_strategy_id\":{},\"cublaslt_effective_bandwidth_bps\":{},\"custom_effective_bandwidth_bps\":{},\"selected_strategy\":\"{}\",\"selected_strategy_id\":{},\"mismatch_count\":{},\"max_abs_diff\":{},\"kernel_launches\":{},\"sync_calls\":{},\"device_allocations\":{},\"device_frees\":{},\"device_arena_bytes\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+        "{{\"status\":\"{}\",\"dtype\":{},\"rows\":{},\"cols\":{},\"block_tokens\":{},\"iterations\":{},\"warmup_iterations\":{},\"compute_capability_major\":{},\"compute_capability_minor\":{},\"matrix_bytes\":{},\"input_bytes\":{},\"output_bytes\":{},\"cublaslt_total_ns\":{},\"cublaslt_avg_ns\":{},\"cublaslt_default_total_ns\":{},\"cublaslt_default_avg_ns\":{},\"cublaslt_heuristic_count\":{},\"cublaslt_best_heuristic_index\":{},\"cublaslt_best_heuristic_total_ns\":{},\"cublaslt_best_heuristic_avg_ns\":{},\"custom_total_ns\":{},\"custom_avg_ns\":{},\"cublaslt_graph_total_ns\":{},\"cublaslt_graph_avg_ns\":{},\"cublaslt_default_graph_total_ns\":{},\"cublaslt_default_graph_avg_ns\":{},\"cublaslt_best_heuristic_graph_total_ns\":{},\"cublaslt_best_heuristic_graph_avg_ns\":{},\"custom_graph_total_ns\":{},\"custom_graph_avg_ns\":{},\"cublaslt_graph_nodes\":{},\"custom_graph_nodes\":{},\"graph_replays\":{},\"graph_captures\":{},\"selected_graph_strategy\":\"{}\",\"selected_graph_strategy_id\":{},\"cublaslt_effective_bandwidth_bps\":{},\"custom_effective_bandwidth_bps\":{},\"selected_strategy\":\"{}\",\"selected_strategy_id\":{},\"mismatch_count\":{},\"max_abs_diff\":{},\"kernel_launches\":{},\"sync_calls\":{},\"device_allocations\":{},\"device_frees\":{},\"device_arena_bytes\":{},\"hot_path_allocations\":{},\"block_cublaslt_total_ns\":{},\"block_cublaslt_avg_ns\":{},\"block_cublaslt_per_token_ns\":{},\"block_cublaslt_graph_total_ns\":{},\"block_cublaslt_graph_avg_ns\":{},\"block_cublaslt_graph_per_token_ns\":{},\"block_cublaslt_graph_nodes\":{},\"block_cublaslt_speedup_x1000\":{},\"block_cublaslt_graph_speedup_x1000\":{},\"block_cublaslt_effective_bandwidth_bps\":{},\"error\":{}}}",
         status,
         summary.dtype,
         summary.rows,
         summary.cols,
+        summary.block_tokens,
         summary.iterations,
         summary.warmup_iterations,
         json_opt_i32(summary.compute_capability_major),
@@ -57,6 +58,16 @@ pub(crate) fn summary_to_json(summary: &CudaProjectionBenchSummary) -> String {
         summary.device_frees,
         summary.device_arena_bytes,
         summary.hot_path_allocations,
+        summary.block_cublaslt_total_ns,
+        summary.block_cublaslt_avg_ns,
+        summary.block_cublaslt_per_token_ns,
+        summary.block_cublaslt_graph_total_ns,
+        summary.block_cublaslt_graph_avg_ns,
+        summary.block_cublaslt_graph_per_token_ns,
+        summary.block_cublaslt_graph_nodes,
+        summary.block_cublaslt_speedup_x1000,
+        summary.block_cublaslt_graph_speedup_x1000,
+        summary.block_cublaslt_effective_bandwidth_bps,
         json_opt_str(summary.error.as_deref()),
     )
 }

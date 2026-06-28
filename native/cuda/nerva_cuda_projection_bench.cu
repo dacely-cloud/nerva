@@ -126,15 +126,20 @@ void clear_result(const NervaCudaProjectionBenchRequest *request,
   memset(out, 0, sizeof(*out));
   out->status = -1;
   if (request != nullptr) {
+    const uint32_t block_tokens =
+        request->block_tokens == 0 ? 1u : request->block_tokens;
     out->dtype = request->dtype;
     out->rows = request->rows;
     out->cols = request->cols;
+    out->block_tokens = block_tokens;
     out->iterations = request->iterations;
     out->warmup_iterations = request->warmup_iterations;
     out->matrix_bytes = static_cast<uint64_t>(request->rows) * request->cols *
                         sizeof(uint16_t);
-    out->input_bytes = static_cast<uint64_t>(request->cols) * sizeof(uint16_t);
-    out->output_bytes = static_cast<uint64_t>(request->rows) * sizeof(float);
+    out->input_bytes =
+        static_cast<uint64_t>(request->cols) * block_tokens * sizeof(uint16_t);
+    out->output_bytes =
+        static_cast<uint64_t>(request->rows) * block_tokens * sizeof(float);
     out->device_arena_bytes = out->matrix_bytes + out->input_bytes +
                               out->output_bytes * 2ull + sizeof(uint32_t) * 2ull +
                               kWorkspaceBytes;
@@ -176,12 +181,27 @@ uint64_t effective_bandwidth(uint64_t bytes_per_iteration,
   return static_cast<uint64_t>(bytes / seconds);
 }
 
-cudaError_t create_lt_layouts(uint32_t rows, uint32_t cols, uint32_t dtype,
-                              cublasLtMatmulDesc_t *op_desc,
-                              cublasLtMatrixLayout_t *a_desc,
-                              cublasLtMatrixLayout_t *b_desc,
-                              cublasLtMatrixLayout_t *c_desc,
-                              cublasLtMatrixLayout_t *d_desc) {
+uint64_t div_u64(uint64_t numerator, uint64_t denominator) {
+  return denominator == 0 ? 0 : numerator / denominator;
+}
+
+uint64_t speedup_x1000(uint64_t baseline_ns, uint64_t candidate_ns) {
+  if (candidate_ns == 0 || baseline_ns > UINT64_MAX / 1000ull) {
+    return 0;
+  }
+  return (baseline_ns * 1000ull) / candidate_ns;
+}
+
+cudaError_t create_lt_layouts_tokens(uint32_t rows, uint32_t cols,
+                                     uint32_t tokens, uint32_t dtype,
+                                     cublasLtMatmulDesc_t *op_desc,
+                                     cublasLtMatrixLayout_t *a_desc,
+                                     cublasLtMatrixLayout_t *b_desc,
+                                     cublasLtMatrixLayout_t *c_desc,
+                                     cublasLtMatrixLayout_t *d_desc) {
+  if (tokens == 0) {
+    return cudaErrorInvalidValue;
+  }
   const cudaDataType_t data_type = encoded_cuda_type(dtype);
   cublasStatus_t status =
       cublasLtMatmulDescCreate(op_desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
@@ -196,16 +216,16 @@ cudaError_t create_lt_layouts(uint32_t rows, uint32_t cols, uint32_t dtype,
         *op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op_b, sizeof(op_b));
   }
   if (status == CUBLAS_STATUS_SUCCESS) {
-    status = cublasLtMatrixLayoutCreate(a_desc, data_type, 1, cols, cols);
+    status = cublasLtMatrixLayoutCreate(a_desc, data_type, tokens, cols, cols);
   }
   if (status == CUBLAS_STATUS_SUCCESS) {
     status = cublasLtMatrixLayoutCreate(b_desc, data_type, rows, cols, cols);
   }
   if (status == CUBLAS_STATUS_SUCCESS) {
-    status = cublasLtMatrixLayoutCreate(c_desc, CUDA_R_32F, 1, rows, rows);
+    status = cublasLtMatrixLayoutCreate(c_desc, CUDA_R_32F, tokens, rows, rows);
   }
   if (status == CUBLAS_STATUS_SUCCESS) {
-    status = cublasLtMatrixLayoutCreate(d_desc, CUDA_R_32F, 1, rows, rows);
+    status = cublasLtMatrixLayoutCreate(d_desc, CUDA_R_32F, tokens, rows, rows);
   }
   cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
   if (status == CUBLAS_STATUS_SUCCESS) {
@@ -225,6 +245,16 @@ cudaError_t create_lt_layouts(uint32_t rows, uint32_t cols, uint32_t dtype,
         *d_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
   }
   return cublas_to_cuda(status);
+}
+
+cudaError_t create_lt_layouts(uint32_t rows, uint32_t cols, uint32_t dtype,
+                              cublasLtMatmulDesc_t *op_desc,
+                              cublasLtMatrixLayout_t *a_desc,
+                              cublasLtMatrixLayout_t *b_desc,
+                              cublasLtMatrixLayout_t *c_desc,
+                              cublasLtMatrixLayout_t *d_desc) {
+  return create_lt_layouts_tokens(rows, cols, 1, dtype, op_desc, a_desc,
+                                  b_desc, c_desc, d_desc);
 }
 
 void destroy_lt_layouts(cublasLtMatmulDesc_t op_desc,
@@ -560,8 +590,15 @@ extern "C" int nerva_cuda_projection_bench(
   cublasLtMatrixLayout_t b_desc = nullptr;
   cublasLtMatrixLayout_t c_desc = nullptr;
   cublasLtMatrixLayout_t d_desc = nullptr;
+  cublasLtMatmulDesc_t block_op_desc = nullptr;
+  cublasLtMatrixLayout_t block_a_desc = nullptr;
+  cublasLtMatrixLayout_t block_b_desc = nullptr;
+  cublasLtMatrixLayout_t block_c_desc = nullptr;
+  cublasLtMatrixLayout_t block_d_desc = nullptr;
 
   auto cleanup = [&]() {
+    destroy_lt_layouts(block_op_desc, block_a_desc, block_b_desc,
+                       block_c_desc, block_d_desc);
     destroy_lt_layouts(op_desc, a_desc, b_desc, c_desc, d_desc);
     if (lt != nullptr) cublasLtDestroy(lt);
     if (workspace != nullptr && cudaFree(workspace) == cudaSuccess) out->device_frees += 1;
@@ -614,8 +651,8 @@ extern "C" int nerva_cuda_projection_bench(
       request->dtype);
   err = cudaGetLastError();
   if (err == cudaSuccess) {
-    init_encoded_kernel<<<1, kThreads, 0, stream>>>(input, request->cols,
-                                                    request->dtype);
+    init_encoded_kernel<<<kInitBlocks, kThreads, 0, stream>>>(
+        input, out->input_bytes / sizeof(uint16_t), request->dtype);
     err = cudaGetLastError();
   }
   if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
@@ -739,7 +776,9 @@ extern "C" int nerva_cuda_projection_bench(
           ? kStrategyCustom
           : kStrategyCublasLt;
   const uint64_t bytes_per_projection =
-      out->matrix_bytes + out->input_bytes + out->output_bytes;
+      out->matrix_bytes +
+      static_cast<uint64_t>(request->cols) * sizeof(uint16_t) +
+      static_cast<uint64_t>(request->rows) * sizeof(float);
   out->cublaslt_effective_bandwidth_bps = effective_bandwidth(
       bytes_per_projection, request->iterations, out->cublaslt_total_ns);
   out->custom_effective_bandwidth_bps = effective_bandwidth(
@@ -748,6 +787,51 @@ extern "C" int nerva_cuda_projection_bench(
       out->custom_avg_ns > 0 && out->custom_avg_ns < out->cublaslt_avg_ns
           ? kStrategyCustom
           : kStrategyCublasLt;
+
+  if (out->block_tokens > 1) {
+    err = create_lt_layouts_tokens(
+        request->rows, request->cols, out->block_tokens, request->dtype,
+        &block_op_desc, &block_a_desc, &block_b_desc, &block_c_desc,
+        &block_d_desc);
+    if (err != cudaSuccess) return fail_with_cleanup(err);
+
+    err = time_cublaslt(lt, block_op_desc, block_a_desc, block_b_desc,
+                        block_c_desc, block_d_desc, request, matrix, input,
+                        cublas_output, workspace, stream, start, stop,
+                        &out->block_cublaslt_total_ns, nullptr);
+    if (err != cudaSuccess) return fail_with_cleanup(err);
+    out->sync_calls += 2;
+    out->kernel_launches += request->warmup_iterations + request->iterations;
+    out->block_cublaslt_avg_ns =
+        out->block_cublaslt_total_ns / request->iterations;
+    out->block_cublaslt_per_token_ns =
+        div_u64(out->block_cublaslt_avg_ns, out->block_tokens);
+    out->block_cublaslt_speedup_x1000 =
+        speedup_x1000(out->cublaslt_avg_ns,
+                      out->block_cublaslt_per_token_ns);
+    const uint64_t block_bytes =
+        out->matrix_bytes + out->input_bytes + out->output_bytes;
+    out->block_cublaslt_effective_bandwidth_bps = effective_bandwidth(
+        block_bytes, request->iterations, out->block_cublaslt_total_ns);
+
+    uint64_t block_graph_replays = 0;
+    err = time_cublaslt_graph(
+        lt, block_op_desc, block_a_desc, block_b_desc, block_c_desc,
+        block_d_desc, request, matrix, input, cublas_output, workspace,
+        stream, start, stop, &out->block_cublaslt_graph_total_ns,
+        &out->block_cublaslt_graph_nodes, &block_graph_replays, nullptr);
+    if (err != cudaSuccess) return fail_with_cleanup(err);
+    out->graph_captures += 1;
+    out->graph_replays += block_graph_replays;
+    out->sync_calls += 2;
+    out->block_cublaslt_graph_avg_ns =
+        out->block_cublaslt_graph_total_ns / request->iterations;
+    out->block_cublaslt_graph_per_token_ns =
+        div_u64(out->block_cublaslt_graph_avg_ns, out->block_tokens);
+    out->block_cublaslt_graph_speedup_x1000 =
+        speedup_x1000(out->cublaslt_graph_avg_ns,
+                      out->block_cublaslt_graph_per_token_ns);
+  }
 
   err = cudaMemsetAsync(mismatches, 0, sizeof(uint32_t), stream);
   if (err == cudaSuccess) {

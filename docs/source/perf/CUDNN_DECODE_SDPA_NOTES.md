@@ -87,6 +87,29 @@ small reusable workspace
 graph-capturable execution
 ```
 
+In the current NERVA code, that maps to two very different execution shapes.
+The native decode path launches a chunk kernel over `{head or kv_head, chunk}`,
+writes `partial_values`, `partial_m`, and `partial_l`, then launches a reduce
+kernel over heads. The cuDNN path builds one SDPA graph op over:
+
+```text
+Q: {1, heads, 1, head_dim}
+K: {1, kv_heads, kv_token_capacity, head_dim}
+V: {1, kv_heads, kv_token_capacity, head_dim}
+O: {1, heads, 1, head_dim}
+```
+
+and passes the live lengths as device tensors:
+
+```text
+seq_len_q  = 1
+seq_len_kv = current decoded context length
+```
+
+That is why cuDNN can keep a stable captured graph while the visible context
+length grows. The graph shape is capacity-sized, but the actual work is masked
+by runtime sequence length data.
+
 cuDNN's frontend also rewrites K for backend SDPA requirements internally. The
 frontend API accepts K as:
 
@@ -103,6 +126,14 @@ and maps the backend matmul view to:
 That is the same layout lesson vLLM's paged attention kernels follow in spirit:
 make K/V reads coalesced and vectorized for the attention tile rather than
 treating each token/head as scalar work.
+
+NVIDIA's current cuDNN frontend SDPA documentation describes the same surface:
+SDPA is implemented with the FlashAttention-2 algorithm, supports MHA/MQA/GQA,
+supports sequence length tensors for variable/padded inputs, and exposes paged
+attention K/V page-table options. NERVA currently uses the dense K/V tensor
+entry point for decode. That is acceptable while the block table is identity,
+but the better long-term design is to make cuDNN consume NERVA's KV block table
+directly through its paged-attention inputs.
 
 ## What To Copy Into Native Kernels
 
@@ -134,6 +165,22 @@ The native path should move toward these patterns:
 6. Prefer one graph node for decode attention.
    Splitting attention into chunk kernels plus reduce increases global traffic
    and graph-node count.
+
+7. Make paged KV a backend contract, not a native-only detail.
+   NERVA already stores KV in 16-token blocks and initializes an identity block
+   table. cuDNN now has paged-attention K/V table inputs, so the cuDNN path
+   should use the same logical block table instead of assuming dense physical
+   order forever.
+
+8. Keep statistics optional.
+   cuDNN decode sets generate_stats=false. Native decode should avoid producing
+   log-sum-exp or max scratch unless a later operation actually needs it.
+
+9. Autotune at the attention-operation level.
+   cuDNN chooses a backend implementation through frontend heuristics. The
+   native path should benchmark chunk size, head-thread mapping, shared-K/V
+   staging, and one-pass versus split-reduce variants per GPU/model shape, then
+   cache that choice.
 ```
 
 ## Current NERVA Controls

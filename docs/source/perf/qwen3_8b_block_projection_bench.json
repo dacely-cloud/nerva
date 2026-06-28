@@ -1,0 +1,56 @@
+{
+  "schema": "nerva-block-projection-bench-v1",
+  "measurement_date": "2026-06-28",
+  "host": "RTX 5090",
+  "model": "Qwen3-8B local safetensors snapshot",
+  "dtype": "bfloat16",
+  "block_tokens": 8,
+  "command_template": "projection-bench <rows> <cols> 1 <iterations> 4 8",
+  "entries": [
+    {
+      "name": "qkv",
+      "rows": 6144,
+      "cols": 4096,
+      "iterations": 32,
+      "cublaslt_graph_avg_ns": 12314,
+      "block_cublaslt_graph_avg_ns": 20500,
+      "block_cublaslt_graph_per_token_ns": 2562,
+      "block_cublaslt_graph_speedup_x1000": 4806,
+      "mismatch_count": 0
+    },
+    {
+      "name": "gate_up",
+      "rows": 24576,
+      "cols": 4096,
+      "iterations": 16,
+      "cublaslt_graph_avg_ns": 120932,
+      "block_cublaslt_graph_avg_ns": 124728,
+      "block_cublaslt_graph_per_token_ns": 15591,
+      "block_cublaslt_graph_speedup_x1000": 7756,
+      "mismatch_count": 0
+    },
+    {
+      "name": "down",
+      "rows": 4096,
+      "cols": 12288,
+      "iterations": 24,
+      "cublaslt_graph_avg_ns": 22550,
+      "block_cublaslt_graph_avg_ns": 69686,
+      "block_cublaslt_graph_per_token_ns": 8710,
+      "block_cublaslt_graph_speedup_x1000": 2588,
+      "mismatch_count": 0
+    },
+    {
+      "name": "lm_head",
+      "rows": 151936,
+      "cols": 4096,
+      "iterations": 4,
+      "cublaslt_graph_avg_ns": 733912,
+      "block_cublaslt_graph_avg_ns": 751808,
+      "block_cublaslt_graph_per_token_ns": 93976,
+      "block_cublaslt_graph_speedup_x1000": 7809,
+      "mismatch_count": 0
+    }
+  ],
+  "conclusion": "Exact block projection amortizes dense weight reads across multiple hidden vectors. The measured Qwen hot shapes show 2.588x to 7.809x graph per-token projection speedup at block_tokens=8. Runtime decode must create valid multi-vector blocks through continuous batching or exact target verification to use this primitive."
+}

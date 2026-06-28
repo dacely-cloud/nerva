@@ -8,6 +8,7 @@ pub(crate) struct NervaCudaProjectionBenchRequest {
     pub(crate) cols: u32,
     pub(crate) iterations: u32,
     pub(crate) warmup_iterations: u32,
+    pub(crate) block_tokens: u32,
 }
 
 #[repr(C)]
@@ -22,6 +23,7 @@ pub(crate) struct NervaCudaProjectionBenchResult {
     pub(crate) dtype: u32,
     pub(crate) rows: u32,
     pub(crate) cols: u32,
+    pub(crate) block_tokens: u32,
     pub(crate) iterations: u32,
     pub(crate) warmup_iterations: u32,
     pub(crate) matrix_bytes: u64,
@@ -61,6 +63,16 @@ pub(crate) struct NervaCudaProjectionBenchResult {
     pub(crate) device_frees: u64,
     pub(crate) device_arena_bytes: u64,
     pub(crate) hot_path_allocations: u64,
+    pub(crate) block_cublaslt_total_ns: u64,
+    pub(crate) block_cublaslt_avg_ns: u64,
+    pub(crate) block_cublaslt_per_token_ns: u64,
+    pub(crate) block_cublaslt_graph_total_ns: u64,
+    pub(crate) block_cublaslt_graph_avg_ns: u64,
+    pub(crate) block_cublaslt_graph_per_token_ns: u64,
+    pub(crate) block_cublaslt_graph_nodes: u64,
+    pub(crate) block_cublaslt_speedup_x1000: u64,
+    pub(crate) block_cublaslt_graph_speedup_x1000: u64,
+    pub(crate) block_cublaslt_effective_bandwidth_bps: u64,
 }
 
 unsafe extern "C" {

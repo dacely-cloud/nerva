@@ -10,6 +10,7 @@ pub struct CudaProjectionBenchSummary {
     pub dtype: u32,
     pub rows: u32,
     pub cols: u32,
+    pub block_tokens: u32,
     pub iterations: u32,
     pub warmup_iterations: u32,
     pub compute_capability_major: Option<i32>,
@@ -51,6 +52,16 @@ pub struct CudaProjectionBenchSummary {
     pub device_frees: u64,
     pub device_arena_bytes: u64,
     pub hot_path_allocations: u64,
+    pub block_cublaslt_total_ns: u64,
+    pub block_cublaslt_avg_ns: u64,
+    pub block_cublaslt_per_token_ns: u64,
+    pub block_cublaslt_graph_total_ns: u64,
+    pub block_cublaslt_graph_avg_ns: u64,
+    pub block_cublaslt_graph_per_token_ns: u64,
+    pub block_cublaslt_graph_nodes: u64,
+    pub block_cublaslt_speedup_x1000: u64,
+    pub block_cublaslt_graph_speedup_x1000: u64,
+    pub block_cublaslt_effective_bandwidth_bps: u64,
     pub error: Option<String>,
 }
 
@@ -68,6 +79,7 @@ impl CudaProjectionBenchSummary {
             dtype,
             rows,
             cols,
+            block_tokens: 1,
             iterations,
             warmup_iterations,
             compute_capability_major: None,
@@ -109,6 +121,16 @@ impl CudaProjectionBenchSummary {
             device_frees: 0,
             device_arena_bytes: 0,
             hot_path_allocations: 0,
+            block_cublaslt_total_ns: 0,
+            block_cublaslt_avg_ns: 0,
+            block_cublaslt_per_token_ns: 0,
+            block_cublaslt_graph_total_ns: 0,
+            block_cublaslt_graph_avg_ns: 0,
+            block_cublaslt_graph_per_token_ns: 0,
+            block_cublaslt_graph_nodes: 0,
+            block_cublaslt_speedup_x1000: 0,
+            block_cublaslt_graph_speedup_x1000: 0,
+            block_cublaslt_effective_bandwidth_bps: 0,
             error: Some(reason),
         }
     }
@@ -131,6 +153,7 @@ impl CudaProjectionBenchSummary {
         self.status == SmokeStatus::Ok
             && self.rows > 0
             && self.cols > 0
+            && self.block_tokens > 0
             && self.iterations > 0
             && self.cublaslt_avg_ns > 0
             && self.custom_avg_ns > 0

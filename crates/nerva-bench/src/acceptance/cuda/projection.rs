@@ -1,7 +1,7 @@
 use crate::acceptance::report::AcceptanceReport;
 
 pub(crate) fn push_projection_benchmark(report: &mut AcceptanceReport) {
-    let summary = nerva_cuda::projection::probe::projection_bench(1, 64, 128, 8, 1);
+    let summary = nerva_cuda::projection::probe::projection_bench(1, 64, 128, 8, 1, 1);
     report.push(
         "cuda_projection_benchmark",
         summary.passed(),

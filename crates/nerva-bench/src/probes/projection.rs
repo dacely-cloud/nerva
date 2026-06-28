@@ -6,6 +6,7 @@ pub(crate) fn run_projection_bench(
     dtype: u32,
     iterations: u32,
     warmup_iterations: u32,
+    block_tokens: u32,
 ) -> Result<String, String> {
     let summary = nerva_cuda::projection::probe::projection_bench(
         dtype,
@@ -13,6 +14,7 @@ pub(crate) fn run_projection_bench(
         cols,
         iterations,
         warmup_iterations,
+        block_tokens,
     );
     Ok(summary.to_json())
 }
@@ -23,5 +25,6 @@ pub(crate) fn run_projection_bench_from_args(args: &[String]) -> Result<String, 
     let dtype = parse_optional_u32(args.get(2).cloned(), 1, "dtype")?;
     let iterations = parse_optional_u32(args.get(3).cloned(), 16, "iterations")?;
     let warmups = parse_optional_u32(args.get(4).cloned(), 2, "warmup_iterations")?;
-    run_projection_bench(rows, cols, dtype, iterations, warmups)
+    let block_tokens = parse_optional_u32(args.get(5).cloned(), 1, "block_tokens")?;
+    run_projection_bench(rows, cols, dtype, iterations, warmups, block_tokens)
 }
