@@ -598,9 +598,9 @@ __global__ void hf_decode_final_head_reduce_kernel(
   }
   __syncthreads();
   const uint32_t current_position = current_position_shared;
-  if (current_position >= max_steps) {
-    return;
-  }
+  (void)max_steps;
+  (void)has_eos_token;
+  (void)eos_token;
   float best_value = -INFINITY;
   uint32_t best_index = 0;
   for (uint32_t index = threadIdx.x; index < vocab_size; index += blockDim.x) {
@@ -638,9 +638,7 @@ __global__ void hf_decode_final_head_reduce_kernel(
     slot->completion = kCompletionDeviceComplete;
     slot->host_copied = 0;
     if (step_cursor != nullptr) {
-      *step_cursor = has_eos_token != 0 && best_index == eos_token
-                         ? max_steps
-                         : current_position + 1;
+      *step_cursor = current_position + 1;
     }
   }
 }
@@ -664,9 +662,7 @@ __global__ void hf_decode_sequence_kernel(
   }
   __syncthreads();
   const uint32_t current_position = current_position_shared;
-  if (current_position >= max_steps) {
-    return;
-  }
+  (void)max_steps;
   if (threadIdx.x == 0) {
     current_token_shared = current_position < prompt_token_count
                                ? prompt_tokens[current_position]
@@ -805,9 +801,7 @@ __global__ void hf_layer_attention_encode_kernel(
   }
   __syncthreads();
   const uint32_t current_position = current_position_shared;
-  if (current_position >= max_steps) {
-    return;
-  }
+  (void)max_steps;
   const uint32_t attention_hidden = heads * head_dim;
   const uint32_t kv_hidden = kv_heads * head_dim;
   LayerScratch s =
@@ -1065,8 +1059,8 @@ __global__ void hf_layer_attention_chunk_kernel(
   }
   __syncthreads();
   const uint32_t current_position = current_position_shared;
-  if (current_position >= max_steps ||
-      head_dim > blockDim.x * kHeadThreadElements) {
+  (void)max_steps;
+  if (head_dim > blockDim.x * kHeadThreadElements) {
     return;
   }
   const uint32_t head = blockIdx.x;
@@ -1174,7 +1168,8 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
   }
   __syncthreads();
   const uint32_t current_position = current_position_shared;
-  if (current_position >= max_steps || kv_heads == 0 ||
+  (void)max_steps;
+  if (kv_heads == 0 ||
       heads / kv_heads != kGroupedGqaHeads || heads % kv_heads != 0 ||
       head_dim > kGroupedGqaHeadDimMax ||
       blockDim.x != kGroupedGqaThreads) {
@@ -1311,7 +1306,8 @@ __global__ void hf_layer_shared_warp_gqa_attention_chunk_kernel(
   }
   __syncthreads();
   const uint32_t current_position = current_position_shared;
-  if (current_position >= max_steps || kv_heads == 0 ||
+  (void)max_steps;
+  if (kv_heads == 0 ||
       heads / kv_heads != kGroupedGqaHeads || heads % kv_heads != 0 ||
       head_dim > kSharedWarpGqaHeadDimMax ||
       blockDim.x != kSharedWarpGqaThreads) {
@@ -1428,9 +1424,8 @@ __global__ void hf_layer_attention_reduce_kernel(
     const float *partial_values, const float *partial_m, const float *partial_l,
     uint16_t *projection_input) {
   extern __shared__ float chunk_weights[];
-  if (step_cursor != nullptr && *step_cursor >= max_steps) {
-    return;
-  }
+  (void)step_cursor;
+  (void)max_steps;
   const uint32_t head = blockIdx.x;
   if (head >= heads || head_dim > blockDim.x * kHeadThreadElements) {
     return;
@@ -1490,9 +1485,8 @@ __global__ void hf_layer_mlp_norm_encode_kernel(
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
     uint32_t *step_cursor, uint32_t max_steps, float rms_eps, float *scratch,
     uint16_t *projection_input) {
-  if (step_cursor != nullptr && *step_cursor >= max_steps) {
-    return;
-  }
+  (void)step_cursor;
+  (void)max_steps;
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   add_bias(arena, layout.o_bias, hidden, dtype, s.residual);
@@ -1508,9 +1502,8 @@ __global__ void hf_layer_ff_encode_kernel(
     uint32_t dtype, uint32_t hidden, uint32_t attention_hidden,
     uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
     uint32_t max_steps, float *scratch, uint16_t *projection_input) {
-  if (step_cursor != nullptr && *step_cursor >= max_steps) {
-    return;
-  }
+  (void)step_cursor;
+  (void)max_steps;
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   const uint32_t start = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1544,9 +1537,8 @@ __global__ void hf_layer_finish_next_attn_norm_encode_kernel(
     uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
     uint32_t max_steps, float rms_eps, float *scratch,
     uint16_t *projection_input) {
-  if (step_cursor != nullptr && *step_cursor >= max_steps) {
-    return;
-  }
+  (void)step_cursor;
+  (void)max_steps;
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
@@ -1562,9 +1554,8 @@ __global__ void hf_layer_finish_final_norm_encode_kernel(
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float rms_eps, float *scratch, uint16_t *projection_input) {
-  if (step_cursor != nullptr && *step_cursor >= max_steps) {
-    return;
-  }
+  (void)step_cursor;
+  (void)max_steps;
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
