@@ -12,8 +12,9 @@ use crate::decode::hf_sequence::session::ffi::{
     NervaCudaHfDecodeSequenceProjectionBatchPlanRequest,
     NervaCudaHfDecodeSequenceProjectionBatchPlanResult, NervaCudaHfDecodeSequenceSession,
     NervaCudaHfDecodeSequenceSessionCreateRequest, NervaCudaHfDecodeSequenceSessionCreateResult,
-    NervaCudaHfDecodeSequenceSessionRunRequest, PROJECTION_BATCH_KIND_QKV,
-    PROJECTION_BATCH_PLAN_INSUFFICIENT_COMPATIBLE_READY,
+    NervaCudaHfDecodeSequenceSessionRunRequest, PROJECTION_BATCH_KIND_ATTENTION_OUTPUT,
+    PROJECTION_BATCH_KIND_DOWN, PROJECTION_BATCH_KIND_GATE_UP, PROJECTION_BATCH_KIND_LM_HEAD,
+    PROJECTION_BATCH_KIND_QKV, PROJECTION_BATCH_PLAN_INSUFFICIENT_COMPATIBLE_READY,
     PROJECTION_BATCH_PLAN_INSUFFICIENT_SCRATCH, PROJECTION_BATCH_PLAN_INVALID_LAYER,
     PROJECTION_BATCH_PLAN_INVALID_REQUEST, PROJECTION_BATCH_PLAN_NO_READY_SESSIONS,
     PROJECTION_BATCH_PLAN_NO_SESSIONS, PROJECTION_BATCH_PLAN_READY,
@@ -266,6 +267,81 @@ impl CudaHfDecodeSequenceSession {
         min_block_tokens: u32,
         layer_index: u32,
     ) -> CudaHfDecodeSequenceProjectionBatchExecuteSummary {
+        Self::execute_projection_batch(
+            sessions,
+            target_block_tokens,
+            min_block_tokens,
+            PROJECTION_BATCH_KIND_QKV,
+            layer_index,
+        )
+    }
+
+    pub fn execute_attention_output_projection_batch(
+        sessions: &mut [&mut CudaHfDecodeSequenceSession],
+        target_block_tokens: u32,
+        min_block_tokens: u32,
+        layer_index: u32,
+    ) -> CudaHfDecodeSequenceProjectionBatchExecuteSummary {
+        Self::execute_projection_batch(
+            sessions,
+            target_block_tokens,
+            min_block_tokens,
+            PROJECTION_BATCH_KIND_ATTENTION_OUTPUT,
+            layer_index,
+        )
+    }
+
+    pub fn execute_gate_up_projection_batch(
+        sessions: &mut [&mut CudaHfDecodeSequenceSession],
+        target_block_tokens: u32,
+        min_block_tokens: u32,
+        layer_index: u32,
+    ) -> CudaHfDecodeSequenceProjectionBatchExecuteSummary {
+        Self::execute_projection_batch(
+            sessions,
+            target_block_tokens,
+            min_block_tokens,
+            PROJECTION_BATCH_KIND_GATE_UP,
+            layer_index,
+        )
+    }
+
+    pub fn execute_down_projection_batch(
+        sessions: &mut [&mut CudaHfDecodeSequenceSession],
+        target_block_tokens: u32,
+        min_block_tokens: u32,
+        layer_index: u32,
+    ) -> CudaHfDecodeSequenceProjectionBatchExecuteSummary {
+        Self::execute_projection_batch(
+            sessions,
+            target_block_tokens,
+            min_block_tokens,
+            PROJECTION_BATCH_KIND_DOWN,
+            layer_index,
+        )
+    }
+
+    pub fn execute_lm_head_projection_batch(
+        sessions: &mut [&mut CudaHfDecodeSequenceSession],
+        target_block_tokens: u32,
+        min_block_tokens: u32,
+    ) -> CudaHfDecodeSequenceProjectionBatchExecuteSummary {
+        Self::execute_projection_batch(
+            sessions,
+            target_block_tokens,
+            min_block_tokens,
+            PROJECTION_BATCH_KIND_LM_HEAD,
+            0,
+        )
+    }
+
+    fn execute_projection_batch(
+        sessions: &mut [&mut CudaHfDecodeSequenceSession],
+        target_block_tokens: u32,
+        min_block_tokens: u32,
+        projection_kind: u32,
+        layer_index: u32,
+    ) -> CudaHfDecodeSequenceProjectionBatchExecuteSummary {
         let mut handles = sessions
             .iter_mut()
             .map(|session| session.raw_handle())
@@ -275,7 +351,7 @@ impl CudaHfDecodeSequenceSession {
             session_count: handles.len() as u32,
             target_block_tokens,
             min_block_tokens,
-            projection_kind: PROJECTION_BATCH_KIND_QKV,
+            projection_kind,
             layer_index,
         };
         let mut out = NervaCudaHfDecodeSequenceProjectionBatchExecuteResult::default();

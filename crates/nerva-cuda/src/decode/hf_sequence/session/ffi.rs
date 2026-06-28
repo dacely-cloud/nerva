@@ -205,6 +205,10 @@ pub(crate) const PROJECTION_BATCH_PLAN_UNSUPPORTED_PROJECTION: u32 = 6;
 pub(crate) const PROJECTION_BATCH_PLAN_INVALID_LAYER: u32 = 7;
 pub(crate) const PROJECTION_BATCH_PLAN_INSUFFICIENT_SCRATCH: u32 = 8;
 pub(crate) const PROJECTION_BATCH_KIND_QKV: u32 = 1;
+pub(crate) const PROJECTION_BATCH_KIND_ATTENTION_OUTPUT: u32 = 2;
+pub(crate) const PROJECTION_BATCH_KIND_GATE_UP: u32 = 3;
+pub(crate) const PROJECTION_BATCH_KIND_DOWN: u32 = 4;
+pub(crate) const PROJECTION_BATCH_KIND_LM_HEAD: u32 = 5;
 
 unsafe extern "C" {
     fn nerva_cuda_hf_decode_sequence_session_create(

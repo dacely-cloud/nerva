@@ -1,7 +1,8 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::request::CUDA_HF_DECODE_SEQUENCE_DTYPE_F16;
 use crate::decode::hf_sequence::session::request::{
-    CudaHfDecodeSequenceSession, CudaHfDecodeSequenceSessionConfig,
+    CudaHfDecodeSequenceProjectionBatchExecuteSummary, CudaHfDecodeSequenceSession,
+    CudaHfDecodeSequenceSessionConfig,
 };
 use crate::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use crate::decode::hf_sequence::weight_plan::{
@@ -39,7 +40,7 @@ fn hf_decode_sequence_projection_batch_execute_reports_no_sessions_without_cuda(
 }
 
 #[test]
-fn hf_decode_sequence_projection_batch_executes_qkv_for_two_sessions() {
+fn hf_decode_sequence_projection_batch_executes_all_projection_kinds_for_two_sessions() {
     let _guard = super::cuda_test_lock();
 
     let one = 0x3c00;
@@ -135,23 +136,62 @@ fn hf_decode_sequence_projection_batch_executes_qkv_for_two_sessions() {
     assert_eq!(plan.pack_input_bytes, (intermediate * 2 * 2) as u64);
     assert_eq!(plan.hot_path_allocations, 0);
 
-    let executed = {
+    let qkv = {
         let mut sessions = [&mut session_a, &mut session_b];
         CudaHfDecodeSequenceSession::execute_qkv_projection_batch(&mut sessions, 2, 2, 0)
     };
-    assert_eq!(executed.status, SmokeStatus::Ok);
-    assert_eq!(executed.reason, "ready");
-    assert!(executed.exact);
-    assert_eq!(executed.block_tokens, 2);
-    assert_eq!(executed.rows, (hidden * 3) as u32);
-    assert_eq!(executed.cols, hidden as u32);
-    assert_eq!(executed.input_bytes, (hidden * 2 * 2) as u64);
-    assert_eq!(executed.output_bytes, (hidden * 3 * 2 * 4) as u64);
-    assert_eq!(executed.pack_kernel_launches, 2);
-    assert_eq!(executed.projection_kernel_launches, 1);
-    assert_eq!(executed.scatter_kernel_launches, 2);
-    assert!(executed.elapsed_ns > 0);
-    assert_eq!(executed.hot_path_allocations, 0);
+    assert_projection_batch_exec(&qkv, 1, (hidden * 3) as u32, hidden as u32);
+
+    let attention_output = {
+        let mut sessions = [&mut session_a, &mut session_b];
+        CudaHfDecodeSequenceSession::execute_attention_output_projection_batch(
+            &mut sessions,
+            2,
+            2,
+            0,
+        )
+    };
+    assert_projection_batch_exec(&attention_output, 2, hidden as u32, hidden as u32);
+
+    let gate_up = {
+        let mut sessions = [&mut session_a, &mut session_b];
+        CudaHfDecodeSequenceSession::execute_gate_up_projection_batch(&mut sessions, 2, 2, 0)
+    };
+    assert_projection_batch_exec(&gate_up, 3, (intermediate * 2) as u32, hidden as u32);
+
+    let down = {
+        let mut sessions = [&mut session_a, &mut session_b];
+        CudaHfDecodeSequenceSession::execute_down_projection_batch(&mut sessions, 2, 2, 0)
+    };
+    assert_projection_batch_exec(&down, 4, hidden as u32, intermediate as u32);
+
+    let lm_head = {
+        let mut sessions = [&mut session_a, &mut session_b];
+        CudaHfDecodeSequenceSession::execute_lm_head_projection_batch(&mut sessions, 2, 2)
+    };
+    assert_projection_batch_exec(&lm_head, 5, vocab_size as u32, hidden as u32);
+}
+
+fn assert_projection_batch_exec(
+    summary: &CudaHfDecodeSequenceProjectionBatchExecuteSummary,
+    projection_kind: u32,
+    rows: u32,
+    cols: u32,
+) {
+    assert_eq!(summary.status, SmokeStatus::Ok);
+    assert_eq!(summary.reason, "ready");
+    assert!(summary.exact);
+    assert_eq!(summary.projection_kind, projection_kind);
+    assert_eq!(summary.block_tokens, 2);
+    assert_eq!(summary.rows, rows);
+    assert_eq!(summary.cols, cols);
+    assert_eq!(summary.input_bytes, u64::from(cols) * 2 * 2);
+    assert_eq!(summary.output_bytes, u64::from(rows) * 2 * 4);
+    assert_eq!(summary.pack_kernel_launches, 2);
+    assert_eq!(summary.projection_kernel_launches, 1);
+    assert_eq!(summary.scatter_kernel_launches, 2);
+    assert!(summary.elapsed_ns > 0);
+    assert_eq!(summary.hot_path_allocations, 0);
 }
 
 #[test]

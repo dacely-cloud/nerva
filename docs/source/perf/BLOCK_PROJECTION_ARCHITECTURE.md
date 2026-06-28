@@ -286,17 +286,13 @@ down_input_bytes / down_output_bytes
 lm_head_input_bytes / lm_head_output_bytes
 ```
 
-This is the native handoff point from the Rust planner to CUDA execution. The
-next executor patch should allocate or reuse the reported staging buffers,
-pack columns from compatible sessions, run the existing `project_encoded_rows`
-path with `tokens = block_tokens`, and scatter output columns back to each
-session's private scratch state.
+This is the native handoff point from the Rust planner to CUDA execution.
 
-The first narrow execution hook now exists for the QKV projection:
+The native execution hook now covers the decode projection family:
 
 ```text
 nerva_cuda_hf_decode_sequence_projection_batch_execute(...)
-projection_kind = QKV
+projection_kind = QKV | W_O | GATE_UP | DOWN | LM_HEAD
 ```
 
 Current behavior:
@@ -304,14 +300,14 @@ Current behavior:
 ```text
 1. select active compatible sessions with the same descriptor hash and shape
 2. pack each session's encoded projection input into a row-major token block
-3. run one `project_encoded_rows(..., tokens = block_tokens)` QKV GEMM
-4. scatter each output row block back to that session's private Q/K/V scratch
+3. run one `project_encoded_rows(..., tokens = block_tokens)` GEMM
+4. scatter each output row block back to that session's private scratch/logits
 ```
 
 The implementation uses existing per-session scratch as staging and reports
 zero hot-path allocations. The focused CUDA test creates two descriptor-backed
 sessions, starts both, verifies the native plan is exact, executes a block-2
-QKV projection, and checks:
+projection for every supported stage, and checks each stage:
 
 ```text
 pack launches        2
@@ -320,7 +316,7 @@ scatter launches     2
 hot allocations      0
 ```
 
-This still is not full batched decode. The next steps are to apply the same
-pack/GEMM/scatter pattern to W_o, gate/up, down, and LM head, then move the
-call sites inside the decode scheduler instead of exposing them only as a
-probe-level session primitive.
+This still is not full batched decode. The next step is to move these stage
+calls inside the decode scheduler so compatible resident sessions advance
+together through the block projection path instead of exposing it only as a
+session primitive.

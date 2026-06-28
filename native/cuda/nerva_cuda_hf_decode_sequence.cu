@@ -196,6 +196,10 @@ constexpr uint32_t kProjectionBatchPlanUnsupportedProjection = 6;
 constexpr uint32_t kProjectionBatchPlanInvalidLayer = 7;
 constexpr uint32_t kProjectionBatchPlanInsufficientScratch = 8;
 constexpr uint32_t kProjectionBatchKindQkv = 1;
+constexpr uint32_t kProjectionBatchKindAttentionOutput = 2;
+constexpr uint32_t kProjectionBatchKindGateUp = 3;
+constexpr uint32_t kProjectionBatchKindDown = 4;
+constexpr uint32_t kProjectionBatchKindLmHead = 5;
 
 __host__ __device__ LayerScratch layer_scratch_ptrs(
     float *scratch, uint32_t hidden, uint32_t attention_hidden,
@@ -7379,8 +7383,20 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
   if (request->sessions == nullptr) {
     return -1;
   }
-  if (request->projection_kind != kProjectionBatchKindQkv) {
+  const bool layer_projection =
+      request->projection_kind == kProjectionBatchKindQkv ||
+      request->projection_kind == kProjectionBatchKindAttentionOutput ||
+      request->projection_kind == kProjectionBatchKindGateUp ||
+      request->projection_kind == kProjectionBatchKindDown;
+  const bool lm_head_projection =
+      request->projection_kind == kProjectionBatchKindLmHead;
+  if (!layer_projection && !lm_head_projection) {
     out->reason = kProjectionBatchPlanUnsupportedProjection;
+    out->status = 0;
+    return 0;
+  }
+  if (lm_head_projection && request->layer_index != 0) {
+    out->reason = kProjectionBatchPlanInvalidLayer;
     out->status = 0;
     return 0;
   }
@@ -7442,7 +7458,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
         request->sessions[candidate_index];
     if (!ready_session(candidate) ||
         candidate->planned_weight_descriptor_hash == 0 ||
-        request->layer_index >= candidate->layer_count) {
+        (layer_projection && request->layer_index >= candidate->layer_count)) {
       continue;
     }
     uint32_t compatible = 0;
@@ -7465,7 +7481,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     out->status = 0;
     return 0;
   }
-  if (request->layer_index >= best->layer_count) {
+  if (layer_projection && request->layer_index >= best->layer_count) {
     out->reason = kProjectionBatchPlanInvalidLayer;
     out->status = 0;
     return 0;
@@ -7491,22 +7507,69 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
   const uint32_t kv_hidden = best->kv_heads * best->head_dim;
   const PackedProjectionShape packed_shape = packed_projection_shape(
       best->hidden, attention_hidden, kv_hidden, best->intermediate);
-  const uint32_t rows = static_cast<uint32_t>(packed_shape.qkv_rows);
-  const uint32_t cols = best->hidden;
+  uint32_t rows = 0;
+  uint32_t cols = 0;
+  const uint16_t *matrix = nullptr;
+  float *batch_output = nullptr;
+  uint64_t batch_output_capacity = 0;
+  const SequenceLayerLayout layout =
+      layer_projection ? best->host_layouts[request->layer_index]
+                       : SequenceLayerLayout{};
+  switch (request->projection_kind) {
+    case kProjectionBatchKindQkv:
+      rows = static_cast<uint32_t>(packed_shape.qkv_rows);
+      cols = best->hidden;
+      matrix = best->device_qkv_packed +
+               packed_shape.qkv_elements_per_layer * request->layer_index;
+      batch_output = best->device_prefill_qkv;
+      batch_output_capacity = best->prefill_qkv_bytes;
+      break;
+    case kProjectionBatchKindAttentionOutput:
+      rows = best->hidden;
+      cols = attention_hidden;
+      matrix = best->device_arena + layout.w_o;
+      batch_output = best->device_prefill_o;
+      batch_output_capacity = best->prefill_o_bytes;
+      break;
+    case kProjectionBatchKindGateUp:
+      rows = static_cast<uint32_t>(packed_shape.gate_up_rows);
+      cols = best->hidden;
+      matrix = best->device_gate_up_packed +
+               packed_shape.gate_up_elements_per_layer * request->layer_index;
+      batch_output = best->device_prefill_gate_up;
+      batch_output_capacity = best->prefill_gate_up_bytes;
+      break;
+    case kProjectionBatchKindDown:
+      rows = best->hidden;
+      cols = best->intermediate;
+      matrix = best->device_arena + layout.w_down;
+      batch_output = best->device_prefill_down;
+      batch_output_capacity = best->prefill_down_bytes;
+      break;
+    case kProjectionBatchKindLmHead:
+      rows = best->vocab_size;
+      cols = best->hidden;
+      matrix = best->device_arena + best->arena_layout.lm_head;
+      batch_output = best->device_prefill_gate_up;
+      batch_output_capacity = best->prefill_gate_up_bytes;
+      break;
+    default:
+      break;
+  }
   const uint64_t input_bytes =
       static_cast<uint64_t>(cols) * block_tokens * sizeof(uint16_t);
   const uint64_t output_bytes =
       static_cast<uint64_t>(rows) * block_tokens * sizeof(float);
-  if (best->device_prefill_norm == nullptr || best->device_prefill_qkv == nullptr ||
+  if (rows == 0 || cols == 0 || matrix == nullptr || batch_output == nullptr ||
+      best->device_prefill_norm == nullptr ||
       best->prefill_norm_bytes < input_bytes ||
-      best->prefill_qkv_bytes < output_bytes) {
+      batch_output_capacity < output_bytes) {
     out->reason = kProjectionBatchPlanInsufficientScratch;
     out->status = 0;
     return 0;
   }
 
   uint16_t *batch_input = best->device_prefill_norm;
-  float *batch_output = best->device_prefill_qkv;
   uint32_t selected_index = 0;
   for (uint32_t index = 0; index < request->session_count &&
                            selected_index < block_tokens;
@@ -7544,9 +7607,6 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     selected_index += 1;
   }
 
-  const uint16_t *matrix =
-      best->device_qkv_packed +
-      packed_shape.qkv_elements_per_layer * request->layer_index;
   if (err == cudaSuccess) {
     err = project_encoded_rows(best, nullptr, matrix, batch_input, rows, cols,
                                block_tokens, best->dtype, 0.0f, batch_output);
@@ -7565,9 +7625,33 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     LayerScratch scratch = layer_scratch_ptrs(
         session->device_scratch, session->hidden, attention_hidden, kv_hidden,
         session->intermediate);
+    float *scatter_dst = nullptr;
+    switch (request->projection_kind) {
+      case kProjectionBatchKindQkv:
+        scatter_dst = scratch.q;
+        break;
+      case kProjectionBatchKindAttentionOutput:
+        scatter_dst = scratch.residual;
+        break;
+      case kProjectionBatchKindGateUp:
+        scatter_dst = scratch.gate;
+        break;
+      case kProjectionBatchKindDown:
+        scatter_dst = scratch.down;
+        break;
+      case kProjectionBatchKindLmHead:
+        scatter_dst = session->device_scratch + session->hidden * 2;
+        break;
+      default:
+        break;
+    }
+    if (scatter_dst == nullptr) {
+      err = cudaErrorInvalidValue;
+      break;
+    }
     hf_projection_batch_scatter_f32_kernel<<<scatter_blocks, kDecodeThreads, 0,
                                              best->stream>>>(
-        batch_output, scratch.q, rows, selected_index);
+        batch_output, scatter_dst, rows, selected_index);
     err = cudaGetLastError();
     out->scatter_kernel_launches += 1;
     selected_index += 1;

@@ -557,6 +557,12 @@ typedef struct NervaCudaHfDecodeSequenceProjectionBatchPlanResult {
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeSequenceProjectionBatchPlanResult;
 
+#define NERVA_CUDA_PROJECTION_BATCH_KIND_QKV 1u
+#define NERVA_CUDA_PROJECTION_BATCH_KIND_ATTENTION_OUTPUT 2u
+#define NERVA_CUDA_PROJECTION_BATCH_KIND_GATE_UP 3u
+#define NERVA_CUDA_PROJECTION_BATCH_KIND_DOWN 4u
+#define NERVA_CUDA_PROJECTION_BATCH_KIND_LM_HEAD 5u
+
 typedef struct NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest {
   NervaCudaHfDecodeSequenceSession **sessions;
   uint32_t session_count;
