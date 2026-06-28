@@ -18,9 +18,10 @@ use crate::engine::hf_cuda_decode::file_backed::session_stream_queue::BoundedHos
 use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 use crate::engine::runtime::Runtime;
 
-const BLOCK_VERIFY_FALLBACK_MIN_CALLS: usize = 8;
-const BLOCK_VERIFY_FALLBACK_MIN_DRAFT_TOKENS: usize = 32;
-const BLOCK_VERIFY_FALLBACK_ACCEPTED_PER_DRAFT: f64 = 0.35;
+const BLOCK_VERIFY_INITIAL_PROBE_TOKENS: usize = 2;
+const BLOCK_VERIFY_FALLBACK_MIN_CALLS: usize = 1;
+const BLOCK_VERIFY_FALLBACK_MIN_DRAFT_TOKENS: usize = 2;
+const BLOCK_VERIFY_FALLBACK_ACCEPTED_PER_DRAFT: f64 = 0.60;
 
 pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
     runtime: &Runtime,
@@ -139,6 +140,8 @@ where
     let mut block_verify_wide_draft_tokens = 0usize;
     let mut block_verify_wide_accepted_tokens = 0usize;
     let mut block_verify_token_fallback = false;
+    let mut block_verify_effective_tokens =
+        adaptive_block_verify_start_tokens(projection_mode.block_tokens());
     let decode_started = Instant::now();
     for chunk_index in 0..chunks {
         if tokens.len() >= requested_tokens {
@@ -156,8 +159,9 @@ where
                 (loop_state.advance(current_steps), current_steps, false)
             }
             HfCudaProjectionMode::BlockVerify { block_tokens } => {
-                let current_steps =
-                    current_chunk_steps(chunk_steps, remaining_tokens, projection_mode);
+                let current_steps = block_verify_effective_tokens
+                    .min(block_tokens)
+                    .min(remaining_tokens);
                 let draft = draft_ngram_block(
                     prompt_tokens,
                     &tokens,
@@ -185,6 +189,12 @@ where
                 block_verify_wide_accepted_tokens,
             ) {
                 block_verify_token_fallback = true;
+            } else if summary.tokens.len() == current_steps
+                && block_verify_effective_tokens < projection_mode.block_tokens()
+            {
+                block_verify_effective_tokens = block_verify_effective_tokens
+                    .saturating_mul(2)
+                    .min(projection_mode.block_tokens());
             }
         }
         let hit_stop = contains_stop_token(&summary.tokens, &stop_tokens);
@@ -236,6 +246,14 @@ where
         queue: queue.summary(),
         stop_reason,
     })
+}
+
+fn adaptive_block_verify_start_tokens(block_tokens: usize) -> usize {
+    if block_tokens <= 1 {
+        1
+    } else {
+        BLOCK_VERIFY_INITIAL_PROBE_TOKENS.min(block_tokens)
+    }
 }
 
 fn should_fallback_block_verify(calls: usize, draft_tokens: usize, accepted_tokens: usize) -> bool {

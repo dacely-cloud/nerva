@@ -633,7 +633,7 @@ impl NervaCliLoggerInner {
                         Tone::Yellow,
                     ));
                 }
-                if wide_acceptance < 0.35 {
+                if wide_acceptance < 0.60 {
                     self.print_plain_report_block_line(report_warning_line(
                         self.color,
                         "block verifier is losing: drafter acceptance is too low",
