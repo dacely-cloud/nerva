@@ -186,6 +186,13 @@ struct LtGemmTokensPlan {
 constexpr uint32_t kGemvBackendLt = 0;
 constexpr uint32_t kGemvBackendCublas = 1;
 
+constexpr uint32_t kProjectionBatchPlanReady = 0;
+constexpr uint32_t kProjectionBatchPlanInvalidRequest = 1;
+constexpr uint32_t kProjectionBatchPlanNoSessions = 2;
+constexpr uint32_t kProjectionBatchPlanNoReadySessions = 3;
+constexpr uint32_t kProjectionBatchPlanSharedWeightsUnproven = 4;
+constexpr uint32_t kProjectionBatchPlanInsufficientCompatibleReady = 5;
+
 __host__ __device__ LayerScratch layer_scratch_ptrs(
     float *scratch, uint32_t hidden, uint32_t attention_hidden,
     uint32_t kv_hidden, uint32_t intermediate) {
@@ -7163,6 +7170,162 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
     fail(out, err);
   }
   return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_plan(
+    const NervaCudaHfDecodeSequenceProjectionBatchPlanRequest *request,
+    NervaCudaHfDecodeSequenceProjectionBatchPlanResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  out->reason = kProjectionBatchPlanInvalidRequest;
+  if (request == nullptr) {
+    return -1;
+  }
+  out->requested_session_count = request->session_count;
+  out->target_block_tokens =
+      request->target_block_tokens == 0 ? 1u : request->target_block_tokens;
+  out->min_block_tokens =
+      request->min_block_tokens == 0 ? 1u : request->min_block_tokens;
+  if (request->session_count == 0) {
+    out->reason = kProjectionBatchPlanNoSessions;
+    out->status = 0;
+    return 0;
+  }
+  if (request->sessions == nullptr) {
+    return -1;
+  }
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    out->cuda_error = static_cast<int32_t>(err);
+    return -1;
+  }
+
+  std::vector<NervaCudaHfDecodeSequenceSession *> ready;
+  ready.reserve(request->session_count);
+  for (uint32_t index = 0; index < request->session_count; ++index) {
+    NervaCudaHfDecodeSequenceSession *session = request->sessions[index];
+    if (session == nullptr || !session->active_started ||
+        session->active_finished || session->active_prompt_token_count == 0 ||
+        session->active_cursor >= session->max_context_tokens) {
+      continue;
+    }
+    ready.push_back(session);
+  }
+
+  if (ready.empty()) {
+    out->reason = kProjectionBatchPlanNoReadySessions;
+    out->status = 0;
+    return 0;
+  }
+
+  auto same_projection_model =
+      [](const NervaCudaHfDecodeSequenceSession *lhs,
+         const NervaCudaHfDecodeSequenceSession *rhs) {
+        return lhs->planned_weight_descriptor_hash != 0 &&
+               rhs->planned_weight_descriptor_hash != 0 &&
+               lhs->planned_weight_descriptor_hash ==
+                   rhs->planned_weight_descriptor_hash &&
+               lhs->dtype == rhs->dtype && lhs->hidden == rhs->hidden &&
+               lhs->heads == rhs->heads && lhs->kv_heads == rhs->kv_heads &&
+               lhs->head_dim == rhs->head_dim &&
+               lhs->intermediate == rhs->intermediate &&
+               lhs->vocab_size == rhs->vocab_size &&
+               lhs->layer_count == rhs->layer_count &&
+               lhs->resident_weight_bytes == rhs->resident_weight_bytes;
+      };
+
+  bool any_hash = false;
+  for (const NervaCudaHfDecodeSequenceSession *session : ready) {
+    any_hash = any_hash || session->planned_weight_descriptor_hash != 0;
+  }
+  if (!any_hash) {
+    out->reason = kProjectionBatchPlanSharedWeightsUnproven;
+    out->status = 0;
+    return 0;
+  }
+
+  NervaCudaHfDecodeSequenceSession *best = nullptr;
+  uint32_t best_count = 0;
+  for (NervaCudaHfDecodeSequenceSession *candidate : ready) {
+    if (candidate->planned_weight_descriptor_hash == 0) {
+      continue;
+    }
+    uint32_t compatible = 0;
+    for (NervaCudaHfDecodeSequenceSession *other : ready) {
+      if (same_projection_model(candidate, other)) {
+        compatible += 1;
+      }
+    }
+    if (compatible > best_count) {
+      best = candidate;
+      best_count = compatible;
+    }
+  }
+
+  out->eligible_session_count = best_count;
+  if (best == nullptr || best_count < out->min_block_tokens) {
+    out->reason = kProjectionBatchPlanInsufficientCompatibleReady;
+    out->status = 0;
+    return 0;
+  }
+
+  const uint32_t block_tokens =
+      std::min(best_count, out->target_block_tokens);
+  const uint64_t attention_hidden =
+      static_cast<uint64_t>(best->heads) * best->head_dim;
+  const uint64_t kv_hidden =
+      static_cast<uint64_t>(best->kv_heads) * best->head_dim;
+  const PackedProjectionShape packed_shape = packed_projection_shape(
+      best->hidden, attention_hidden, kv_hidden, best->intermediate);
+  const uint64_t hidden = best->hidden;
+  const uint64_t intermediate = best->intermediate;
+  const uint64_t vocab_size = best->vocab_size;
+  const uint64_t token_u16 = static_cast<uint64_t>(block_tokens) * sizeof(uint16_t);
+  const uint64_t token_f32 = static_cast<uint64_t>(block_tokens) * sizeof(float);
+  const uint64_t max_input_cols =
+      std::max<uint64_t>(hidden, std::max<uint64_t>(attention_hidden, intermediate));
+  const uint64_t max_output_rows =
+      std::max<uint64_t>(
+          vocab_size,
+          std::max<uint64_t>(packed_shape.qkv_rows,
+                             std::max<uint64_t>(packed_shape.gate_up_rows,
+                                                hidden)));
+
+  out->reason = kProjectionBatchPlanReady;
+  out->exact = 1;
+  out->block_tokens = block_tokens;
+  out->dtype = best->dtype;
+  out->hidden = best->hidden;
+  out->heads = best->heads;
+  out->kv_heads = best->kv_heads;
+  out->head_dim = best->head_dim;
+  out->intermediate = best->intermediate;
+  out->vocab_size = best->vocab_size;
+  out->layer_count = best->layer_count;
+  out->max_context_tokens = best->max_context_tokens;
+  out->planned_weight_descriptor_hash = best->planned_weight_descriptor_hash;
+  out->resident_weight_bytes = best->resident_weight_bytes;
+  out->qkv_rows = packed_shape.qkv_rows;
+  out->gate_up_rows = packed_shape.gate_up_rows;
+  out->qkv_input_bytes = hidden * token_u16;
+  out->qkv_output_bytes = packed_shape.qkv_rows * token_f32;
+  out->attention_output_input_bytes = attention_hidden * token_u16;
+  out->attention_output_output_bytes = hidden * token_f32;
+  out->gate_up_input_bytes = hidden * token_u16;
+  out->gate_up_output_bytes = packed_shape.gate_up_rows * token_f32;
+  out->down_input_bytes = intermediate * token_u16;
+  out->down_output_bytes = hidden * token_f32;
+  out->lm_head_input_bytes = hidden * token_u16;
+  out->lm_head_output_bytes = vocab_size * token_f32;
+  out->pack_input_bytes = max_input_cols * token_u16;
+  out->max_projection_output_bytes = max_output_rows * token_f32;
+  out->hot_path_allocations = 0;
+  out->status = 0;
+  return 0;
 }
 
 extern "C" int nerva_cuda_hf_decode_sequence_session_destroy(

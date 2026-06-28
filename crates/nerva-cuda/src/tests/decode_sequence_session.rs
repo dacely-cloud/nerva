@@ -1,8 +1,24 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::request::CUDA_HF_DECODE_SEQUENCE_DTYPE_F16;
-use crate::decode::hf_sequence::session::request::CudaHfDecodeSequenceSessionConfig;
+use crate::decode::hf_sequence::session::request::{
+    CudaHfDecodeSequenceSession, CudaHfDecodeSequenceSessionConfig,
+};
 use crate::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use crate::smoke::status::SmokeStatus;
+
+#[test]
+fn hf_decode_sequence_projection_batch_plan_reports_no_sessions_without_cuda() {
+    let summary = CudaHfDecodeSequenceSession::projection_batch_plan(&mut [], 8, 2);
+
+    assert_eq!(summary.status, SmokeStatus::Ok);
+    assert_eq!(summary.reason, "no_sessions");
+    assert!(!summary.exact);
+    assert_eq!(summary.requested_session_count, 0);
+    assert_eq!(summary.block_tokens, 0);
+    assert_eq!(summary.target_block_tokens, 8);
+    assert_eq!(summary.min_block_tokens, 2);
+    assert_eq!(summary.hot_path_allocations, 0);
+}
 
 #[test]
 fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {

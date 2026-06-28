@@ -106,6 +106,63 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionAdvanceRequest {
     pub(crate) output_token_capacity: u32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaHfDecodeSequenceProjectionBatchPlanRequest {
+    pub(crate) sessions: *mut *mut NervaCudaHfDecodeSequenceSession,
+    pub(crate) session_count: u32,
+    pub(crate) target_block_tokens: u32,
+    pub(crate) min_block_tokens: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NervaCudaHfDecodeSequenceProjectionBatchPlanResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) device_count: i32,
+    pub(crate) reason: u32,
+    pub(crate) exact: u32,
+    pub(crate) requested_session_count: u32,
+    pub(crate) eligible_session_count: u32,
+    pub(crate) block_tokens: u32,
+    pub(crate) target_block_tokens: u32,
+    pub(crate) min_block_tokens: u32,
+    pub(crate) dtype: u32,
+    pub(crate) hidden: u32,
+    pub(crate) heads: u32,
+    pub(crate) kv_heads: u32,
+    pub(crate) head_dim: u32,
+    pub(crate) intermediate: u32,
+    pub(crate) vocab_size: u32,
+    pub(crate) layer_count: u32,
+    pub(crate) max_context_tokens: u32,
+    pub(crate) planned_weight_descriptor_hash: u64,
+    pub(crate) resident_weight_bytes: u64,
+    pub(crate) qkv_rows: u64,
+    pub(crate) gate_up_rows: u64,
+    pub(crate) qkv_input_bytes: u64,
+    pub(crate) qkv_output_bytes: u64,
+    pub(crate) attention_output_input_bytes: u64,
+    pub(crate) attention_output_output_bytes: u64,
+    pub(crate) gate_up_input_bytes: u64,
+    pub(crate) gate_up_output_bytes: u64,
+    pub(crate) down_input_bytes: u64,
+    pub(crate) down_output_bytes: u64,
+    pub(crate) lm_head_input_bytes: u64,
+    pub(crate) lm_head_output_bytes: u64,
+    pub(crate) pack_input_bytes: u64,
+    pub(crate) max_projection_output_bytes: u64,
+    pub(crate) hot_path_allocations: u64,
+}
+
+pub(crate) const PROJECTION_BATCH_PLAN_READY: u32 = 0;
+pub(crate) const PROJECTION_BATCH_PLAN_INVALID_REQUEST: u32 = 1;
+pub(crate) const PROJECTION_BATCH_PLAN_NO_SESSIONS: u32 = 2;
+pub(crate) const PROJECTION_BATCH_PLAN_NO_READY_SESSIONS: u32 = 3;
+pub(crate) const PROJECTION_BATCH_PLAN_SHARED_WEIGHTS_UNPROVEN: u32 = 4;
+pub(crate) const PROJECTION_BATCH_PLAN_INSUFFICIENT_COMPATIBLE_READY: u32 = 5;
+
 unsafe extern "C" {
     fn nerva_cuda_hf_decode_sequence_session_create(
         request: *const NervaCudaHfDecodeSequenceSessionCreateRequest,
@@ -123,6 +180,10 @@ unsafe extern "C" {
     fn nerva_cuda_hf_decode_sequence_session_advance(
         request: *const NervaCudaHfDecodeSequenceSessionAdvanceRequest,
         out: *mut NervaCudaHfDecodeSequenceResult,
+    ) -> c_int;
+    fn nerva_cuda_hf_decode_sequence_projection_batch_plan(
+        request: *const NervaCudaHfDecodeSequenceProjectionBatchPlanRequest,
+        out: *mut NervaCudaHfDecodeSequenceProjectionBatchPlanResult,
     ) -> c_int;
     fn nerva_cuda_hf_decode_sequence_session_destroy(
         session: *mut NervaCudaHfDecodeSequenceSession,
@@ -157,6 +218,13 @@ pub(crate) fn advance_hf_decode_sequence_session(
     out: &mut NervaCudaHfDecodeSequenceResult,
 ) -> c_int {
     unsafe { nerva_cuda_hf_decode_sequence_session_advance(request, out) }
+}
+
+pub(crate) fn plan_hf_decode_sequence_projection_batch(
+    request: &NervaCudaHfDecodeSequenceProjectionBatchPlanRequest,
+    out: &mut NervaCudaHfDecodeSequenceProjectionBatchPlanResult,
+) -> c_int {
+    unsafe { nerva_cuda_hf_decode_sequence_projection_batch_plan(request, out) }
 }
 
 pub(crate) fn destroy_hf_decode_sequence_session(

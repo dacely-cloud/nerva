@@ -250,3 +250,44 @@ sessions, pack their hidden vectors into the block input, call the existing
 token projection dispatcher with `tokens = batch_size`, and scatter the output
 columns back to isolated per-session state before attention, sampling, and stop
 policy continue.
+
+## Native Session Batch Contract
+
+The native CUDA session API now exposes the metadata contract needed before a
+real multi-session executor can run:
+
+```text
+nerva_cuda_hf_decode_sequence_projection_batch_plan(...)
+```
+
+This function accepts actual opaque session handles, not synthetic request ids.
+It reports `ready` only when active sessions prove:
+
+```text
+same dtype
+same transformer shape
+same planned weight descriptor hash
+same resident weight byte count
+not finished
+context capacity still available
+at least min_block_tokens compatible sessions
+```
+
+When the contract is exact, the result also reports the staging sizes for the
+real executor:
+
+```text
+pack_input_bytes
+max_projection_output_bytes
+qkv_input_bytes / qkv_output_bytes
+attention_output_input_bytes / attention_output_output_bytes
+gate_up_input_bytes / gate_up_output_bytes
+down_input_bytes / down_output_bytes
+lm_head_input_bytes / lm_head_output_bytes
+```
+
+This is the native handoff point from the Rust planner to CUDA execution. The
+next executor patch should allocate or reuse the reported staging buffers,
+pack columns from compatible sessions, run the existing `project_encoded_rows`
+path with `tokens = block_tokens`, and scatter output columns back to each
+session's private scratch state.
