@@ -254,6 +254,7 @@ fn assert_layer_projection_batch_exec(
     assert_eq!(summary.pack_kernel_launches, 8);
     assert_eq!(summary.projection_kernel_launches, 4);
     assert_eq!(summary.scatter_kernel_launches, 8);
+    assert_eq!(summary.dependency_kernel_launches, 12);
     assert!(summary.elapsed_ns > 0);
     assert!(summary.qkv_elapsed_ns > 0);
     assert!(summary.attention_output_elapsed_ns > 0);

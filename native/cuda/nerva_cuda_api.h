@@ -636,6 +636,7 @@ typedef struct NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult {
   uint64_t pack_kernel_launches;
   uint64_t projection_kernel_launches;
   uint64_t scatter_kernel_launches;
+  uint64_t dependency_kernel_launches;
   uint64_t sync_calls;
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult;

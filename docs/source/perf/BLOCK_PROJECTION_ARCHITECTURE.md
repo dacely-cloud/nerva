@@ -329,11 +329,21 @@ The native API also exposes a layer-level scheduler primitive:
 nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(...)
 ```
 
-It runs the four projection-heavy decode stages for one transformer layer over
-the same compatible session block:
+It runs a semantically valid one-layer decode transaction over the same
+compatible session block. The dense projections are shared as `W * X`, while
+the dependency kernels that produce the next projection input remain isolated
+per session:
 
 ```text
-QKV -> W_O -> gate/up -> down
+optional layer-0 input/RMSNorm prepare
+batched QKV projection
+per-session QKV publish + decode attention
+batched W_O projection
+per-session residual + MLP RMSNorm
+batched gate/up projection
+per-session SiLU gate activation
+batched down projection
+per-session residual finish + next/final RMSNorm
 ```
 
 and returns aggregate accounting:
@@ -344,12 +354,12 @@ qkv_rows / attention_output_rows / gate_up_rows / down_rows
 input_bytes / output_bytes
 qkv_elapsed_ns / attention_output_elapsed_ns / gate_up_elapsed_ns / down_elapsed_ns
 pack_kernel_launches / projection_kernel_launches / scatter_kernel_launches
+dependency_kernel_launches
 hot_path_allocations
 ```
 
 This is the scheduler-facing unit needed for continuous decode batching. The
-current implementation reuses the proven per-projection executor for each
-stage, so it is a correctness and integration contract first. The remaining
-performance work is to move session selection, stream synchronization, and
-event timing out of the individual stage calls so a compatible request block
-can stay resident on one batch stream through the whole layer transaction.
+current implementation still reuses the proven per-projection executor for each
+dense stage, so it is a correctness and integration contract first. The
+remaining performance work is to fuse the selection, stream synchronization,
+and event timing now that the layer dataflow itself is correct.

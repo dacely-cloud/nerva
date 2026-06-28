@@ -237,6 +237,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult {
     pub(crate) pack_kernel_launches: u64,
     pub(crate) projection_kernel_launches: u64,
     pub(crate) scatter_kernel_launches: u64,
+    pub(crate) dependency_kernel_launches: u64,
     pub(crate) sync_calls: u64,
     pub(crate) hot_path_allocations: u64,
 }
