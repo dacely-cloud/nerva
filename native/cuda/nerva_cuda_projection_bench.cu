@@ -185,26 +185,27 @@ cudaError_t create_lt_layouts(uint32_t rows, uint32_t cols, uint32_t dtype,
   const cudaDataType_t data_type = encoded_cuda_type(dtype);
   cublasStatus_t status =
       cublasLtMatmulDescCreate(op_desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
-  cublasOperation_t op = CUBLAS_OP_N;
+  cublasOperation_t op_a = CUBLAS_OP_N;
+  cublasOperation_t op_b = CUBLAS_OP_T;
   if (status == CUBLAS_STATUS_SUCCESS) {
     status = cublasLtMatmulDescSetAttribute(
-        *op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op, sizeof(op));
+        *op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op_a, sizeof(op_a));
   }
   if (status == CUBLAS_STATUS_SUCCESS) {
     status = cublasLtMatmulDescSetAttribute(
-        *op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op, sizeof(op));
+        *op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op_b, sizeof(op_b));
   }
   if (status == CUBLAS_STATUS_SUCCESS) {
-    status = cublasLtMatrixLayoutCreate(a_desc, data_type, rows, cols, cols);
+    status = cublasLtMatrixLayoutCreate(a_desc, data_type, 1, cols, cols);
   }
   if (status == CUBLAS_STATUS_SUCCESS) {
-    status = cublasLtMatrixLayoutCreate(b_desc, data_type, cols, 1, 1);
+    status = cublasLtMatrixLayoutCreate(b_desc, data_type, rows, cols, cols);
   }
   if (status == CUBLAS_STATUS_SUCCESS) {
-    status = cublasLtMatrixLayoutCreate(c_desc, CUDA_R_32F, rows, 1, 1);
+    status = cublasLtMatrixLayoutCreate(c_desc, CUDA_R_32F, 1, rows, rows);
   }
   if (status == CUBLAS_STATUS_SUCCESS) {
-    status = cublasLtMatrixLayoutCreate(d_desc, CUDA_R_32F, rows, 1, 1);
+    status = cublasLtMatrixLayoutCreate(d_desc, CUDA_R_32F, 1, rows, rows);
   }
   cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
   if (status == CUBLAS_STATUS_SUCCESS) {
@@ -253,7 +254,7 @@ cudaError_t launch_cublaslt(cublasLtHandle_t handle,
   const float alpha = 1.0f;
   const float beta = 0.0f;
   const cublasStatus_t status =
-      cublasLtMatmul(handle, op_desc, &alpha, matrix, a_desc, input, b_desc,
+      cublasLtMatmul(handle, op_desc, &alpha, input, a_desc, matrix, b_desc,
                      &beta, output, c_desc, output, d_desc, algo, workspace,
                      kWorkspaceBytes, stream);
   return cublas_to_cuda(status);

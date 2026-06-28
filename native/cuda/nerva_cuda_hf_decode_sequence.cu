@@ -45,6 +45,9 @@ constexpr uint32_t kSharedWarpGqaThreads =
     kGroupedGqaHeads * kSharedWarpGqaThreadsPerHead;
 constexpr uint32_t kSharedWarpGqaHeadDimMax =
     kSharedWarpGqaThreadsPerHead * kHeadThreadElements;
+constexpr uint32_t kSharedWarpGqaTileTokens = kKvCacheBlockTokens;
+constexpr uint32_t kSharedWarpGqaTileElements =
+    kSharedWarpGqaTileTokens * kSharedWarpGqaHeadDimMax;
 constexpr uint32_t kLtGemvMaxHeuristics = 32;
 constexpr uint32_t kLtGemvAutotuneWarmups = 1;
 constexpr uint32_t kLtGemvAutotuneIterations = 3;
@@ -1291,8 +1294,8 @@ __global__ void hf_layer_shared_warp_gqa_attention_chunk_kernel(
     float *partial_m, float *partial_l, uint32_t kv_block_count,
     const uint32_t *kv_block_table) {
   __shared__ uint32_t current_position_shared;
-  __shared__ float shared_k[kSharedWarpGqaHeadDimMax];
-  __shared__ float shared_v[kSharedWarpGqaHeadDimMax];
+  __shared__ float shared_k[kSharedWarpGqaTileElements];
+  __shared__ float shared_v[kSharedWarpGqaTileElements];
   if (threadIdx.x == 0) {
     current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
   }
@@ -1350,50 +1353,64 @@ __global__ void hf_layer_shared_warp_gqa_attention_chunk_kernel(
         (logical_block + 1u) * kKvCacheBlockTokens;
     const uint32_t block_limit =
         logical_block_end < chunk_end ? logical_block_end : chunk_end;
-    uint64_t token_base = kv_cache_page_offset(
+    uint64_t block_token_base = kv_cache_page_offset(
         layer_index, kv_block_count, kv_block_table[logical_block],
         token - logical_block * kKvCacheBlockTokens, kv_hidden, kv_start);
-    for (; token < block_limit; ++token, token_base += kv_hidden) {
-      for (uint32_t offset = threadIdx.x; offset < head_dim;
-           offset += blockDim.x) {
-        shared_k[offset] =
-            encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
-        shared_v[offset] =
-            encoded_to_f32_typed<DType>(kv_values[token_base + offset]);
+    while (token < block_limit) {
+      const uint32_t remaining = block_limit - token;
+      const uint32_t tile_count = remaining < kSharedWarpGqaTileTokens
+                                      ? remaining
+                                      : kSharedWarpGqaTileTokens;
+      const uint32_t tile_elements = tile_count * head_dim;
+      for (uint32_t index = threadIdx.x; index < tile_elements;
+           index += blockDim.x) {
+        const uint32_t tile_token = index / head_dim;
+        const uint32_t offset = index - tile_token * head_dim;
+        const uint64_t source = block_token_base +
+                                static_cast<uint64_t>(tile_token) * kv_hidden +
+                                offset;
+        shared_k[index] = encoded_to_f32_typed<DType>(kv_keys[source]);
+        shared_v[index] = encoded_to_f32_typed<DType>(kv_values[source]);
       }
       __syncthreads();
-      float partial = 0.0f;
+      for (uint32_t tile_token = 0; tile_token < tile_count; ++tile_token) {
+        const uint32_t tile_base = tile_token * head_dim;
+        float partial = 0.0f;
 #pragma unroll
-      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
-        const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
-        if (offset < head_dim) {
-          partial += q_frag[item] * shared_k[offset];
+        for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+          const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+          if (offset < head_dim) {
+            partial += q_frag[item] * shared_k[tile_base + offset];
+          }
         }
-      }
-      const float score = warp_sum(partial) * scale;
-      float old_scale = 0.0f;
-      float new_scale = 0.0f;
-      float next_m_value = local_m;
-      float next_l_value = local_l;
-      if (lane == 0) {
-        const float next_m = fmaxf(local_m, score);
-        old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
-        new_scale = expf(score - next_m);
-        next_l_value = local_l * old_scale + new_scale;
-        next_m_value = next_m;
-      }
-      old_scale = __shfl_sync(0xffffffffu, old_scale, 0);
-      new_scale = __shfl_sync(0xffffffffu, new_scale, 0);
-      local_l = __shfl_sync(0xffffffffu, next_l_value, 0);
-      local_m = __shfl_sync(0xffffffffu, next_m_value, 0);
+        const float score = warp_sum(partial) * scale;
+        float old_scale = 0.0f;
+        float new_scale = 0.0f;
+        float next_m_value = local_m;
+        float next_l_value = local_l;
+        if (lane == 0) {
+          const float next_m = fmaxf(local_m, score);
+          old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+          new_scale = expf(score - next_m);
+          next_l_value = local_l * old_scale + new_scale;
+          next_m_value = next_m;
+        }
+        old_scale = __shfl_sync(0xffffffffu, old_scale, 0);
+        new_scale = __shfl_sync(0xffffffffu, new_scale, 0);
+        local_l = __shfl_sync(0xffffffffu, next_l_value, 0);
+        local_m = __shfl_sync(0xffffffffu, next_m_value, 0);
 #pragma unroll
-      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
-        const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
-        if (offset < head_dim) {
-          acc[item] = acc[item] * old_scale + shared_v[offset] * new_scale;
+        for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+          const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+          if (offset < head_dim) {
+            acc[item] =
+                acc[item] * old_scale + shared_v[tile_base + offset] * new_scale;
+          }
         }
       }
       __syncthreads();
+      token += tile_count;
+      block_token_base += static_cast<uint64_t>(tile_count) * kv_hidden;
     }
   }
   if (lane == 0) {
