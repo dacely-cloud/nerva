@@ -5,7 +5,6 @@ use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use nerva_model::causal_lm::types::HfCausalLmStopReason;
 use nerva_model::hf::metadata::HfModelMetadata;
 
-use crate::engine::hf_cuda_decode::file_backed::projection_mode::HfCudaProjectionMode;
 use crate::engine::hf_cuda_decode::summary::HfCudaSeedDecodeSummary;
 
 pub struct HfCudaDeviceSessionStreamOutput {
@@ -17,7 +16,6 @@ pub struct HfCudaDeviceSessionStreamOutput {
     pub bytes_loaded: usize,
     pub data_hash: u64,
     pub data_hash_available: bool,
-    pub projection_mode: HfCudaProjectionMode,
     pub load_wall_ns: u64,
     pub prefill_wall_ns: u64,
     pub decode_wall_ns: u64,

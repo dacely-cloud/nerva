@@ -5,7 +5,6 @@ use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::HfCudaDeviceGe
 use nerva_runtime::engine::hf_cuda_decode::file_backed::progress::{
     HfCudaDeviceProgressPhase, HfCudaDeviceSessionChunkProgress,
 };
-use nerva_runtime::engine::hf_cuda_decode::file_backed::projection_mode::HfCudaProjectionMode;
 
 use crate::cli::ui::format;
 use crate::cli::ui::logo_image::TerminalLogo;
@@ -19,8 +18,6 @@ pub(crate) struct UiState {
     pub(crate) prompt: String,
     pub(crate) context: String,
     pub(crate) output_cap: String,
-    pub(crate) projection_mode: String,
-    pub(crate) projection_block: String,
     pub(crate) queue: String,
     pub(crate) compute: String,
     pub(crate) stop_tokens: String,
@@ -45,8 +42,6 @@ impl UiState {
             prompt: String::new(),
             context: String::new(),
             output_cap: String::new(),
-            projection_mode: String::new(),
-            projection_block: String::new(),
             queue: String::new(),
             compute: String::new(),
             stop_tokens: String::new(),
@@ -69,8 +64,6 @@ impl UiState {
         self.prompt = format!("{}, {} tokens", input.prompt_mode, input.prompt_tokens);
         self.context = format!("{} tokens", input.context_tokens);
         self.output_cap = format!("{} tokens", input.output_tokens);
-        self.projection_mode = input.projection_mode.name().to_string();
-        self.projection_block = input.projection_mode.block_tokens().to_string();
         self.queue = format!("{} host-visible slots", input.queue_capacity);
         self.compute = input
             .compute_capability
@@ -85,11 +78,8 @@ impl UiState {
             input.prompt_tokens, input.context_tokens, input.output_tokens
         ));
         self.push_log(format!(
-            "projection {} block {}, queue {} slots, stop policy {} ids",
-            self.projection_mode,
-            self.projection_block,
-            input.queue_capacity,
-            input.stop_token_count
+            "queue {} slots, stop policy {} ids",
+            input.queue_capacity, input.stop_token_count
         ));
     }
 
@@ -132,14 +122,6 @@ impl UiState {
             (
                 "generated".into(),
                 format!("{} tokens", output.tokens().len()),
-            ),
-            (
-                "projection".into(),
-                format!(
-                    "{} x{}",
-                    output.stream.projection_mode.name(),
-                    output.stream.projection_mode.block_tokens()
-                ),
             ),
             (
                 "model".into(),
@@ -198,7 +180,6 @@ pub(crate) struct ConfigureInput<'a> {
     pub(crate) queue_capacity: usize,
     pub(crate) compute_capability: Option<u32>,
     pub(crate) stop_token_count: usize,
-    pub(crate) projection_mode: HfCudaProjectionMode,
 }
 
 fn decode_rate(stats: &DecodeStats) -> String {

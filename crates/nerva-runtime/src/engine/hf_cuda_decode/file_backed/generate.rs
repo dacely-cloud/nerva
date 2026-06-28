@@ -5,8 +5,7 @@ use nerva_core::types::id::token::TokenId;
 use nerva_model::causal_lm::types::HfCausalLmStopReason;
 
 use crate::engine::hf_cuda_decode::file_backed::progress::HfCudaDeviceSessionChunkProgress;
-use crate::engine::hf_cuda_decode::file_backed::projection_mode::HfCudaProjectionMode;
-use crate::engine::hf_cuda_decode::file_backed::session_stream::run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_profiling_and_progress;
+use crate::engine::hf_cuda_decode::file_backed::session_stream::run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_and_progress;
 use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 use crate::engine::runtime::Runtime;
 
@@ -34,7 +33,7 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_generate(
     queue_capacity: usize,
     compute_capability: Option<u32>,
 ) -> Result<HfCudaDeviceGenerateOutput> {
-    run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_and_progress(
+    run_hf_causal_lm_cuda_shard_backed_device_generate_with_progress(
         runtime,
         dir,
         prompt_tokens,
@@ -42,7 +41,6 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_generate(
         max_new_tokens,
         queue_capacity,
         compute_capability,
-        HfCudaProjectionMode::Token,
         |_| {},
     )
 }
@@ -60,7 +58,7 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_progress<F>(
 where
     F: FnMut(HfCudaDeviceSessionChunkProgress),
 {
-    run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_and_progress(
+    run_hf_causal_lm_cuda_shard_backed_device_generate_with_profiling_and_progress(
         runtime,
         dir,
         prompt_tokens,
@@ -68,40 +66,12 @@ where
         max_new_tokens,
         queue_capacity,
         compute_capability,
-        HfCudaProjectionMode::Token,
-        progress,
-    )
-}
-
-pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_and_progress<F>(
-    runtime: &Runtime,
-    dir: impl AsRef<Path>,
-    prompt_tokens: &[TokenId],
-    max_context_tokens: usize,
-    max_new_tokens: usize,
-    queue_capacity: usize,
-    compute_capability: Option<u32>,
-    projection_mode: HfCudaProjectionMode,
-    progress: F,
-) -> Result<HfCudaDeviceGenerateOutput>
-where
-    F: FnMut(HfCudaDeviceSessionChunkProgress),
-{
-    run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_profiling_and_progress(
-        runtime,
-        dir,
-        prompt_tokens,
-        max_context_tokens,
-        max_new_tokens,
-        queue_capacity,
-        compute_capability,
-        projection_mode,
         false,
         progress,
     )
 }
 
-pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_profiling_and_progress<
+pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_profiling_and_progress<
     F,
 >(
     runtime: &Runtime,
@@ -111,7 +81,6 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_p
     max_new_tokens: usize,
     queue_capacity: usize,
     compute_capability: Option<u32>,
-    projection_mode: HfCudaProjectionMode,
     detailed_profile: bool,
     progress: F,
 ) -> Result<HfCudaDeviceGenerateOutput>
@@ -123,21 +92,15 @@ where
             reason: "HF CUDA generate max_new_tokens must be non-zero".to_string(),
         });
     }
-    let chunk_steps = projection_mode.block_tokens();
-    let chunks = match projection_mode {
-        HfCudaProjectionMode::Token => max_new_tokens,
-        HfCudaProjectionMode::BlockVerify { .. } => max_new_tokens,
-    };
-    let stream = run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_profiling_and_progress(
+    let stream = run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_and_progress(
         runtime,
         dir,
         prompt_tokens,
         max_context_tokens,
-        chunk_steps,
-        chunks,
+        1,
+        max_new_tokens,
         queue_capacity,
         compute_capability,
-        projection_mode,
         detailed_profile,
         progress,
     )?;

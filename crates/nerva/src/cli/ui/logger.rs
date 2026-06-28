@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 use nerva_runtime::engine::hf_cuda_decode::file_backed::progress::{
     HfCudaDeviceProgressPhase, HfCudaDeviceSessionChunkProgress,
 };
-use nerva_runtime::engine::hf_cuda_decode::file_backed::projection_mode::HfCudaProjectionMode;
 
 use crate::cli::ui::color::{ColorMode, Tone, code, paint, reset, stderr_color_mode};
 use crate::cli::ui::format;
@@ -103,7 +102,6 @@ impl NervaCliLogger {
         queue_capacity: usize,
         compute_capability: Option<u32>,
         stop_token_count: usize,
-        projection_mode: HfCudaProjectionMode,
     ) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.state.configure(ConfigureInput {
@@ -115,7 +113,6 @@ impl NervaCliLogger {
                 queue_capacity,
                 compute_capability,
                 stop_token_count,
-                projection_mode,
             });
             inner.configured();
         }
@@ -197,12 +194,10 @@ impl NervaCliLoggerInner {
                 self.print_plain_line(
                     "request",
                     format!(
-                        "prompt {} context {} output {} projection {}x{} queue {} device {} stop_ids {}",
+                        "prompt {} context {} output {} queue {} device {} stop_ids {}",
                         self.state.prompt,
                         self.state.context,
                         self.state.output_cap,
-                        self.state.projection_mode,
-                        self.state.projection_block,
                         self.state.queue,
                         self.state.compute,
                         self.state.stop_tokens
@@ -352,21 +347,11 @@ impl NervaCliLoggerInner {
             metric(self.color, "inst", inst_rate, Tone::Green),
         ];
         if progress.chunk_requested > 1 {
-            let acceptance = progress.observed as f64 * 100.0 / progress.chunk_requested as f64;
             fields.push(metric(
                 self.color,
-                "accept",
-                format!(
-                    "{}/{} ({acceptance:.1}%)",
-                    progress.observed, progress.chunk_requested
-                ),
-                if acceptance >= 50.0 {
-                    Tone::Green
-                } else if acceptance >= 25.0 {
-                    Tone::Yellow
-                } else {
-                    Tone::Red
-                },
+                "chunk",
+                format!("{}/{}", progress.observed, progress.chunk_requested),
+                Tone::Green,
             ));
         }
         fields.extend([
@@ -541,16 +526,6 @@ impl NervaCliLoggerInner {
             format::duration(elapsed),
             Tone::Cyan,
         ));
-        self.print_plain_report_block_line(report_kv_line(
-            self.color,
-            "projection mode",
-            format!(
-                "{} x{}",
-                output.stream.projection_mode.name(),
-                output.stream.projection_mode.block_tokens()
-            ),
-            Tone::Green,
-        ));
         self.print_plain_report_block_line("");
 
         self.print_plain_report_block_line(report_section_line(self.color, "LOAD", Tone::Orange));
@@ -618,41 +593,12 @@ impl NervaCliLoggerInner {
             format::tokens_per_s(stats.tokens, Duration::from_nanos(stats.wall_ns.max(1))),
             Tone::Green,
         ));
-        if output.stream.projection_mode.block_tokens() > 1 {
-            self.print_plain_report_block_line(report_kv_line(
-                self.color,
-                "decode calls",
-                output.stream.chunks.len().to_string(),
-                Tone::Dim,
-            ));
-            if let Some(wide_acceptance) = stats.wide_acceptance() {
-                self.print_plain_report_block_line(report_kv_line(
-                    self.color,
-                    "wide acceptance",
-                    format!(
-                        "{} / {} ({:.1}%)",
-                        stats.wide_accepted_tokens,
-                        stats.wide_draft_tokens,
-                        wide_acceptance * 100.0
-                    ),
-                    acceptance_tone(wide_acceptance),
-                ));
-                if stats.draft_tokens > stats.wide_draft_tokens {
-                    self.print_plain_report_block_line(report_kv_line(
-                        self.color,
-                        "adaptive fallback",
-                        "token mode after low acceptance",
-                        Tone::Yellow,
-                    ));
-                }
-                if wide_acceptance < 0.60 {
-                    self.print_plain_report_block_line(report_warning_line(
-                        self.color,
-                        "block verifier is losing: drafter acceptance is too low",
-                    ));
-                }
-            }
-        }
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "decode chunks",
+            output.stream.chunks.len().to_string(),
+            Tone::Dim,
+        ));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
             "mean latency",
@@ -1004,15 +950,6 @@ fn report_kv_line(
     )
 }
 
-fn report_warning_line(color: ColorMode, message: &str) -> String {
-    let label = format!("    {:<width$}", "warning", width = REPORT_LABEL_WIDTH);
-    format!(
-        "{} {}",
-        paint(color, Tone::Dim, label),
-        paint(color, Tone::Red, message)
-    )
-}
-
 fn report_timing_line(color: ColorMode, label: &str, ns: u64, total_ns: u64, tone: Tone) -> String {
     let ratio = ratio(ns, total_ns);
     let label = format!("    {:<width$}", label, width = REPORT_LABEL_WIDTH);
@@ -1079,16 +1016,6 @@ fn report_bar(color: ColorMode, ratio: f64, tone: Tone) -> String {
         )
     } else {
         format!("{filled_bar}{empty_bar}")
-    }
-}
-
-fn acceptance_tone(acceptance: f64) -> Tone {
-    if acceptance >= 0.5 {
-        Tone::Green
-    } else if acceptance >= 0.25 {
-        Tone::Yellow
-    } else {
-        Tone::Red
     }
 }
 

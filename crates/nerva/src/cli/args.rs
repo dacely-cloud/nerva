@@ -1,9 +1,5 @@
 use clap::Parser;
 use nerva_model::hf::tokenizer::PromptFormat;
-use nerva_runtime::engine::hf_cuda_decode::file_backed::projection_mode::{
-    DEFAULT_PROJECTION_BLOCK_TOKENS, HfCudaProjectionMode, MAX_PROJECTION_BLOCK_TOKENS,
-    block_verify_mode,
-};
 
 pub(crate) const AUTO_CONTEXT_MARGIN: usize = 16;
 pub(crate) const DEFAULT_OUTPUT_TOKENS: usize = 256;
@@ -18,7 +14,6 @@ pub(crate) struct GenerateArgs {
     pub queue_capacity: Option<usize>,
     pub compute_capability: Option<u32>,
     pub prompt_format: PromptFormat,
-    pub projection_mode: HfCudaProjectionMode,
     pub profiling: bool,
     pub json: bool,
     pub debug: bool,
@@ -34,7 +29,6 @@ impl Default for GenerateArgs {
             queue_capacity: None,
             compute_capability: None,
             prompt_format: PromptFormat::Auto,
-            projection_mode: HfCudaProjectionMode::Token,
             profiling: false,
             json: false,
             debug: false,
@@ -72,14 +66,6 @@ struct ClapGenerateArgs {
     debug: bool,
     #[arg(long = "profiling")]
     profiling: bool,
-    #[arg(long = "projection-mode", default_value = "token")]
-    projection_mode: String,
-    #[arg(
-        long = "projection-block-tokens",
-        default_value_t = DEFAULT_PROJECTION_BLOCK_TOKENS,
-        value_parser = parse_token_count
-    )]
-    projection_block_tokens: usize,
     #[arg(long = "raw", conflicts_with = "chat")]
     raw: bool,
     #[arg(long = "chat")]
@@ -95,12 +81,10 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
     let parsed = ClapGenerateArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
     if parsed.help {
         return Err(
-            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--projection-mode token|block-verify] [--profiling] [--chat|--raw] [--json] [--debug]"
+            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--profiling] [--chat|--raw] [--json] [--debug]"
                 .to_string(),
         );
     }
-    let projection_mode =
-        parse_projection_mode(&parsed.projection_mode, parsed.projection_block_tokens)?;
     Ok(GenerateArgs {
         model: parsed.model,
         prompt: parsed.prompt,
@@ -115,34 +99,10 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
         } else {
             PromptFormat::Auto
         },
-        projection_mode,
         profiling: parsed.profiling,
         json: parsed.json,
         debug: parsed.debug,
     })
-}
-
-fn parse_projection_mode(value: &str, block_tokens: usize) -> Result<HfCudaProjectionMode, String> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "token" | "single" | "single-token" | "gemv" => Ok(HfCudaProjectionMode::Token),
-        "block" | "block-verify" | "verify" | "speculative" | "speculative-greedy" => {
-            if block_tokens < 2 {
-                return Err(
-                    "--projection-block-tokens must be at least 2 for block-verify".to_string(),
-                );
-            }
-            if block_tokens > MAX_PROJECTION_BLOCK_TOKENS {
-                return Err(format!(
-                    "--projection-block-tokens supports at most {MAX_PROJECTION_BLOCK_TOKENS}"
-                ));
-            }
-            block_verify_mode(block_tokens)
-                .map_err(|_| "invalid --projection-block-tokens".to_string())
-        }
-        _ => Err(format!(
-            "invalid --projection-mode: {value}; expected token or block-verify"
-        )),
-    }
 }
 
 pub(crate) fn parse_token_count(value: &str) -> Result<usize, String> {
@@ -165,7 +125,7 @@ pub(crate) fn parse_token_count(value: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HfCudaProjectionMode, PromptFormat, parse_args, parse_token_count};
+    use super::{PromptFormat, parse_args, parse_token_count};
 
     #[test]
     fn parses_k_token_counts() {
@@ -188,32 +148,7 @@ mod tests {
         assert_eq!(parsed.context_tokens, Some(32 * 1024));
         assert_eq!(parsed.output_tokens, Some(16 * 1024));
         assert_eq!(parsed.prompt_format, PromptFormat::Raw);
-        assert_eq!(parsed.projection_mode, HfCudaProjectionMode::Token);
         assert!(parsed.debug);
         assert!(!parsed.profiling);
-    }
-
-    #[test]
-    fn parses_projection_mode() {
-        let args = [
-            "-m",
-            "qwen3-8b",
-            "-p",
-            "hello",
-            "--projection-mode",
-            "block-verify",
-            "--projection-block-tokens",
-            "8",
-            "--profiling",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-        let parsed = parse_args(&args).unwrap();
-        assert_eq!(
-            parsed.projection_mode,
-            HfCudaProjectionMode::BlockVerify { block_tokens: 8 }
-        );
-        assert!(parsed.profiling);
     }
 }

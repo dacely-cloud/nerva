@@ -4,7 +4,7 @@ use nerva_model::hf::tokenizer::{
 };
 use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
     HfCudaDeviceGenerateOutput,
-    run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_profiling_and_progress,
+    run_hf_causal_lm_cuda_shard_backed_device_generate_with_profiling_and_progress,
 };
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
@@ -76,7 +76,6 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
         queue_capacity,
         compute_capability,
         stop_token_ids.len(),
-        parsed.projection_mode,
     );
     logger.runtime_init();
     let runtime = Runtime::new(RuntimeConfig::default())
@@ -86,7 +85,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
     let _native_progress = logger.native_load_progress_guard();
     let _ticker = logger.ticker_guard();
     let output =
-        run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_profiling_and_progress(
+        run_hf_causal_lm_cuda_shard_backed_device_generate_with_profiling_and_progress(
             &runtime,
             &model_path_string,
             &prompt_tokens,
@@ -94,7 +93,6 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
             output_tokens,
             queue_capacity,
             compute_capability,
-            parsed.projection_mode,
             parsed.profiling,
             |progress| logger.decode_progress(progress),
         )
@@ -182,20 +180,11 @@ fn generate_json_output(
                 .iter()
                 .map(|path| path.device_timeline_active_ns)
                 .sum::<u64>();
-            let acceptance = if chunk.steps_requested == 0 {
-                "0.0".to_string()
-            } else {
-                format!(
-                    "{:.6}",
-                    chunk.tokens.len() as f64 / chunk.steps_requested as f64
-                )
-            };
             format!(
-                "{{\"chunk_index\":{},\"draft_tokens\":{},\"tokens\":{},\"acceptance\":{},\"wall_ns\":{},\"device_ns\":{},\"tokens_per_second\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"graph_nodes\":{},\"graph_replays\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"h2d_bytes\":{},\"d2h_bytes\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{}}}",
+                "{{\"chunk_index\":{},\"requested_tokens\":{},\"observed_tokens\":{},\"wall_ns\":{},\"device_ns\":{},\"tokens_per_second\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"graph_nodes\":{},\"graph_replays\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"h2d_bytes\":{},\"d2h_bytes\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{}}}",
                 index,
                 chunk.steps_requested,
                 chunk.tokens.len(),
-                acceptance,
                 chunk_wall_ns,
                 chunk_device_ns,
                 tokens_per_second(chunk.tokens.len(), chunk_wall_ns as u128),
@@ -223,13 +212,11 @@ fn generate_json_output(
         .collect::<Vec<_>>()
         .join(",");
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"projection_mode\":\"{}\",\"projection_block_tokens\":{},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
+        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"prefill_chunk_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
         env!("CARGO_PKG_VERSION"),
         json_escape(path),
         input_mode,
         prompt_mode,
-        output.stream.projection_mode.name(),
-        output.stream.projection_mode.block_tokens(),
         output.stream.create.prefill_chunk_tokens,
         output.stream.create.head_threads,
         json_escape(prompt),

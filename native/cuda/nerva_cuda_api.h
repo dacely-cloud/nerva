@@ -511,14 +511,6 @@ typedef struct NervaCudaHfDecodeSequenceSessionAdvanceRequest {
   uint32_t output_token_capacity;
 } NervaCudaHfDecodeSequenceSessionAdvanceRequest;
 
-typedef struct NervaCudaHfDecodeSequenceSessionVerifyBlockRequest {
-  NervaCudaHfDecodeSequenceSession *session;
-  const uint32_t *draft_tokens;
-  uint32_t draft_token_count;
-  uint32_t *output_tokens;
-  uint32_t output_token_capacity;
-} NervaCudaHfDecodeSequenceSessionVerifyBlockRequest;
-
 typedef struct NervaCudaTinyDecodeResult {
   int32_t status;
   int32_t cuda_error;
@@ -706,9 +698,6 @@ int nerva_cuda_hf_decode_sequence_session_start(
     NervaCudaHfDecodeSequenceResult *out);
 int nerva_cuda_hf_decode_sequence_session_advance(
     const NervaCudaHfDecodeSequenceSessionAdvanceRequest *request,
-    NervaCudaHfDecodeSequenceResult *out);
-int nerva_cuda_hf_decode_sequence_session_verify_block(
-    const NervaCudaHfDecodeSequenceSessionVerifyBlockRequest *request,
     NervaCudaHfDecodeSequenceResult *out);
 int nerva_cuda_hf_decode_sequence_session_destroy(
     NervaCudaHfDecodeSequenceSession *session,
