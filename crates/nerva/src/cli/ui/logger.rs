@@ -583,6 +583,12 @@ impl NervaCliLoggerInner {
         ));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
+            "prefill chunk",
+            format!("{} tokens", output.stream.create.prefill_chunk_tokens),
+            Tone::Cyan,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
             "tensors",
             output.stream.tensors_loaded.to_string(),
             Tone::Dim,

@@ -26,7 +26,9 @@ constexpr uint32_t kCompletionDeviceComplete = 1;
 constexpr uint32_t kWeightStrategyGpuResident = 1;
 constexpr uint32_t kWeightStrategyGpuStaged = 2;
 constexpr uint32_t kDecodeThreads = 256;
-constexpr uint32_t kPrefillChunkTokens = 128;
+constexpr uint32_t kPrefillChunkBaseTokens = 1024;
+constexpr uint32_t kPrefillChunkMaxTokens = 8192;
+constexpr uint32_t kVerifyMaxDraftTokens = 128;
 constexpr uint32_t kDecodeAttentionChunkTokens = 64;
 constexpr uint32_t kChunkedDecodeAttentionThreshold = 128;
 constexpr uint64_t kMissingOffset = UINT64_MAX;
@@ -34,6 +36,7 @@ constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ull;
 constexpr uint64_t kFnvPrime = 0x00000100000001b3ull;
 constexpr size_t kCublasWorkspaceBytes = 16ull * 1024ull * 1024ull;
 constexpr uint64_t kDescriptorStreamStagingBytes = 64ull * 1024ull * 1024ull;
+constexpr uint64_t kPrefillAutotuneSafetyBytes = 256ull * 1024ull * 1024ull;
 
 enum CreateFailureStage : int32_t {
   kCreateStageNone = 0,
@@ -2329,6 +2332,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t vocab_size = 0;
   uint32_t layer_count = 0;
   uint32_t max_context_tokens = 0;
+  uint32_t prefill_chunk_tokens = 0;
   float rms_eps = 0.0f;
   float rope_theta = 0.0f;
   SequenceArenaLayout arena_layout{};
@@ -2519,6 +2523,97 @@ uint64_t session_device_footprint(
          session->packed_gate_up_bytes + session->kv_bytes +
          session->prompt_bytes + session->slots_bytes + sizeof(uint32_t) +
          kCublasWorkspaceBytes;
+}
+
+uint64_t session_fixed_footprint_without_prefill_chunk(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  return session->arena_bytes + session->layout_bytes + session->scratch_bytes +
+         session->projection_input_bytes + session->prefill_hidden_bytes * 2 +
+         session->decode_attention_values_bytes +
+         session->decode_attention_stats_bytes * 2 +
+         session->verify_logits_bytes + session->packed_qkv_bytes +
+         session->packed_gate_up_bytes + session->kv_bytes +
+         session->prompt_bytes + session->slots_bytes + sizeof(uint32_t) +
+         kCublasWorkspaceBytes;
+}
+
+uint64_t sat_add_u64(uint64_t lhs, uint64_t rhs) {
+  if (UINT64_MAX - lhs < rhs) return UINT64_MAX;
+  return lhs + rhs;
+}
+
+uint64_t sat_mul_u64(uint64_t lhs, uint64_t rhs) {
+  if (lhs != 0 && rhs > UINT64_MAX / lhs) return UINT64_MAX;
+  return lhs * rhs;
+}
+
+uint64_t prefill_chunk_scratch_bytes(uint64_t chunk_tokens,
+                                     uint64_t projection_input_elements,
+                                     uint64_t prefill_qkv_rows,
+                                     uint64_t attention_hidden,
+                                     uint64_t hidden,
+                                     uint64_t prefill_gate_up_rows,
+                                     uint64_t intermediate) {
+  uint64_t total = 0;
+  total = sat_add_u64(total, sat_mul_u64(
+      sat_mul_u64(projection_input_elements, chunk_tokens), sizeof(uint16_t)));
+  total = sat_add_u64(total, sat_mul_u64(
+      sat_mul_u64(prefill_qkv_rows, chunk_tokens), sizeof(float)));
+  total = sat_add_u64(total, sat_mul_u64(
+      sat_mul_u64(attention_hidden, chunk_tokens), sizeof(uint16_t)));
+  total = sat_add_u64(total, sat_mul_u64(
+      sat_mul_u64(hidden, chunk_tokens), sizeof(float)));
+  total = sat_add_u64(total, sat_mul_u64(
+      sat_mul_u64(prefill_gate_up_rows, chunk_tokens), sizeof(float)));
+  total = sat_add_u64(total, sat_mul_u64(
+      sat_mul_u64(intermediate, chunk_tokens), sizeof(uint16_t)));
+  total = sat_add_u64(total, sat_mul_u64(
+      sat_mul_u64(hidden, chunk_tokens), sizeof(float)));
+  return total;
+}
+
+uint32_t tune_prefill_chunk_tokens(uint64_t max_context_tokens,
+                                   uint64_t fixed_device_bytes,
+                                   uint64_t projection_input_elements,
+                                   uint64_t prefill_qkv_rows,
+                                   uint64_t attention_hidden,
+                                   uint64_t hidden,
+                                   uint64_t prefill_gate_up_rows,
+                                   uint64_t intermediate,
+                                   uint64_t free_device_bytes) {
+  if (max_context_tokens == 0) return 0;
+  const uint64_t base =
+      std::min<uint64_t>(kPrefillChunkBaseTokens, max_context_tokens);
+  const uint64_t max_target =
+      std::min<uint64_t>(kPrefillChunkMaxTokens, max_context_tokens);
+  const uint64_t min_chunk =
+      std::min<uint64_t>(base, std::min<uint64_t>(
+          max_context_tokens, static_cast<uint64_t>(kVerifyMaxDraftTokens)));
+  if (free_device_bytes == 0) {
+    return static_cast<uint32_t>(base);
+  }
+  const uint64_t budget =
+      free_device_bytes > kPrefillAutotuneSafetyBytes
+          ? free_device_bytes - kPrefillAutotuneSafetyBytes
+          : free_device_bytes;
+  auto fits = [&](uint64_t candidate) {
+    const uint64_t footprint = sat_add_u64(
+        fixed_device_bytes,
+        prefill_chunk_scratch_bytes(candidate, projection_input_elements,
+                                    prefill_qkv_rows, attention_hidden, hidden,
+                                    prefill_gate_up_rows, intermediate));
+    return footprint <= budget;
+  };
+  uint64_t chunk = base;
+  while (chunk > min_chunk && !fits(chunk)) {
+    chunk = std::max<uint64_t>(min_chunk, chunk / 2);
+  }
+  while (chunk < max_target) {
+    const uint64_t next = std::min<uint64_t>(max_target, chunk * 2);
+    if (next == chunk || !fits(next)) break;
+    chunk = next;
+  }
+  return static_cast<uint32_t>(chunk);
 }
 
 uint32_t ceil_div_u32(uint32_t value, uint32_t divisor) {
@@ -3148,9 +3243,9 @@ cudaError_t launch_cublas_session_prefill(
     const SequenceLayerLayout layout = session->host_layouts[layer_index];
     for (uint32_t chunk_start = 0;
          err == cudaSuccess && chunk_start < prompt_token_count;
-         chunk_start += kPrefillChunkTokens) {
+         chunk_start += session->prefill_chunk_tokens) {
       const uint32_t chunk_tokens =
-          std::min(kPrefillChunkTokens, prompt_token_count - chunk_start);
+          std::min(session->prefill_chunk_tokens, prompt_token_count - chunk_start);
       hf_prefill_attn_norm_kernel<<<chunk_tokens, kDecodeThreads, 0,
                                     session->stream>>>(
           session->device_arena, layout, session->dtype, session->hidden,
@@ -3311,7 +3406,8 @@ cudaError_t launch_cublas_session_verify_draft(
   if (draft_token_count == 0) {
     return cudaSuccess;
   }
-  if (draft_token_count > kPrefillChunkTokens ||
+  if (draft_token_count > kVerifyMaxDraftTokens ||
+      draft_token_count > session->prefill_chunk_tokens ||
       chunk_start >= session->max_context_tokens ||
       chunk_start + draft_token_count > session->max_context_tokens ||
       !use_cublas_layer_path(session)) {
@@ -3449,16 +3545,14 @@ cudaError_t launch_cublas_session_verify_draft(
     err = encoded_row_major_gemm_tokens(
         session->cublas, session->device_arena + session->arena_layout.lm_head,
         session->device_prefill_norm, session->vocab_size, session->hidden,
-        draft_token_count, session->dtype, 0.0f,
-        session->device_verify_logits);
+        draft_token_count, session->dtype, 0.0f, session->device_verify_logits);
     out->kernel_launches += 1;
   }
   if (err == cudaSuccess) {
     hf_verify_logits_reduce_kernel<<<draft_token_count, kDecodeThreads, 0,
                                      session->stream>>>(
         chunk_start, draft_token_count, has_eos_token, eos_token,
-        session->device_verify_logits, session->vocab_size,
-        session->device_slots);
+        session->device_verify_logits, session->vocab_size, session->device_slots);
     err = cudaGetLastError();
     out->kernel_launches += 1;
   }
@@ -3634,6 +3728,7 @@ void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
   out->vocab_size = session->vocab_size;
   out->layer_count = session->layer_count;
   out->max_context_tokens = session->max_context_tokens;
+  out->prefill_chunk_tokens = session->prefill_chunk_tokens;
   out->resident_weight_bytes = session->resident_weight_bytes;
   out->planned_weight_blocks = session->planned_weight_blocks;
   out->planned_gpu_resident_blocks = session->planned_gpu_resident_blocks;
@@ -4038,6 +4133,14 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   if (err != cudaSuccess) {
     return fail(out, err, kCreateStageSetDevice);
   }
+  size_t device_free_before_alloc = 0;
+  size_t device_total_before_alloc = 0;
+  cudaError_t mem_info_err =
+      cudaMemGetInfo(&device_free_before_alloc, &device_total_before_alloc);
+  if (mem_info_err != cudaSuccess) {
+    device_free_before_alloc = 0;
+    device_total_before_alloc = 0;
+  }
 
   auto *session = new (std::nothrow) NervaCudaHfDecodeSequenceSession();
   if (session == nullptr) {
@@ -4084,11 +4187,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       intermediate > attention_hidden
           ? (intermediate > hidden ? intermediate : hidden)
           : (attention_hidden > hidden ? attention_hidden : hidden);
-  const uint64_t prefill_chunk = kPrefillChunkTokens;
   const uint64_t prefill_qkv_rows = attention_hidden + kv_hidden * 2;
   const uint64_t prefill_gate_up_rows = intermediate * 2;
-  const uint64_t prefill_norm_elements =
-      projection_input_elements * prefill_chunk;
   const bool pack_cublas =
       should_pack_cublas_weights(request->hidden, attention_hidden);
   const PackedProjectionShape packed_shape = packed_projection_shape(
@@ -4110,14 +4210,6 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->prefill_hidden_bytes =
       static_cast<uint64_t>(request->max_context_tokens) * hidden *
       sizeof(uint16_t);
-  session->prefill_norm_bytes = prefill_norm_elements * sizeof(uint16_t);
-  session->prefill_qkv_bytes = prefill_qkv_rows * prefill_chunk * sizeof(float);
-  session->prefill_attn_bytes = attention_hidden * prefill_chunk * sizeof(uint16_t);
-  session->prefill_o_bytes = hidden * prefill_chunk * sizeof(float);
-  session->prefill_gate_up_bytes =
-      prefill_gate_up_rows * prefill_chunk * sizeof(float);
-  session->prefill_ff_bytes = intermediate * prefill_chunk * sizeof(uint16_t);
-  session->prefill_down_bytes = hidden * prefill_chunk * sizeof(float);
   session->decode_attention_max_chunks =
       ceil_div_u32(request->max_context_tokens, kDecodeAttentionChunkTokens);
   session->decode_attention_values_bytes =
@@ -4127,7 +4219,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       static_cast<uint64_t>(request->heads) *
       session->decode_attention_max_chunks * sizeof(float);
   session->verify_logits_bytes =
-      vocab_size * prefill_chunk * sizeof(float);
+      vocab_size * static_cast<uint64_t>(kVerifyMaxDraftTokens) * sizeof(float);
   if (pack_cublas) {
     session->packed_qkv_bytes =
         packed_shape.qkv_elements_per_layer * request->layer_count *
@@ -4144,6 +4236,28 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       sizeof(NervaCudaSyntheticTokenSlot);
   session->prompt_bytes =
       static_cast<uint64_t>(request->max_context_tokens) * sizeof(uint32_t);
+  const uint64_t fixed_device_bytes =
+      session_fixed_footprint_without_prefill_chunk(session);
+  const uint32_t prefill_chunk = tune_prefill_chunk_tokens(
+      request->max_context_tokens, fixed_device_bytes, projection_input_elements,
+      prefill_qkv_rows, attention_hidden, hidden, prefill_gate_up_rows,
+      intermediate, static_cast<uint64_t>(device_free_before_alloc));
+  session->prefill_chunk_tokens = prefill_chunk;
+  session->prefill_norm_bytes =
+      projection_input_elements * static_cast<uint64_t>(prefill_chunk) *
+      sizeof(uint16_t);
+  session->prefill_qkv_bytes =
+      prefill_qkv_rows * static_cast<uint64_t>(prefill_chunk) * sizeof(float);
+  session->prefill_attn_bytes =
+      attention_hidden * static_cast<uint64_t>(prefill_chunk) * sizeof(uint16_t);
+  session->prefill_o_bytes =
+      hidden * static_cast<uint64_t>(prefill_chunk) * sizeof(float);
+  session->prefill_gate_up_bytes =
+      prefill_gate_up_rows * static_cast<uint64_t>(prefill_chunk) * sizeof(float);
+  session->prefill_ff_bytes =
+      intermediate * static_cast<uint64_t>(prefill_chunk) * sizeof(uint16_t);
+  session->prefill_down_bytes =
+      hidden * static_cast<uint64_t>(prefill_chunk) * sizeof(float);
   session->planned_weight_blocks = request->planned_weight_blocks;
   session->planned_gpu_resident_blocks = request->planned_gpu_resident_blocks;
   session->planned_gpu_staged_blocks = request->planned_gpu_staged_blocks;
@@ -4803,7 +4917,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_verify_block(
       request->draft_tokens == nullptr || request->output_tokens == nullptr ||
       request->draft_token_count == 0 ||
       request->output_token_capacity < request->draft_token_count ||
-      request->draft_token_count > kPrefillChunkTokens) {
+      request->draft_token_count > kVerifyMaxDraftTokens) {
     return -1;
   }
   NervaCudaHfDecodeSequenceSession *session = request->session;

@@ -20,6 +20,7 @@ pub(super) fn failed_create_summary(
         vocab_size: request.vocab_size as u32,
         layer_count: request.layers.len() as u32,
         max_context_tokens: request.max_context_tokens as u32,
+        prefill_chunk_tokens: 0,
         resident_weight_bytes: 0,
         planned_weight_blocks: 0,
         planned_gpu_resident_blocks: 0,
