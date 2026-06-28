@@ -103,6 +103,8 @@ fn hf_decode_step_summary_serializes_fused_device_step_fields() {
 
 #[test]
 fn hf_decode_step_runs_layer_and_final_head_when_device_is_available() {
+    let _guard = super::cuda_test_lock();
+
     let one = 0x3c00;
     let zero = 0x0000;
     let neg_one = 0xbc00;

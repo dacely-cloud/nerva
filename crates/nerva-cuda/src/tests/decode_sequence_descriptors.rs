@@ -16,6 +16,8 @@ use crate::smoke::status::SmokeStatus;
 
 #[test]
 fn declared_weight_descriptors_override_legacy_weight_pointers() {
+    let _guard = super::cuda_test_lock();
+
     let one = 0x3c00;
     let zero = 0x0000;
     let neg_one = 0xbc00;
@@ -89,6 +91,8 @@ fn declared_weight_descriptors_override_legacy_weight_pointers() {
 
 #[test]
 fn declared_weight_descriptors_accept_null_legacy_weight_pointers() {
+    let _guard = super::cuda_test_lock();
+
     if crate::smoke::probe::smoke().status != SmokeStatus::Ok {
         return;
     }

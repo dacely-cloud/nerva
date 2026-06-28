@@ -2,7 +2,7 @@ use crate::cli::model::{
     causal_lm, causal_lm_cuda, causal_lm_cuda_generate, causal_lm_cuda_session,
     causal_lm_cuda_session_loop, causal_lm_cuda_session_stream,
 };
-use crate::parse::parse_optional_usize;
+use crate::parse::{parse_optional_u32, parse_optional_usize};
 
 pub(crate) fn run_model_artifact(command: &str, args: &[String]) -> Option<Result<String, String>> {
     match command {
@@ -69,12 +69,18 @@ fn run_hf_cuda_generate(args: &[String]) -> Result<String, String> {
     let max_context = parse_optional_usize(args.get(1).cloned(), 8, "max_context_tokens")?;
     let max_new_tokens = parse_optional_usize(args.get(2).cloned(), 16, "max_new_tokens")?;
     let capacity = parse_optional_usize(args.get(3).cloned(), 64, "queue_capacity")?;
+    let compute_capability =
+        match parse_optional_u32(args.get(5).cloned(), 0, "compute_capability")? {
+            0 => None,
+            value => Some(value),
+        };
     causal_lm_cuda_generate::hf_causal_lm_cuda_generate_json(
         args.first().cloned(),
         max_context,
         max_new_tokens,
         capacity,
         args.get(4).cloned(),
+        compute_capability,
     )
 }
 

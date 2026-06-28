@@ -40,6 +40,8 @@ fn hf_decode_chain_summary_serializes_layer_count() {
 
 #[test]
 fn hf_decode_chain_runs_two_layers_and_final_head_when_device_is_available() {
+    let _guard = super::cuda_test_lock();
+
     let one = 0x3c00;
     let zero = 0x0000;
     let neg_one = 0xbc00;

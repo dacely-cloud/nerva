@@ -5,8 +5,15 @@ use crate::artifact::run::run_artifact;
 use crate::cli::{cuda, exit, model, probes, usage, weights_io};
 
 pub(crate) fn run() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let command = args.next();
+    let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
+    if is_runtime_command(&raw_args) {
+        eprintln!(
+            "nerva-bench is for benchmarks and artifacts. Use: cargo run -p nerva -- -m model -p prompt [-c context] [-o output]"
+        );
+        return ExitCode::from(2);
+    }
+    let mut args = raw_args.iter().skip(1).cloned();
+    let command = raw_args.first().cloned();
 
     if let Some(exit_code) = cuda::dispatch(command.as_deref(), &mut args) {
         return exit_code;
@@ -43,4 +50,11 @@ pub(crate) fn run() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+fn is_runtime_command(args: &[String]) -> bool {
+    matches!(
+        args.first().map(String::as_str),
+        Some("-m" | "--model" | "generate" | "chat" | "ask")
+    )
 }

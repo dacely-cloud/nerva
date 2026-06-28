@@ -10,6 +10,8 @@ use crate::smoke::status::SmokeStatus;
 
 #[test]
 fn hf_decode_sequence_accepts_qk_norm_descriptor_blocks() {
+    let _guard = super::cuda_test_lock();
+
     let one = 0x3c00;
     let zero = 0x0000;
     let neg_one = 0xbc00;

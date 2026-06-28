@@ -1,6 +1,7 @@
 use nerva_core::types::block::kind::BlockKind;
 use nerva_core::types::block::residency::ResidencyState;
 use nerva_core::types::error::{NervaError, Result};
+use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_kernel_contracts::registry::bootstrap::bootstrap_registry;
 use nerva_ledger::types::decision::{BlockVersionDependency, ExecutionDecision};
 use nerva_ledger::types::fallback::{FallbackClass, FallbackDecision};
@@ -30,6 +31,7 @@ impl Runtime {
             });
         }
 
+        let compute_capability = compute_capability.or_else(discover_cuda_compute_capability);
         let registry = bootstrap_registry();
         let measurements = run_measurement_table_probe()?;
         let cost_model = ResidentWeightCostModel::from_measurements(&measurements.entries)?;
@@ -155,4 +157,14 @@ impl Runtime {
             ledger,
         })
     }
+}
+
+fn discover_cuda_compute_capability() -> Option<u32> {
+    let summary = nerva_cuda::smoke::probe::smoke();
+    if summary.status != SmokeStatus::Ok {
+        return None;
+    }
+    let major = u32::try_from(summary.compute_capability_major?).ok()?;
+    let minor = u32::try_from(summary.compute_capability_minor?).ok()?;
+    Some(major * 10 + minor)
 }

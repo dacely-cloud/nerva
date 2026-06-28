@@ -56,6 +56,8 @@ fn loaded_tiny_block_summary_serializes_residency_fields() {
 
 #[test]
 fn generic_block_forward_runs_loaded_tiny_weights() {
+    let _guard = super::cuda_test_lock();
+
     let zero = 0x0000;
     let half = 0x3800;
     let one = 0x3c00;

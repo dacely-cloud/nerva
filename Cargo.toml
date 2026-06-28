@@ -8,6 +8,7 @@ members = [
     "crates/nerva-runtime",
     "crates/nerva-model",
     "crates/nerva-kernel-contracts",
+    "crates/nerva",
     "crates/nerva-bench",
     "tools/compare_ledgers",
 ]
@@ -29,6 +30,10 @@ nerva-cuda = { path = "crates/nerva-cuda" }
 nerva-runtime = { path = "crates/nerva-runtime" }
 nerva-model = { path = "crates/nerva-model" }
 nerva-kernel-contracts = { path = "crates/nerva-kernel-contracts" }
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.29"
+anyhow = "1"
+ratatui = "0.30"
 
 [profile.release]
 strip = "symbols"

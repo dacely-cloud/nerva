@@ -451,6 +451,7 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateRequest {
 typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
   int32_t status;
   int32_t cuda_error;
+  int32_t failure_stage;
   int32_t device_count;
   uint32_t dtype;
   uint32_t hidden;

@@ -10,6 +10,7 @@ pub(super) fn failed_create_summary(
 ) -> CudaHfDecodeSequenceSessionCreateSummary {
     CudaHfDecodeSequenceSessionCreateSummary {
         status: SmokeStatus::Failed,
+        failure_stage: 1,
         dtype: request.dtype,
         hidden: request.hidden as u32,
         heads: request.heads as u32,

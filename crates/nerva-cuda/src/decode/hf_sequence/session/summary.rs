@@ -5,6 +5,7 @@ use crate::smoke::status::SmokeStatus;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CudaHfDecodeSequenceSessionCreateSummary {
     pub status: SmokeStatus,
+    pub failure_stage: i32,
     pub dtype: u32,
     pub hidden: u32,
     pub heads: u32,
@@ -38,8 +39,10 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
 impl CudaHfDecodeSequenceSessionCreateSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"failure_stage\":{},\"failure_stage_label\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
+            self.failure_stage,
+            create_stage_label(self.failure_stage),
             self.dtype,
             self.hidden,
             self.heads,
@@ -86,6 +89,7 @@ pub(crate) fn create_summary_from_result(
         } else {
             SmokeStatus::Failed
         },
+        failure_stage: out.failure_stage,
         dtype: out.dtype,
         hidden: out.hidden,
         heads: out.heads,
@@ -113,8 +117,53 @@ pub(crate) fn create_summary_from_result(
         h2d_bytes: out.h2d_bytes,
         sync_calls: out.sync_calls,
         hot_path_allocations: out.hot_path_allocations,
-        error: (return_code != 0 || out.status != 0)
-            .then(|| format!("CUDA HF decode sequence session failed: {}", out.cuda_error)),
+        error: (return_code != 0 || out.status != 0).then(|| {
+            format!(
+                "CUDA HF decode sequence session failed: cuda_error={} failure_stage={} ({})",
+                out.cuda_error,
+                out.failure_stage,
+                create_stage_label(out.failure_stage),
+            )
+        }),
+    }
+}
+
+pub(crate) fn create_stage_label(stage: i32) -> &'static str {
+    match stage {
+        0 => "none",
+        1 => "invalid_request",
+        2 => "cuda_get_device_count",
+        3 => "cuda_set_device",
+        4 => "session_alloc",
+        5 => "host_weight_alloc",
+        6 => "host_slots_alloc",
+        7 => "device_arena_alloc",
+        8 => "device_layouts_alloc",
+        9 => "device_scratch_alloc",
+        10 => "projection_input_alloc",
+        11 => "packed_qkv_alloc",
+        12 => "packed_gate_up_alloc",
+        13 => "kv_keys_alloc",
+        14 => "kv_values_alloc",
+        15 => "prompt_tokens_alloc",
+        16 => "device_slots_alloc",
+        17 => "device_step_alloc",
+        18 => "cublas_workspace_alloc",
+        19 => "stream_create",
+        20 => "cublas_create",
+        21 => "cublaslt_create",
+        22 => "cublas_configure",
+        23 => "start_event_create",
+        24 => "stop_event_create",
+        25 => "descriptor_copy",
+        26 => "layout_copy",
+        27 => "pack_replicas",
+        28 => "warm_cublas",
+        29 => "setup_synchronize",
+        30 => "prefill_hidden_alloc",
+        31 => "prefill_chunk_alloc",
+        32 => "decode_attention_alloc",
+        _ => "unknown",
     }
 }
 

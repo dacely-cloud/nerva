@@ -175,7 +175,7 @@ fn record_event(
 fn visible_ns(summary: &CudaHfDecodeSequenceSummary) -> u64 {
     let token_count = summary.tokens.len().max(1) as u64;
     let copy = (summary.h2d_bytes + summary.d2h_bytes) / token_count;
-    (summary.resident_weight_bytes / token_count + copy).max(1)
+    (copy + graph_replay_ns(summary)).max(1)
 }
 
 fn device_active_ns(summary: &CudaHfDecodeSequenceSummary) -> u64 {

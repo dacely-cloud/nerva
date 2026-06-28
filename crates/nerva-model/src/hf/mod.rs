@@ -4,4 +4,5 @@ pub mod hash;
 pub mod metadata;
 pub mod parser;
 pub mod probe;
+pub mod tokenizer;
 pub mod validate;

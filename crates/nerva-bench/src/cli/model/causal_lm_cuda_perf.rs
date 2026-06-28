@@ -1,4 +1,4 @@
-use nerva_runtime::engine::hf_cuda_decode::file_backed::session_stream::HfCudaDeviceSessionStreamOutput;
+use nerva_runtime::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 
 pub(crate) fn stream_perf_json(output: &HfCudaDeviceSessionStreamOutput) -> String {
     let latencies = token_wall_latencies(output);

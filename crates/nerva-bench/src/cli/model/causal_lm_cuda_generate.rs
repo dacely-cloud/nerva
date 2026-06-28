@@ -1,3 +1,4 @@
+use std::fs;
 use std::process::ExitCode;
 
 use nerva_core::types::id::token::TokenId;
@@ -8,13 +9,13 @@ use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 use crate::cli::exit;
 use crate::cli::model::causal_lm_cuda_perf::stream_perf_json;
-use crate::cli::model::causal_lm_cuda_session::parse_prompt;
 use crate::cli::model::causal_lm_cuda_session_stream::{
     chunks_json, queue_json, records_json, u32s_json,
 };
 use crate::cli::model::causal_lm_text::generated_text_json;
 use crate::json::json_escape;
-use crate::parse::parse_optional_usize;
+use crate::parse::{parse_optional_u32, parse_optional_usize};
+use nerva_model::hf::tokenizer::encode_text_prompt;
 
 pub(crate) fn run_hf_causal_lm_cuda_generate(args: &mut impl Iterator<Item = String>) -> ExitCode {
     let path = args.next();
@@ -36,6 +37,11 @@ pub(crate) fn run_hf_causal_lm_cuda_generate(args: &mut impl Iterator<Item = Str
         max_new_tokens,
         queue_capacity,
         args.next(),
+        match parse_optional_u32(args.next(), 0, "compute_capability") {
+            Ok(0) => None,
+            Ok(value) => Some(value),
+            Err(reason) => return exit::parse_error(reason),
+        },
     ))
 }
 
@@ -45,11 +51,19 @@ pub(crate) fn hf_causal_lm_cuda_generate_json(
     max_new_tokens: usize,
     queue_capacity: usize,
     prompt_spec: Option<String>,
+    compute_capability: Option<u32>,
 ) -> Result<String, String> {
     let path = path.ok_or_else(|| "hf-cuda-generate requires checkpoint_dir".to_string())?;
-    let prompt = prompt_spec.unwrap_or_else(|| "0".to_string());
-    let prompt_ids = parse_prompt(&prompt)?;
-    let token_ids = prompt_ids.iter().copied().map(TokenId).collect::<Vec<_>>();
+    let prompt_spec =
+        prompt_spec.ok_or_else(|| "hf-cuda-generate requires prompt_text".to_string())?;
+    let prompt = resolve_prompt_text(&prompt_spec)?;
+    let encoded = encode_text_prompt(&path, &prompt)?;
+    let token_ids = encoded
+        .token_ids
+        .iter()
+        .copied()
+        .map(TokenId)
+        .collect::<Vec<_>>();
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
     let output = run_hf_causal_lm_cuda_shard_backed_device_generate(
@@ -59,15 +73,33 @@ pub(crate) fn hf_causal_lm_cuda_generate_json(
         max_context_tokens,
         max_new_tokens,
         queue_capacity,
-        None,
+        compute_capability,
     )
     .map_err(|err| format!("HF CUDA generate failed: {err:?}"))?;
-    generate_json(&path, &prompt, &prompt_ids, &output)
+    generate_json(
+        &path,
+        &prompt,
+        encoded.input_mode,
+        &encoded.token_ids,
+        &output,
+    )
 }
 
-fn generate_json(
+fn resolve_prompt_text(prompt_spec: &str) -> Result<String, String> {
+    let Some(path) = prompt_spec.strip_prefix('@') else {
+        return Ok(prompt_spec.to_string());
+    };
+    if path.is_empty() {
+        return Err("hf-cuda-generate prompt file path is empty".to_string());
+    }
+    fs::read_to_string(path)
+        .map_err(|err| format!("hf-cuda-generate failed to read prompt file {path}: {err}"))
+}
+
+pub(crate) fn generate_json(
     path: &str,
     prompt: &str,
+    input_mode: &str,
     prompt_ids: &[u32],
     output: &HfCudaDeviceGenerateOutput,
 ) -> Result<String, String> {
@@ -76,10 +108,12 @@ fn generate_json(
         .map_err(|err| format!("HF CUDA generate dtype failed: {err:?}"))?;
     let generated_text = generated_text_json(path, output.tokens())?;
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"device_generate\",\"path\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"max_new_tokens\":{},\"tokens\":{},\"generated_text\":{},\"stop_reason\":\"{}\",\"chunks_observed\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"data_hash_available\":{},\"perf\":{},\"queue\":{},\"create\":{},\"start\":{},\"records\":{},\"chunks\":{}}}",
+        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"device_generate\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"prompt_tokens\":{},\"max_new_tokens\":{},\"tokens\":{},\"generated_text\":{},\"stop_reason\":\"{}\",\"chunks_observed\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"data_hash_available\":{},\"perf\":{},\"queue\":{},\"create\":{},\"start\":{},\"records\":{},\"chunks\":{}}}",
         json_escape(path),
+        input_mode,
         json_escape(prompt),
         u32s_json(prompt_ids),
+        prompt_ids.len(),
         output.max_new_tokens,
         token_ids_json(output.tokens()),
         generated_text,

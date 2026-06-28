@@ -6,6 +6,8 @@ use crate::smoke::status::SmokeStatus;
 
 #[test]
 fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
+    let _guard = super::cuda_test_lock();
+
     let one = 0x3c00;
     let zero = 0x0000;
     let neg_one = 0xbc00;
@@ -95,6 +97,8 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
         (started.summary.h2d_bytes, started.summary.d2h_bytes),
         (4, 0)
     );
+    assert!(started.summary.kernel_launches > 0);
+    assert!(started.summary.device_elapsed_ns > 0);
     let mut loop_state = started.loop_state.unwrap();
     let first_step = loop_state.advance(1);
     let second_step = loop_state.advance(1);
@@ -103,8 +107,10 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
     assert_eq!((first_step.h2d_bytes, second_step.h2d_bytes), (0, 0));
     assert_eq!(
         (first_step.graph_captures, first_step.graph_cache_hits),
-        (1, 0)
+        (0, 0)
     );
+    assert_eq!(first_step.kernel_launches, 0);
+    assert_eq!(first_step.device_elapsed_ns, 0);
     assert_eq!(
         (second_step.graph_captures, second_step.graph_cache_hits),
         (0, 1)
@@ -113,6 +119,8 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
 
 #[test]
 fn hf_decode_sequence_session_packs_projection_replicas_for_cublas_path() {
+    let _guard = super::cuda_test_lock();
+
     let one = 0x3c00;
     let zero = 0x0000;
     let hidden = 128;
@@ -168,25 +176,17 @@ fn hf_decode_sequence_session_packs_projection_replicas_for_cublas_path() {
     let mut session = created.session.unwrap();
     let started = CudaHfDecodeSequenceLoop::start(&mut session, &[0], None);
     assert_eq!(started.summary.status, SmokeStatus::Ok);
+    assert!(started.summary.kernel_launches > 0);
+    assert!(started.summary.device_elapsed_ns > 0);
     let mut loop_state = started.loop_state.unwrap();
     let summary = loop_state.advance(1);
 
     assert_eq!(summary.status, SmokeStatus::Ok);
     assert_eq!(summary.tokens, vec![0]);
-    assert_eq!((summary.graph_nodes, summary.kernel_launches), (11, 11));
-    assert!(summary.projection_ns > 0);
-    assert_eq!(
-        summary.projection_ns,
-        summary.qkv_projection_ns
-            + summary.attention_output_projection_ns
-            + summary.gate_up_projection_ns
-            + summary.down_projection_ns
-            + summary.lm_head_projection_ns
-    );
-    assert!(summary.attention_ns > 0);
-    assert!(summary.mlp_ns > 0);
-    assert!(summary.norm_ns > 0);
-    assert!(summary.sampling_ns > 0);
+    assert_eq!(summary.graph_replays, 0);
+    assert_eq!(summary.graph_nodes, 0);
+    assert_eq!(summary.kernel_launches, 0);
+    assert_eq!(summary.device_elapsed_ns, 0);
     assert!(summary.device_arena_bytes > summary.resident_weight_bytes);
     assert_eq!(summary.host_causality_edges, 0);
     assert_eq!(summary.hot_path_allocations, 0);

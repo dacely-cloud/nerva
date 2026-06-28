@@ -84,3 +84,22 @@ pub(crate) fn remove_tiny_hf_checkpoint_dir(dir: &std::path::Path) {
     let _ = std::fs::remove_file(dir.join("config.json"));
     let _ = std::fs::remove_dir(dir);
 }
+
+pub(crate) fn write_tiny_wordlevel_tokenizer(dir: &std::path::Path) {
+    let tokenizer = r#"{
+        "version":"1.0",
+        "truncation":null,
+        "padding":null,
+        "added_tokens":[],
+        "normalizer":null,
+        "pre_tokenizer":{"type":"Whitespace"},
+        "post_processor":null,
+        "decoder":null,
+        "model":{
+            "type":"WordLevel",
+            "vocab":{"zero":0,"one":1,"two":2,"three":3},
+            "unk_token":"zero"
+        }
+    }"#;
+    std::fs::write(dir.join("tokenizer.json"), tokenizer).unwrap();
+}

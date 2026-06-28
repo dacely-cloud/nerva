@@ -10,3 +10,5 @@ publish.workspace = true
 [dependencies]
 nerva-core.workspace = true
 nerva-ledger.workspace = true
+serde_json = "1"
+tokenizers = "0.20"

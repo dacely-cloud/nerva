@@ -1,0 +1,17 @@
+[package]
+name = "nerva"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+nerva-core.workspace = true
+nerva-model.workspace = true
+nerva-runtime.workspace = true
+ratatui.workspace = true

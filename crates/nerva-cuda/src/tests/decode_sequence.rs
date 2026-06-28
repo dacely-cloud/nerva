@@ -81,6 +81,8 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
 }
 #[test]
 fn hf_decode_sequence_runs_device_first_steps_when_device_is_available() {
+    let _guard = super::cuda_test_lock();
+
     let one = 0x3c00;
     let zero = 0x0000;
     let neg_one = 0xbc00;

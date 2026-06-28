@@ -10,6 +10,8 @@ use crate::engine::tests::hf_fixture::{remove_hf_checkpoint_dir, write_qwen3_hf_
 
 #[test]
 fn cuda_loaded_qwen3_prompt_decode_consumes_qk_norm_weights() {
+    let _guard = super::cuda_test_lock();
+
     let dir = write_qwen3_hf_checkpoint_dir("nerva-hf-cuda-qwen3");
     let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
     let runtime = Runtime::new(RuntimeConfig::default()).unwrap();

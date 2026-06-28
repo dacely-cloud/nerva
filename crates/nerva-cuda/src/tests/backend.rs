@@ -61,6 +61,8 @@ fn backend_contract_summary_serializes_allocation_and_queue_fields() {
 
 #[test]
 fn backend_contract_smoke_is_repeatable_when_device_is_available() {
+    let _guard = super::cuda_test_lock();
+
     let first = backend_contract_smoke(4096, 4096);
     if first.status != SmokeStatus::Ok {
         return;

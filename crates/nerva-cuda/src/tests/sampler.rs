@@ -65,6 +65,8 @@ fn hf_sampler_summary_serializes_loaded_final_head_fields() {
 
 #[test]
 fn hf_sampler_runs_loaded_final_head_when_device_is_available() {
+    let _guard = super::cuda_test_lock();
+
     let one = 0x3c00;
     let zero = 0x0000;
     let neg_one = 0xbc00;

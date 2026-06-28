@@ -1,7 +1,7 @@
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
 
-use crate::engine::hf_cuda_decode::file_backed::session_stream::{
+use crate::engine::hf_cuda_decode::file_backed::session_stream_types::{
     HfCudaDeviceSessionStreamRecord, HfCudaHostOutputQueueSummary,
 };
 

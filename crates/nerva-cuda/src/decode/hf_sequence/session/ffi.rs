@@ -40,6 +40,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionCreateRequest {
 pub(crate) struct NervaCudaHfDecodeSequenceSessionCreateResult {
     pub(crate) status: i32,
     pub(crate) cuda_error: i32,
+    pub(crate) failure_stage: i32,
     pub(crate) device_count: i32,
     pub(crate) dtype: u32,
     pub(crate) hidden: u32,

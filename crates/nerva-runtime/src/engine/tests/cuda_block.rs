@@ -10,6 +10,8 @@ use crate::engine::cuda_block::run_precision_block_on_cuda;
 
 #[test]
 fn cuda_precision_block_forward_matches_cpu_exact_block() {
+    let _guard = super::cuda_test_lock();
+
     let shape = TransformerBlockShape::new(2, 1, 2);
     for dtype in [DType::F16, DType::BF16] {
         let block = tiny_block(dtype, shape);

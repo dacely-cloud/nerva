@@ -1,5 +1,7 @@
 use crate::artifact::run::run_artifact;
-use crate::tests::support::{remove_tiny_hf_checkpoint_dir, write_tiny_hf_checkpoint_dir};
+use crate::tests::support::{
+    remove_tiny_hf_checkpoint_dir, write_tiny_hf_checkpoint_dir, write_tiny_wordlevel_tokenizer,
+};
 
 #[test]
 fn artifact_wraps_probe_with_reproducibility_metadata() {
@@ -109,14 +111,15 @@ fn artifact_runs_external_hf_cuda_decode_checkpoint_with_metadata() {
 #[test]
 fn artifact_runs_external_hf_cuda_generate_checkpoint_with_metadata() {
     let dir = write_tiny_hf_checkpoint_dir("nerva-artifact-hf-cuda-generate");
+    write_tiny_wordlevel_tokenizer(&dir);
     let json = run_artifact(
         Some("hf-cuda-generate".to_string()),
         vec![
             dir.to_string_lossy().into_owned(),
-            "3".to_string(),
+            "4".to_string(),
             "2".to_string(),
             "1".to_string(),
-            "0".to_string(),
+            "one two".to_string(),
         ],
     )
     .unwrap();
@@ -125,6 +128,8 @@ fn artifact_runs_external_hf_cuda_generate_checkpoint_with_metadata() {
     assert!(json.contains("\"command\":\"hf-cuda-generate\""));
     assert!(json.contains("\"summary\""));
     assert!(json.contains("\"mode\":\"device_generate\""));
+    assert!(json.contains("\"input_mode\":\"tokenizer_json\""));
+    assert!(json.contains("\"prompt_token_ids\":[1,2]"));
     assert!(json.contains("\"max_new_tokens\":2"));
     assert!(json.contains("\"stop_reason\":\"max_steps\""));
     assert!(json.contains("\"host_causality_edges\":0"));

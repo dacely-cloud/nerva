@@ -15,6 +15,8 @@ use crate::smoke::status::SmokeStatus;
 
 #[test]
 fn declared_weight_descriptors_stream_file_backed_sources() {
+    let _guard = super::cuda_test_lock();
+
     if crate::smoke::probe::smoke().status != SmokeStatus::Ok {
         return;
     }

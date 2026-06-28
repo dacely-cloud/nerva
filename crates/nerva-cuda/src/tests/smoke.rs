@@ -37,6 +37,8 @@ fn c_char_array_conversion_handles_empty_and_terminated_values() {
 
 #[test]
 fn cuda_smoke_is_repeatable_when_device_is_available() {
+    let _guard = super::cuda_test_lock();
+
     let first = smoke();
     if first.status != SmokeStatus::Ok {
         return;
