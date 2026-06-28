@@ -1,4 +1,17 @@
+use std::time::Instant;
+
 use nerva_core::types::dtype::DType;
+use nerva_cuda::decode::hf_chain::layer::CudaHfDecodeChainLayer;
+use nerva_cuda::decode::hf_sequence::request::CUDA_HF_DECODE_SEQUENCE_DTYPE_F16;
+use nerva_cuda::decode::hf_sequence::session::request::{
+    CudaHfDecodeSequenceSession, CudaHfDecodeSequenceSessionConfig,
+};
+use nerva_cuda::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
+use nerva_cuda::decode::hf_sequence::weight_plan::{
+    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+};
+use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_runtime::engine::hf_cuda_decode::projection_batch::{
     plan_exact_projection_batch, ProjectionBatchCandidate, ProjectionBatchConfig,
     ProjectionBatchModelKey, ProjectionBatchPlanReason,
@@ -95,6 +108,35 @@ pub(crate) fn run_projection_batch_exec_probe(
         block_tokens,
     );
     Ok(projection_batch_exec_probe_json(&plan_input, &summary))
+}
+
+pub(crate) fn run_projection_batch_advance_probe(
+    ready_requests: usize,
+    compatible_requests: usize,
+    target_block_tokens: usize,
+    min_block_tokens: usize,
+) -> Result<String, String> {
+    let plan_input = projection_batch_plan_input(
+        ready_requests,
+        compatible_requests,
+        target_block_tokens,
+        min_block_tokens,
+    );
+    if !plan_input.plan.exact {
+        return Ok(projection_batch_advance_probe_skipped_json(&plan_input));
+    }
+
+    let block_tokens = plan_input.plan.block_tokens;
+    let mut sequential_sessions = create_synthetic_batch_sessions(block_tokens)?;
+    let mut batch_sessions = create_synthetic_batch_sessions(block_tokens)?;
+    let sequential = run_synthetic_sequential_advance(&mut sequential_sessions)?;
+    let batch =
+        run_synthetic_batched_advance(&mut batch_sessions, target_block_tokens, min_block_tokens)?;
+    Ok(projection_batch_advance_probe_json(
+        &plan_input,
+        &sequential,
+        &batch,
+    ))
 }
 
 struct ProjectionBatchPlanInput {
@@ -281,6 +323,276 @@ fn projection_batch_exec_probe_json(
         summary.device_frees,
         summary.hot_path_allocations,
         error_json,
+    )
+}
+
+struct SequentialAdvanceProbe {
+    wall_ns: u128,
+    tokens: Vec<u32>,
+    ok: bool,
+}
+
+struct BatchedAdvanceProbe {
+    wall_ns: u128,
+    summary:
+        nerva_cuda::decode::hf_sequence::session::request::CudaHfDecodeSequenceBatchAdvanceSummary,
+}
+
+fn run_synthetic_sequential_advance(
+    sessions: &mut [CudaHfDecodeSequenceSession],
+) -> Result<SequentialAdvanceProbe, String> {
+    let mut loops = start_and_drain_first_tokens(sessions)?;
+    let started = Instant::now();
+    let mut tokens = Vec::with_capacity(loops.len());
+    let mut ok = true;
+    for loop_state in &mut loops {
+        let summary = loop_state.advance(1);
+        ok = ok && summary.status == SmokeStatus::Ok && summary.tokens.len() == 1;
+        tokens.extend(summary.tokens.iter().copied());
+    }
+    Ok(SequentialAdvanceProbe {
+        wall_ns: started.elapsed().as_nanos(),
+        tokens,
+        ok,
+    })
+}
+
+fn run_synthetic_batched_advance(
+    sessions: &mut [CudaHfDecodeSequenceSession],
+    target_block_tokens: usize,
+    min_block_tokens: usize,
+) -> Result<BatchedAdvanceProbe, String> {
+    let mut loops = start_and_drain_first_tokens(sessions)?;
+    let mut loop_refs = loops.iter_mut().collect::<Vec<_>>();
+    let started = Instant::now();
+    let summary = CudaHfDecodeSequenceLoop::batch_advance_one(
+        &mut loop_refs,
+        u32::try_from(target_block_tokens)
+            .map_err(|_| "target_block_tokens does not fit in u32".to_string())?,
+        u32::try_from(min_block_tokens)
+            .map_err(|_| "min_block_tokens does not fit in u32".to_string())?,
+    );
+    Ok(BatchedAdvanceProbe {
+        wall_ns: started.elapsed().as_nanos(),
+        summary,
+    })
+}
+
+fn start_and_drain_first_tokens(
+    sessions: &mut [CudaHfDecodeSequenceSession],
+) -> Result<Vec<CudaHfDecodeSequenceLoop<'_>>, String> {
+    let mut loops = Vec::with_capacity(sessions.len());
+    for (index, session) in sessions.iter_mut().enumerate() {
+        let prompt = [u32::try_from(index % 2).unwrap_or(0)];
+        let started = CudaHfDecodeSequenceLoop::start(session, &prompt, None);
+        if started.summary.status != SmokeStatus::Ok {
+            return Err(started
+                .summary
+                .error
+                .unwrap_or_else(|| "CUDA synthetic session start failed".to_string()));
+        }
+        let mut loop_state = started.loop_state.unwrap();
+        let first = loop_state.advance(1);
+        if first.status != SmokeStatus::Ok || first.tokens.len() != 1 {
+            return Err(first
+                .error
+                .unwrap_or_else(|| "CUDA synthetic first token drain failed".to_string()));
+        }
+        loops.push(loop_state);
+    }
+    Ok(loops)
+}
+
+fn create_synthetic_batch_sessions(
+    count: usize,
+) -> Result<Vec<CudaHfDecodeSequenceSession>, String> {
+    let one = 0x3c00;
+    let zero = 0x0000;
+    let hidden = 128usize;
+    let intermediate = 256usize;
+    let vocab_size = 8usize;
+    let embeddings = vec![zero; vocab_size * hidden];
+    let rms = vec![one; hidden];
+    let attn_matrix = vec![zero; hidden * hidden];
+    let mlp_matrix = vec![zero; intermediate * hidden];
+    let down_matrix = vec![zero; hidden * intermediate];
+    let lm_head = vec![zero; vocab_size * hidden];
+    let layer = CudaHfDecodeChainLayer {
+        rms_attn_weight: &rms,
+        rms_mlp_weight: &rms,
+        w_q: &attn_matrix,
+        w_k: &attn_matrix,
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &attn_matrix,
+        w_o: &attn_matrix,
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &mlp_matrix,
+        w_up: &mlp_matrix,
+        w_down: &down_matrix,
+    };
+    let layers = [layer];
+    let weight_blocks = synthetic_weight_blocks(
+        &embeddings,
+        &rms,
+        &attn_matrix,
+        &mlp_matrix,
+        &down_matrix,
+        &lm_head,
+    );
+    let weight_plan = synthetic_weight_plan(&weight_blocks);
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: hidden,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 5,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &embeddings,
+        layers: &layers,
+        final_norm_weight: &rms,
+        lm_head: &lm_head,
+        weight_plan: Some(weight_plan),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+    };
+    let mut sessions = Vec::with_capacity(count);
+    for _ in 0..count {
+        let created = config.create();
+        if created.summary.status != SmokeStatus::Ok {
+            return Err(created
+                .summary
+                .error
+                .unwrap_or_else(|| "CUDA synthetic session create failed".to_string()));
+        }
+        sessions.push(created.session.unwrap());
+    }
+    Ok(sessions)
+}
+
+fn synthetic_weight_plan(
+    descriptors: &[CudaHfDecodeSequenceWeightBlock],
+) -> CudaHfDecodeSequenceWeightPlan {
+    let weight_bytes = descriptors
+        .iter()
+        .map(|descriptor| descriptor.bytes)
+        .sum::<u64>();
+    CudaHfDecodeSequenceWeightPlan {
+        blocks: descriptors.len() as u32,
+        gpu_resident_blocks: descriptors.len() as u32,
+        gpu_staged_blocks: 0,
+        weight_bytes,
+        gpu_resident_weight_bytes: weight_bytes,
+        gpu_staged_weight_bytes: 0,
+        descriptor_hash: hash_weight_blocks(descriptors),
+    }
+}
+
+fn synthetic_weight_blocks(
+    embeddings: &[u16],
+    rms: &[u16],
+    attn_matrix: &[u16],
+    mlp_matrix: &[u16],
+    down_matrix: &[u16],
+    lm_head: &[u16],
+) -> Vec<CudaHfDecodeSequenceWeightBlock> {
+    let mut offset = 0u64;
+    let mut block_id = 0u64;
+    let mut blocks = Vec::new();
+    for source in [
+        embeddings,
+        rms,
+        rms,
+        attn_matrix,
+        attn_matrix,
+        attn_matrix,
+        attn_matrix,
+        mlp_matrix,
+        mlp_matrix,
+        down_matrix,
+        rms,
+        lm_head,
+    ] {
+        let bytes = (source.len() * std::mem::size_of::<u16>()) as u64;
+        blocks.push(CudaHfDecodeSequenceWeightBlock {
+            host_source: source.as_ptr(),
+            source_file: std::ptr::null(),
+            source_file_len: 0,
+            file_offset_begin: 0,
+            block_id,
+            block_version: 1,
+            offset_bytes: offset,
+            bytes,
+            strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+            reserved: 0,
+        });
+        offset = offset.saturating_add(bytes);
+        block_id = block_id.saturating_add(1);
+    }
+    blocks
+}
+
+fn projection_batch_advance_probe_skipped_json(input: &ProjectionBatchPlanInput) -> String {
+    format!(
+        "{{\"schema\":\"nerva-projection-batch-advance-probe-v1\",\"status\":\"skipped\",\"reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"exact\":false,\"block_tokens\":0,\"executor_status\":\"not_executed\"}}",
+        reason_name(input.plan.reason),
+        input.ready_requests,
+        input.compatible_requests,
+        input.config.target_block_tokens,
+        input.config.min_block_tokens,
+    )
+}
+
+fn projection_batch_advance_probe_json(
+    input: &ProjectionBatchPlanInput,
+    sequential: &SequentialAdvanceProbe,
+    batch: &BatchedAdvanceProbe,
+) -> String {
+    let batch_summary = &batch.summary;
+    let status = if sequential.ok && batch_summary.status == SmokeStatus::Ok {
+        "ok"
+    } else {
+        "failed"
+    };
+    let wall_speedup_x1000 = if batch.wall_ns > 0 {
+        sequential
+            .wall_ns
+            .saturating_mul(1000)
+            .saturating_div(batch.wall_ns)
+    } else {
+        0
+    };
+    format!(
+        "{{\"schema\":\"nerva-projection-batch-advance-probe-v1\",\"status\":\"{}\",\"plan_reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"exact\":{},\"block_tokens\":{},\"observed_tokens\":{},\"sequential_wall_ns\":{},\"batch_wall_ns\":{},\"sequential_vs_batch_wall_speedup_x1000\":{},\"batch_projection_elapsed_ns\":{},\"projection_kernel_launches\":{},\"pack_kernel_launches\":{},\"scatter_kernel_launches\":{},\"dependency_kernel_launches\":{},\"sampling_kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"sequential_tokens\":{:?},\"batch_tokens\":{:?},\"executor_status\":\"synthetic_batch_advance\"}}",
+        status,
+        reason_name(input.plan.reason),
+        input.ready_requests,
+        input.compatible_requests,
+        input.config.target_block_tokens,
+        input.config.min_block_tokens,
+        batch_summary.exact,
+        batch_summary.block_tokens,
+        batch_summary.observed_tokens,
+        sequential.wall_ns,
+        batch.wall_ns,
+        wall_speedup_x1000,
+        batch_summary.projection_elapsed_ns,
+        batch_summary.projection_kernel_launches,
+        batch_summary.pack_kernel_launches,
+        batch_summary.scatter_kernel_launches,
+        batch_summary.dependency_kernel_launches,
+        batch_summary.sampling_kernel_launches,
+        batch_summary.sync_calls,
+        batch_summary.hot_path_allocations,
+        sequential.tokens,
+        batch_summary.tokens,
     )
 }
 

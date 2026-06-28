@@ -418,3 +418,22 @@ CudaHfDecodeSequenceLoop::batch_advance_one(...)
 Schedulers can keep owning `CudaHfDecodeSequenceLoop` values, consume the
 prefill-produced first token through the normal `advance(1)` path, and then
 submit compatible active loops to the batch advance wrapper.
+
+The bench CLI exposes a synthetic end-to-end probe for this primitive:
+
+```text
+cargo run -p nerva-bench --release -- projection-batch-advance-probe 2 2 2 2
+```
+
+The current RTX 5090 synthetic artifact is:
+
+```text
+docs/source/perf/synthetic_projection_batch_advance_probe.json
+```
+
+It verifies matching tokens, five batched projection launches for a one-layer
+model (`QKV`, `W_O`, `gate/up`, `down`, `LM head`), zero hot-path allocations,
+and a small wall-clock win over two sequential one-token loop advances on the
+tiny synthetic model. This is not a Qwen throughput claim; it is the first
+hardware-backed proof that the full batched decode-step composition is callable
+above raw FFI and preserves token output for compatible sessions.
