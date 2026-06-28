@@ -1658,7 +1658,7 @@ __global__ void hf_prefill_qkv_publish_kernel(
     uint32_t dtype, uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
     uint32_t max_steps, uint32_t chunk_start, uint32_t chunk_tokens,
     float rms_eps, float rope_theta, float *qkv, uint16_t *kv_keys,
-    uint16_t *kv_values, uint32_t kv_block_count,
+    uint16_t *kv_values, uint16_t *qkv_encoded, uint32_t kv_block_count,
     const uint32_t *kv_block_table) {
   const uint32_t local_token = blockIdx.x;
   const uint32_t lane = blockIdx.y;
@@ -1694,6 +1694,14 @@ __global__ void hf_prefill_qkv_publish_kernel(
     }
     __syncthreads();
     apply_rope_head(token_qkv + head_start, head_dim, global_pos, rope_theta);
+    if (qkv_encoded != nullptr) {
+      uint16_t *encoded =
+          qkv_encoded + static_cast<uint64_t>(local_token) * rows + head_start;
+      for (uint32_t offset = threadIdx.x; offset < head_dim;
+           offset += blockDim.x) {
+        encoded[offset] = f32_to_encoded(token_qkv[head_start + offset], dtype);
+      }
+    }
   }
   if (lane < kv_heads) {
     const uint32_t kv_start = lane * head_dim;
@@ -1720,6 +1728,14 @@ __global__ void hf_prefill_qkv_publish_kernel(
     }
     __syncthreads();
     apply_rope_head(k + kv_start, head_dim, global_pos, rope_theta);
+    uint16_t *encoded_k = nullptr;
+    uint16_t *encoded_v = nullptr;
+    if (qkv_encoded != nullptr) {
+      uint16_t *encoded =
+          qkv_encoded + static_cast<uint64_t>(local_token) * rows;
+      encoded_k = encoded + attention_hidden + kv_start;
+      encoded_v = encoded + attention_hidden + kv_hidden + kv_start;
+    }
     const uint64_t token_base = kv_cache_token_base(
         layer_index, kv_block_count, kv_block_table, global_pos, kv_hidden,
         kv_start);
@@ -1729,20 +1745,16 @@ __global__ void hf_prefill_qkv_publish_kernel(
         value += encoded_to_f32(arena[layout.v_bias + kv_start + offset], dtype);
       }
       v[kv_start + offset] = value;
-      kv_keys[token_base + offset] = f32_to_encoded(k[kv_start + offset], dtype);
-      kv_values[token_base + offset] = f32_to_encoded(value, dtype);
+      const uint16_t encoded_key =
+          f32_to_encoded(k[kv_start + offset], dtype);
+      const uint16_t encoded_value = f32_to_encoded(value, dtype);
+      kv_keys[token_base + offset] = encoded_key;
+      kv_values[token_base + offset] = encoded_value;
+      if (encoded_k != nullptr) {
+        encoded_k[offset] = encoded_key;
+        encoded_v[offset] = encoded_value;
+      }
     }
-  }
-}
-
-__global__ void hf_prefill_qkv_pack_encoded_kernel(
-    uint32_t dtype, uint64_t rows, uint32_t chunk_tokens, const float *qkv,
-    uint16_t *qkv_encoded) {
-  const uint64_t total = rows * static_cast<uint64_t>(chunk_tokens);
-  const uint64_t index = blockIdx.x * blockDim.x + threadIdx.x;
-  const uint64_t stride = blockDim.x * gridDim.x;
-  for (uint64_t cursor = index; cursor < total; cursor += stride) {
-    qkv_encoded[cursor] = f32_to_encoded(qkv[cursor], dtype);
   }
 }
 
@@ -4874,6 +4886,21 @@ cudaError_t launch_cublas_session_prefill(
       if (err == cudaSuccess) {
         err = profile_stage_begin();
       }
+      const uint32_t query_group =
+          session->kv_heads == 0 ? 0 : session->heads / session->kv_heads;
+      const bool use_grouped_gqa =
+          query_group == kGroupedGqaHeads &&
+          session->heads % session->kv_heads == 0 &&
+          session->head_dim <= kSharedWarpGqaHeadDimMax;
+#if NERVA_HAVE_CUDNN_FRONTEND
+      const bool use_cudnn_sdpa =
+          session->cudnn_prefill_sdpa_disabled == 0 &&
+          session->cudnn != nullptr &&
+          session->device_prefill_qkv_encoded != nullptr &&
+          session->dtype == kDTypeBF16 && use_grouped_gqa &&
+          chunk_start == 0 && chunk_tokens == prompt_token_count &&
+          session->head_dim <= 128;
+#endif
       if (err == cudaSuccess) {
         const dim3 grid(chunk_tokens, std::max(session->heads, session->kv_heads));
         hf_prefill_qkv_publish_kernel<<<grid, session->head_threads, 0,
@@ -4883,6 +4910,11 @@ cudaError_t launch_cublas_session_prefill(
             session->max_context_tokens, chunk_start, chunk_tokens,
             session->rms_eps, session->rope_theta, session->device_prefill_qkv,
             session->device_kv_keys, session->device_kv_values,
+#if NERVA_HAVE_CUDNN_FRONTEND
+            use_cudnn_sdpa ? session->device_prefill_qkv_encoded : nullptr,
+#else
+            nullptr,
+#endif
             session->kv_block_count, session->device_kv_block_table);
         err = cudaGetLastError();
         out->kernel_launches += 1;
@@ -4892,43 +4924,17 @@ cudaError_t launch_cublas_session_prefill(
         err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
-        const uint32_t query_group =
-            session->kv_heads == 0 ? 0 : session->heads / session->kv_heads;
-        const bool use_grouped_gqa =
-            query_group == kGroupedGqaHeads &&
-            session->heads % session->kv_heads == 0 &&
-            session->head_dim <= kSharedWarpGqaHeadDimMax;
 #if NERVA_HAVE_CUDNN_FRONTEND
         bool ran_cudnn_sdpa = false;
-        const bool use_cudnn_sdpa =
-            session->cudnn_prefill_sdpa_disabled == 0 &&
-            session->cudnn != nullptr &&
-            session->device_prefill_qkv_encoded != nullptr &&
-            session->dtype == kDTypeBF16 && use_grouped_gqa &&
-            chunk_start == 0 && chunk_tokens == prompt_token_count &&
-            session->head_dim <= 128;
         if (use_cudnn_sdpa) {
-          const uint64_t total =
-              static_cast<uint64_t>(packed_shape.qkv_rows) * chunk_tokens;
-          const uint32_t blocks = static_cast<uint32_t>(
-              (total + kDecodeThreads - 1u) / kDecodeThreads);
-          hf_prefill_qkv_pack_encoded_kernel<<<blocks, kDecodeThreads, 0,
-                                               session->stream>>>(
-              session->dtype, packed_shape.qkv_rows, chunk_tokens,
-              session->device_prefill_qkv,
-              session->device_prefill_qkv_encoded);
-          err = cudaGetLastError();
+          err = execute_cudnn_prefill_sdpa(session, chunk_tokens);
           if (err == cudaSuccess) {
             out->kernel_launches += 1;
-            err = execute_cudnn_prefill_sdpa(session, chunk_tokens);
-            if (err == cudaSuccess) {
-              out->kernel_launches += 1;
-              ran_cudnn_sdpa = true;
-            } else if (err == cudaErrorNotSupported ||
-                       err == cudaErrorMemoryAllocation) {
-              session->cudnn_prefill_sdpa_disabled = 1;
-              err = cudaSuccess;
-            }
+            ran_cudnn_sdpa = true;
+          } else if (err == cudaErrorNotSupported ||
+                     err == cudaErrorMemoryAllocation) {
+            session->cudnn_prefill_sdpa_disabled = 1;
+            err = cudaSuccess;
           }
         }
         if (!ran_cudnn_sdpa) {
@@ -6472,7 +6478,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
   cudaError_t err = cudaSuccess;
   if (run_count != 0) {
     const uint32_t attention_chunks =
-        decode_attention_chunks_for_cursor(session, session->active_cursor);
+        decode_attention_chunks_for_cursor(session, target_cursor);
     err = ensure_session_graph(session, session->max_context_tokens, prompt_count,
                                session->active_has_eos_token,
                                session->active_eos_token, attention_chunks,

@@ -16,9 +16,7 @@ use crate::engine::hf_cuda_decode::file_backed::session_stream_queue::BoundedHos
 use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 use crate::engine::runtime::Runtime;
 
-const TOKEN_MODE_MAX_ADVANCE_STEPS: usize = 64;
-const DECODE_ATTENTION_CHUNK_TOKENS: usize = 64;
-const CHUNKED_DECODE_ATTENTION_THRESHOLD: usize = 128;
+const TOKEN_MODE_MAX_ADVANCE_STEPS: usize = 128;
 
 pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
     runtime: &Runtime,
@@ -217,22 +215,7 @@ fn current_token_mode_steps(
     if max_steps <= 1 {
         return max_steps;
     }
-    let kv_tokens = used_context;
-    if kv_tokens == 0 {
-        return 1;
-    }
-    let boundary_steps = if kv_tokens <= CHUNKED_DECODE_ATTENTION_THRESHOLD {
-        CHUNKED_DECODE_ATTENTION_THRESHOLD
-            .saturating_sub(kv_tokens)
-            .saturating_add(1)
-    } else {
-        let chunks = kv_tokens.div_ceil(DECODE_ATTENTION_CHUNK_TOKENS);
-        chunks
-            .saturating_mul(DECODE_ATTENTION_CHUNK_TOKENS)
-            .saturating_sub(kv_tokens)
-            .saturating_add(1)
-    };
-    max_steps.min(boundary_steps.max(1))
+    max_steps
 }
 
 fn duration_ns(duration: Duration) -> u64 {
@@ -295,16 +278,16 @@ mod tests {
     use super::current_token_mode_steps;
 
     #[test]
-    fn token_mode_batches_until_decode_attention_boundary() {
-        assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 128), 4);
-        assert_eq!(current_token_mode_steps(3965, 4, 508, 8192, 128), 64);
-        assert_eq!(current_token_mode_steps(3965, 68, 444, 8192, 128), 64);
+    fn token_mode_batches_to_runtime_advance_cap() {
+        assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 128), 128);
+        assert_eq!(current_token_mode_steps(3965, 128, 384, 8192, 128), 128);
+        assert_eq!(current_token_mode_steps(3965, 384, 128, 8192, 128), 128);
     }
 
     #[test]
     fn token_mode_respects_context_queue_and_remaining_budget() {
-        assert_eq!(current_token_mode_steps(16, 0, 512, 8192, 128), 64);
-        assert_eq!(current_token_mode_steps(120, 0, 512, 8192, 128), 9);
+        assert_eq!(current_token_mode_steps(16, 0, 512, 8192, 128), 128);
+        assert_eq!(current_token_mode_steps(120, 0, 512, 8192, 128), 128);
         assert_eq!(current_token_mode_steps(3965, 0, 2, 8192, 128), 2);
         assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 2), 2);
         assert_eq!(current_token_mode_steps(1, 0, 512, 3, 128), 3);
