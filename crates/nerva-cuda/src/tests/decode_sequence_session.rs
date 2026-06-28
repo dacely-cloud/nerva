@@ -68,6 +68,18 @@ fn hf_decode_sequence_batch_advance_one_reports_no_sessions_without_cuda() {
 }
 
 #[test]
+fn hf_decode_sequence_loop_batch_advance_one_reports_no_sessions_without_cuda() {
+    let summary = CudaHfDecodeSequenceLoop::batch_advance_one(&mut [], 8, 2);
+
+    assert_eq!(summary.status, SmokeStatus::Ok);
+    assert_eq!(summary.reason, "no_sessions");
+    assert!(!summary.exact);
+    assert_eq!(summary.requested_session_count, 0);
+    assert_eq!(summary.block_tokens, 0);
+    assert!(summary.tokens.is_empty());
+}
+
+#[test]
 fn hf_decode_sequence_projection_batch_executes_all_projection_kinds_for_two_sessions() {
     let _guard = super::cuda_test_lock();
 
@@ -325,6 +337,106 @@ fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions()
     assert_eq!(batch.sampling_kernel_launches, 2);
     assert!(batch.projection_elapsed_ns > 0);
     assert!(batch.lm_head_elapsed_ns > 0);
+    assert_eq!(batch.hot_path_allocations, 0);
+}
+
+#[test]
+fn hf_decode_sequence_loop_batch_advance_one_executes_second_token_for_two_loops() {
+    let _guard = super::cuda_test_lock();
+
+    let one = 0x3c00;
+    let zero = 0x0000;
+    let hidden = 128;
+    let intermediate = 256;
+    let vocab_size = 8;
+    let embeddings = vec![zero; vocab_size * hidden];
+    let rms = vec![one; hidden];
+    let attn_matrix = vec![zero; hidden * hidden];
+    let mlp_matrix = vec![zero; intermediate * hidden];
+    let down_matrix = vec![zero; hidden * intermediate];
+    let lm_head = vec![zero; vocab_size * hidden];
+    let layer = CudaHfDecodeChainLayer {
+        rms_attn_weight: &rms,
+        rms_mlp_weight: &rms,
+        w_q: &attn_matrix,
+        w_k: &attn_matrix,
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &attn_matrix,
+        w_o: &attn_matrix,
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &mlp_matrix,
+        w_up: &mlp_matrix,
+        w_down: &down_matrix,
+    };
+    let layers = [layer];
+    let weight_blocks = projection_batch_weight_blocks(
+        &embeddings,
+        &rms,
+        &attn_matrix,
+        &mlp_matrix,
+        &down_matrix,
+        &lm_head,
+    );
+    let weight_plan = projection_batch_weight_plan(&weight_blocks);
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: hidden,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 5,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &embeddings,
+        layers: &layers,
+        final_norm_weight: &rms,
+        lm_head: &lm_head,
+        weight_plan: Some(weight_plan),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+    };
+    let created_a = config.create();
+    if created_a.summary.status != SmokeStatus::Ok {
+        return;
+    }
+    let created_b = config.create();
+    if created_b.summary.status != SmokeStatus::Ok {
+        return;
+    }
+    let mut session_a = created_a.session.unwrap();
+    let mut session_b = created_b.session.unwrap();
+
+    let started_a = CudaHfDecodeSequenceLoop::start(&mut session_a, &[0], None);
+    if started_a.summary.status != SmokeStatus::Ok {
+        return;
+    }
+    let started_b = CudaHfDecodeSequenceLoop::start(&mut session_b, &[1], None);
+    if started_b.summary.status != SmokeStatus::Ok {
+        return;
+    }
+    let mut loop_a = started_a.loop_state.unwrap();
+    let mut loop_b = started_b.loop_state.unwrap();
+    assert_eq!(loop_a.advance(1).tokens, vec![0]);
+    assert_eq!(loop_b.advance(1).tokens, vec![0]);
+
+    let batch = {
+        let mut loops = [&mut loop_a, &mut loop_b];
+        CudaHfDecodeSequenceLoop::batch_advance_one(&mut loops, 2, 2)
+    };
+    assert_eq!(batch.status, SmokeStatus::Ok);
+    assert_eq!(batch.reason, "ready");
+    assert!(batch.exact);
+    assert_eq!(batch.block_tokens, 2);
+    assert_eq!(batch.observed_tokens, 2);
+    assert_eq!(batch.tokens, vec![0, 0]);
+    assert_eq!(batch.projection_kernel_launches, 5);
+    assert_eq!(batch.sampling_kernel_launches, 2);
     assert_eq!(batch.hot_path_allocations, 0);
 }
 

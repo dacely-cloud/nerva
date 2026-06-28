@@ -1,11 +1,13 @@
 use crate::decode::hf_sequence::ffi::NervaCudaHfDecodeSequenceResult;
 use crate::decode::hf_sequence::session::failures::failed_run_summary;
 use crate::decode::hf_sequence::session::ffi::{
-    NervaCudaHfDecodeSequenceSessionAdvanceRequest, NervaCudaHfDecodeSequenceSessionStartRequest,
     advance_hf_decode_sequence_session, start_hf_decode_sequence_session,
+    NervaCudaHfDecodeSequenceSessionAdvanceRequest, NervaCudaHfDecodeSequenceSessionStartRequest,
 };
 use crate::decode::hf_sequence::session::helpers::{summary_from_run, validate_run};
-use crate::decode::hf_sequence::session::request::CudaHfDecodeSequenceSession;
+use crate::decode::hf_sequence::session::request::{
+    CudaHfDecodeSequenceBatchAdvanceSummary, CudaHfDecodeSequenceSession,
+};
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::smoke::status::SmokeStatus;
 
@@ -86,6 +88,34 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
         summary
     }
 
+    pub fn batch_advance_one(
+        loops: &mut [&mut CudaHfDecodeSequenceLoop<'_>],
+        target_block_tokens: u32,
+        min_block_tokens: u32,
+    ) -> CudaHfDecodeSequenceBatchAdvanceSummary {
+        let summary = {
+            let mut sessions = loops
+                .iter_mut()
+                .map(|loop_state| &mut *loop_state.session)
+                .collect::<Vec<_>>();
+            CudaHfDecodeSequenceSession::batch_advance_one(
+                &mut sessions,
+                target_block_tokens,
+                min_block_tokens,
+            )
+        };
+        if summary.status == SmokeStatus::Ok {
+            for (index, loop_state) in loops.iter_mut().enumerate() {
+                let token = summary.tokens.get(index).copied().unwrap_or(u32::MAX);
+                if token != u32::MAX {
+                    loop_state.finished = loop_state
+                        .eos_token
+                        .is_some_and(|eos_token| token == eos_token);
+                }
+            }
+        }
+        summary
+    }
 }
 
 fn validate_loop_start(prompt_tokens: &[u32], vocab_size: u32) -> Option<String> {

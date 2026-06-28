@@ -407,3 +407,14 @@ runtime step is to have the normal scheduler drain the prefill-produced first
 token, group compatible ready sessions, call this one-token batch advance, and
 fall back to single-session graph replay when fewer than `min_block_tokens`
 sessions are eligible.
+
+The Rust stateful loop now exposes this without requiring scheduler code to
+unwrap raw session handles:
+
+```text
+CudaHfDecodeSequenceLoop::batch_advance_one(...)
+```
+
+Schedulers can keep owning `CudaHfDecodeSequenceLoop` values, consume the
+prefill-produced first token through the normal `advance(1)` path, and then
+submit compatible active loops to the batch advance wrapper.
