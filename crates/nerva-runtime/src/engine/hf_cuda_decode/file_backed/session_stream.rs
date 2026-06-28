@@ -16,7 +16,7 @@ use crate::engine::hf_cuda_decode::file_backed::session_stream_queue::BoundedHos
 use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 use crate::engine::runtime::Runtime;
 
-const TOKEN_MODE_MAX_ADVANCE_STEPS: usize = 128;
+const TOKEN_MODE_MAX_ADVANCE_STEPS: usize = 1024;
 
 pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
     runtime: &Runtime,
@@ -279,17 +279,17 @@ mod tests {
 
     #[test]
     fn token_mode_batches_to_runtime_advance_cap() {
-        assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 128), 128);
-        assert_eq!(current_token_mode_steps(3965, 128, 384, 8192, 128), 128);
-        assert_eq!(current_token_mode_steps(3965, 384, 128, 8192, 128), 128);
+        assert_eq!(current_token_mode_steps(3965, 0, 2048, 8192, 2048), 1024);
+        assert_eq!(current_token_mode_steps(3965, 1024, 1024, 8192, 2048), 1024);
+        assert_eq!(current_token_mode_steps(3965, 1536, 512, 8192, 2048), 512);
     }
 
     #[test]
     fn token_mode_respects_context_queue_and_remaining_budget() {
-        assert_eq!(current_token_mode_steps(16, 0, 512, 8192, 128), 128);
-        assert_eq!(current_token_mode_steps(120, 0, 512, 8192, 128), 128);
-        assert_eq!(current_token_mode_steps(3965, 0, 2, 8192, 128), 2);
+        assert_eq!(current_token_mode_steps(16, 0, 512, 8192, 1024), 512);
+        assert_eq!(current_token_mode_steps(120, 0, 2048, 8192, 1024), 1024);
+        assert_eq!(current_token_mode_steps(3965, 0, 2, 8192, 1024), 2);
         assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 2), 2);
-        assert_eq!(current_token_mode_steps(1, 0, 512, 3, 128), 3);
+        assert_eq!(current_token_mode_steps(1, 0, 512, 3, 1024), 3);
     }
 }

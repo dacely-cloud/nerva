@@ -3,7 +3,7 @@ use nerva_model::hf::tokenizer::PromptFormat;
 
 pub(crate) const AUTO_CONTEXT_MARGIN: usize = 16;
 pub(crate) const DEFAULT_OUTPUT_TOKENS: usize = 256;
-pub(crate) const DEFAULT_QUEUE_CAPACITY: usize = 128;
+pub(crate) const DEFAULT_QUEUE_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
 pub(crate) struct GenerateArgs {
