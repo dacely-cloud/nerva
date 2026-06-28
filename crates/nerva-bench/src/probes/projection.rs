@@ -4,6 +4,7 @@ use nerva_runtime::engine::hf_cuda_decode::projection_batch::{
     ProjectionBatchModelKey, ProjectionBatchPlanReason,
 };
 
+use crate::json::json_escape;
 use crate::parse::parse_optional_u32;
 
 pub(crate) fn run_projection_bench(
@@ -41,6 +42,74 @@ pub(crate) fn run_projection_batch_plan(
     target_block_tokens: usize,
     min_block_tokens: usize,
 ) -> Result<String, String> {
+    let plan_input = projection_batch_plan_input(
+        ready_requests,
+        compatible_requests,
+        target_block_tokens,
+        min_block_tokens,
+    );
+    Ok(projection_batch_plan_json(
+        plan_input.ready_requests,
+        plan_input.compatible_requests,
+        plan_input.config,
+        &plan_input.plan,
+    ))
+}
+
+pub(crate) fn run_projection_batch_exec_probe(
+    ready_requests: usize,
+    compatible_requests: usize,
+    rows: u32,
+    cols: u32,
+    dtype: u32,
+    iterations: u32,
+    warmup_iterations: u32,
+    target_block_tokens: usize,
+    min_block_tokens: usize,
+) -> Result<String, String> {
+    let plan_input = projection_batch_plan_input(
+        ready_requests,
+        compatible_requests,
+        target_block_tokens,
+        min_block_tokens,
+    );
+    if !plan_input.plan.exact {
+        return Ok(projection_batch_exec_probe_skipped_json(
+            &plan_input,
+            rows,
+            cols,
+            dtype,
+            iterations,
+            warmup_iterations,
+        ));
+    }
+
+    let block_tokens = u32::try_from(plan_input.plan.block_tokens)
+        .map_err(|_| "planned block_tokens does not fit in u32".to_string())?;
+    let summary = nerva_cuda::projection::probe::projection_bench(
+        dtype,
+        rows,
+        cols,
+        iterations,
+        warmup_iterations,
+        block_tokens,
+    );
+    Ok(projection_batch_exec_probe_json(&plan_input, &summary))
+}
+
+struct ProjectionBatchPlanInput {
+    ready_requests: usize,
+    compatible_requests: usize,
+    config: ProjectionBatchConfig,
+    plan: nerva_runtime::engine::hf_cuda_decode::projection_batch::ProjectionBatchPlan,
+}
+
+fn projection_batch_plan_input(
+    ready_requests: usize,
+    compatible_requests: usize,
+    target_block_tokens: usize,
+    min_block_tokens: usize,
+) -> ProjectionBatchPlanInput {
     let compatible_requests = compatible_requests.min(ready_requests);
     let config = ProjectionBatchConfig::new(target_block_tokens, min_block_tokens);
     let candidates = (0..ready_requests)
@@ -60,12 +129,12 @@ pub(crate) fn run_projection_batch_plan(
         })
         .collect::<Vec<_>>();
     let plan = plan_exact_projection_batch(&candidates, config);
-    Ok(projection_batch_plan_json(
+    ProjectionBatchPlanInput {
         ready_requests,
         compatible_requests,
         config,
-        &plan,
-    ))
+        plan,
+    }
 }
 
 fn qwen3_8b_model_key(data_hash: u64) -> ProjectionBatchModelKey {
@@ -117,6 +186,101 @@ fn projection_batch_plan_json(
         selected,
         ideal_reuse_x1000,
         ideal_reduction_x100,
+    )
+}
+
+fn projection_batch_exec_probe_skipped_json(
+    input: &ProjectionBatchPlanInput,
+    rows: u32,
+    cols: u32,
+    dtype: u32,
+    iterations: u32,
+    warmup_iterations: u32,
+) -> String {
+    format!(
+        "{{\"schema\":\"nerva-projection-batch-exec-probe-v1\",\"status\":\"skipped\",\"reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"exact\":false,\"block_tokens\":0,\"rows\":{},\"cols\":{},\"dtype\":{},\"iterations\":{},\"warmup_iterations\":{},\"executor_status\":\"not_executed\"}}",
+        reason_name(input.plan.reason),
+        input.ready_requests,
+        input.compatible_requests,
+        input.config.target_block_tokens,
+        input.config.min_block_tokens,
+        rows,
+        cols,
+        dtype,
+        iterations,
+        warmup_iterations,
+    )
+}
+
+fn projection_batch_exec_probe_json(
+    input: &ProjectionBatchPlanInput,
+    summary: &nerva_cuda::projection::summary::CudaProjectionBenchSummary,
+) -> String {
+    let status = if summary.passed() { "ok" } else { "failed" };
+    let selected = input
+        .plan
+        .selected_request_ids
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let block_tokens = usize::try_from(summary.block_tokens).unwrap_or(0);
+    let ideal_reuse_x1000 = if input.plan.exact && block_tokens > 0 {
+        block_tokens.saturating_mul(1000)
+    } else {
+        0
+    };
+    let ideal_reduction_x100 = if input.plan.exact && block_tokens > 0 {
+        10_000usize.saturating_sub(10_000usize / block_tokens)
+    } else {
+        0
+    };
+    let per_token_speedup_x1000 = if summary.block_cublaslt_graph_speedup_x1000 > 0 {
+        summary.block_cublaslt_graph_speedup_x1000
+    } else if summary.block_cublaslt_graph_per_token_ns > 0 {
+        summary
+            .cublaslt_graph_avg_ns
+            .saturating_mul(1000)
+            .saturating_div(summary.block_cublaslt_graph_per_token_ns)
+    } else {
+        0
+    };
+    let error_json = match &summary.error {
+        Some(error) => format!("\"{}\"", json_escape(error)),
+        None => "null".to_string(),
+    };
+
+    format!(
+        "{{\"schema\":\"nerva-projection-batch-exec-probe-v1\",\"status\":\"{}\",\"plan_reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"exact\":{},\"block_tokens\":{},\"selected_request_ids\":[{}],\"rows\":{},\"cols\":{},\"dtype\":{},\"iterations\":{},\"warmup_iterations\":{},\"single_graph_avg_ns\":{},\"block_graph_avg_ns\":{},\"block_graph_per_token_ns\":{},\"block_graph_speedup_x1000\":{},\"ideal_projection_weight_stream_reuse_x1000\":{},\"ideal_projection_weight_stream_reduction_x100\":{},\"mismatch_count\":{},\"max_abs_diff\":{},\"graph_replays\":{},\"graph_captures\":{},\"block_graph_nodes\":{},\"device_allocations\":{},\"device_frees\":{},\"hot_path_allocations\":{},\"executor_status\":\"hardware_block_projection_probe\",\"error\":{}}}",
+        status,
+        reason_name(input.plan.reason),
+        input.ready_requests,
+        input.compatible_requests,
+        input.config.target_block_tokens,
+        input.config.min_block_tokens,
+        input.plan.exact,
+        summary.block_tokens,
+        selected,
+        summary.rows,
+        summary.cols,
+        summary.dtype,
+        summary.iterations,
+        summary.warmup_iterations,
+        summary.cublaslt_graph_avg_ns,
+        summary.block_cublaslt_graph_avg_ns,
+        summary.block_cublaslt_graph_per_token_ns,
+        per_token_speedup_x1000,
+        ideal_reuse_x1000,
+        ideal_reduction_x100,
+        summary.mismatch_count,
+        summary.max_abs_diff,
+        summary.graph_replays,
+        summary.graph_captures,
+        summary.block_cublaslt_graph_nodes,
+        summary.device_allocations,
+        summary.device_frees,
+        summary.hot_path_allocations,
+        error_json,
     )
 }
 

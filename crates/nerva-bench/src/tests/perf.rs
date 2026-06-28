@@ -1,7 +1,7 @@
 use crate::artifact::run::run_artifact;
 use crate::perf::measurement::PerfMeasurement;
 use crate::perf::run::{compare_perf_baseline, perf_baseline_json_from_args};
-use crate::probes::projection::run_projection_batch_plan;
+use crate::probes::projection::{run_projection_batch_exec_probe, run_projection_batch_plan};
 
 const NERVA_QWEN3_8B_PERF: &str =
     include_str!("../../../../docs/source/perf/qwen3_8b_nerva_cuda_generate.json");
@@ -149,4 +149,15 @@ fn projection_batch_plan_requires_compatible_weight_hash_group() {
     assert!(json.contains("\"exact\":false"));
     assert!(json.contains("\"block_tokens\":0"));
     assert!(json.contains("\"ideal_projection_weight_stream_reuse_x1000\":0"));
+}
+
+#[test]
+fn projection_batch_exec_probe_skips_unproven_batch_before_cuda() {
+    let json = run_projection_batch_exec_probe(8, 1, 64, 128, 1, 4, 1, 8, 2).unwrap();
+
+    assert!(json.contains("\"schema\":\"nerva-projection-batch-exec-probe-v1\""));
+    assert!(json.contains("\"status\":\"skipped\""));
+    assert!(json.contains("\"reason\":\"insufficient_compatible_ready\""));
+    assert!(json.contains("\"exact\":false"));
+    assert!(json.contains("\"executor_status\":\"not_executed\""));
 }

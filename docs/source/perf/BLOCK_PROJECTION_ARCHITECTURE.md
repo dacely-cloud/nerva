@@ -203,3 +203,50 @@ This is the next runtime seam for the native executor:
 
 That preserves greedy/sampling semantics for each request. The only shared work
 is the dense projection read over identical weights.
+
+## Hardware-Backed Batch Execution Probe
+
+The bench CLI also exposes a stricter probe that combines the exact scheduler
+batch plan with an actual CUDA block projection measurement:
+
+```text
+cargo run -p nerva-bench --release -- projection-batch-exec-probe \
+  8 8 6144 4096 1 16 2 8 2
+```
+
+Arguments:
+
+```text
+ready_requests compatible_requests rows cols dtype iterations warmups target_block min_block
+```
+
+For the Qwen3-8B QKV shape on the RTX 5090, the measured artifact is:
+
+```text
+single graph projection     12364 ns/token
+block8 graph projection     20442 ns total
+block8 graph per token       2555 ns/token
+per-token speedup           4.839x
+mismatches                  0
+hot-path allocations        0
+```
+
+The artifact is recorded at:
+
+```text
+docs/source/perf/qwen3_8b_projection_batch_exec_probe.json
+```
+
+This probe is still not a full decode executor. Its purpose is to fail unless
+both halves of the next architecture step are true:
+
+```text
+1. the runtime planner proves an exact same-weight batch
+2. CUDA measures the matching W * X block projection on the current GPU
+```
+
+That makes the remaining executor work concrete: collect compatible resident
+sessions, pack their hidden vectors into the block input, call the existing
+token projection dispatcher with `tokens = batch_size`, and scatter the output
+columns back to isolated per-session state before attention, sampling, and stop
+policy continue.
