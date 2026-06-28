@@ -33,6 +33,12 @@ constexpr uint32_t kPrefillChunkMaxTokens = 8192;
 constexpr uint32_t kVerifyMaxDraftTokens = 128;
 constexpr uint32_t kKvCacheBlockTokens = 16;
 constexpr uint32_t kDecodeAttentionChunkTokens = 64;
+constexpr uint32_t kGroupedGqaHeads = 4;
+constexpr uint32_t kGroupedGqaThreadsPerHead = 64;
+constexpr uint32_t kGroupedGqaThreads =
+    kGroupedGqaHeads * kGroupedGqaThreadsPerHead;
+constexpr uint32_t kGroupedGqaHeadDimMax =
+    kGroupedGqaThreadsPerHead * kHeadThreadElements;
 constexpr uint32_t kChunkedDecodeAttentionThreshold = 128;
 constexpr uint64_t kMissingOffset = UINT64_MAX;
 constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ull;
@@ -1083,6 +1089,131 @@ __global__ void hf_layer_attention_chunk_kernel(
 #pragma unroll
   for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
     const uint32_t offset = threadIdx.x + item * blockDim.x;
+    if (offset < head_dim) {
+      partial_values[slot * head_dim + offset] = acc[item];
+    }
+  }
+}
+
+template <uint32_t DType>
+__global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
+    uint32_t layer_index, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
+    uint32_t head_dim, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, uint32_t attention_chunks, float *scratch,
+    const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
+    float *partial_m, float *partial_l, uint32_t kv_block_count,
+    const uint32_t *kv_block_table) {
+  __shared__ uint32_t current_position_shared;
+  __shared__ float shared_k[kGroupedGqaHeadDimMax];
+  __shared__ float shared_v[kGroupedGqaHeadDimMax];
+  __shared__ float reduce[kGroupedGqaHeads][kGroupedGqaThreadsPerHead];
+  __shared__ float old_scales[kGroupedGqaHeads];
+  __shared__ float new_scales[kGroupedGqaHeads];
+  if (threadIdx.x == 0) {
+    current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
+  }
+  __syncthreads();
+  const uint32_t current_position = current_position_shared;
+  if (current_position >= max_steps || kv_heads == 0 ||
+      heads / kv_heads != kGroupedGqaHeads || heads % kv_heads != 0 ||
+      head_dim > kGroupedGqaHeadDimMax ||
+      blockDim.x != kGroupedGqaThreads) {
+    return;
+  }
+  const uint32_t kv_head = blockIdx.x;
+  const uint32_t chunk = blockIdx.y;
+  if (kv_head >= kv_heads || chunk >= attention_chunks) {
+    return;
+  }
+  const uint32_t chunk_start = chunk * kDecodeAttentionChunkTokens;
+  if (chunk_start > current_position) {
+    if (threadIdx.x < kGroupedGqaHeads) {
+      const uint32_t head = kv_head * kGroupedGqaHeads + threadIdx.x;
+      const uint64_t slot =
+          (static_cast<uint64_t>(head) * attention_chunks + chunk);
+      partial_m[slot] = -INFINITY;
+      partial_l[slot] = 0.0f;
+    }
+    return;
+  }
+  const uint32_t chunk_limit = chunk_start + kDecodeAttentionChunkTokens;
+  const uint32_t position_limit = current_position + 1u;
+  const uint32_t chunk_end =
+      chunk_limit < position_limit ? chunk_limit : position_limit;
+  const uint32_t attention_hidden = heads * head_dim;
+  const uint32_t kv_hidden = kv_heads * head_dim;
+  const uint32_t kv_start = kv_head * head_dim;
+  const uint32_t q_in_group = threadIdx.x / kGroupedGqaThreadsPerHead;
+  const uint32_t lane = threadIdx.x - q_in_group * kGroupedGqaThreadsPerHead;
+  const uint32_t head = kv_head * kGroupedGqaHeads + q_in_group;
+  const uint32_t head_start = head * head_dim;
+  const uint64_t slot =
+      (static_cast<uint64_t>(head) * attention_chunks + chunk);
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const float scale = rsqrtf(static_cast<float>(head_dim));
+  float local_m = -INFINITY;
+  float local_l = 0.0f;
+  float acc[kHeadThreadElements];
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    acc[item] = 0.0f;
+  }
+  for (uint32_t token = chunk_start; token < chunk_end; ++token) {
+    const uint64_t token_base = kv_cache_token_base(
+        layer_index, kv_block_count, kv_block_table, token, kv_hidden,
+        kv_start);
+    for (uint32_t offset = threadIdx.x; offset < head_dim;
+         offset += blockDim.x) {
+      shared_k[offset] = encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+      shared_v[offset] =
+          encoded_to_f32_typed<DType>(kv_values[token_base + offset]);
+    }
+    __syncthreads();
+    float partial = 0.0f;
+#pragma unroll
+    for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+      const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
+      if (offset < head_dim) {
+        partial += s.q[head_start + offset] * shared_k[offset];
+      }
+    }
+    reduce[q_in_group][lane] = partial;
+    __syncthreads();
+    for (uint32_t stride = kGroupedGqaThreadsPerHead / 2; stride > 0;
+         stride >>= 1) {
+      if (lane < stride) {
+        reduce[q_in_group][lane] += reduce[q_in_group][lane + stride];
+      }
+      __syncthreads();
+    }
+    if (lane == 0) {
+      const float score = reduce[q_in_group][0] * scale;
+      const float next_m = fmaxf(local_m, score);
+      old_scales[q_in_group] =
+          local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+      new_scales[q_in_group] = expf(score - next_m);
+      local_l = local_l * old_scales[q_in_group] + new_scales[q_in_group];
+      local_m = next_m;
+    }
+    __syncthreads();
+#pragma unroll
+    for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+      const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
+      if (offset < head_dim) {
+        acc[item] = acc[item] * old_scales[q_in_group] +
+                    shared_v[offset] * new_scales[q_in_group];
+      }
+    }
+    __syncthreads();
+  }
+  if (lane == 0) {
+    partial_m[slot] = local_m;
+    partial_l[slot] = local_l;
+  }
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
     if (offset < head_dim) {
       partial_values[slot * head_dim + offset] = acc[item];
     }
@@ -3029,10 +3160,40 @@ cudaError_t launch_cublas_layer_session_step(
           session->kv_block_count, session->device_kv_block_table);
       err = cudaGetLastError();
       if (err == cudaSuccess) {
-        const dim3 grid(session->heads, attention_chunks);
-        if (session->dtype == kDTypeBF16) {
+        const uint32_t query_group = session->heads / session->kv_heads;
+        const bool use_grouped_gqa =
+            query_group == kGroupedGqaHeads &&
+            session->heads % session->kv_heads == 0 &&
+            session->head_dim <= kGroupedGqaHeadDimMax;
+        const dim3 grid(use_grouped_gqa ? session->kv_heads : session->heads,
+                        attention_chunks);
+        if (session->dtype == kDTypeBF16 && use_grouped_gqa) {
+          hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeBF16>
+              <<<grid, kGroupedGqaThreads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else if (session->dtype == kDTypeBF16) {
           hf_layer_attention_chunk_kernel<kDTypeBF16>
               <<<grid, session->head_threads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else if (use_grouped_gqa) {
+          hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeF16>
+              <<<grid, kGroupedGqaThreads, 0, session->stream>>>(
                   layer_index, session->hidden, session->heads,
                   session->kv_heads, session->head_dim, session->intermediate,
                   session->device_step, max_steps, attention_chunks,
@@ -3239,10 +3400,40 @@ cudaError_t profile_cublas_layer_session_step(
           session->kv_block_count, session->device_kv_block_table);
       err = cudaGetLastError();
       if (err == cudaSuccess) {
-        const dim3 grid(session->heads, attention_chunks);
-        if (session->dtype == kDTypeBF16) {
+        const uint32_t query_group = session->heads / session->kv_heads;
+        const bool use_grouped_gqa =
+            query_group == kGroupedGqaHeads &&
+            session->heads % session->kv_heads == 0 &&
+            session->head_dim <= kGroupedGqaHeadDimMax;
+        const dim3 grid(use_grouped_gqa ? session->kv_heads : session->heads,
+                        attention_chunks);
+        if (session->dtype == kDTypeBF16 && use_grouped_gqa) {
+          hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeBF16>
+              <<<grid, kGroupedGqaThreads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else if (session->dtype == kDTypeBF16) {
           hf_layer_attention_chunk_kernel<kDTypeBF16>
               <<<grid, session->head_threads, 0, session->stream>>>(
+                  layer_index, session->hidden, session->heads,
+                  session->kv_heads, session->head_dim, session->intermediate,
+                  session->device_step, max_steps, attention_chunks,
+                  session->device_scratch, session->device_kv_keys,
+                  session->device_kv_values,
+                  session->device_decode_attention_values,
+                  session->device_decode_attention_m,
+                  session->device_decode_attention_l, session->kv_block_count,
+                  session->device_kv_block_table);
+        } else if (use_grouped_gqa) {
+          hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeF16>
+              <<<grid, kGroupedGqaThreads, 0, session->stream>>>(
                   layer_index, session->hidden, session->heads,
                   session->kv_heads, session->head_dim, session->intermediate,
                   session->device_step, max_steps, attention_chunks,
