@@ -427,7 +427,7 @@ impl NervaCliLoggerInner {
                     },
                 ),
             ]
-            .join(" "),
+            .join("  "),
         );
     }
 
@@ -480,7 +480,7 @@ impl NervaCliLoggerInner {
                     Tone::Blue,
                 ),
             ]
-            .join(" "),
+            .join("  "),
         );
     }
 
@@ -491,49 +491,149 @@ impl NervaCliLoggerInner {
     ) {
         let stats = DecodeStats::from_output(output);
         self.print_plain_line(
-            "load",
-            format!(
-                "weights {} h2d {} load {} {} tensors {} descriptors {}",
-                format::bytes(output.stream.create.resident_weight_bytes),
-                format::bytes(output.stream.create.h2d_bytes),
-                format::duration(Duration::from_nanos(output.stream.load_wall_ns)),
-                format::gb_per_s(
-                    output.stream.create.h2d_bytes,
-                    Duration::from_nanos(output.stream.load_wall_ns.max(1))
-                ),
-                output.stream.tensors_loaded,
-                output.stream.create.planned_weight_descriptor_count
-            ),
+            "report",
+            paint(self.color, Tone::Green, "NERVA performance report"),
         );
-        self.print_plain_line(
-            "complete",
-            format!(
-                "generated {} tokens stop {} elapsed {}",
-                output.tokens().len(),
-                output.stop_reason().as_str(),
-                format::duration(elapsed)
-            ),
-        );
-        self.print_plain_line(
-            "perf",
-            format!(
-                "decode {} mean {} p50 {} p95 {} p99 {}",
-                format::tokens_per_s(stats.tokens, Duration::from_nanos(stats.wall_ns.max(1))),
-                format::ms_from_ns(stats.mean_ns()),
-                format::ms_from_ns(stats.p50_ns),
-                format::ms_from_ns(stats.p95_ns),
-                format::ms_from_ns(stats.p99_ns)
-            ),
-        );
-        if let Some(drift) = decode_drift_line(output, self.color) {
-            self.print_plain_line("drift", drift);
-        }
-        self.print_plain_line(
-            "time",
+        self.print_plain_report_row(
+            "summary",
             vec![
                 metric(
                     self.color,
-                    "proj",
+                    "generated",
+                    format!("{} tokens", output.tokens().len()),
+                    Tone::Green,
+                ),
+                metric(
+                    self.color,
+                    "stop",
+                    output.stop_reason().as_str(),
+                    Tone::Yellow,
+                ),
+                metric(self.color, "elapsed", format::duration(elapsed), Tone::Cyan),
+            ]
+            .join("  "),
+        );
+        self.print_plain_report_row(
+            "projection",
+            vec![
+                metric(
+                    self.color,
+                    "mode",
+                    output.stream.projection_mode.name(),
+                    Tone::Green,
+                ),
+                metric(
+                    self.color,
+                    "block",
+                    output.stream.projection_mode.block_tokens().to_string(),
+                    Tone::Cyan,
+                ),
+            ]
+            .join("  "),
+        );
+        self.print_plain_report_row(
+            "load",
+            vec![
+                metric(
+                    self.color,
+                    "weights",
+                    format::bytes(output.stream.create.resident_weight_bytes),
+                    Tone::Orange,
+                ),
+                metric(
+                    self.color,
+                    "H2D",
+                    format::bytes(output.stream.create.h2d_bytes),
+                    Tone::Yellow,
+                ),
+                metric(
+                    self.color,
+                    "time",
+                    format::duration(Duration::from_nanos(output.stream.load_wall_ns)),
+                    Tone::Cyan,
+                ),
+                metric(
+                    self.color,
+                    "bandwidth",
+                    format::gb_per_s(
+                        output.stream.create.h2d_bytes,
+                        Duration::from_nanos(output.stream.load_wall_ns.max(1)),
+                    ),
+                    Tone::Green,
+                ),
+            ]
+            .join("  "),
+        );
+        self.print_plain_report_row(
+            "",
+            vec![
+                metric(
+                    self.color,
+                    "tensors",
+                    output.stream.tensors_loaded.to_string(),
+                    Tone::Dim,
+                ),
+                metric(
+                    self.color,
+                    "descriptors",
+                    output
+                        .stream
+                        .create
+                        .planned_weight_descriptor_count
+                        .to_string(),
+                    Tone::Dim,
+                ),
+            ]
+            .join("  "),
+        );
+        self.print_plain_report_row(
+            "throughput",
+            metric(
+                self.color,
+                "decode",
+                format::tokens_per_s(stats.tokens, Duration::from_nanos(stats.wall_ns.max(1))),
+                Tone::Green,
+            ),
+        );
+        self.print_plain_report_row(
+            "latency",
+            vec![
+                metric(
+                    self.color,
+                    "mean",
+                    format::ms_from_ns(stats.mean_ns()),
+                    Tone::Cyan,
+                ),
+                metric(
+                    self.color,
+                    "p50",
+                    format::ms_from_ns(stats.p50_ns),
+                    Tone::Green,
+                ),
+                metric(
+                    self.color,
+                    "p95",
+                    format::ms_from_ns(stats.p95_ns),
+                    Tone::Yellow,
+                ),
+                metric(
+                    self.color,
+                    "p99",
+                    format::ms_from_ns(stats.p99_ns),
+                    Tone::Red,
+                ),
+            ]
+            .join("  "),
+        );
+        if let Some(drift) = decode_drift_line(output, self.color) {
+            self.print_plain_report_row("drift", drift);
+        }
+        self.print_plain_report_row(
+            "time split",
+            vec![
+                metric(
+                    self.color,
+                    "projection",
                     format::ms_from_ns(stats.projection_ns),
                     Tone::Blue,
                 ),
@@ -562,29 +662,95 @@ impl NervaCliLoggerInner {
                     Tone::Green,
                 ),
             ]
-            .join(" "),
+            .join("  "),
         );
-        self.print_plain_line(
-            "graph",
-            format!(
-                "kernels {} nodes {} replays {} cache_hits {} sync_calls {} hot_alloc {}",
-                stats.kernel_launches,
-                stats.graph_nodes,
-                stats.graph_replays,
-                stats.graph_cache_hits,
-                stats.sync_calls,
-                stats.hot_path_allocations
-            ),
+        self.print_plain_report_row(
+            "cuda graph",
+            vec![
+                metric(
+                    self.color,
+                    "kernels",
+                    stats.kernel_launches.to_string(),
+                    Tone::Magenta,
+                ),
+                metric(
+                    self.color,
+                    "nodes",
+                    stats.graph_nodes.to_string(),
+                    Tone::Magenta,
+                ),
+                metric(
+                    self.color,
+                    "replays",
+                    stats.graph_replays.to_string(),
+                    Tone::Blue,
+                ),
+            ]
+            .join("  "),
         );
-        self.print_plain_line(
+        self.print_plain_report_row(
+            "",
+            vec![
+                metric(
+                    self.color,
+                    "cache hits",
+                    stats.graph_cache_hits.to_string(),
+                    Tone::Green,
+                ),
+                metric(
+                    self.color,
+                    "sync calls",
+                    stats.sync_calls.to_string(),
+                    Tone::Yellow,
+                ),
+                metric(
+                    self.color,
+                    "hot alloc",
+                    stats.hot_path_allocations.to_string(),
+                    if stats.hot_path_allocations == 0 {
+                        Tone::Green
+                    } else {
+                        Tone::Red
+                    },
+                ),
+            ]
+            .join("  "),
+        );
+        self.print_plain_report_row(
             "memory",
-            format!(
-                "weights {} kv {} decode_h2d {} d2h {}",
-                format::bytes(output.stream.create.resident_weight_bytes),
-                format::bytes(output.stream.create.resident_kv_bytes),
-                format::bytes(stats.h2d_bytes),
-                format::bytes(stats.d2h_bytes)
-            ),
+            vec![
+                metric(
+                    self.color,
+                    "weights",
+                    format::bytes(output.stream.create.resident_weight_bytes),
+                    Tone::Orange,
+                ),
+                metric(
+                    self.color,
+                    "KV",
+                    format::bytes(output.stream.create.resident_kv_bytes),
+                    Tone::Blue,
+                ),
+            ]
+            .join("  "),
+        );
+        self.print_plain_report_row(
+            "",
+            vec![
+                metric(
+                    self.color,
+                    "decode H2D",
+                    format::bytes(stats.h2d_bytes),
+                    Tone::Yellow,
+                ),
+                metric(
+                    self.color,
+                    "D2H",
+                    format::bytes(stats.d2h_bytes),
+                    Tone::Cyan,
+                ),
+            ]
+            .join("  "),
         );
     }
 
@@ -608,6 +774,41 @@ impl NervaCliLoggerInner {
             format::duration(self.state.boot.elapsed()),
             phase,
             message.as_ref()
+        );
+    }
+
+    fn print_plain_report_row(&mut self, label: &str, message: impl AsRef<str>) {
+        const LABEL_WIDTH: usize = 12;
+        self.last_plain_emit = Instant::now();
+        let label = if label.is_empty() {
+            String::new()
+        } else {
+            label.to_string()
+        };
+        if self.color.enabled() {
+            eprintln!(
+                "{}[{}]{} {}{:<8}{} {}{:<width$}{} {}",
+                code(self.color, Tone::Dim),
+                format::duration(self.state.boot.elapsed()),
+                reset(self.color),
+                code(self.color, phase_tone("report")),
+                "report",
+                reset(self.color),
+                code(self.color, Tone::Dim),
+                label,
+                reset(self.color),
+                message.as_ref(),
+                width = LABEL_WIDTH,
+            );
+            return;
+        }
+        eprintln!(
+            "[{}] {:<8} {:<width$} {}",
+            format::duration(self.state.boot.elapsed()),
+            "report",
+            label,
+            message.as_ref(),
+            width = LABEL_WIDTH,
         );
     }
 
@@ -709,7 +910,7 @@ impl Drop for NativeLoadProgressGuard {
 
 fn phase_tone(phase: &str) -> Tone {
     match phase {
-        "decode" | "prefill" | "complete" | "perf" => Tone::Green,
+        "decode" | "prefill" | "complete" | "perf" | "report" => Tone::Green,
         "load" | "boot" | "version" => Tone::Orange,
         "request" | "runtime" => Tone::Cyan,
         "time" | "drift" => Tone::Yellow,
@@ -778,7 +979,7 @@ fn decode_drift_line(
             metric(color, "last", format::ms_from_ns(last), tone_for_delta),
             metric(color, "delta", format!("{delta:+.2}%"), tone_for_delta),
         ]
-        .join(" "),
+        .join("  "),
     )
 }
 
