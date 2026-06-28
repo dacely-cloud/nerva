@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "measured-planner",
     "memory-loop",
     "projection-bench [rows] [cols] [dtype] [iterations] [warmup_iterations] [block_tokens]",
+    "projection-batch-plan [ready_requests] [compatible_requests] [target_block_tokens] [min_block_tokens]",
     "perf-baseline workload scope nerva_tps vllm_tps rvllm_tps nerva_p99_ms vllm_p99_ms rvllm_p99_ms",
     "external-baseline engine workload scope status evidence",
     "block",

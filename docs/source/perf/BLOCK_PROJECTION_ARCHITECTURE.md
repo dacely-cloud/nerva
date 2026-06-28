@@ -181,6 +181,16 @@ shows strong per-token wins at `block_tokens=8`. The planner caps the selected
 request count to that target and returns no batch when fewer than two compatible
 ready sequences exist.
 
+The planner can be exercised from the bench CLI:
+
+```text
+cargo run -p nerva-bench -- projection-batch-plan 8 8 8 2
+```
+
+The output reports the selected request ids and the ideal projection weight
+stream reuse factor. For example, `block_tokens = 8` exposes an ideal `8x`
+weight-stream reuse opportunity before kernel overhead and non-projection work.
+
 This is the next runtime seam for the native executor:
 
 ```text

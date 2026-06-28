@@ -1,6 +1,7 @@
 use crate::artifact::run::run_artifact;
 use crate::perf::measurement::PerfMeasurement;
 use crate::perf::run::{compare_perf_baseline, perf_baseline_json_from_args};
+use crate::probes::projection::run_projection_batch_plan;
 
 const NERVA_QWEN3_8B_PERF: &str =
     include_str!("../../../../docs/source/perf/qwen3_8b_nerva_cuda_generate.json");
@@ -125,4 +126,27 @@ fn perf_measurement_rejects_non_positive_or_mismatched_artifacts() {
     other.scope = "different_scope".to_string();
     let nerva = PerfMeasurement::parse("nerva", NERVA_QWEN3_8B_PERF).unwrap();
     assert!(!nerva.matches_workload(&other));
+}
+
+#[test]
+fn projection_batch_plan_reports_exact_block_reuse() {
+    let json = run_projection_batch_plan(8, 8, 8, 2).unwrap();
+
+    assert!(json.contains("\"schema\":\"nerva-projection-batch-plan-v1\""));
+    assert!(json.contains("\"plan_reason\":\"ready\""));
+    assert!(json.contains("\"exact\":true"));
+    assert!(json.contains("\"block_tokens\":8"));
+    assert!(json.contains("\"selected_request_ids\":[0,1,2,3,4,5,6,7]"));
+    assert!(json.contains("\"ideal_projection_weight_stream_reuse_x1000\":8000"));
+    assert!(json.contains("\"executor_status\":\"planner_only\""));
+}
+
+#[test]
+fn projection_batch_plan_requires_compatible_weight_hash_group() {
+    let json = run_projection_batch_plan(8, 1, 8, 2).unwrap();
+
+    assert!(json.contains("\"plan_reason\":\"insufficient_compatible_ready\""));
+    assert!(json.contains("\"exact\":false"));
+    assert!(json.contains("\"block_tokens\":0"));
+    assert!(json.contains("\"ideal_projection_weight_stream_reuse_x1000\":0"));
 }

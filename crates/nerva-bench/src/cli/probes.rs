@@ -56,6 +56,7 @@ pub(crate) fn dispatch(
         )),
         Some("memory-loop") => Some(exit::print_json_result(memory_loop::run_memory_loop_probe())),
         Some("projection-bench") => Some(run_projection_bench_command(args)),
+        Some("projection-batch-plan") => Some(run_projection_batch_plan_command(args)),
         Some("perf-baseline") => Some(exit::print_json_result(
             perf::run::perf_baseline_json_from_args(&args.collect::<Vec<_>>()),
         )),
@@ -132,6 +133,32 @@ fn run_projection_bench_command(args: &mut impl Iterator<Item = String>) -> Exit
         iterations,
         warmups,
         block_tokens,
+    ))
+}
+
+fn run_projection_batch_plan_command(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let ready_requests = match parse_optional_usize(args.next(), 8, "ready_requests") {
+        Ok(ready_requests) => ready_requests,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let compatible_requests =
+        match parse_optional_usize(args.next(), ready_requests, "compatible_requests") {
+            Ok(compatible_requests) => compatible_requests,
+            Err(reason) => return exit::parse_error(reason),
+        };
+    let target_block_tokens = match parse_optional_usize(args.next(), 8, "target_block_tokens") {
+        Ok(target_block_tokens) => target_block_tokens,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let min_block_tokens = match parse_optional_usize(args.next(), 2, "min_block_tokens") {
+        Ok(min_block_tokens) => min_block_tokens,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    exit::print_json_result(projection::run_projection_batch_plan(
+        ready_requests,
+        compatible_requests,
+        target_block_tokens,
+        min_block_tokens,
     ))
 }
 
