@@ -3160,6 +3160,78 @@ cudaError_t encoded_row_major_gemm_tokens(
   return cublas_to_cuda(status);
 }
 
+cudaError_t encoded_row_major_gemm_tokens_lt(
+    cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
+    size_t workspace_bytes, const uint16_t *matrix, const uint16_t *input,
+    uint32_t rows, uint32_t cols, uint32_t tokens, uint32_t dtype, float beta,
+    float *output) {
+  if (handle == nullptr || rows == 0 || cols == 0 || tokens == 0 ||
+      rows > INT32_MAX || cols > INT32_MAX || tokens > INT32_MAX) {
+    return cudaErrorInvalidValue;
+  }
+  const cudaDataType_t data_type = encoded_cuda_type(dtype);
+  cublasLtMatmulDesc_t op_desc = nullptr;
+  cublasLtMatrixLayout_t a_desc = nullptr;
+  cublasLtMatrixLayout_t b_desc = nullptr;
+  cublasLtMatrixLayout_t c_desc = nullptr;
+  cublasLtMatrixLayout_t d_desc = nullptr;
+  cublasStatus_t status =
+      cublasLtMatmulDescCreate(&op_desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+  cublasOperation_t op_a = CUBLAS_OP_N;
+  cublasOperation_t op_b = CUBLAS_OP_T;
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatmulDescSetAttribute(
+        op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op_a, sizeof(op_a));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatmulDescSetAttribute(
+        op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op_b, sizeof(op_b));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(
+        &a_desc, data_type, tokens, cols, cols);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(&b_desc, data_type, rows, cols, cols);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(&c_desc, CUDA_R_32F, tokens, rows, rows);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(&d_desc, CUDA_R_32F, tokens, rows, rows);
+  cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        a_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        b_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        c_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        d_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS) {
+    const float alpha = 1.0f;
+    status = cublasLtMatmul(handle, op_desc, &alpha, input, a_desc, matrix,
+                            b_desc, &beta, output, c_desc, output, d_desc,
+                            nullptr, workspace, workspace_bytes, stream);
+  }
+  destroy_lt_descriptors(op_desc, a_desc, b_desc, c_desc, d_desc);
+  return cublas_to_cuda(status);
+}
+
+cudaError_t encoded_row_major_gemm_tokens_best(
+    cublasHandle_t cublas, cublasLtHandle_t cublas_lt, cudaStream_t stream,
+    void *workspace, size_t workspace_bytes, const uint16_t *matrix,
+    const uint16_t *input, uint32_t rows, uint32_t cols, uint32_t tokens,
+    uint32_t dtype, float beta, float *output) {
+  cudaError_t err = encoded_row_major_gemm_tokens_lt(
+      cublas_lt, stream, workspace, workspace_bytes, matrix, input, rows, cols,
+      tokens, dtype, beta, output);
+  if (err == cudaSuccess) {
+    return err;
+  }
+  return encoded_row_major_gemm_tokens(cublas, matrix, input, rows, cols,
+                                       tokens, dtype, beta, output);
+}
+
 cudaError_t final_head_gemv(cublasHandle_t handle, uint16_t *arena,
                             SequenceArenaLayout arena_layout, uint32_t dtype,
                             uint32_t hidden, uint32_t vocab_size,
@@ -5118,8 +5190,9 @@ cudaError_t launch_cublas_session_prefill(
         err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
-        err = encoded_row_major_gemm_tokens(
-            session->cublas,
+        err = encoded_row_major_gemm_tokens_best(
+            session->cublas, session->cublas_lt, session->stream,
+            session->cublas_workspace, kCublasWorkspaceBytes,
             session->device_qkv_packed +
                 packed_shape.qkv_elements_per_layer * layer_index,
             session->device_prefill_norm,
@@ -5226,8 +5299,10 @@ cudaError_t launch_cublas_session_prefill(
         err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
-        err = encoded_row_major_gemm_tokens(
-            session->cublas, session->device_arena + layout.w_o,
+        err = encoded_row_major_gemm_tokens_best(
+            session->cublas, session->cublas_lt, session->stream,
+            session->cublas_workspace, kCublasWorkspaceBytes,
+            session->device_arena + layout.w_o,
             session->device_prefill_attn, session->hidden, attention_hidden,
             chunk_tokens, session->dtype, 0.0f, session->device_prefill_o);
         out->kernel_launches += 1;
@@ -5252,8 +5327,9 @@ cudaError_t launch_cublas_session_prefill(
         err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
-        err = encoded_row_major_gemm_tokens(
-            session->cublas,
+        err = encoded_row_major_gemm_tokens_best(
+            session->cublas, session->cublas_lt, session->stream,
+            session->cublas_workspace, kCublasWorkspaceBytes,
             session->device_gate_up_packed +
                 packed_shape.gate_up_elements_per_layer * layer_index,
             session->device_prefill_norm,
@@ -5282,8 +5358,10 @@ cudaError_t launch_cublas_session_prefill(
         err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
-        err = encoded_row_major_gemm_tokens(
-            session->cublas, session->device_arena + layout.w_down,
+        err = encoded_row_major_gemm_tokens_best(
+            session->cublas, session->cublas_lt, session->stream,
+            session->cublas_workspace, kCublasWorkspaceBytes,
+            session->device_arena + layout.w_down,
             session->device_prefill_ff, session->hidden, session->intermediate,
             chunk_tokens, session->dtype, 0.0f, session->device_prefill_down);
         out->kernel_launches += 1;
