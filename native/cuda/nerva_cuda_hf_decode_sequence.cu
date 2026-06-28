@@ -4182,6 +4182,46 @@ void copy_cached_profile(const NervaCudaHfDecodeSequenceSession *session,
 }
 
 #if NERVA_HAVE_CUDNN_FRONTEND
+bool cudnn_decode_debug_enabled() {
+  static int enabled = []() {
+    const char *value = getenv("NERVA_CUDNN_DECODE_DEBUG");
+    return value != nullptr && value[0] != '\0' && strcmp(value, "0") != 0;
+  }();
+  return enabled != 0;
+}
+
+bool cudnn_decode_runtime_enabled() {
+  static int enabled = []() {
+    const char *value = getenv("NERVA_CUDNN_DECODE");
+    if (value == nullptr || value[0] == '\0') {
+      return 1;
+    }
+    const bool is_disabled =
+        strcmp(value, "0") == 0 || strcmp(value, "false") == 0 ||
+        strcmp(value, "False") == 0 || strcmp(value, "FALSE") == 0;
+    return is_disabled ? 0 : 1;
+  }();
+  return enabled != 0;
+}
+
+void log_cudnn_decode_status(const char *phase,
+                             cudnn_frontend::error_object status) {
+  if (!cudnn_decode_debug_enabled()) {
+    return;
+  }
+  fprintf(stderr, "[nerva-cudnn-decode] %s failed code=%d message=%s\n",
+          phase, static_cast<int>(status.get_code()),
+          status.get_message().c_str());
+}
+
+void log_cudnn_decode_cuda_error(const char *phase, cudaError_t err) {
+  if (!cudnn_decode_debug_enabled()) {
+    return;
+  }
+  fprintf(stderr, "[nerva-cudnn-decode] %s failed cuda=%s: %s\n", phase,
+          cudaGetErrorName(err), cudaGetErrorString(err));
+}
+
 cudaError_t ensure_cudnn_prefill_sdpa_plan(
     NervaCudaHfDecodeSequenceSession *session, uint32_t seq_tokens) {
   if (session == nullptr || session->cudnn == nullptr || seq_tokens == 0 ||
@@ -4322,14 +4362,33 @@ cudaError_t execute_cudnn_prefill_sdpa(
 
 bool can_use_cudnn_decode_sdpa(const NervaCudaHfDecodeSequenceSession *session,
                                uint32_t attention_chunks) {
-  return session != nullptr && attention_chunks != 0 &&
-         session->cudnn_decode_sdpa_disabled == 0 &&
-         session->cudnn != nullptr && session->dtype == kDTypeBF16 &&
-         session->heads != 0 && session->kv_heads != 0 &&
-         session->heads % session->kv_heads == 0 && session->head_dim != 0 &&
-         session->device_decode_q != nullptr &&
-         session->device_decode_seq_len_q != nullptr &&
-         session->device_decode_seq_len_kv != nullptr;
+  const bool usable =
+      session != nullptr && attention_chunks != 0 &&
+      cudnn_decode_runtime_enabled() &&
+      session->cudnn_decode_sdpa_disabled == 0 &&
+      session->cudnn != nullptr && session->dtype == kDTypeBF16 &&
+      session->heads != 0 && session->kv_heads != 0 &&
+      session->heads % session->kv_heads == 0 && session->head_dim != 0 &&
+      session->device_decode_q != nullptr &&
+      session->device_decode_seq_len_q != nullptr &&
+      session->device_decode_seq_len_kv != nullptr;
+  if (!usable && cudnn_decode_debug_enabled()) {
+    fprintf(stderr,
+            "[nerva-cudnn-decode] gate failed session=%d chunks=%u disabled=%u "
+            "cudnn=%d dtype=%u heads=%u kv_heads=%u head_dim=%u q=%d "
+            "seq_q=%d seq_kv=%d\n",
+            session != nullptr, attention_chunks,
+            session == nullptr ? 0 : session->cudnn_decode_sdpa_disabled,
+            session != nullptr && session->cudnn != nullptr,
+            session == nullptr ? 0 : session->dtype,
+            session == nullptr ? 0 : session->heads,
+            session == nullptr ? 0 : session->kv_heads,
+            session == nullptr ? 0 : session->head_dim,
+            session != nullptr && session->device_decode_q != nullptr,
+            session != nullptr && session->device_decode_seq_len_q != nullptr,
+            session != nullptr && session->device_decode_seq_len_kv != nullptr);
+  }
+  return usable;
 }
 
 cudaError_t ensure_cudnn_decode_sdpa_plan(
@@ -4439,6 +4498,7 @@ cudaError_t ensure_cudnn_decode_sdpa_plan(
   auto status = plan->graph->build(session->cudnn,
                                    {cudnn_frontend::HeurMode_t::A});
   if (status.is_bad()) {
+    log_cudnn_decode_status("build", status);
     delete plan;
     return cudaErrorNotSupported;
   }
@@ -4449,6 +4509,14 @@ cudaError_t ensure_cudnn_decode_sdpa_plan(
     return cudaErrorMemoryAllocation;
   }
   plan->workspace_bytes = static_cast<size_t>(workspace);
+  if (cudnn_decode_debug_enabled()) {
+    fprintf(stderr,
+            "[nerva-cudnn-decode] build ok max_context=%u kv_capacity=%u "
+            "heads=%u kv_heads=%u head_dim=%u workspace=%zu\n",
+            session->max_context_tokens, session->kv_token_capacity,
+            session->heads, session->kv_heads, session->head_dim,
+            plan->workspace_bytes);
+  }
   delete session->cudnn_decode_sdpa;
   session->cudnn_decode_sdpa = plan;
   return cudaSuccess;
@@ -4484,7 +4552,11 @@ cudaError_t execute_cudnn_decode_sdpa(
   };
   auto status = session->cudnn_decode_sdpa->graph->execute(
       session->cudnn, tensors, session->cublas_workspace);
-  return status.is_good() ? cudaSuccess : cudaErrorLaunchFailure;
+  if (status.is_bad()) {
+    log_cudnn_decode_status("execute", status);
+    return cudaErrorLaunchFailure;
+  }
+  return cudaSuccess;
 }
 #endif
 
@@ -5769,6 +5841,7 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
     }
 #if NERVA_HAVE_CUDNN_FRONTEND
     if (tried_cudnn_decode_sdpa) {
+      log_cudnn_decode_cuda_error("graph capture", err);
       session->cudnn_decode_sdpa_disabled = 1;
       if (graph_exec != nullptr) {
         cudaGraphExecDestroy(graph_exec);
@@ -6726,12 +6799,6 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
   cudaError_t err = cudaMemsetAsync(session->device_slots, 0,
                                     session->slots_bytes, session->stream);
   if (err == cudaSuccess)
-    err = cudaMemsetAsync(session->device_kv_keys, 0, session->kv_bytes / 2,
-                          session->stream);
-  if (err == cudaSuccess)
-    err = cudaMemsetAsync(session->device_kv_values, 0, session->kv_bytes / 2,
-                          session->stream);
-  if (err == cudaSuccess)
     err = cudaMemsetAsync(session->device_step, 0, sizeof(uint32_t),
                           session->stream);
   const uint64_t prompt_bytes =
@@ -6912,12 +6979,6 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
   session->pending_prefill_available = 0;
   cudaError_t err = cudaMemsetAsync(session->device_slots, 0,
                                     session->slots_bytes, session->stream);
-  if (err == cudaSuccess)
-    err = cudaMemsetAsync(session->device_kv_keys, 0, session->kv_bytes / 2,
-                          session->stream);
-  if (err == cudaSuccess)
-    err = cudaMemsetAsync(session->device_kv_values, 0, session->kv_bytes / 2,
-                          session->stream);
   if (err == cudaSuccess)
     err = cudaMemsetAsync(session->device_step, 0, sizeof(uint32_t),
                           session->stream);
