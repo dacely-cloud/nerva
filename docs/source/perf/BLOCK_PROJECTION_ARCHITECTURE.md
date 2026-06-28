@@ -402,14 +402,8 @@ dependency_kernel_launches / sampling_kernel_launches
 sync_calls / hot_path_allocations
 ```
 
-This is still a native primitive, not the production queue scheduler. The next
-runtime step is to have the normal scheduler drain the prefill-produced first
-token, group compatible ready sessions, call this one-token batch advance, and
-fall back to single-session graph replay when fewer than `min_block_tokens`
-sessions are eligible.
-
-The Rust stateful loop now exposes this without requiring scheduler code to
-unwrap raw session handles:
+The Rust stateful loop exposes this without requiring scheduler code to unwrap
+raw session handles:
 
 ```text
 CudaHfDecodeSequenceLoop::batch_advance_one(...)
@@ -418,6 +412,29 @@ CudaHfDecodeSequenceLoop::batch_advance_one(...)
 Schedulers can keep owning `CudaHfDecodeSequenceLoop` values, consume the
 prefill-produced first token through the normal `advance(1)` path, and then
 submit compatible active loops to the batch advance wrapper.
+
+The runtime now has the scheduler-facing bridge:
+
+```text
+crates/nerva-runtime/src/engine/hf_cuda_decode/batch_advance.rs
+
+advance_decode_loops_once(...)
+```
+
+It attempts the CUDA one-token batch advance when at least `min_block_tokens`
+loops are present. A successful exact batch returns tokens in original loop
+order and marks `used_batched_projection() == true`. If the native planner
+rejects the batch before touching device state (`no_ready_sessions`,
+`shared_weights_unproven`, or `insufficient_compatible_ready`), the bridge
+falls back to one sequential `advance(1)` per loop and keeps the rejection
+summary attached for scheduler telemetry. If a batch attempt fails after the
+execution path may have started, the bridge returns `BatchFailed` instead of
+silently replaying the loops sequentially.
+
+This is still not the full production queue scheduler. The remaining runtime
+work is to build a continuous decode queue that groups multiple live requests
+by the existing exact planner, drains each prefill-produced first token, and
+then calls `advance_decode_loops_once` for the compatible active group.
 
 The bench CLI exposes a synthetic end-to-end probe for this primitive:
 
@@ -431,9 +448,10 @@ The current RTX 5090 synthetic artifact is:
 docs/source/perf/synthetic_projection_batch_advance_probe.json
 ```
 
-It verifies matching tokens, five batched projection launches for a one-layer
-model (`QKV`, `W_O`, `gate/up`, `down`, `LM head`), zero hot-path allocations,
-and a small wall-clock win over two sequential one-token loop advances on the
-tiny synthetic model. This is not a Qwen throughput claim; it is the first
-hardware-backed proof that the full batched decode-step composition is callable
-above raw FFI and preserves token output for compatible sessions.
+It verifies matching tokens through the runtime bridge, five batched projection
+launches for a one-layer model (`QKV`, `W_O`, `gate/up`, `down`, `LM head`),
+zero hot-path allocations, and a small wall-clock win over two sequential
+one-token loop advances on the tiny synthetic model. This is not a Qwen
+throughput claim; it is the first hardware-backed proof that the full batched
+decode-step composition is callable through scheduler-facing runtime code and
+preserves token output for compatible sessions.

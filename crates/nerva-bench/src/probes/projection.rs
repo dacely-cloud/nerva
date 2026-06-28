@@ -8,13 +8,16 @@ use nerva_cuda::decode::hf_sequence::session::request::{
 };
 use nerva_cuda::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use nerva_cuda::decode::hf_sequence::weight_plan::{
-    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
-    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
+    CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use nerva_cuda::smoke::status::SmokeStatus;
+use nerva_runtime::engine::hf_cuda_decode::batch_advance::{
+    CudaDecodeBatchAdvanceConfig, advance_decode_loops_once,
+};
 use nerva_runtime::engine::hf_cuda_decode::projection_batch::{
-    plan_exact_projection_batch, ProjectionBatchCandidate, ProjectionBatchConfig,
-    ProjectionBatchModelKey, ProjectionBatchPlanReason,
+    ProjectionBatchCandidate, ProjectionBatchConfig, ProjectionBatchModelKey,
+    ProjectionBatchPlanReason, plan_exact_projection_batch,
 };
 
 use crate::json::json_escape;
@@ -365,13 +368,24 @@ fn run_synthetic_batched_advance(
     let mut loops = start_and_drain_first_tokens(sessions)?;
     let mut loop_refs = loops.iter_mut().collect::<Vec<_>>();
     let started = Instant::now();
-    let summary = CudaHfDecodeSequenceLoop::batch_advance_one(
+    let output = advance_decode_loops_once(
         &mut loop_refs,
-        u32::try_from(target_block_tokens)
-            .map_err(|_| "target_block_tokens does not fit in u32".to_string())?,
-        u32::try_from(min_block_tokens)
-            .map_err(|_| "min_block_tokens does not fit in u32".to_string())?,
+        CudaDecodeBatchAdvanceConfig::new(
+            u32::try_from(target_block_tokens)
+                .map_err(|_| "target_block_tokens does not fit in u32".to_string())?,
+            u32::try_from(min_block_tokens)
+                .map_err(|_| "min_block_tokens does not fit in u32".to_string())?,
+        ),
     );
+    if !output.used_batched_projection() {
+        return Err(format!(
+            "runtime batch-advance bridge did not use batched projection: {:?}",
+            output.mode
+        ));
+    }
+    let summary = output
+        .batch
+        .ok_or_else(|| "runtime batch-advance bridge returned no batch summary".to_string())?;
     Ok(BatchedAdvanceProbe {
         wall_ns: started.elapsed().as_nanos(),
         summary,
@@ -570,7 +584,7 @@ fn projection_batch_advance_probe_json(
         0
     };
     format!(
-        "{{\"schema\":\"nerva-projection-batch-advance-probe-v1\",\"status\":\"{}\",\"plan_reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"exact\":{},\"block_tokens\":{},\"observed_tokens\":{},\"sequential_wall_ns\":{},\"batch_wall_ns\":{},\"sequential_vs_batch_wall_speedup_x1000\":{},\"batch_projection_elapsed_ns\":{},\"projection_kernel_launches\":{},\"pack_kernel_launches\":{},\"scatter_kernel_launches\":{},\"dependency_kernel_launches\":{},\"sampling_kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"sequential_tokens\":{:?},\"batch_tokens\":{:?},\"executor_status\":\"synthetic_batch_advance\"}}",
+        "{{\"schema\":\"nerva-projection-batch-advance-probe-v1\",\"status\":\"{}\",\"plan_reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"exact\":{},\"block_tokens\":{},\"observed_tokens\":{},\"sequential_wall_ns\":{},\"batch_wall_ns\":{},\"sequential_vs_batch_wall_speedup_x1000\":{},\"batch_projection_elapsed_ns\":{},\"projection_kernel_launches\":{},\"pack_kernel_launches\":{},\"scatter_kernel_launches\":{},\"dependency_kernel_launches\":{},\"sampling_kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"sequential_tokens\":{:?},\"batch_tokens\":{:?},\"executor_status\":\"runtime_batch_advance_bridge\"}}",
         status,
         reason_name(input.plan.reason),
         input.ready_requests,

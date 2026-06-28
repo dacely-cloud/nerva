@@ -1,3 +1,4 @@
+pub mod batch_advance;
 mod contract;
 mod descriptors;
 pub mod file_backed;
