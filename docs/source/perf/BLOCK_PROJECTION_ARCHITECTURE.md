@@ -432,9 +432,25 @@ execution path may have started, the bridge returns `BatchFailed` instead of
 silently replaying the loops sequentially.
 
 This is still not the full production queue scheduler. The remaining runtime
-work is to build a continuous decode queue that groups multiple live requests
-by the existing exact planner, drains each prefill-produced first token, and
-then calls `advance_decode_loops_once` for the compatible active group.
+work is to connect the real request queue to this grouping/execution path and
+prove Qwen throughput with multiple live requests.
+
+The runtime also has a continuous decode batch scheduler surface:
+
+```text
+crates/nerva-runtime/src/engine/hf_cuda_decode/continuous_batch.rs
+
+plan_continuous_projection_batch(...)
+advance_continuous_decode_batch_once(...)
+```
+
+`plan_continuous_projection_batch` wraps the exact projection planner and
+returns selected input indices plus fallback input indices. The executor
+consumes `(ProjectionBatchCandidate, CudaHfDecodeSequenceLoop)` entries,
+partitions the compatible group, calls `advance_decode_loops_once` for the
+selected loops, and advances leftovers sequentially with an explicit
+`not_selected_for_projection_batch` reason. If the selected batch fails after
+the execution path may have started, leftovers are not advanced silently.
 
 The bench CLI exposes a synthetic end-to-end probe for this primitive:
 
@@ -448,10 +464,10 @@ The current RTX 5090 synthetic artifact is:
 docs/source/perf/synthetic_projection_batch_advance_probe.json
 ```
 
-It verifies matching tokens through the runtime bridge, five batched projection
-launches for a one-layer model (`QKV`, `W_O`, `gate/up`, `down`, `LM head`),
-zero hot-path allocations, and a small wall-clock win over two sequential
-one-token loop advances on the tiny synthetic model. This is not a Qwen
-throughput claim; it is the first hardware-backed proof that the full batched
-decode-step composition is callable through scheduler-facing runtime code and
-preserves token output for compatible sessions.
+It verifies matching tokens through the continuous runtime scheduler, five
+batched projection launches for a one-layer model (`QKV`, `W_O`, `gate/up`,
+`down`, `LM head`), zero hot-path allocations, and a small wall-clock win over
+two sequential one-token loop advances on the tiny synthetic model. This is not
+a Qwen throughput claim; it is the first hardware-backed proof that the full
+batched decode-step composition is callable through scheduler-facing runtime
+code and preserves token output for compatible sessions.

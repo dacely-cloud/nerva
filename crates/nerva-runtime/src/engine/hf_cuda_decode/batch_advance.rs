@@ -95,6 +95,13 @@ pub fn advance_decode_loops_once(
     }
 }
 
+pub fn advance_decode_loops_sequential_once(
+    loops: &mut [&mut CudaHfDecodeSequenceLoop<'_>],
+    reason: &'static str,
+) -> CudaDecodeBatchAdvanceOutput {
+    advance_sequential_once(loops, reason, None)
+}
+
 fn advance_sequential_once(
     loops: &mut [&mut CudaHfDecodeSequenceLoop<'_>],
     reason: &'static str,

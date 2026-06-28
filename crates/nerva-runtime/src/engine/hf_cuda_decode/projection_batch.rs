@@ -67,7 +67,7 @@ pub struct ProjectionBatchCandidate {
 }
 
 impl ProjectionBatchCandidate {
-    fn can_decode_one_token(&self) -> bool {
+    pub fn can_decode_one_token(&self) -> bool {
         self.ready
             && !self.stopped
             && self.remaining_tokens > 0
@@ -82,6 +82,18 @@ pub enum ProjectionBatchPlanReason {
     NoReadyCandidates,
     SharedWeightsUnproven,
     InsufficientCompatibleReady,
+}
+
+impl ProjectionBatchPlanReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::NoCandidates => "no_candidates",
+            Self::NoReadyCandidates => "no_ready_candidates",
+            Self::SharedWeightsUnproven => "shared_weights_unproven",
+            Self::InsufficientCompatibleReady => "insufficient_compatible_ready",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

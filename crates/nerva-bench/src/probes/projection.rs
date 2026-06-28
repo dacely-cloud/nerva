@@ -12,8 +12,8 @@ use nerva_cuda::decode::hf_sequence::weight_plan::{
     CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use nerva_cuda::smoke::status::SmokeStatus;
-use nerva_runtime::engine::hf_cuda_decode::batch_advance::{
-    CudaDecodeBatchAdvanceConfig, advance_decode_loops_once,
+use nerva_runtime::engine::hf_cuda_decode::continuous_batch::{
+    CudaDecodeLoopBatchEntry, advance_continuous_decode_batch_once,
 };
 use nerva_runtime::engine::hf_cuda_decode::projection_batch::{
     ProjectionBatchCandidate, ProjectionBatchConfig, ProjectionBatchModelKey,
@@ -366,30 +366,66 @@ fn run_synthetic_batched_advance(
     min_block_tokens: usize,
 ) -> Result<BatchedAdvanceProbe, String> {
     let mut loops = start_and_drain_first_tokens(sessions)?;
-    let mut loop_refs = loops.iter_mut().collect::<Vec<_>>();
+    let entries = loops
+        .iter_mut()
+        .enumerate()
+        .map(|(index, loop_state)| CudaDecodeLoopBatchEntry {
+            candidate: synthetic_projection_batch_candidate(index as u64),
+            loop_state,
+        })
+        .collect::<Vec<_>>();
     let started = Instant::now();
-    let output = advance_decode_loops_once(
-        &mut loop_refs,
-        CudaDecodeBatchAdvanceConfig::new(
-            u32::try_from(target_block_tokens)
-                .map_err(|_| "target_block_tokens does not fit in u32".to_string())?,
-            u32::try_from(min_block_tokens)
-                .map_err(|_| "min_block_tokens does not fit in u32".to_string())?,
-        ),
+    let output = advance_continuous_decode_batch_once(
+        entries,
+        ProjectionBatchConfig::new(target_block_tokens, min_block_tokens),
     );
     if !output.used_batched_projection() {
         return Err(format!(
-            "runtime batch-advance bridge did not use batched projection: {:?}",
-            output.mode
+            "continuous batch scheduler did not use batched projection: {:?}",
+            output.records
         ));
     }
     let summary = output
-        .batch
-        .ok_or_else(|| "runtime batch-advance bridge returned no batch summary".to_string())?;
+        .selected
+        .and_then(|selected| selected.batch)
+        .ok_or_else(|| "continuous batch scheduler returned no batch summary".to_string())?;
+    if summary.target_block_tokens
+        != u32::try_from(target_block_tokens)
+            .map_err(|_| "target_block_tokens does not fit in u32".to_string())?
+        || summary.min_block_tokens
+            != u32::try_from(min_block_tokens)
+                .map_err(|_| "min_block_tokens does not fit in u32".to_string())?
+    {
+        return Err("continuous batch scheduler returned unexpected block config".to_string());
+    }
     Ok(BatchedAdvanceProbe {
         wall_ns: started.elapsed().as_nanos(),
         summary,
     })
+}
+
+fn synthetic_projection_batch_candidate(request_id: u64) -> ProjectionBatchCandidate {
+    ProjectionBatchCandidate {
+        request_id,
+        model: ProjectionBatchModelKey {
+            data_hash: 0x7379_6e74_6865_7469,
+            data_hash_available: true,
+            dtype: DType::F16,
+            hidden_size: 128,
+            attention_heads: 2,
+            kv_heads: 2,
+            head_dim: 64,
+            intermediate_size: 256,
+            vocab_size: 8,
+            layer_count: 1,
+        },
+        prompt_tokens: 1,
+        generated_tokens: 1,
+        remaining_tokens: 1,
+        max_context_tokens: 5,
+        ready: true,
+        stopped: false,
+    }
 }
 
 fn start_and_drain_first_tokens(
@@ -584,7 +620,7 @@ fn projection_batch_advance_probe_json(
         0
     };
     format!(
-        "{{\"schema\":\"nerva-projection-batch-advance-probe-v1\",\"status\":\"{}\",\"plan_reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"exact\":{},\"block_tokens\":{},\"observed_tokens\":{},\"sequential_wall_ns\":{},\"batch_wall_ns\":{},\"sequential_vs_batch_wall_speedup_x1000\":{},\"batch_projection_elapsed_ns\":{},\"projection_kernel_launches\":{},\"pack_kernel_launches\":{},\"scatter_kernel_launches\":{},\"dependency_kernel_launches\":{},\"sampling_kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"sequential_tokens\":{:?},\"batch_tokens\":{:?},\"executor_status\":\"runtime_batch_advance_bridge\"}}",
+        "{{\"schema\":\"nerva-projection-batch-advance-probe-v1\",\"status\":\"{}\",\"plan_reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"exact\":{},\"block_tokens\":{},\"observed_tokens\":{},\"sequential_wall_ns\":{},\"batch_wall_ns\":{},\"sequential_vs_batch_wall_speedup_x1000\":{},\"batch_projection_elapsed_ns\":{},\"projection_kernel_launches\":{},\"pack_kernel_launches\":{},\"scatter_kernel_launches\":{},\"dependency_kernel_launches\":{},\"sampling_kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"sequential_tokens\":{:?},\"batch_tokens\":{:?},\"executor_status\":\"continuous_runtime_batch_scheduler\"}}",
         status,
         reason_name(input.plan.reason),
         input.ready_requests,

@@ -11,10 +11,10 @@
   "exact": true,
   "block_tokens": 2,
   "observed_tokens": 2,
-  "sequential_wall_ns": 252862,
-  "batch_wall_ns": 222327,
-  "sequential_vs_batch_wall_speedup_x1000": 1137,
-  "batch_projection_elapsed_ns": 123135,
+  "sequential_wall_ns": 268294,
+  "batch_wall_ns": 255968,
+  "sequential_vs_batch_wall_speedup_x1000": 1048,
+  "batch_projection_elapsed_ns": 138304,
   "projection_kernel_launches": 5,
   "pack_kernel_launches": 10,
   "scatter_kernel_launches": 10,
@@ -24,5 +24,5 @@
   "hot_path_allocations": 0,
   "sequential_tokens": [0, 0],
   "batch_tokens": [0, 0],
-  "executor_status": "runtime_batch_advance_bridge"
+  "executor_status": "continuous_runtime_batch_scheduler"
 }
