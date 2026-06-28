@@ -46,14 +46,14 @@ constexpr uint32_t kSharedWarpGqaThreads =
     kGroupedGqaHeads * kSharedWarpGqaThreadsPerHead;
 constexpr uint32_t kSharedWarpGqaHeadDimMax =
     kSharedWarpGqaThreadsPerHead * kHeadThreadElements;
-constexpr uint32_t kLtGemvMaxHeuristics = 8;
+constexpr uint32_t kLtGemvMaxHeuristics = 32;
 constexpr uint32_t kLtGemvAutotuneWarmups = 1;
 constexpr uint32_t kLtGemvAutotuneIterations = 3;
 constexpr uint32_t kChunkedDecodeAttentionThreshold = 128;
 constexpr uint64_t kMissingOffset = UINT64_MAX;
 constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ull;
 constexpr uint64_t kFnvPrime = 0x00000100000001b3ull;
-constexpr size_t kCublasWorkspaceBytes = 16ull * 1024ull * 1024ull;
+constexpr size_t kCublasWorkspaceBytes = 64ull * 1024ull * 1024ull;
 constexpr uint64_t kDescriptorStreamStagingBytes = 64ull * 1024ull * 1024ull;
 constexpr uint64_t kPrefillAutotuneSafetyBytes = 256ull * 1024ull * 1024ull;
 
@@ -1769,6 +1769,109 @@ __global__ void hf_prefill_attention_kernel(
       value /= local_l;
     }
     out[head_start + offset] = f32_to_encoded(value, dtype);
+  }
+}
+
+template <uint32_t DType>
+__global__ void hf_prefill_grouped_gqa_attention_kernel(
+    uint32_t layer_index, uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
+    uint32_t max_steps, uint32_t chunk_start, uint32_t chunk_tokens,
+    const float *qkv, const uint16_t *kv_keys, const uint16_t *kv_values,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint16_t *attn_out) {
+  __shared__ float shared_k[kGroupedGqaHeadDimMax];
+  __shared__ float shared_v[kGroupedGqaHeadDimMax];
+  const uint32_t local_token = blockIdx.x;
+  const uint32_t kv_head = blockIdx.y;
+  if (local_token >= chunk_tokens || kv_head >= kv_heads ||
+      kv_heads == 0 || heads / kv_heads != kGroupedGqaHeads ||
+      heads % kv_heads != 0 || head_dim > kSharedWarpGqaHeadDimMax ||
+      blockDim.x != kSharedWarpGqaThreads) {
+    return;
+  }
+  (void)max_steps;
+  const uint32_t q_in_group = threadIdx.x / kSharedWarpGqaThreadsPerHead;
+  const uint32_t lane = threadIdx.x - q_in_group * kSharedWarpGqaThreadsPerHead;
+  const uint32_t head = kv_head * kGroupedGqaHeads + q_in_group;
+  const uint32_t attention_hidden = heads * head_dim;
+  const uint32_t kv_hidden = kv_heads * head_dim;
+  const uint64_t rows = static_cast<uint64_t>(attention_hidden) + kv_hidden * 2;
+  const float *q = qkv + static_cast<uint64_t>(local_token) * rows;
+  uint16_t *out = attn_out + static_cast<uint64_t>(local_token) * attention_hidden;
+  const uint32_t global_pos = chunk_start + local_token;
+  const uint32_t head_start = head * head_dim;
+  const uint32_t kv_start = kv_head * head_dim;
+  const float scale = rsqrtf(static_cast<float>(head_dim));
+  float local_m = -INFINITY;
+  float local_l = 0.0f;
+  float q_frag[kHeadThreadElements];
+  float acc[kHeadThreadElements];
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+    q_frag[item] = offset < head_dim ? q[head_start + offset] : 0.0f;
+    acc[item] = 0.0f;
+  }
+  for (uint32_t token = 0; token <= global_pos;) {
+    const uint32_t logical_block = token / kKvCacheBlockTokens;
+    const uint32_t logical_block_end =
+        (logical_block + 1u) * kKvCacheBlockTokens;
+    const uint32_t block_limit =
+        logical_block_end <= global_pos ? logical_block_end : global_pos + 1u;
+    uint64_t token_base = kv_cache_page_offset(
+        layer_index, kv_block_count, kv_block_table[logical_block],
+        token - logical_block * kKvCacheBlockTokens, kv_hidden, kv_start);
+    for (; token < block_limit; ++token, token_base += kv_hidden) {
+      for (uint32_t offset = threadIdx.x; offset < head_dim;
+           offset += blockDim.x) {
+        shared_k[offset] =
+            encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+        shared_v[offset] =
+            encoded_to_f32_typed<DType>(kv_values[token_base + offset]);
+      }
+      __syncthreads();
+      float partial = 0.0f;
+#pragma unroll
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+        if (offset < head_dim) {
+          partial += q_frag[item] * shared_k[offset];
+        }
+      }
+      const float score = warp_sum(partial) * scale;
+      float old_scale = 0.0f;
+      float new_scale = 0.0f;
+      float next_m_value = local_m;
+      float next_l_value = local_l;
+      if (lane == 0) {
+        const float next_m = fmaxf(local_m, score);
+        old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+        new_scale = expf(score - next_m);
+        next_l_value = local_l * old_scale + new_scale;
+        next_m_value = next_m;
+      }
+      old_scale = __shfl_sync(0xffffffffu, old_scale, 0);
+      new_scale = __shfl_sync(0xffffffffu, new_scale, 0);
+      local_l = __shfl_sync(0xffffffffu, next_l_value, 0);
+      local_m = __shfl_sync(0xffffffffu, next_m_value, 0);
+#pragma unroll
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+        if (offset < head_dim) {
+          acc[item] = acc[item] * old_scale + shared_v[offset] * new_scale;
+        }
+      }
+      __syncthreads();
+    }
+  }
+  const bool normalize = local_l > 0.0f && isfinite(local_l);
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+    if (offset < head_dim) {
+      const float value = normalize ? acc[item] / local_l : acc[item];
+      out[head_start + offset] = f32_to_encoded(value, DType);
+    }
   }
 }
 
@@ -4290,15 +4393,43 @@ cudaError_t launch_cublas_session_prefill(
         out->kernel_launches += 1;
       }
       if (err == cudaSuccess) {
-        const dim3 grid(chunk_tokens, session->heads);
-        hf_prefill_attention_kernel<<<grid, session->head_threads,
-                                      session->head_dim * sizeof(float),
-                                      session->stream>>>(
-            layer_index, session->dtype, session->heads, session->kv_heads,
-            session->head_dim, session->max_context_tokens, chunk_start,
-            chunk_tokens, session->device_prefill_qkv, session->device_kv_keys,
-            session->device_kv_values, session->kv_block_count,
-            session->device_kv_block_table, session->device_prefill_attn);
+        const uint32_t query_group =
+            session->kv_heads == 0 ? 0 : session->heads / session->kv_heads;
+        const bool use_grouped_gqa =
+            query_group == kGroupedGqaHeads &&
+            session->heads % session->kv_heads == 0 &&
+            session->head_dim <= kSharedWarpGqaHeadDimMax;
+        if (session->dtype == kDTypeBF16 && use_grouped_gqa) {
+          const dim3 grid(chunk_tokens, session->kv_heads);
+          hf_prefill_grouped_gqa_attention_kernel<kDTypeBF16>
+              <<<grid, kSharedWarpGqaThreads, 0, session->stream>>>(
+                  layer_index, session->heads, session->kv_heads,
+                  session->head_dim, session->max_context_tokens, chunk_start,
+                  chunk_tokens, session->device_prefill_qkv,
+                  session->device_kv_keys, session->device_kv_values,
+                  session->kv_block_count, session->device_kv_block_table,
+                  session->device_prefill_attn);
+        } else if (use_grouped_gqa) {
+          const dim3 grid(chunk_tokens, session->kv_heads);
+          hf_prefill_grouped_gqa_attention_kernel<kDTypeF16>
+              <<<grid, kSharedWarpGqaThreads, 0, session->stream>>>(
+                  layer_index, session->heads, session->kv_heads,
+                  session->head_dim, session->max_context_tokens, chunk_start,
+                  chunk_tokens, session->device_prefill_qkv,
+                  session->device_kv_keys, session->device_kv_values,
+                  session->kv_block_count, session->device_kv_block_table,
+                  session->device_prefill_attn);
+        } else {
+          const dim3 grid(chunk_tokens, session->heads);
+          hf_prefill_attention_kernel<<<grid, session->head_threads,
+                                        session->head_dim * sizeof(float),
+                                        session->stream>>>(
+              layer_index, session->dtype, session->heads, session->kv_heads,
+              session->head_dim, session->max_context_tokens, chunk_start,
+              chunk_tokens, session->device_prefill_qkv, session->device_kv_keys,
+              session->device_kv_values, session->kv_block_count,
+              session->device_kv_block_table, session->device_prefill_attn);
+        }
         err = cudaGetLastError();
         out->kernel_launches += 1;
       }
