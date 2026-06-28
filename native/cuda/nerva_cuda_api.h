@@ -464,6 +464,7 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
   uint32_t layer_count;
   uint32_t max_context_tokens;
   uint32_t prefill_chunk_tokens;
+  uint32_t head_threads;
   uint64_t resident_weight_bytes;
   uint32_t planned_weight_blocks;
   uint32_t planned_gpu_resident_blocks;

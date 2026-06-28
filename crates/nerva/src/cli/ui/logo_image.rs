@@ -23,6 +23,7 @@ const TAGLINE_PRIMARY: &str = "An inference operating system for large models";
 const TAGLINE_SECONDARY: &str = "AI inference beyond the VRAM wall";
 const ANSI_RESET: &str = "\x1b[0m";
 const LOGO_GAP: &str = " ";
+const LOGO_ORANGE: (u8, u8, u8) = (255, 106, 42);
 
 #[derive(Clone, Debug)]
 pub(crate) struct TerminalLogo {
@@ -38,9 +39,9 @@ impl TerminalLogo {
 }
 
 pub(crate) fn block_logo() -> Vec<Line<'static>> {
-    logo_lines()
+    logo_rows()
         .into_iter()
-        .map(|line| gradient_line(&line))
+        .map(|(n, erva)| logo_line(&n, &erva))
         .collect()
 }
 
@@ -52,15 +53,11 @@ pub(crate) fn tagline_lines() -> Vec<Line<'static>> {
 }
 
 pub(crate) fn plain_brand(width: u16, color: ColorMode) -> Vec<String> {
-    let mut lines = logo_lines()
+    let mut lines = logo_rows()
         .into_iter()
-        .map(|line| {
-            let visible_width = line.chars().count();
-            center_line(
-                &plain_gradient_line(line.trim_end(), color),
-                visible_width,
-                width,
-            )
+        .map(|(n, erva)| {
+            let visible_width = n.chars().count() + LOGO_GAP.chars().count() + erva.chars().count();
+            center_line(&plain_logo_line(&n, &erva, color), visible_width, width)
         })
         .collect::<Vec<_>>();
     lines.push(String::new());
@@ -85,20 +82,15 @@ pub(crate) fn wordmark() -> Line<'static> {
     ])
 }
 
-fn gradient_line(value: &str) -> Line<'static> {
-    let width = value.chars().count().max(1);
-    Line::from(
-        value
-            .chars()
-            .enumerate()
-            .map(|(index, character)| {
-                Span::styled(character.to_string(), gradient_style(index, width))
-            })
-            .collect::<Vec<_>>(),
-    )
+fn logo_line(n: &str, erva: &str) -> Line<'static> {
+    let mut spans = Vec::new();
+    spans.extend(flat_orange_spans(n));
+    spans.push(Span::raw(LOGO_GAP));
+    spans.extend(gradient_spans(erva));
+    Line::from(spans)
 }
 
-fn logo_lines() -> Vec<String> {
+fn logo_rows() -> Vec<(String, String)> {
     let n_width = max_width(&BIG_N_LINES);
     let erva_width = max_width(&SMALL_ERVA_LINES);
     BIG_N_LINES
@@ -110,12 +102,9 @@ fn logo_lines() -> Vec<String> {
                 .and_then(|index| SMALL_ERVA_LINES.get(index))
                 .copied()
                 .unwrap_or("");
-            format!(
-                "{n:<n_width$}{LOGO_GAP}{erva:<erva_width$}",
-                n = *n,
-                erva = erva,
-                n_width = n_width,
-                erva_width = erva_width
+            (
+                format!("{n:<n_width$}", n = *n, n_width = n_width),
+                format!("{erva:<erva_width$}", erva = erva, erva_width = erva_width),
             )
         })
         .collect()
@@ -136,14 +125,99 @@ fn gradient_style(index: usize, width: usize) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-fn plain_gradient_line(value: &str, color: ColorMode) -> String {
+fn flat_orange_spans(value: &str) -> Vec<Span<'static>> {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_whitespace() {
+                Span::raw(character.to_string())
+            } else {
+                Span::styled(character.to_string(), orange_style())
+            }
+        })
+        .collect()
+}
+
+fn gradient_spans(value: &str) -> Vec<Span<'static>> {
+    let width = value
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .count()
+        .max(1);
+    let mut index = 0;
+    value
+        .chars()
+        .map(|character| {
+            if character.is_whitespace() {
+                Span::raw(character.to_string())
+            } else {
+                let span = Span::styled(character.to_string(), gradient_style(index, width));
+                index += 1;
+                span
+            }
+        })
+        .collect()
+}
+
+fn orange_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(LOGO_ORANGE.0, LOGO_ORANGE.1, LOGO_ORANGE.2))
+        .add_modifier(Modifier::BOLD)
+}
+
+fn plain_logo_line(n: &str, erva: &str, color: ColorMode) -> String {
+    let mut output = String::new();
+    output.push_str(&plain_orange_segment(n, color));
+    output.push_str(LOGO_GAP);
+    output.push_str(&plain_gradient_segment(erva.trim_end(), color));
+    output
+}
+
+fn plain_orange_segment(value: &str, color: ColorMode) -> String {
     if !color.enabled() {
         return value.to_string();
     }
-    let width = value.chars().count().max(1);
     let mut output = String::new();
     let mut colored = false;
-    for (index, character) in value.chars().enumerate() {
+    for character in value.chars() {
+        if character.is_whitespace() {
+            if colored {
+                output.push_str(ANSI_RESET);
+                colored = false;
+            }
+            output.push(character);
+            continue;
+        }
+        if color.truecolor() {
+            output.push_str(&format!(
+                "\x1b[38;2;{};{};{}m{}",
+                LOGO_ORANGE.0, LOGO_ORANGE.1, LOGO_ORANGE.2, character
+            ));
+        } else {
+            output.push_str("\x1b[93m");
+            output.push(character);
+        }
+        colored = true;
+    }
+    if colored {
+        output.push_str(ANSI_RESET);
+    }
+    output
+}
+
+fn plain_gradient_segment(value: &str, color: ColorMode) -> String {
+    if !color.enabled() {
+        return value.to_string();
+    }
+    let width = value
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .count()
+        .max(1);
+    let mut output = String::new();
+    let mut colored = false;
+    let mut index = 0;
+    for character in value.chars() {
         if character.is_whitespace() {
             if colored {
                 output.push_str(ANSI_RESET);
@@ -159,6 +233,7 @@ fn plain_gradient_line(value: &str, color: ColorMode) -> String {
             output.push_str(ansi_gradient_code(index, width));
             output.push(character);
         }
+        index += 1;
         colored = true;
     }
     if colored {

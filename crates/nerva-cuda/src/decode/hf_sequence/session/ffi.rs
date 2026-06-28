@@ -53,6 +53,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionCreateResult {
     pub(crate) layer_count: u32,
     pub(crate) max_context_tokens: u32,
     pub(crate) prefill_chunk_tokens: u32,
+    pub(crate) head_threads: u32,
     pub(crate) resident_weight_bytes: u64,
     pub(crate) planned_weight_blocks: u32,
     pub(crate) planned_gpu_resident_blocks: u32,

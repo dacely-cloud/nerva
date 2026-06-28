@@ -589,6 +589,12 @@ impl NervaCliLoggerInner {
         ));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
+            "head threads",
+            output.stream.create.head_threads.to_string(),
+            Tone::Cyan,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
             "tensors",
             output.stream.tensors_loaded.to_string(),
             Tone::Dim,

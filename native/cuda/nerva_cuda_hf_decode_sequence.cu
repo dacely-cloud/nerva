@@ -26,6 +26,8 @@ constexpr uint32_t kCompletionDeviceComplete = 1;
 constexpr uint32_t kWeightStrategyGpuResident = 1;
 constexpr uint32_t kWeightStrategyGpuStaged = 2;
 constexpr uint32_t kDecodeThreads = 256;
+constexpr uint32_t kHeadThreadsMax = 256;
+constexpr uint32_t kHeadThreadElements = 4;
 constexpr uint32_t kPrefillChunkBaseTokens = 1024;
 constexpr uint32_t kPrefillChunkMaxTokens = 8192;
 constexpr uint32_t kVerifyMaxDraftTokens = 128;
@@ -945,7 +947,8 @@ __global__ void hf_layer_attention_chunk_kernel(
   }
   __syncthreads();
   const uint32_t current_position = current_position_shared;
-  if (current_position >= max_steps || head_dim > blockDim.x) {
+  if (current_position >= max_steps ||
+      head_dim > blockDim.x * kHeadThreadElements) {
     return;
   }
   const uint32_t head = blockIdx.x;
@@ -975,24 +978,37 @@ __global__ void hf_layer_attention_chunk_kernel(
   const uint32_t kv_start = kv_head * head_dim;
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
-  const bool lane = threadIdx.x < head_dim;
   const float scale = rsqrtf(static_cast<float>(head_dim));
   float local_m = -INFINITY;
   float local_l = 0.0f;
-  float acc = 0.0f;
+  float acc[kHeadThreadElements];
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    acc[item] = 0.0f;
+  }
   for (uint32_t token = chunk_start; token < chunk_end; ++token) {
     const uint64_t token_base =
         (static_cast<uint64_t>(layer_index) * max_steps + token) * kv_hidden +
         kv_start;
-    const float key_value = lane ? kv_keys[token_base + threadIdx.x] : 0.0f;
-    const float partial =
-        lane ? s.q[head_start + threadIdx.x] * key_value : 0.0f;
+    float partial = 0.0f;
+#pragma unroll
+    for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+      const uint32_t offset = threadIdx.x + item * blockDim.x;
+      if (offset < head_dim) {
+        partial += s.q[head_start + offset] * kv_keys[token_base + offset];
+      }
+    }
     const float score = block_sum(partial) * scale;
     const float next_m = fmaxf(local_m, score);
     const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
     const float new_scale = expf(score - next_m);
-    if (lane) {
-      acc = acc * old_scale + kv_values[token_base + threadIdx.x] * new_scale;
+#pragma unroll
+    for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+      const uint32_t offset = threadIdx.x + item * blockDim.x;
+      if (offset < head_dim) {
+        acc[item] = acc[item] * old_scale +
+                    kv_values[token_base + offset] * new_scale;
+      }
     }
     local_l = local_l * old_scale + new_scale;
     local_m = next_m;
@@ -1001,8 +1017,12 @@ __global__ void hf_layer_attention_chunk_kernel(
     partial_m[slot] = local_m;
     partial_l[slot] = local_l;
   }
-  if (lane) {
-    partial_values[slot * head_dim + threadIdx.x] = acc;
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = threadIdx.x + item * blockDim.x;
+    if (offset < head_dim) {
+      partial_values[slot * head_dim + offset] = acc[item];
+    }
   }
 }
 
@@ -1018,7 +1038,7 @@ __global__ void hf_layer_attention_reduce_kernel(
     return;
   }
   const uint32_t head = blockIdx.x;
-  if (head >= heads || head_dim > blockDim.x) {
+  if (head >= heads || head_dim > blockDim.x * kHeadThreadElements) {
     return;
   }
   if (threadIdx.x == 0) {
@@ -1044,7 +1064,7 @@ __global__ void hf_layer_attention_reduce_kernel(
   }
   __syncthreads();
   const uint32_t head_start = head * head_dim;
-  if (threadIdx.x < head_dim) {
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
     float value = 0.0f;
     const float global_l = global_l_shared;
     const float global_m = global_m_shared;
@@ -1057,14 +1077,14 @@ __global__ void hf_layer_attention_reduce_kernel(
           continue;
         }
         const float weight = expf(partial_m[slot] - global_m) / global_l;
-        value += partial_values[slot * head_dim + threadIdx.x] * weight;
+        value += partial_values[slot * head_dim + offset] * weight;
       }
     }
     LayerScratch s =
         layer_scratch_ptrs(scratch, hidden, heads * head_dim,
                            kv_heads * head_dim, intermediate);
-    s.attn[head_start + threadIdx.x] = value;
-    projection_input[head_start + threadIdx.x] = f32_to_encoded(value, dtype);
+    s.attn[head_start + offset] = value;
+    projection_input[head_start + offset] = f32_to_encoded(value, dtype);
   }
 }
 
@@ -2357,6 +2377,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t heads = 0;
   uint32_t kv_heads = 0;
   uint32_t head_dim = 0;
+  uint32_t head_threads = kHeadThreadsMax;
   uint32_t intermediate = 0;
   uint32_t vocab_size = 0;
   uint32_t layer_count = 0;
@@ -2650,6 +2671,29 @@ uint32_t ceil_div_u32(uint32_t value, uint32_t divisor) {
   return divisor == 0 ? 0 : (value + divisor - 1u) / divisor;
 }
 
+uint32_t next_pow2_at_least(uint32_t value, uint32_t minimum,
+                            uint32_t maximum) {
+  uint32_t out = minimum;
+  while (out < value && out < maximum) {
+    out <<= 1;
+  }
+  return out > maximum ? maximum : out;
+}
+
+uint32_t tuned_head_threads(uint32_t head_dim, const cudaDeviceProp &props) {
+  const uint32_t warp_threads = props.warpSize > 0 ? props.warpSize : 32u;
+  const uint32_t minimum = props.major >= 9 ? std::max(warp_threads, 64u)
+                                            : warp_threads;
+  const uint32_t exact_head_threads =
+      next_pow2_at_least(head_dim, minimum, kHeadThreadsMax);
+  const uint32_t compact_threads = next_pow2_at_least(
+      ceil_div_u32(head_dim, kHeadThreadElements), minimum, kHeadThreadsMax);
+  if (props.major >= 9 && compact_threads < exact_head_threads) {
+    return compact_threads;
+  }
+  return exact_head_threads;
+}
+
 uint32_t decode_attention_chunks_for_cursor(
     const NervaCudaHfDecodeSequenceSession *session, uint32_t cursor) {
   const uint32_t kv_tokens = cursor >= session->max_context_tokens
@@ -2866,7 +2910,7 @@ cudaError_t launch_cublas_layer_session_step(
         static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
         session->dtype, 0.0f, scratch.q);
     if (err == cudaSuccess && attention_chunks == 0) {
-      hf_layer_qkv_attention_encode_kernel<<<session->heads, kDecodeThreads, 0,
+      hf_layer_qkv_attention_encode_kernel<<<session->heads, session->head_threads, 0,
                                              session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
           session->hidden, session->heads, session->kv_heads, session->head_dim,
@@ -2876,7 +2920,7 @@ cudaError_t launch_cublas_layer_session_step(
           session->device_projection_input);
       err = cudaGetLastError();
     } else if (err == cudaSuccess) {
-      hf_layer_qkv_prepare_kernel<<<session->heads, kDecodeThreads, 0,
+      hf_layer_qkv_prepare_kernel<<<session->heads, session->head_threads, 0,
                                     session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
           session->hidden, session->heads, session->kv_heads, session->head_dim,
@@ -2886,7 +2930,7 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
       if (err == cudaSuccess) {
         const dim3 grid(session->heads, attention_chunks);
-        hf_layer_attention_chunk_kernel<<<grid, kDecodeThreads, 0,
+        hf_layer_attention_chunk_kernel<<<grid, session->head_threads, 0,
                                           session->stream>>>(
             layer_index, session->hidden, session->heads, session->kv_heads,
             session->head_dim, session->intermediate, session->device_step,
@@ -2898,7 +2942,7 @@ cudaError_t launch_cublas_layer_session_step(
         err = cudaGetLastError();
       }
       if (err == cudaSuccess) {
-        hf_layer_attention_reduce_kernel<<<session->heads, kDecodeThreads, 0,
+        hf_layer_attention_reduce_kernel<<<session->heads, session->head_threads, 0,
                                            session->stream>>>(
             session->dtype, session->hidden, session->heads, session->kv_heads,
             session->head_dim, session->intermediate, session->device_step,
@@ -3058,7 +3102,7 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess && attention_chunks == 0) {
-      hf_layer_qkv_attention_encode_kernel<<<session->heads, kDecodeThreads, 0,
+      hf_layer_qkv_attention_encode_kernel<<<session->heads, session->head_threads, 0,
                                              session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
           session->hidden, session->heads, session->kv_heads, session->head_dim,
@@ -3068,7 +3112,7 @@ cudaError_t profile_cublas_layer_session_step(
           session->device_projection_input);
       err = cudaGetLastError();
     } else if (err == cudaSuccess) {
-      hf_layer_qkv_prepare_kernel<<<session->heads, kDecodeThreads, 0,
+      hf_layer_qkv_prepare_kernel<<<session->heads, session->head_threads, 0,
                                     session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
           session->hidden, session->heads, session->kv_heads, session->head_dim,
@@ -3078,7 +3122,7 @@ cudaError_t profile_cublas_layer_session_step(
       err = cudaGetLastError();
       if (err == cudaSuccess) {
         const dim3 grid(session->heads, attention_chunks);
-        hf_layer_attention_chunk_kernel<<<grid, kDecodeThreads, 0,
+        hf_layer_attention_chunk_kernel<<<grid, session->head_threads, 0,
                                           session->stream>>>(
             layer_index, session->hidden, session->heads, session->kv_heads,
             session->head_dim, session->intermediate, session->device_step,
@@ -3090,7 +3134,7 @@ cudaError_t profile_cublas_layer_session_step(
         err = cudaGetLastError();
       }
       if (err == cudaSuccess) {
-        hf_layer_attention_reduce_kernel<<<session->heads, kDecodeThreads, 0,
+        hf_layer_attention_reduce_kernel<<<session->heads, session->head_threads, 0,
                                            session->stream>>>(
             session->dtype, session->hidden, session->heads, session->kv_heads,
             session->head_dim, session->intermediate, session->device_step,
@@ -3295,8 +3339,8 @@ cudaError_t launch_cublas_session_prefill(
       }
       if (err == cudaSuccess) {
         const dim3 grid(chunk_tokens, std::max(session->heads, session->kv_heads));
-        hf_prefill_qkv_publish_kernel<<<grid, kDecodeThreads, 0,
-                                        session->stream>>>(
+        hf_prefill_qkv_publish_kernel<<<grid, session->head_threads, 0,
+                                      session->stream>>>(
             session->device_arena, layout, layer_index, session->dtype,
             session->heads, session->kv_heads, session->head_dim,
             session->max_context_tokens, chunk_start, chunk_tokens,
@@ -3307,7 +3351,7 @@ cudaError_t launch_cublas_session_prefill(
       }
       if (err == cudaSuccess) {
         const dim3 grid(chunk_tokens, session->heads);
-        hf_prefill_attention_kernel<<<grid, kDecodeThreads,
+        hf_prefill_attention_kernel<<<grid, session->head_threads,
                                       session->head_dim * sizeof(float),
                                       session->stream>>>(
             layer_index, session->dtype, session->heads, session->kv_heads,
@@ -3481,7 +3525,7 @@ cudaError_t launch_cublas_session_verify_draft(
     if (err == cudaSuccess) {
       const dim3 grid(draft_token_count,
                       std::max(session->heads, session->kv_heads));
-      hf_prefill_qkv_publish_kernel<<<grid, kDecodeThreads, 0,
+      hf_prefill_qkv_publish_kernel<<<grid, session->head_threads, 0,
                                       session->stream>>>(
           session->device_arena, layout, layer_index, session->dtype,
           session->heads, session->kv_heads, session->head_dim,
@@ -3493,7 +3537,7 @@ cudaError_t launch_cublas_session_verify_draft(
     }
     if (err == cudaSuccess) {
       const dim3 grid(draft_token_count, session->heads);
-      hf_prefill_attention_kernel<<<grid, kDecodeThreads,
+      hf_prefill_attention_kernel<<<grid, session->head_threads,
                                     session->head_dim * sizeof(float),
                                     session->stream>>>(
           layer_index, session->dtype, session->heads, session->kv_heads,
@@ -3760,6 +3804,7 @@ void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
   out->layer_count = session->layer_count;
   out->max_context_tokens = session->max_context_tokens;
   out->prefill_chunk_tokens = session->prefill_chunk_tokens;
+  out->head_threads = session->head_threads;
   out->resident_weight_bytes = session->resident_weight_bytes;
   out->planned_weight_blocks = session->planned_weight_blocks;
   out->planned_gpu_resident_blocks = session->planned_gpu_resident_blocks;
@@ -4164,6 +4209,13 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   if (err != cudaSuccess) {
     return fail(out, err, kCreateStageSetDevice);
   }
+  cudaDeviceProp device_props{};
+  cudaError_t props_err = cudaGetDeviceProperties(&device_props, 0);
+  if (props_err != cudaSuccess) {
+    device_props.warpSize = 32;
+    device_props.major = 0;
+    cudaGetLastError();
+  }
   size_t device_free_before_alloc = 0;
   size_t device_total_before_alloc = 0;
   cudaError_t mem_info_err =
@@ -4229,6 +4281,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->heads = request->heads;
   session->kv_heads = request->kv_heads;
   session->head_dim = request->head_dim;
+  session->head_threads = tuned_head_threads(request->head_dim, device_props);
   session->intermediate = request->intermediate;
   session->vocab_size = request->vocab_size;
   session->layer_count = request->layer_count;

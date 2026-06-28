@@ -16,6 +16,7 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
     pub layer_count: u32,
     pub max_context_tokens: u32,
     pub prefill_chunk_tokens: u32,
+    pub head_threads: u32,
     pub resident_weight_bytes: u64,
     pub planned_weight_blocks: u32,
     pub planned_gpu_resident_blocks: u32,
@@ -40,7 +41,7 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
 impl CudaHfDecodeSequenceSessionCreateSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"failure_stage\":{},\"failure_stage_label\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"prefill_chunk_tokens\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"failure_stage\":{},\"failure_stage_label\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
             self.failure_stage,
             create_stage_label(self.failure_stage),
@@ -54,6 +55,7 @@ impl CudaHfDecodeSequenceSessionCreateSummary {
             self.layer_count,
             self.max_context_tokens,
             self.prefill_chunk_tokens,
+            self.head_threads,
             self.resident_weight_bytes,
             self.planned_weight_blocks,
             self.planned_gpu_resident_blocks,
@@ -102,6 +104,7 @@ pub(crate) fn create_summary_from_result(
         layer_count: out.layer_count,
         max_context_tokens: out.max_context_tokens,
         prefill_chunk_tokens: out.prefill_chunk_tokens,
+        head_threads: out.head_threads,
         resident_weight_bytes: out.resident_weight_bytes,
         planned_weight_blocks: out.planned_weight_blocks,
         planned_gpu_resident_blocks: out.planned_gpu_resident_blocks,
