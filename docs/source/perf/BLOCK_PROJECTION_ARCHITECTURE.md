@@ -320,3 +320,36 @@ This still is not full batched decode. The next step is to move these stage
 calls inside the decode scheduler so compatible resident sessions advance
 together through the block projection path instead of exposing it only as a
 session primitive.
+
+## Layer Projection Batch Primitive
+
+The native API also exposes a layer-level scheduler primitive:
+
+```text
+nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(...)
+```
+
+It runs the four projection-heavy decode stages for one transformer layer over
+the same compatible session block:
+
+```text
+QKV -> W_O -> gate/up -> down
+```
+
+and returns aggregate accounting:
+
+```text
+block_tokens
+qkv_rows / attention_output_rows / gate_up_rows / down_rows
+input_bytes / output_bytes
+qkv_elapsed_ns / attention_output_elapsed_ns / gate_up_elapsed_ns / down_elapsed_ns
+pack_kernel_launches / projection_kernel_launches / scatter_kernel_launches
+hot_path_allocations
+```
+
+This is the scheduler-facing unit needed for continuous decode batching. The
+current implementation reuses the proven per-projection executor for each
+stage, so it is a correctness and integration contract first. The remaining
+performance work is to move session selection, stream synchronization, and
+event timing out of the individual stage calls so a compatible request block
+can stay resident on one batch stream through the whole layer transaction.

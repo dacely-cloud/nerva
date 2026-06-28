@@ -7691,6 +7691,103 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
   return 0;
 }
 
+extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
+    const NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteRequest *request,
+    NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  out->reason = kProjectionBatchPlanInvalidRequest;
+  if (request == nullptr) {
+    return -1;
+  }
+
+  out->requested_session_count = request->session_count;
+  out->target_block_tokens =
+      request->target_block_tokens == 0 ? 1u : request->target_block_tokens;
+  out->min_block_tokens =
+      request->min_block_tokens == 0 ? 1u : request->min_block_tokens;
+  out->layer_index = request->layer_index;
+
+  constexpr uint32_t kLayerProjectionKinds[] = {
+      kProjectionBatchKindQkv,
+      kProjectionBatchKindAttentionOutput,
+      kProjectionBatchKindGateUp,
+      kProjectionBatchKindDown,
+  };
+  NervaCudaHfDecodeSequenceProjectionBatchExecuteResult stages[4];
+  for (uint32_t index = 0; index < 4; ++index) {
+    NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest stage_request{};
+    stage_request.sessions = request->sessions;
+    stage_request.session_count = request->session_count;
+    stage_request.target_block_tokens = request->target_block_tokens;
+    stage_request.min_block_tokens = request->min_block_tokens;
+    stage_request.projection_kind = kLayerProjectionKinds[index];
+    stage_request.layer_index = request->layer_index;
+    const int rc = nerva_cuda_hf_decode_sequence_projection_batch_execute(
+        &stage_request, &stages[index]);
+    out->cuda_error = stages[index].cuda_error;
+    out->device_count = stages[index].device_count;
+    out->reason = stages[index].reason;
+    out->eligible_session_count = stages[index].eligible_session_count;
+    out->block_tokens = stages[index].block_tokens;
+    out->target_block_tokens = stages[index].target_block_tokens;
+    out->min_block_tokens = stages[index].min_block_tokens;
+    out->dtype = stages[index].dtype;
+    if (rc != 0 || stages[index].status != 0 || stages[index].exact == 0) {
+      out->exact = 0;
+      out->status = stages[index].status;
+      return rc;
+    }
+  }
+
+  const auto &qkv = stages[0];
+  const auto &attention_output = stages[1];
+  const auto &gate_up = stages[2];
+  const auto &down = stages[3];
+  out->reason = kProjectionBatchPlanReady;
+  out->exact = 1;
+  out->status = 0;
+  out->qkv_rows = qkv.rows;
+  out->attention_output_rows = attention_output.rows;
+  out->gate_up_rows = gate_up.rows;
+  out->down_rows = down.rows;
+  out->hidden_cols = qkv.cols;
+  out->attention_output_cols = attention_output.cols;
+  out->down_cols = down.cols;
+  out->input_bytes = qkv.input_bytes + attention_output.input_bytes +
+                     gate_up.input_bytes + down.input_bytes;
+  out->output_bytes = qkv.output_bytes + attention_output.output_bytes +
+                      gate_up.output_bytes + down.output_bytes;
+  out->qkv_elapsed_ns = qkv.elapsed_ns;
+  out->attention_output_elapsed_ns = attention_output.elapsed_ns;
+  out->gate_up_elapsed_ns = gate_up.elapsed_ns;
+  out->down_elapsed_ns = down.elapsed_ns;
+  out->elapsed_ns = qkv.elapsed_ns + attention_output.elapsed_ns +
+                    gate_up.elapsed_ns + down.elapsed_ns;
+  out->pack_kernel_launches = qkv.pack_kernel_launches +
+                              attention_output.pack_kernel_launches +
+                              gate_up.pack_kernel_launches +
+                              down.pack_kernel_launches;
+  out->projection_kernel_launches =
+      qkv.projection_kernel_launches +
+      attention_output.projection_kernel_launches +
+      gate_up.projection_kernel_launches + down.projection_kernel_launches;
+  out->scatter_kernel_launches = qkv.scatter_kernel_launches +
+                                 attention_output.scatter_kernel_launches +
+                                 gate_up.scatter_kernel_launches +
+                                 down.scatter_kernel_launches;
+  out->sync_calls = qkv.sync_calls + attention_output.sync_calls +
+                    gate_up.sync_calls + down.sync_calls;
+  out->hot_path_allocations = qkv.hot_path_allocations +
+                              attention_output.hot_path_allocations +
+                              gate_up.hot_path_allocations +
+                              down.hot_path_allocations;
+  return 0;
+}
+
 extern "C" int nerva_cuda_hf_decode_sequence_session_destroy(
     NervaCudaHfDecodeSequenceSession *session,
     NervaCudaHfDecodeSequenceSessionCreateResult *out) {

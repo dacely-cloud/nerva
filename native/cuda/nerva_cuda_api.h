@@ -598,6 +598,48 @@ typedef struct NervaCudaHfDecodeSequenceProjectionBatchExecuteResult {
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeSequenceProjectionBatchExecuteResult;
 
+typedef struct NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteRequest {
+  NervaCudaHfDecodeSequenceSession **sessions;
+  uint32_t session_count;
+  uint32_t target_block_tokens;
+  uint32_t min_block_tokens;
+  uint32_t layer_index;
+} NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteRequest;
+
+typedef struct NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t reason;
+  uint32_t exact;
+  uint32_t layer_index;
+  uint32_t requested_session_count;
+  uint32_t eligible_session_count;
+  uint32_t block_tokens;
+  uint32_t target_block_tokens;
+  uint32_t min_block_tokens;
+  uint32_t dtype;
+  uint32_t qkv_rows;
+  uint32_t attention_output_rows;
+  uint32_t gate_up_rows;
+  uint32_t down_rows;
+  uint32_t hidden_cols;
+  uint32_t attention_output_cols;
+  uint32_t down_cols;
+  uint64_t input_bytes;
+  uint64_t output_bytes;
+  uint64_t elapsed_ns;
+  uint64_t qkv_elapsed_ns;
+  uint64_t attention_output_elapsed_ns;
+  uint64_t gate_up_elapsed_ns;
+  uint64_t down_elapsed_ns;
+  uint64_t pack_kernel_launches;
+  uint64_t projection_kernel_launches;
+  uint64_t scatter_kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult;
+
 typedef struct NervaCudaTinyDecodeResult {
   int32_t status;
   int32_t cuda_error;
@@ -804,6 +846,9 @@ int nerva_cuda_hf_decode_sequence_projection_batch_plan(
 int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     const NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest *request,
     NervaCudaHfDecodeSequenceProjectionBatchExecuteResult *out);
+int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
+    const NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteRequest *request,
+    NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult *out);
 int nerva_cuda_hf_decode_sequence_session_destroy(
     NervaCudaHfDecodeSequenceSession *session,
     NervaCudaHfDecodeSequenceSessionCreateResult *out);
