@@ -14,7 +14,14 @@
 #include <chrono>
 #include <new>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+#if NERVA_HAVE_CUDNN_FRONTEND
+#include <cudnn.h>
+#include <cudnn_frontend.h>
+#include <memory>
+#endif
 
 namespace {
 
@@ -1728,6 +1735,17 @@ __global__ void hf_prefill_qkv_publish_kernel(
   }
 }
 
+__global__ void hf_prefill_qkv_pack_encoded_kernel(
+    uint32_t dtype, uint64_t rows, uint32_t chunk_tokens, const float *qkv,
+    uint16_t *qkv_encoded) {
+  const uint64_t total = rows * static_cast<uint64_t>(chunk_tokens);
+  const uint64_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint64_t stride = blockDim.x * gridDim.x;
+  for (uint64_t cursor = index; cursor < total; cursor += stride) {
+    qkv_encoded[cursor] = f32_to_encoded(qkv[cursor], dtype);
+  }
+}
+
 __global__ void hf_prefill_attention_kernel(
     uint32_t layer_index, uint32_t dtype, uint32_t heads, uint32_t kv_heads,
     uint32_t head_dim, uint32_t max_steps, uint32_t chunk_start,
@@ -2466,6 +2484,25 @@ cudaError_t cublas_to_cuda(cublasStatus_t status) {
       return cudaErrorUnknown;
   }
 }
+
+#if NERVA_HAVE_CUDNN_FRONTEND
+cudaError_t cudnn_to_cuda(cudnnStatus_t status) {
+  switch (status) {
+    case CUDNN_STATUS_SUCCESS:
+      return cudaSuccess;
+    case CUDNN_STATUS_ALLOC_FAILED:
+      return cudaErrorMemoryAllocation;
+    case CUDNN_STATUS_BAD_PARAM:
+      return cudaErrorInvalidValue;
+    case CUDNN_STATUS_NOT_SUPPORTED:
+      return cudaErrorNotSupported;
+    case CUDNN_STATUS_EXECUTION_FAILED:
+      return cudaErrorLaunchFailure;
+    default:
+      return cudaErrorUnknown;
+  }
+}
+#endif
 
 cudaDataType_t encoded_cuda_type(uint32_t dtype) {
   return dtype == kDTypeBF16 ? CUDA_R_16BF : CUDA_R_16F;
@@ -3412,6 +3449,18 @@ void scale_profile_counters(NervaCudaHfDecodeSequenceResult *out,
   out->sampling_ns = saturating_mul_profile_value(out->sampling_ns, scale);
 }
 
+#if NERVA_HAVE_CUDNN_FRONTEND
+struct CudnnPrefillSdpaPlan {
+  std::unique_ptr<cudnn_frontend::graph::Graph> graph;
+  uint32_t seq_tokens = 0;
+  uint32_t heads = 0;
+  uint32_t kv_heads = 0;
+  uint32_t head_dim = 0;
+  uint64_t rows = 0;
+  size_t workspace_bytes = 0;
+};
+#endif
+
 }  // namespace
 
 struct NervaCudaHfDecodeSequenceSession {
@@ -3440,6 +3489,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint64_t prefill_hidden_bytes = 0;
   uint64_t prefill_norm_bytes = 0;
   uint64_t prefill_qkv_bytes = 0;
+  uint64_t prefill_qkv_encoded_bytes = 0;
   uint64_t prefill_attn_bytes = 0;
   uint64_t prefill_o_bytes = 0;
   uint64_t prefill_gate_up_bytes = 0;
@@ -3476,6 +3526,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint16_t *device_prefill_hidden_b = nullptr;
   uint16_t *device_prefill_norm = nullptr;
   float *device_prefill_qkv = nullptr;
+  uint16_t *device_prefill_qkv_encoded = nullptr;
   uint16_t *device_prefill_attn = nullptr;
   float *device_prefill_o = nullptr;
   float *device_prefill_gate_up = nullptr;
@@ -3497,6 +3548,11 @@ struct NervaCudaHfDecodeSequenceSession {
   cudaStream_t stream = nullptr;
   cublasHandle_t cublas = nullptr;
   cublasLtHandle_t cublas_lt = nullptr;
+#if NERVA_HAVE_CUDNN_FRONTEND
+  cudnnHandle_t cudnn = nullptr;
+  CudnnPrefillSdpaPlan *cudnn_prefill_sdpa = nullptr;
+  uint32_t cudnn_prefill_sdpa_disabled = 0;
+#endif
   LtGemvPlan qkv_plan;
   LtGemvPlan attention_output_plan;
   LtGemvPlan gate_up_plan;
@@ -3553,6 +3609,11 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   if (session->cached_graph != nullptr) {
     cudaGraphDestroy(session->cached_graph);
   }
+#if NERVA_HAVE_CUDNN_FRONTEND
+  delete session->cudnn_prefill_sdpa;
+  session->cudnn_prefill_sdpa = nullptr;
+  if (session->cudnn != nullptr) cudnnDestroy(session->cudnn);
+#endif
   if (session->profile_stop != nullptr) cudaEventDestroy(session->profile_stop);
   if (session->profile_start != nullptr) cudaEventDestroy(session->profile_start);
   if (session->device_stop != nullptr) cudaEventDestroy(session->device_stop);
@@ -3579,6 +3640,7 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_prefill_gate_up);
   cudaFree(session->device_prefill_o);
   cudaFree(session->device_prefill_attn);
+  cudaFree(session->device_prefill_qkv_encoded);
   cudaFree(session->device_prefill_qkv);
   cudaFree(session->device_prefill_norm);
   cudaFree(session->device_prefill_hidden_b);
@@ -3625,6 +3687,7 @@ uint64_t session_device_footprint(
   return session->arena_bytes + session->layout_bytes + session->scratch_bytes +
          session->projection_input_bytes + session->prefill_hidden_bytes * 2 +
          session->prefill_norm_bytes + session->prefill_qkv_bytes +
+         session->prefill_qkv_encoded_bytes +
          session->prefill_attn_bytes + session->prefill_o_bytes +
          session->prefill_gate_up_bytes + session->prefill_ff_bytes +
          session->prefill_down_bytes + session->decode_attention_values_bytes +
@@ -3669,6 +3732,8 @@ uint64_t prefill_chunk_scratch_bytes(uint64_t chunk_tokens,
       sat_mul_u64(projection_input_elements, chunk_tokens), sizeof(uint16_t)));
   total = sat_add_u64(total, sat_mul_u64(
       sat_mul_u64(prefill_qkv_rows, chunk_tokens), sizeof(float)));
+  total = sat_add_u64(total, sat_mul_u64(
+      sat_mul_u64(prefill_qkv_rows, chunk_tokens), sizeof(uint16_t)));
   total = sat_add_u64(total, sat_mul_u64(
       sat_mul_u64(attention_hidden, chunk_tokens), sizeof(uint16_t)));
   total = sat_add_u64(total, sat_mul_u64(
@@ -3890,6 +3955,146 @@ void copy_cached_profile(const NervaCudaHfDecodeSequenceSession *session,
   out->norm_ns = session->cached_norm_ns;
   out->sampling_ns = session->cached_sampling_ns;
 }
+
+#if NERVA_HAVE_CUDNN_FRONTEND
+cudaError_t ensure_cudnn_prefill_sdpa_plan(
+    NervaCudaHfDecodeSequenceSession *session, uint32_t seq_tokens) {
+  if (session == nullptr || session->cudnn == nullptr || seq_tokens == 0 ||
+      session->dtype != kDTypeBF16 || session->head_dim == 0 ||
+      session->heads == 0 || session->kv_heads == 0 ||
+      session->heads % session->kv_heads != 0) {
+    return cudaErrorNotSupported;
+  }
+  if (session->cudnn_prefill_sdpa != nullptr &&
+      session->cudnn_prefill_sdpa->seq_tokens == seq_tokens &&
+      session->cudnn_prefill_sdpa->heads == session->heads &&
+      session->cudnn_prefill_sdpa->kv_heads == session->kv_heads &&
+      session->cudnn_prefill_sdpa->head_dim == session->head_dim) {
+    return cudaSuccess;
+  }
+
+  auto *plan = new (std::nothrow) CudnnPrefillSdpaPlan();
+  if (plan == nullptr) {
+    return cudaErrorMemoryAllocation;
+  }
+  plan->seq_tokens = seq_tokens;
+  plan->heads = session->heads;
+  plan->kv_heads = session->kv_heads;
+  plan->head_dim = session->head_dim;
+  const uint64_t attention_hidden =
+      static_cast<uint64_t>(session->heads) * session->head_dim;
+  const uint64_t kv_hidden =
+      static_cast<uint64_t>(session->kv_heads) * session->head_dim;
+  plan->rows = attention_hidden + kv_hidden * 2;
+  plan->graph = std::make_unique<cudnn_frontend::graph::Graph>();
+  plan->graph->set_io_data_type(cudnn_frontend::DataType_t::BFLOAT16)
+      .set_intermediate_data_type(cudnn_frontend::DataType_t::FLOAT)
+      .set_compute_data_type(cudnn_frontend::DataType_t::FLOAT);
+
+  constexpr int64_t kTensorQ = 9001;
+  constexpr int64_t kTensorK = 9002;
+  constexpr int64_t kTensorV = 9003;
+  constexpr int64_t kTensorO = 9004;
+  const int64_t batch = 1;
+  const int64_t heads = static_cast<int64_t>(session->heads);
+  const int64_t kv_heads = static_cast<int64_t>(session->kv_heads);
+  const int64_t seq = static_cast<int64_t>(seq_tokens);
+  const int64_t dim = static_cast<int64_t>(session->head_dim);
+  const int64_t rows = static_cast<int64_t>(plan->rows);
+  const std::vector<int64_t> q_stride = {seq * rows, dim, rows, 1};
+  const std::vector<int64_t> k_stride = {seq * rows, dim, rows, 1};
+  const std::vector<int64_t> v_stride = {seq * rows, dim, rows, 1};
+  const std::vector<int64_t> o_stride = {
+      seq * heads * dim, dim, heads * dim, 1};
+
+  auto q_desc = cudnn_frontend::graph::Tensor_attributes()
+                    .set_name("nerva_q")
+                    .set_uid(kTensorQ)
+                    .set_dim({batch, heads, seq, dim})
+                    .set_stride(q_stride);
+  auto k_desc = cudnn_frontend::graph::Tensor_attributes()
+                    .set_name("nerva_k")
+                    .set_uid(kTensorK)
+                    .set_dim({batch, kv_heads, seq, dim})
+                    .set_stride(k_stride);
+  auto v_desc = cudnn_frontend::graph::Tensor_attributes()
+                    .set_name("nerva_v")
+                    .set_uid(kTensorV)
+                    .set_dim({batch, kv_heads, seq, dim})
+                    .set_stride(v_stride);
+  auto o_desc = cudnn_frontend::graph::Tensor_attributes()
+                    .set_name("nerva_o")
+                    .set_uid(kTensorO)
+                    .set_dim({batch, heads, seq, dim})
+                    .set_stride(o_stride);
+
+  auto sdpa = cudnn_frontend::graph::SDPA_attributes()
+                  .set_name("nerva_prefill_sdpa")
+                  .set_generate_stats(false)
+                  .set_causal_mask(true)
+                  .set_attn_scale(rsqrtf(static_cast<float>(session->head_dim)));
+  auto q = plan->graph->tensor(q_desc);
+  auto k = plan->graph->tensor(k_desc);
+  auto v = plan->graph->tensor(v_desc);
+  auto outputs = plan->graph->sdpa(q, k, v, sdpa);
+  outputs[0]->set_output(true)
+      .set_dim({batch, heads, seq, dim})
+      .set_stride(o_stride)
+      .set_uid(kTensorO);
+
+  cudnnStatus_t stream_status = cudnnSetStream(session->cudnn, session->stream);
+  if (stream_status != CUDNN_STATUS_SUCCESS) {
+    delete plan;
+    return cudnn_to_cuda(stream_status);
+  }
+  auto status = plan->graph->build(session->cudnn,
+                                   {cudnn_frontend::HeurMode_t::A});
+  if (status.is_bad()) {
+    delete plan;
+    return cudaErrorNotSupported;
+  }
+  const int64_t workspace = plan->graph->get_workspace_size();
+  if (workspace < 0 ||
+      static_cast<uint64_t>(workspace) > kCublasWorkspaceBytes) {
+    delete plan;
+    return cudaErrorMemoryAllocation;
+  }
+  plan->workspace_bytes = static_cast<size_t>(workspace);
+  delete session->cudnn_prefill_sdpa;
+  session->cudnn_prefill_sdpa = plan;
+  return cudaSuccess;
+}
+
+cudaError_t execute_cudnn_prefill_sdpa(
+    NervaCudaHfDecodeSequenceSession *session, uint32_t seq_tokens) {
+  cudaError_t err = ensure_cudnn_prefill_sdpa_plan(session, seq_tokens);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  constexpr int64_t kTensorQ = 9001;
+  constexpr int64_t kTensorK = 9002;
+  constexpr int64_t kTensorV = 9003;
+  constexpr int64_t kTensorO = 9004;
+  const uint64_t attention_hidden =
+      static_cast<uint64_t>(session->heads) * session->head_dim;
+  const uint64_t kv_hidden =
+      static_cast<uint64_t>(session->kv_heads) * session->head_dim;
+  uint16_t *base = session->device_prefill_qkv_encoded;
+  std::unordered_map<int64_t, void *> tensors = {
+      {kTensorQ, base},
+      {kTensorK, base + attention_hidden},
+      {kTensorV, base + attention_hidden + kv_hidden},
+      {kTensorO, session->device_prefill_attn},
+  };
+  cudnnStatus_t stream_status = cudnnSetStream(session->cudnn, session->stream);
+  if (stream_status != CUDNN_STATUS_SUCCESS) {
+    return cudnn_to_cuda(stream_status);
+  }
+  auto status = session->cudnn_prefill_sdpa->graph->execute(
+      session->cudnn, tensors, session->cublas_workspace);
+  return status.is_good() ? cudaSuccess : cudaErrorLaunchFailure;
+}
+#endif
 
 void stash_prefill_metrics(NervaCudaHfDecodeSequenceSession *session,
                            const NervaCudaHfDecodeSequenceResult *out) {
@@ -4693,6 +4898,41 @@ cudaError_t launch_cublas_session_prefill(
             query_group == kGroupedGqaHeads &&
             session->heads % session->kv_heads == 0 &&
             session->head_dim <= kSharedWarpGqaHeadDimMax;
+#if NERVA_HAVE_CUDNN_FRONTEND
+        bool ran_cudnn_sdpa = false;
+        const bool use_cudnn_sdpa =
+            session->cudnn_prefill_sdpa_disabled == 0 &&
+            session->cudnn != nullptr &&
+            session->device_prefill_qkv_encoded != nullptr &&
+            session->dtype == kDTypeBF16 && use_grouped_gqa &&
+            chunk_start == 0 && chunk_tokens == prompt_token_count &&
+            session->head_dim <= 128;
+        if (use_cudnn_sdpa) {
+          const uint64_t total =
+              static_cast<uint64_t>(packed_shape.qkv_rows) * chunk_tokens;
+          const uint32_t blocks = static_cast<uint32_t>(
+              (total + kDecodeThreads - 1u) / kDecodeThreads);
+          hf_prefill_qkv_pack_encoded_kernel<<<blocks, kDecodeThreads, 0,
+                                               session->stream>>>(
+              session->dtype, packed_shape.qkv_rows, chunk_tokens,
+              session->device_prefill_qkv,
+              session->device_prefill_qkv_encoded);
+          err = cudaGetLastError();
+          if (err == cudaSuccess) {
+            out->kernel_launches += 1;
+            err = execute_cudnn_prefill_sdpa(session, chunk_tokens);
+            if (err == cudaSuccess) {
+              out->kernel_launches += 1;
+              ran_cudnn_sdpa = true;
+            } else if (err == cudaErrorNotSupported ||
+                       err == cudaErrorMemoryAllocation) {
+              session->cudnn_prefill_sdpa_disabled = 1;
+              err = cudaSuccess;
+            }
+          }
+        }
+        if (!ran_cudnn_sdpa) {
+#endif
         if (session->dtype == kDTypeBF16 && use_grouped_gqa) {
           const dim3 grid(chunk_tokens, session->kv_heads);
           hf_prefill_grouped_gqa_attention_direct_kernel<kDTypeBF16>
@@ -4724,8 +4964,11 @@ cudaError_t launch_cublas_session_prefill(
               session->device_kv_values, session->kv_block_count,
               session->device_kv_block_table, session->device_prefill_attn);
         }
-        err = cudaGetLastError();
-        out->kernel_launches += 1;
+          err = cudaGetLastError();
+          out->kernel_launches += 1;
+#if NERVA_HAVE_CUDNN_FRONTEND
+        }
+#endif
       }
       if (err == cudaSuccess) err = profile_stage_end(&attention_ns);
       if (err == cudaSuccess) {
@@ -5613,6 +5856,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       sizeof(uint16_t);
   session->prefill_qkv_bytes =
       prefill_qkv_rows * static_cast<uint64_t>(prefill_chunk) * sizeof(float);
+  session->prefill_qkv_encoded_bytes =
+      prefill_qkv_rows * static_cast<uint64_t>(prefill_chunk) *
+      sizeof(uint16_t);
   session->prefill_attn_bytes =
       attention_hidden * static_cast<uint64_t>(prefill_chunk) * sizeof(uint16_t);
   session->prefill_o_bytes =
@@ -5687,6 +5933,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_qkv),
                      session->prefill_qkv_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_prefill_qkv_encoded),
+        session->prefill_qkv_encoded_bytes);
   }
   if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_attn),
@@ -5777,12 +6028,23 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     failure_stage = kCreateStageCublasLtCreate;
     err = cublas_to_cuda(cublasLtCreate(&session->cublas_lt));
   }
+#if NERVA_HAVE_CUDNN_FRONTEND
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageCublasConfigure;
+    err = cudnn_to_cuda(cudnnCreate(&session->cudnn));
+  }
+#endif
   if (err == cudaSuccess) {
     failure_stage = kCreateStageCublasConfigure;
     err = configure_cublas(session->cublas, session->stream,
                            session->cublas_workspace,
                            kCublasWorkspaceBytes);
   }
+#if NERVA_HAVE_CUDNN_FRONTEND
+  if (err == cudaSuccess) {
+    err = cudnn_to_cuda(cudnnSetStream(session->cudnn, session->stream));
+  }
+#endif
   if (err == cudaSuccess) {
     failure_stage = kCreateStageStartEventCreate;
     err = cudaEventCreate(&session->device_start);

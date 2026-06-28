@@ -7,3 +7,9 @@
 [env]
 LIBCLANG_PATH = "/usr/lib/llvm-18/lib"
 LLVM_SYS_220_PREFIX = "/usr/lib/llvm-22"
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C",
+    "link-arg=-Wl,-rpath,/root/vllm/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib",
+]

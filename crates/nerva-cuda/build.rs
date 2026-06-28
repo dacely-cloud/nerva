@@ -27,12 +27,50 @@ fn main() {
         cuda_arches.join(";")
     );
 
-    print_link_directives(&out_dir, cuda_root.as_ref());
-    let cuda_objects = compile_cuda_sources(&sources, &out_dir, &nvcc, cuda_arches.as_slice());
+    let cudnn = cudnn_frontend_paths();
+    print_link_directives(&out_dir, cuda_root.as_ref(), cudnn.as_ref());
+    let cuda_objects =
+        compile_cuda_sources(&sources, &out_dir, &nvcc, cuda_arches.as_slice(), cudnn.as_ref());
     archive_cuda_objects(&archive, cuda_objects.as_slice());
 }
 
-fn print_link_directives(out_dir: &PathBuf, cuda_root: Option<&PathBuf>) {
+struct CudnnFrontendPaths {
+    frontend_include: PathBuf,
+    cudnn_include: PathBuf,
+    cudnn_lib: PathBuf,
+}
+
+fn cudnn_frontend_paths() -> Option<CudnnFrontendPaths> {
+    let mut roots = Vec::new();
+    if let Ok(root) = env::var("NERVA_CUDNN_FRONTEND_ROOT") {
+        roots.push(PathBuf::from(root));
+    }
+    roots.push(PathBuf::from(
+        "/root/vllm/.venv/lib/python3.12/site-packages",
+    ));
+    for root in roots {
+        let frontend_include = root.join("include");
+        let cudnn_include = root.join("nvidia/cudnn/include");
+        let cudnn_lib = root.join("nvidia/cudnn/lib");
+        if frontend_include.join("cudnn_frontend.h").is_file()
+            && cudnn_include.join("cudnn.h").is_file()
+            && cudnn_lib.join("libcudnn.so.9").is_file()
+        {
+            return Some(CudnnFrontendPaths {
+                frontend_include,
+                cudnn_include,
+                cudnn_lib,
+            });
+        }
+    }
+    None
+}
+
+fn print_link_directives(
+    out_dir: &PathBuf,
+    cuda_root: Option<&PathBuf>,
+    cudnn: Option<&CudnnFrontendPaths>,
+) {
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=nerva_cuda_api");
     if let Some(cuda_lib_dir) = build_support::paths::find_cuda_lib_dir(cuda_root) {
@@ -41,7 +79,24 @@ fn print_link_directives(out_dir: &PathBuf, cuda_root: Option<&PathBuf>) {
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", cuda_lib_dir.display());
         }
     }
+    if let Some(cudnn) = cudnn {
+        let link_name = out_dir.join("libcudnn.so");
+        let real_name = cudnn.cudnn_lib.join("libcudnn.so.9");
+        if !link_name.exists() && real_name.is_file() {
+            #[cfg(unix)]
+            {
+                let _ = std::os::unix::fs::symlink(&real_name, &link_name);
+            }
+        }
+        println!("cargo:rustc-link-search=native={}", cudnn.cudnn_lib.display());
+        println!("cargo:rustc-link-search=native={}", out_dir.display());
+        if cfg!(target_os = "linux") {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", cudnn.cudnn_lib.display());
+        }
+        println!("cargo:rustc-link-lib=dylib=cudnn");
+    }
     println!("cargo:rustc-link-lib=dylib=cudart");
+    println!("cargo:rustc-link-lib=dylib=nvrtc");
     println!("cargo:rustc-link-lib=dylib=cublas");
     println!("cargo:rustc-link-lib=dylib=cublasLt");
     println!("cargo:rustc-link-lib=dylib=cuda");
@@ -53,6 +108,7 @@ fn compile_cuda_sources(
     out_dir: &PathBuf,
     nvcc: &PathBuf,
     cuda_arches: &[String],
+    cudnn: Option<&CudnnFrontendPaths>,
 ) -> Vec<PathBuf> {
     let mut cuda_objects = Vec::with_capacity(sources.cuda_sources.len());
     for cuda_source in &sources.cuda_sources {
@@ -65,6 +121,15 @@ fn compile_cuda_sources(
         let mut command = Command::new(nvcc);
         command.arg("-std=c++17").arg("-Xcompiler").arg("-fPIC");
         build_support::arch::add_cuda_arch_flags(&mut command, cuda_arches);
+        if let Some(cudnn) = cudnn {
+            command
+                .arg("-D")
+                .arg("NERVA_HAVE_CUDNN_FRONTEND=1")
+                .arg("-I")
+                .arg(&cudnn.frontend_include)
+                .arg("-I")
+                .arg(&cudnn.cudnn_include);
+        }
         command
             .arg("-I")
             .arg(&sources.native_dir)
