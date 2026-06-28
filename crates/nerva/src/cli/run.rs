@@ -4,7 +4,7 @@ use nerva_model::hf::tokenizer::{
 };
 use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
     HfCudaDeviceGenerateOutput,
-    run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_and_progress,
+    run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_profiling_and_progress,
 };
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
@@ -86,7 +86,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
     let _native_progress = logger.native_load_progress_guard();
     let _ticker = logger.ticker_guard();
     let output =
-        run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_and_progress(
+        run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_profiling_and_progress(
             &runtime,
             &model_path_string,
             &prompt_tokens,
@@ -95,6 +95,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
             queue_capacity,
             compute_capability,
             parsed.projection_mode,
+            parsed.profiling,
             |progress| logger.decode_progress(progress),
         )
         .map_err(|err| format!("generation failed: {err:?}"))?;

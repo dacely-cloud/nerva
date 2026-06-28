@@ -446,6 +446,7 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateRequest {
   const NervaCudaHfDecodeSequenceWeightBlock *planned_weight_descriptors;
   uint32_t planned_weight_descriptor_count;
   uint64_t planned_weight_descriptor_hash;
+  uint32_t detailed_profile;
 } NervaCudaHfDecodeSequenceSessionCreateRequest;
 
 typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {

@@ -681,47 +681,62 @@ impl NervaCliLoggerInner {
             "TIME PROFILE",
             Tone::Magenta,
         ));
-        self.print_plain_report_block_line(report_kv_line(
-            self.color,
-            "profiled total",
-            format::ms_from_ns(profile_total_ns),
-            Tone::Dim,
-        ));
-        self.print_plain_report_block_line(report_timing_line(
-            self.color,
-            "projection",
-            stats.projection_ns,
-            profile_total_ns,
-            Tone::Blue,
-        ));
-        self.print_plain_report_block_line(report_timing_line(
-            self.color,
-            "attention",
-            stats.attention_ns,
-            profile_total_ns,
-            Tone::Cyan,
-        ));
-        self.print_plain_report_block_line(report_timing_line(
-            self.color,
-            "norm",
-            stats.norm_ns,
-            profile_total_ns,
-            Tone::Yellow,
-        ));
-        self.print_plain_report_block_line(report_timing_line(
-            self.color,
-            "mlp",
-            stats.mlp_ns,
-            profile_total_ns,
-            Tone::Magenta,
-        ));
-        self.print_plain_report_block_line(report_timing_line(
-            self.color,
-            "sample",
-            stats.sampling_ns,
-            profile_total_ns,
-            Tone::Green,
-        ));
+        if profile_total_ns == 0 {
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "detail profiler",
+                "off",
+                Tone::Dim,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "enable",
+                "--profiling",
+                Tone::Yellow,
+            ));
+        } else {
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "profiled total",
+                format::ms_from_ns(profile_total_ns),
+                Tone::Dim,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "projection",
+                stats.projection_ns,
+                profile_total_ns,
+                Tone::Blue,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "attention",
+                stats.attention_ns,
+                profile_total_ns,
+                Tone::Cyan,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "norm",
+                stats.norm_ns,
+                profile_total_ns,
+                Tone::Yellow,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "mlp",
+                stats.mlp_ns,
+                profile_total_ns,
+                Tone::Magenta,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "sample",
+                stats.sampling_ns,
+                profile_total_ns,
+                Tone::Green,
+            ));
+        }
         self.print_plain_report_block_line("");
 
         self.print_plain_report_block_line(report_section_line(

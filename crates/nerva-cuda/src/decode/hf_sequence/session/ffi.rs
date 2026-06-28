@@ -33,6 +33,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionCreateRequest {
     pub(crate) planned_weight_descriptors: *const CudaHfDecodeSequenceWeightBlock,
     pub(crate) planned_weight_descriptor_count: u32,
     pub(crate) planned_weight_descriptor_hash: u64,
+    pub(crate) detailed_profile: u32,
 }
 
 #[repr(C)]

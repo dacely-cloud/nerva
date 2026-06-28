@@ -6,7 +6,7 @@ use nerva_model::causal_lm::types::HfCausalLmStopReason;
 
 use crate::engine::hf_cuda_decode::file_backed::progress::HfCudaDeviceSessionChunkProgress;
 use crate::engine::hf_cuda_decode::file_backed::projection_mode::HfCudaProjectionMode;
-use crate::engine::hf_cuda_decode::file_backed::session_stream::run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_and_progress;
+use crate::engine::hf_cuda_decode::file_backed::session_stream::run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_profiling_and_progress;
 use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 use crate::engine::runtime::Runtime;
 
@@ -87,6 +87,37 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_a
 where
     F: FnMut(HfCudaDeviceSessionChunkProgress),
 {
+    run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_profiling_and_progress(
+        runtime,
+        dir,
+        prompt_tokens,
+        max_context_tokens,
+        max_new_tokens,
+        queue_capacity,
+        compute_capability,
+        projection_mode,
+        false,
+        progress,
+    )
+}
+
+pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_projection_mode_profiling_and_progress<
+    F,
+>(
+    runtime: &Runtime,
+    dir: impl AsRef<Path>,
+    prompt_tokens: &[TokenId],
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    queue_capacity: usize,
+    compute_capability: Option<u32>,
+    projection_mode: HfCudaProjectionMode,
+    detailed_profile: bool,
+    progress: F,
+) -> Result<HfCudaDeviceGenerateOutput>
+where
+    F: FnMut(HfCudaDeviceSessionChunkProgress),
+{
     if max_new_tokens == 0 {
         return Err(NervaError::InvalidArgument {
             reason: "HF CUDA generate max_new_tokens must be non-zero".to_string(),
@@ -97,19 +128,19 @@ where
         HfCudaProjectionMode::Token => max_new_tokens,
         HfCudaProjectionMode::BlockVerify { .. } => max_new_tokens,
     };
-    let stream =
-        run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_and_progress(
-            runtime,
-            dir,
-            prompt_tokens,
-            max_context_tokens,
-            chunk_steps,
-            chunks,
-            queue_capacity,
-            compute_capability,
-            projection_mode,
-            progress,
-        )?;
+    let stream = run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_profiling_and_progress(
+        runtime,
+        dir,
+        prompt_tokens,
+        max_context_tokens,
+        chunk_steps,
+        chunks,
+        queue_capacity,
+        compute_capability,
+        projection_mode,
+        detailed_profile,
+        progress,
+    )?;
     Ok(HfCudaDeviceGenerateOutput {
         max_new_tokens,
         stream,

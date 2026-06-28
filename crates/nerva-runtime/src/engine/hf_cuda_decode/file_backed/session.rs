@@ -62,6 +62,22 @@ pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session(
     max_context_tokens: usize,
     compute_capability: Option<u32>,
 ) -> Result<HfCudaShardBackedDeviceOnlySession> {
+    create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling(
+        runtime,
+        dir,
+        max_context_tokens,
+        compute_capability,
+        false,
+    )
+}
+
+pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling(
+    runtime: &Runtime,
+    dir: impl AsRef<Path>,
+    max_context_tokens: usize,
+    compute_capability: Option<u32>,
+    detailed_profile: bool,
+) -> Result<HfCudaShardBackedDeviceOnlySession> {
     if max_context_tokens == 0 {
         return Err(NervaError::InvalidArgument {
             reason: "HF CUDA shard-backed session capacity must be non-zero".to_string(),
@@ -89,6 +105,7 @@ pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session(
         lm_head: &[],
         weight_plan: Some(weight_plan),
         weight_blocks: &resident_weights.descriptors,
+        detailed_profile,
     }
     .create();
     if created.summary.status != SmokeStatus::Ok {

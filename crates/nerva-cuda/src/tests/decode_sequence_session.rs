@@ -50,6 +50,7 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
         lm_head: &lm_head,
         weight_plan: None,
         weight_blocks: &[],
+        detailed_profile: false,
     }
     .create();
 
@@ -167,6 +168,7 @@ fn hf_decode_sequence_session_packs_projection_replicas_for_cublas_path() {
         lm_head: &lm_head,
         weight_plan: None,
         weight_blocks: &[],
+        detailed_profile: false,
     }
     .create();
 
@@ -242,6 +244,7 @@ fn hf_decode_sequence_session_verifies_greedy_draft_block() {
         lm_head: &lm_head,
         weight_plan: None,
         weight_blocks: &[],
+        detailed_profile: false,
     }
     .create();
 

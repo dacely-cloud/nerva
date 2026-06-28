@@ -19,6 +19,7 @@ pub(crate) struct GenerateArgs {
     pub compute_capability: Option<u32>,
     pub prompt_format: PromptFormat,
     pub projection_mode: HfCudaProjectionMode,
+    pub profiling: bool,
     pub json: bool,
     pub debug: bool,
 }
@@ -34,6 +35,7 @@ impl Default for GenerateArgs {
             compute_capability: None,
             prompt_format: PromptFormat::Auto,
             projection_mode: HfCudaProjectionMode::Token,
+            profiling: false,
             json: false,
             debug: false,
         }
@@ -68,6 +70,8 @@ struct ClapGenerateArgs {
     json: bool,
     #[arg(long = "debug")]
     debug: bool,
+    #[arg(long = "profiling")]
+    profiling: bool,
     #[arg(long = "projection-mode", default_value = "token")]
     projection_mode: String,
     #[arg(
@@ -91,7 +95,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
     let parsed = ClapGenerateArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
     if parsed.help {
         return Err(
-            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--projection-mode token|block-verify] [--chat|--raw] [--json] [--debug]"
+            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--projection-mode token|block-verify] [--profiling] [--chat|--raw] [--json] [--debug]"
                 .to_string(),
         );
     }
@@ -112,6 +116,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
             PromptFormat::Auto
         },
         projection_mode,
+        profiling: parsed.profiling,
         json: parsed.json,
         debug: parsed.debug,
     })
@@ -185,6 +190,7 @@ mod tests {
         assert_eq!(parsed.prompt_format, PromptFormat::Raw);
         assert_eq!(parsed.projection_mode, HfCudaProjectionMode::Token);
         assert!(parsed.debug);
+        assert!(!parsed.profiling);
     }
 
     #[test]
@@ -198,6 +204,7 @@ mod tests {
             "block-verify",
             "--projection-block-tokens",
             "8",
+            "--profiling",
         ]
         .into_iter()
         .map(str::to_string)
@@ -207,5 +214,6 @@ mod tests {
             parsed.projection_mode,
             HfCudaProjectionMode::BlockVerify { block_tokens: 8 }
         );
+        assert!(parsed.profiling);
     }
 }

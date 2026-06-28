@@ -2362,6 +2362,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t layer_count = 0;
   uint32_t max_context_tokens = 0;
   uint32_t prefill_chunk_tokens = 0;
+  uint32_t detailed_profile = 0;
   float rms_eps = 0.0f;
   float rope_theta = 0.0f;
   SequenceArenaLayout arena_layout{};
@@ -3732,7 +3733,8 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
     graph = nullptr;
     graph_exec = nullptr;
   }
-  if (err == cudaSuccess && use_cublas_layer_path(session)) {
+  if (err == cudaSuccess && use_cublas_layer_path(session) &&
+      session->detailed_profile != 0) {
     err = profile_cublas_layer_session_step(
         session, max_steps, prompt_token_count, has_eos_token, eos_token,
         attention_chunks, profile_cursor);
@@ -4231,6 +4233,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->vocab_size = request->vocab_size;
   session->layer_count = request->layer_count;
   session->max_context_tokens = request->max_context_tokens;
+  session->detailed_profile = request->detailed_profile == 0 ? 0u : 1u;
   session->rms_eps = request->rms_eps;
   session->rope_theta = request->rope_theta;
   session->layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);

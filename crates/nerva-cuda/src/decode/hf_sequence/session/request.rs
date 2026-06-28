@@ -40,6 +40,7 @@ pub struct CudaHfDecodeSequenceSessionConfig<'a> {
     pub lm_head: &'a [u16],
     pub weight_plan: Option<CudaHfDecodeSequenceWeightPlan>,
     pub weight_blocks: &'a [CudaHfDecodeSequenceWeightBlock],
+    pub detailed_profile: bool,
 }
 
 pub struct CudaHfDecodeSequenceSession {
@@ -123,6 +124,7 @@ impl<'a> CudaHfDecodeSequenceSessionConfig<'a> {
             planned_weight_descriptors: descriptor_ptr(self.weight_blocks),
             planned_weight_descriptor_count: self.weight_blocks.len() as u32,
             planned_weight_descriptor_hash: plan.descriptor_hash,
+            detailed_profile: self.detailed_profile as u32,
         }
     }
 }

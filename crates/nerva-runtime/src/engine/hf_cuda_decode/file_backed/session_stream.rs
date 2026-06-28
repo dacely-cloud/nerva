@@ -13,7 +13,7 @@ use crate::engine::hf_cuda_decode::file_backed::block_verify::draft_ngram_block;
 use crate::engine::hf_cuda_decode::file_backed::progress::HfCudaDeviceSessionChunkProgress;
 use crate::engine::hf_cuda_decode::file_backed::projection_mode::HfCudaProjectionMode;
 use crate::engine::hf_cuda_decode::file_backed::run::summary_from_sequence;
-use crate::engine::hf_cuda_decode::file_backed::session::create_hf_causal_lm_cuda_shard_backed_device_only_session;
+use crate::engine::hf_cuda_decode::file_backed::session::create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling;
 use crate::engine::hf_cuda_decode::file_backed::session_stream_queue::BoundedHostOutputQueue;
 use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 use crate::engine::runtime::Runtime;
@@ -90,6 +90,39 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_
     queue_capacity: usize,
     compute_capability: Option<u32>,
     projection_mode: HfCudaProjectionMode,
+    progress: F,
+) -> Result<HfCudaDeviceSessionStreamOutput>
+where
+    F: FnMut(HfCudaDeviceSessionChunkProgress),
+{
+    run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_profiling_and_progress(
+        runtime,
+        dir,
+        prompt_tokens,
+        max_context_tokens,
+        chunk_steps,
+        chunks,
+        queue_capacity,
+        compute_capability,
+        projection_mode,
+        false,
+        progress,
+    )
+}
+
+pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_profiling_and_progress<
+    F,
+>(
+    runtime: &Runtime,
+    dir: impl AsRef<Path>,
+    prompt_tokens: &[TokenId],
+    max_context_tokens: usize,
+    chunk_steps: usize,
+    chunks: usize,
+    queue_capacity: usize,
+    compute_capability: Option<u32>,
+    projection_mode: HfCudaProjectionMode,
+    detailed_profile: bool,
     mut progress: F,
 ) -> Result<HfCudaDeviceSessionStreamOutput>
 where
@@ -98,11 +131,12 @@ where
     validate_args(prompt_tokens, chunk_steps, chunks, queue_capacity)?;
     let dir = dir.as_ref();
     let load_started = Instant::now();
-    let mut session = create_hf_causal_lm_cuda_shard_backed_device_only_session(
+    let mut session = create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling(
         runtime,
         dir,
         max_context_tokens,
         compute_capability,
+        detailed_profile,
     )?;
     let load_wall_ns = duration_ns(load_started.elapsed());
     validate_vocab(prompt_tokens, session.metadata.vocab_size)?;
@@ -296,7 +330,9 @@ fn current_token_mode_steps(
     queue_capacity: usize,
 ) -> usize {
     let used_context = prompt_tokens.saturating_add(generated_tokens);
-    let context_steps = max_context_tokens.saturating_sub(used_context).saturating_add(1);
+    let context_steps = max_context_tokens
+        .saturating_sub(used_context)
+        .saturating_add(1);
     let max_steps = TOKEN_MODE_MAX_ADVANCE_STEPS
         .min(remaining_tokens)
         .min(context_steps)
