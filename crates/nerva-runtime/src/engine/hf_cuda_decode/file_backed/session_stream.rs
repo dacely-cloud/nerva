@@ -18,6 +18,10 @@ use crate::engine::hf_cuda_decode::file_backed::session_stream_queue::BoundedHos
 use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 use crate::engine::runtime::Runtime;
 
+const BLOCK_VERIFY_FALLBACK_MIN_CALLS: usize = 8;
+const BLOCK_VERIFY_FALLBACK_MIN_DRAFT_TOKENS: usize = 32;
+const BLOCK_VERIFY_FALLBACK_ACCEPTED_PER_DRAFT: f64 = 0.35;
+
 pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
     runtime: &Runtime,
     dir: impl AsRef<Path>,
@@ -131,30 +135,58 @@ where
     let mut summaries = Vec::new();
     let mut tokens = Vec::new();
     let mut stop_reason = HfCausalLmStopReason::MaxSteps;
+    let mut block_verify_wide_calls = 0usize;
+    let mut block_verify_wide_draft_tokens = 0usize;
+    let mut block_verify_wide_accepted_tokens = 0usize;
+    let mut block_verify_token_fallback = false;
     let decode_started = Instant::now();
     for chunk_index in 0..chunks {
         if tokens.len() >= requested_tokens {
             break;
         }
-        let current_steps = current_chunk_steps(
-            chunk_steps,
-            requested_tokens.saturating_sub(tokens.len()),
-            projection_mode,
-        );
-        let sequence = match projection_mode {
-            HfCudaProjectionMode::Token => loop_state.advance(current_steps),
-            HfCudaProjectionMode::BlockVerify { .. } => {
+        let remaining_tokens = requested_tokens.saturating_sub(tokens.len());
+        let (sequence, current_steps, wide_block_verify) = match projection_mode {
+            HfCudaProjectionMode::Token => {
+                let current_steps =
+                    current_chunk_steps(chunk_steps, remaining_tokens, projection_mode);
+                (loop_state.advance(current_steps), current_steps, false)
+            }
+            HfCudaProjectionMode::BlockVerify { .. } if block_verify_token_fallback => {
+                let current_steps = 1.min(remaining_tokens);
+                (loop_state.advance(current_steps), current_steps, false)
+            }
+            HfCudaProjectionMode::BlockVerify { block_tokens } => {
+                let current_steps =
+                    current_chunk_steps(chunk_steps, remaining_tokens, projection_mode);
                 let draft = draft_ngram_block(
                     prompt_tokens,
                     &tokens,
                     current_steps,
                     session.metadata.vocab_size,
                 );
-                loop_state.verify_block(&draft)
+                (
+                    loop_state.verify_block(&draft),
+                    current_steps,
+                    block_tokens > 1 && current_steps > 1,
+                )
             }
         };
         let mut summary = summary_from_sequence(&sequence, current_steps)?;
         summary.resident_weights = session.resident_weights.clone();
+        if wide_block_verify {
+            block_verify_wide_calls = block_verify_wide_calls.saturating_add(1);
+            block_verify_wide_draft_tokens =
+                block_verify_wide_draft_tokens.saturating_add(current_steps);
+            block_verify_wide_accepted_tokens =
+                block_verify_wide_accepted_tokens.saturating_add(summary.tokens.len());
+            if should_fallback_block_verify(
+                block_verify_wide_calls,
+                block_verify_wide_draft_tokens,
+                block_verify_wide_accepted_tokens,
+            ) {
+                block_verify_token_fallback = true;
+            }
+        }
         let hit_stop = contains_stop_token(&summary.tokens, &stop_tokens);
         for (chunk_offset, token) in summary.tokens.iter().copied().enumerate() {
             let record = queue.push(token, chunk_index, chunk_offset)?;
@@ -204,6 +236,19 @@ where
         queue: queue.summary(),
         stop_reason,
     })
+}
+
+fn should_fallback_block_verify(calls: usize, draft_tokens: usize, accepted_tokens: usize) -> bool {
+    if calls < BLOCK_VERIFY_FALLBACK_MIN_CALLS
+        || draft_tokens < BLOCK_VERIFY_FALLBACK_MIN_DRAFT_TOKENS
+    {
+        return false;
+    }
+    if draft_tokens == 0 {
+        return false;
+    }
+    let acceptance = accepted_tokens as f64 / draft_tokens as f64;
+    acceptance < BLOCK_VERIFY_FALLBACK_ACCEPTED_PER_DRAFT
 }
 
 fn requested_token_budget(

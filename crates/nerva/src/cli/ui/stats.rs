@@ -4,6 +4,8 @@ use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::HfCudaDeviceGe
 pub(crate) struct DecodeStats {
     pub tokens: usize,
     pub draft_tokens: usize,
+    pub wide_draft_tokens: usize,
+    pub wide_accepted_tokens: usize,
     pub wall_ns: u64,
     pub p50_ns: u64,
     pub p95_ns: u64,
@@ -33,6 +35,10 @@ impl DecodeStats {
         };
         for chunk in &output.stream.chunks {
             stats.draft_tokens += chunk.steps_requested;
+            if chunk.steps_requested > 1 {
+                stats.wide_draft_tokens += chunk.steps_requested;
+                stats.wide_accepted_tokens += chunk.tokens.len();
+            }
             stats.projection_ns += chunk.projection_ns;
             stats.attention_ns += chunk.attention_ns;
             stats.mlp_ns += chunk.mlp_ns;
@@ -67,11 +73,11 @@ impl DecodeStats {
         }
     }
 
-    pub(crate) fn acceptance(&self) -> f64 {
-        if self.draft_tokens == 0 {
-            0.0
+    pub(crate) fn wide_acceptance(&self) -> Option<f64> {
+        if self.wide_draft_tokens == 0 {
+            None
         } else {
-            self.tokens as f64 / self.draft_tokens as f64
+            Some(self.wide_accepted_tokens as f64 / self.wide_draft_tokens as f64)
         }
     }
 }

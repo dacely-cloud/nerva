@@ -607,29 +607,38 @@ impl NervaCliLoggerInner {
             Tone::Green,
         ));
         if output.stream.projection_mode.block_tokens() > 1 {
-            let acceptance = stats.acceptance();
             self.print_plain_report_block_line(report_kv_line(
                 self.color,
-                "verifier calls",
+                "decode calls",
                 output.stream.chunks.len().to_string(),
                 Tone::Dim,
             ));
-            self.print_plain_report_block_line(report_kv_line(
-                self.color,
-                "accepted / draft",
-                format!(
-                    "{} / {} ({:.1}%)",
-                    stats.tokens,
-                    stats.draft_tokens,
-                    acceptance * 100.0
-                ),
-                acceptance_tone(acceptance),
-            ));
-            if acceptance < 0.35 {
-                self.print_plain_report_block_line(report_warning_line(
+            if let Some(wide_acceptance) = stats.wide_acceptance() {
+                self.print_plain_report_block_line(report_kv_line(
                     self.color,
-                    "block verifier is losing: drafter acceptance is too low; token mode is expected to be faster",
+                    "wide acceptance",
+                    format!(
+                        "{} / {} ({:.1}%)",
+                        stats.wide_accepted_tokens,
+                        stats.wide_draft_tokens,
+                        wide_acceptance * 100.0
+                    ),
+                    acceptance_tone(wide_acceptance),
                 ));
+                if stats.draft_tokens > stats.wide_draft_tokens {
+                    self.print_plain_report_block_line(report_kv_line(
+                        self.color,
+                        "adaptive fallback",
+                        "token mode after low acceptance",
+                        Tone::Yellow,
+                    ));
+                }
+                if wide_acceptance < 0.35 {
+                    self.print_plain_report_block_line(report_warning_line(
+                        self.color,
+                        "block verifier is losing: drafter acceptance is too low",
+                    ));
+                }
             }
         }
         self.print_plain_report_block_line(report_kv_line(
@@ -781,7 +790,6 @@ impl NervaCliLoggerInner {
             format::bytes(stats.d2h_bytes),
             Tone::Cyan,
         ));
-        self.print_plain_report_block_line(report_rule_line(self.color));
     }
 
     fn print_plain_line(&mut self, phase: &str, message: impl AsRef<str>) {
@@ -920,7 +928,6 @@ fn phase_tone(phase: &str) -> Tone {
     }
 }
 
-const REPORT_WIDTH: usize = 78;
 const REPORT_LABEL_WIDTH: usize = 18;
 const REPORT_BAR_WIDTH: usize = 32;
 
@@ -949,27 +956,11 @@ fn metric(color: ColorMode, label: &str, value: impl AsRef<str>, value_tone: Ton
 }
 
 fn report_title_line(color: ColorMode, title: &str, tone: Tone) -> String {
-    let prefix = format!("+-- {title} ");
-    let dash_count = REPORT_WIDTH.saturating_sub(prefix.len() + 1);
-    paint(
-        color,
-        tone,
-        format!("{}{}+", prefix, "-".repeat(dash_count)),
-    )
-}
-
-fn report_rule_line(color: ColorMode) -> String {
-    paint(
-        color,
-        Tone::Dim,
-        format!("+{}+", "-".repeat(REPORT_WIDTH.saturating_sub(2))),
-    )
+    paint(color, tone, title)
 }
 
 fn report_section_line(color: ColorMode, title: &str, tone: Tone) -> String {
-    let prefix = format!(":: {title} ");
-    let dash_count = REPORT_WIDTH.saturating_sub(prefix.len());
-    paint(color, tone, format!("{}{}", prefix, "-".repeat(dash_count)))
+    paint(color, tone, title)
 }
 
 fn report_kv_line(
