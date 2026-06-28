@@ -18,6 +18,7 @@ use crate::engine::runtime::Runtime;
 
 const TOKEN_MODE_MAX_ADVANCE_STEPS: usize = 1024;
 const TOKEN_MODE_EOS_FIRST_ADVANCE_STEPS: usize = 64;
+const TOKEN_MODE_EOS_SECOND_ADVANCE_STEPS: usize = 128;
 const TOKEN_MODE_EOS_RAMP_ADVANCE_STEPS: usize = 256;
 const TOKEN_MODE_EOS_RAMP_TOKENS: usize = TOKEN_MODE_MAX_ADVANCE_STEPS;
 
@@ -228,6 +229,10 @@ fn token_mode_advance_cap(generated_tokens: usize, stop_tokens_known: bool) -> u
     }
     if generated_tokens == 0 {
         TOKEN_MODE_EOS_FIRST_ADVANCE_STEPS
+    } else if generated_tokens
+        < TOKEN_MODE_EOS_FIRST_ADVANCE_STEPS + TOKEN_MODE_EOS_SECOND_ADVANCE_STEPS
+    {
+        TOKEN_MODE_EOS_SECOND_ADVANCE_STEPS
     } else {
         TOKEN_MODE_EOS_RAMP_ADVANCE_STEPS
     }
@@ -332,6 +337,10 @@ mod tests {
         );
         assert_eq!(
             current_token_mode_steps(3965, 64, 1984, 8192, 2048, true),
+            128
+        );
+        assert_eq!(
+            current_token_mode_steps(3965, 192, 1856, 8192, 2048, true),
             256
         );
         assert_eq!(
