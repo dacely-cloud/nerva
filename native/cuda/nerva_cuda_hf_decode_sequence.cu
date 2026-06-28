@@ -170,6 +170,19 @@ struct LtGemvPlan {
   uint64_t tuned_avg_ns = 0;
 };
 
+struct LtGemmTokensPlan {
+  uint32_t rows = 0;
+  uint32_t cols = 0;
+  uint32_t tokens = 0;
+  uint32_t dtype = 0;
+  cublasLtMatmulDesc_t op_desc = nullptr;
+  cublasLtMatrixLayout_t a_desc = nullptr;
+  cublasLtMatrixLayout_t b_desc = nullptr;
+  cublasLtMatrixLayout_t c_desc = nullptr;
+  cublasLtMatrixLayout_t d_desc = nullptr;
+  bool ready = false;
+};
+
 constexpr uint32_t kGemvBackendLt = 0;
 constexpr uint32_t kGemvBackendCublas = 1;
 
@@ -2599,6 +2612,15 @@ void destroy_lt_gemv_plan(LtGemvPlan *plan) {
   *plan = LtGemvPlan{};
 }
 
+void destroy_lt_gemm_tokens_plan(LtGemmTokensPlan *plan) {
+  if (plan == nullptr) {
+    return;
+  }
+  destroy_lt_descriptors(plan->op_desc, plan->a_desc, plan->b_desc,
+                         plan->c_desc, plan->d_desc);
+  *plan = LtGemmTokensPlan{};
+}
+
 cudaError_t create_lt_gemv_descriptors(
     uint32_t rows, uint32_t cols, uint32_t dtype,
     cublasLtMatmulDesc_t *op_desc, cublasLtMatrixLayout_t *a_desc,
@@ -2648,6 +2670,78 @@ cudaError_t create_lt_gemv_descriptors(
     *c_desc = nullptr;
     *d_desc = nullptr;
   }
+  return cublas_to_cuda(status);
+}
+
+cudaError_t create_lt_gemm_tokens_plan(LtGemmTokensPlan *plan, uint32_t rows,
+                                       uint32_t cols, uint32_t tokens,
+                                       uint32_t dtype) {
+  if (plan == nullptr || rows == 0 || cols == 0 || tokens == 0 ||
+      rows > INT32_MAX || cols > INT32_MAX || tokens > INT32_MAX) {
+    return cudaErrorInvalidValue;
+  }
+  destroy_lt_gemm_tokens_plan(plan);
+  const cudaDataType_t data_type = encoded_cuda_type(dtype);
+  cublasStatus_t status =
+      cublasLtMatmulDescCreate(&plan->op_desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+  cublasOperation_t op_a = CUBLAS_OP_N;
+  cublasOperation_t op_b = CUBLAS_OP_T;
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatmulDescSetAttribute(
+        plan->op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op_a, sizeof(op_a));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatmulDescSetAttribute(
+        plan->op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op_b, sizeof(op_b));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutCreate(
+        &plan->a_desc, data_type, tokens, cols, cols);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status =
+        cublasLtMatrixLayoutCreate(&plan->b_desc, data_type, rows, cols, cols);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status =
+        cublasLtMatrixLayoutCreate(&plan->c_desc, CUDA_R_32F, tokens, rows, rows);
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status =
+        cublasLtMatrixLayoutCreate(&plan->d_desc, CUDA_R_32F, tokens, rows, rows);
+  cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        plan->a_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        plan->b_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        plan->c_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status == CUBLAS_STATUS_SUCCESS)
+    status = cublasLtMatrixLayoutSetAttribute(
+        plan->d_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    destroy_lt_gemm_tokens_plan(plan);
+    return cublas_to_cuda(status);
+  }
+  plan->rows = rows;
+  plan->cols = cols;
+  plan->tokens = tokens;
+  plan->dtype = dtype;
+  plan->ready = true;
+  return cudaSuccess;
+}
+
+cudaError_t launch_lt_gemm_tokens_plan(
+    cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
+    size_t workspace_bytes, const LtGemmTokensPlan *plan,
+    const uint16_t *matrix, const uint16_t *input, float beta, float *output) {
+  if (handle == nullptr || plan == nullptr || !plan->ready ||
+      matrix == nullptr || input == nullptr || output == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  const float alpha = 1.0f;
+  const cublasStatus_t status = cublasLtMatmul(
+      handle, plan->op_desc, &alpha, input, plan->a_desc, matrix, plan->b_desc,
+      &beta, output, plan->c_desc, output, plan->d_desc, nullptr, workspace,
+      workspace_bytes, stream);
   return cublas_to_cuda(status);
 }
 
@@ -3677,6 +3771,7 @@ struct NervaCudaHfDecodeSequenceSession {
   LtGemvPlan gate_up_plan;
   LtGemvPlan down_plan;
   LtGemvPlan lm_head_plan;
+  std::vector<LtGemmTokensPlan> prefill_gemm_token_plans;
   cudaEvent_t device_start = nullptr;
   cudaEvent_t device_stop = nullptr;
   cudaEvent_t profile_start = nullptr;
@@ -3739,6 +3834,10 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   if (session->profile_start != nullptr) cudaEventDestroy(session->profile_start);
   if (session->device_stop != nullptr) cudaEventDestroy(session->device_stop);
   if (session->device_start != nullptr) cudaEventDestroy(session->device_start);
+  for (LtGemmTokensPlan &plan : session->prefill_gemm_token_plans) {
+    destroy_lt_gemm_tokens_plan(&plan);
+  }
+  session->prefill_gemm_token_plans.clear();
   destroy_lt_gemv_plan(&session->lm_head_plan);
   destroy_lt_gemv_plan(&session->down_plan);
   destroy_lt_gemv_plan(&session->gate_up_plan);
@@ -5126,6 +5225,44 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
                                  uint32_t profile_cursor,
                                  NervaCudaHfDecodeSequenceResult *out);
 
+cudaError_t encoded_row_major_gemm_tokens_cached(
+    NervaCudaHfDecodeSequenceSession *session, const uint16_t *matrix,
+    const uint16_t *input, uint32_t rows, uint32_t cols, uint32_t tokens,
+    uint32_t dtype, float beta, float *output) {
+  if (session == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  for (LtGemmTokensPlan &plan : session->prefill_gemm_token_plans) {
+    if (plan.ready && plan.rows == rows && plan.cols == cols &&
+        plan.tokens == tokens && plan.dtype == dtype) {
+      cudaError_t err = launch_lt_gemm_tokens_plan(
+          session->cublas_lt, session->stream, session->cublas_workspace,
+          kCublasWorkspaceBytes, &plan, matrix, input, beta, output);
+      if (err == cudaSuccess) {
+        return err;
+      }
+      return encoded_row_major_gemm_tokens(session->cublas, matrix, input, rows,
+                                           cols, tokens, dtype, beta, output);
+    }
+  }
+
+  session->prefill_gemm_token_plans.emplace_back();
+  LtGemmTokensPlan &plan = session->prefill_gemm_token_plans.back();
+  cudaError_t err = create_lt_gemm_tokens_plan(&plan, rows, cols, tokens, dtype);
+  if (err == cudaSuccess) {
+    err = launch_lt_gemm_tokens_plan(
+        session->cublas_lt, session->stream, session->cublas_workspace,
+        kCublasWorkspaceBytes, &plan, matrix, input, beta, output);
+  }
+  if (err == cudaSuccess) {
+    return err;
+  }
+  destroy_lt_gemm_tokens_plan(&plan);
+  session->prefill_gemm_token_plans.pop_back();
+  return encoded_row_major_gemm_tokens(session->cublas, matrix, input, rows,
+                                       cols, tokens, dtype, beta, output);
+}
+
 cudaError_t launch_cublas_session_prefill(
     NervaCudaHfDecodeSequenceSession *session, uint32_t prompt_token_count,
     uint32_t has_eos_token, uint32_t eos_token,
@@ -5190,9 +5327,8 @@ cudaError_t launch_cublas_session_prefill(
         err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
-        err = encoded_row_major_gemm_tokens_best(
-            session->cublas, session->cublas_lt, session->stream,
-            session->cublas_workspace, kCublasWorkspaceBytes,
+        err = encoded_row_major_gemm_tokens_cached(
+            session,
             session->device_qkv_packed +
                 packed_shape.qkv_elements_per_layer * layer_index,
             session->device_prefill_norm,
@@ -5299,9 +5435,8 @@ cudaError_t launch_cublas_session_prefill(
         err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
-        err = encoded_row_major_gemm_tokens_best(
-            session->cublas, session->cublas_lt, session->stream,
-            session->cublas_workspace, kCublasWorkspaceBytes,
+        err = encoded_row_major_gemm_tokens_cached(
+            session,
             session->device_arena + layout.w_o,
             session->device_prefill_attn, session->hidden, attention_hidden,
             chunk_tokens, session->dtype, 0.0f, session->device_prefill_o);
@@ -5327,9 +5462,8 @@ cudaError_t launch_cublas_session_prefill(
         err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
-        err = encoded_row_major_gemm_tokens_best(
-            session->cublas, session->cublas_lt, session->stream,
-            session->cublas_workspace, kCublasWorkspaceBytes,
+        err = encoded_row_major_gemm_tokens_cached(
+            session,
             session->device_gate_up_packed +
                 packed_shape.gate_up_elements_per_layer * layer_index,
             session->device_prefill_norm,
@@ -5358,9 +5492,8 @@ cudaError_t launch_cublas_session_prefill(
         err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
-        err = encoded_row_major_gemm_tokens_best(
-            session->cublas, session->cublas_lt, session->stream,
-            session->cublas_workspace, kCublasWorkspaceBytes,
+        err = encoded_row_major_gemm_tokens_cached(
+            session,
             session->device_arena + layout.w_down,
             session->device_prefill_ff, session->hidden, session->intermediate,
             chunk_tokens, session->dtype, 0.0f, session->device_prefill_down);
@@ -5555,8 +5688,15 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
                                  uint32_t attention_chunks,
                                  uint32_t profile_cursor,
                                  NervaCudaHfDecodeSequenceResult *out) {
+  uint32_t cache_attention_chunks = attention_chunks;
+#if NERVA_HAVE_CUDNN_FRONTEND
+  if (session->cudnn_decode_sdpa != nullptr &&
+      can_use_cudnn_decode_sdpa(session, attention_chunks)) {
+    cache_attention_chunks = 1;
+  }
+#endif
   if (session_graph_matches(session, max_steps, prompt_token_count,
-                            has_eos_token, eos_token, attention_chunks)) {
+                            has_eos_token, eos_token, cache_attention_chunks)) {
     out->graph_nodes = session->cached_graph_nodes;
     out->graph_cache_hits = 1;
     copy_cached_profile(session, out);
@@ -5568,6 +5708,7 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
   for (uint32_t attempt = 0; attempt < 2; ++attempt) {
     reset_session_graph(session);
     bool tried_cudnn_decode_sdpa = false;
+    bool captured_cudnn_decode_sdpa = false;
 #if NERVA_HAVE_CUDNN_FRONTEND
     if (can_use_cudnn_decode_sdpa(session, attention_chunks)) {
       tried_cudnn_decode_sdpa = true;
@@ -5576,6 +5717,8 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
         session->cudnn_decode_sdpa_disabled = 1;
         err = cudaSuccess;
         tried_cudnn_decode_sdpa = false;
+      } else {
+        captured_cudnn_decode_sdpa = true;
       }
     }
 #endif
@@ -5615,7 +5758,9 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
       session->cached_prompt_token_count = prompt_token_count;
       session->cached_has_eos_token = has_eos_token;
       session->cached_eos_token = eos_token;
-      session->cached_attention_chunks = attention_chunks;
+      session->cached_attention_chunks = captured_cudnn_decode_sdpa
+                                             ? 1
+                                             : attention_chunks;
       session->cached_graph_nodes = out->graph_nodes;
       out->graph_captures = 1;
       graph = nullptr;
