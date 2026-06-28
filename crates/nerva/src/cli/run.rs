@@ -212,7 +212,7 @@ fn generate_json_output(
         .collect::<Vec<_>>()
         .join(",");
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"prefill_chunk_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
+        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"prefill_chunk_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
         env!("CARGO_PKG_VERSION"),
         json_escape(path),
         input_mode,
@@ -232,6 +232,16 @@ fn generate_json_output(
         output.stream.load_wall_ns,
         output.stream.prefill_wall_ns,
         output.stream.start.device_elapsed_ns,
+        output.stream.start.projection_ns,
+        output.stream.start.qkv_projection_ns,
+        output.stream.start.attention_output_projection_ns,
+        output.stream.start.gate_up_projection_ns,
+        output.stream.start.down_projection_ns,
+        output.stream.start.lm_head_projection_ns,
+        output.stream.start.attention_ns,
+        output.stream.start.mlp_ns,
+        output.stream.start.norm_ns,
+        output.stream.start.sampling_ns,
         output.stream.decode_wall_ns,
         post_load_wall_ns,
         tokens_per_second(generated_tokens, elapsed_wall_ns),

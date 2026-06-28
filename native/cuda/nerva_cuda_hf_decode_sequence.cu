@@ -1874,6 +1874,102 @@ __global__ void hf_prefill_grouped_gqa_attention_kernel(
   }
 }
 
+template <uint32_t DType>
+__global__ void hf_prefill_grouped_gqa_attention_direct_kernel(
+    uint32_t layer_index, uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
+    uint32_t max_steps, uint32_t chunk_start, uint32_t chunk_tokens,
+    const float *qkv, const uint16_t *kv_keys, const uint16_t *kv_values,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint16_t *attn_out) {
+  const uint32_t local_token = blockIdx.x;
+  const uint32_t kv_head = blockIdx.y;
+  if (local_token >= chunk_tokens || kv_head >= kv_heads ||
+      kv_heads == 0 || heads / kv_heads != kGroupedGqaHeads ||
+      heads % kv_heads != 0 || head_dim > kSharedWarpGqaHeadDimMax ||
+      blockDim.x != kSharedWarpGqaThreads) {
+    return;
+  }
+  (void)max_steps;
+  const uint32_t q_in_group = threadIdx.x / kSharedWarpGqaThreadsPerHead;
+  const uint32_t lane = threadIdx.x - q_in_group * kSharedWarpGqaThreadsPerHead;
+  const uint32_t head = kv_head * kGroupedGqaHeads + q_in_group;
+  const uint32_t attention_hidden = heads * head_dim;
+  const uint32_t kv_hidden = kv_heads * head_dim;
+  const uint64_t rows = static_cast<uint64_t>(attention_hidden) + kv_hidden * 2;
+  const float *q = qkv + static_cast<uint64_t>(local_token) * rows;
+  uint16_t *out = attn_out + static_cast<uint64_t>(local_token) * attention_hidden;
+  const uint32_t global_pos = chunk_start + local_token;
+  const uint32_t head_start = head * head_dim;
+  const uint32_t kv_start = kv_head * head_dim;
+  const float scale = rsqrtf(static_cast<float>(head_dim));
+  float local_m = -INFINITY;
+  float local_l = 0.0f;
+  float q_frag[kHeadThreadElements];
+  float acc[kHeadThreadElements];
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+    q_frag[item] = offset < head_dim ? q[head_start + offset] : 0.0f;
+    acc[item] = 0.0f;
+  }
+  for (uint32_t token = 0; token <= global_pos;) {
+    const uint32_t logical_block = token / kKvCacheBlockTokens;
+    const uint32_t logical_block_end =
+        (logical_block + 1u) * kKvCacheBlockTokens;
+    const uint32_t block_limit =
+        logical_block_end <= global_pos ? logical_block_end : global_pos + 1u;
+    uint64_t token_base = kv_cache_page_offset(
+        layer_index, kv_block_count, kv_block_table[logical_block],
+        token - logical_block * kKvCacheBlockTokens, kv_hidden, kv_start);
+    for (; token < block_limit; ++token, token_base += kv_hidden) {
+      float partial = 0.0f;
+#pragma unroll
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+        if (offset < head_dim) {
+          partial += q_frag[item] *
+                     encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+        }
+      }
+      const float score = warp_sum(partial) * scale;
+      float old_scale = 0.0f;
+      float new_scale = 0.0f;
+      float next_m_value = local_m;
+      float next_l_value = local_l;
+      if (lane == 0) {
+        const float next_m = fmaxf(local_m, score);
+        old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+        new_scale = expf(score - next_m);
+        next_l_value = local_l * old_scale + new_scale;
+        next_m_value = next_m;
+      }
+      old_scale = __shfl_sync(0xffffffffu, old_scale, 0);
+      new_scale = __shfl_sync(0xffffffffu, new_scale, 0);
+      local_l = __shfl_sync(0xffffffffu, next_l_value, 0);
+      local_m = __shfl_sync(0xffffffffu, next_m_value, 0);
+#pragma unroll
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+        if (offset < head_dim) {
+          acc[item] =
+              acc[item] * old_scale +
+              encoded_to_f32_typed<DType>(kv_values[token_base + offset]) *
+                  new_scale;
+        }
+      }
+    }
+  }
+  const bool normalize = local_l > 0.0f && isfinite(local_l);
+#pragma unroll
+  for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = lane + item * kSharedWarpGqaThreadsPerHead;
+    if (offset < head_dim) {
+      const float value = normalize ? acc[item] / local_l : acc[item];
+      out[head_start + offset] = f32_to_encoded(value, DType);
+    }
+  }
+}
+
 __global__ void hf_prefill_mlp_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
@@ -3183,6 +3279,8 @@ struct NervaCudaHfDecodeSequenceSession {
   LtGemvPlan lm_head_plan;
   cudaEvent_t device_start = nullptr;
   cudaEvent_t device_stop = nullptr;
+  cudaEvent_t profile_start = nullptr;
+  cudaEvent_t profile_stop = nullptr;
   cudaGraph_t cached_graph = nullptr;
   cudaGraphExec_t cached_graph_exec = nullptr;
   uint32_t cached_context_steps = 0;
@@ -3230,6 +3328,8 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   if (session->cached_graph != nullptr) {
     cudaGraphDestroy(session->cached_graph);
   }
+  if (session->profile_stop != nullptr) cudaEventDestroy(session->profile_stop);
+  if (session->profile_start != nullptr) cudaEventDestroy(session->profile_start);
   if (session->device_stop != nullptr) cudaEventDestroy(session->device_stop);
   if (session->device_start != nullptr) cudaEventDestroy(session->device_start);
   destroy_lt_gemv_plan(&session->lm_head_plan);
@@ -3600,22 +3700,22 @@ void drain_prefill_metrics(NervaCudaHfDecodeSequenceSession *session,
 }
 
 cudaError_t profile_begin(NervaCudaHfDecodeSequenceSession *session) {
-  return cudaEventRecord(session->device_start, session->stream);
+  return cudaEventRecord(session->profile_start, session->stream);
 }
 
 cudaError_t profile_end(NervaCudaHfDecodeSequenceSession *session,
                         uint64_t *bucket) {
-  cudaError_t err = cudaEventRecord(session->device_stop, session->stream);
+  cudaError_t err = cudaEventRecord(session->profile_stop, session->stream);
   if (err != cudaSuccess) {
     return err;
   }
-  err = cudaEventSynchronize(session->device_stop);
+  err = cudaEventSynchronize(session->profile_stop);
   if (err != cudaSuccess) {
     return err;
   }
   float elapsed_ms = 0.0f;
-  err = cudaEventElapsedTime(&elapsed_ms, session->device_start,
-                             session->device_stop);
+  err = cudaEventElapsedTime(&elapsed_ms, session->profile_start,
+                             session->profile_stop);
   if (err == cudaSuccess && elapsed_ms > 0.0f) {
     uint64_t elapsed_ns = static_cast<uint64_t>(elapsed_ms * 1000000.0f);
     *bucket += elapsed_ns == 0 ? 1 : elapsed_ns;
@@ -4279,6 +4379,22 @@ cudaError_t launch_cublas_session_prefill(
   const uint32_t kv_hidden = session->kv_heads * session->head_dim;
   const PackedProjectionShape packed_shape = packed_projection_shape(
       session->hidden, attention_hidden, kv_hidden, session->intermediate);
+  const bool collect_profile = session->detailed_profile != 0;
+  uint64_t qkv_projection_ns = 0;
+  uint64_t attention_output_projection_ns = 0;
+  uint64_t gate_up_projection_ns = 0;
+  uint64_t down_projection_ns = 0;
+  uint64_t lm_head_projection_ns = 0;
+  uint64_t attention_ns = 0;
+  uint64_t mlp_ns = 0;
+  uint64_t norm_ns = 0;
+  uint64_t sampling_ns = 0;
+  auto profile_stage_begin = [&]() -> cudaError_t {
+    return collect_profile ? profile_begin(session) : cudaSuccess;
+  };
+  auto profile_stage_end = [&](uint64_t *bucket) -> cudaError_t {
+    return collect_profile ? profile_end(session, bucket) : cudaSuccess;
+  };
   cudaError_t err = cudaEventRecord(session->device_start, session->stream);
   if (err == cudaSuccess) {
     hf_prefill_embed_kernel<<<prompt_token_count, kDecodeThreads, 0,
@@ -4300,13 +4416,20 @@ cudaError_t launch_cublas_session_prefill(
          chunk_start += session->prefill_chunk_tokens) {
       const uint32_t chunk_tokens =
           std::min(session->prefill_chunk_tokens, prompt_token_count - chunk_start);
-      hf_prefill_attn_norm_kernel<<<chunk_tokens, kDecodeThreads, 0,
-                                    session->stream>>>(
-          session->device_arena, layout, session->dtype, session->hidden,
-          chunk_start, chunk_tokens, session->rms_eps, hidden_in,
-          session->device_prefill_norm);
-      err = cudaGetLastError();
-      out->kernel_launches += 1;
+      if (err == cudaSuccess) err = profile_stage_begin();
+      if (err == cudaSuccess) {
+        hf_prefill_attn_norm_kernel<<<chunk_tokens, kDecodeThreads, 0,
+                                      session->stream>>>(
+            session->device_arena, layout, session->dtype, session->hidden,
+            chunk_start, chunk_tokens, session->rms_eps, hidden_in,
+            session->device_prefill_norm);
+        err = cudaGetLastError();
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&norm_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
       if (err == cudaSuccess) {
         err = encoded_row_major_gemm_tokens(
             session->cublas,
@@ -4316,6 +4439,10 @@ cudaError_t launch_cublas_session_prefill(
             static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
             chunk_tokens, session->dtype, 0.0f, session->device_prefill_qkv);
         out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&qkv_projection_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
         const dim3 grid(chunk_tokens, std::max(session->heads, session->kv_heads));
@@ -4330,6 +4457,10 @@ cudaError_t launch_cublas_session_prefill(
         err = cudaGetLastError();
         out->kernel_launches += 1;
       }
+      if (err == cudaSuccess) err = profile_stage_end(&norm_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
       if (err == cudaSuccess) {
         const uint32_t query_group =
             session->kv_heads == 0 ? 0 : session->heads / session->kv_heads;
@@ -4339,7 +4470,7 @@ cudaError_t launch_cublas_session_prefill(
             session->head_dim <= kSharedWarpGqaHeadDimMax;
         if (session->dtype == kDTypeBF16 && use_grouped_gqa) {
           const dim3 grid(chunk_tokens, session->kv_heads);
-          hf_prefill_grouped_gqa_attention_kernel<kDTypeBF16>
+          hf_prefill_grouped_gqa_attention_direct_kernel<kDTypeBF16>
               <<<grid, kSharedWarpGqaThreads, 0, session->stream>>>(
                   layer_index, session->heads, session->kv_heads,
                   session->head_dim, session->max_context_tokens, chunk_start,
@@ -4349,7 +4480,7 @@ cudaError_t launch_cublas_session_prefill(
                   session->device_prefill_attn);
         } else if (use_grouped_gqa) {
           const dim3 grid(chunk_tokens, session->kv_heads);
-          hf_prefill_grouped_gqa_attention_kernel<kDTypeF16>
+          hf_prefill_grouped_gqa_attention_direct_kernel<kDTypeF16>
               <<<grid, kSharedWarpGqaThreads, 0, session->stream>>>(
                   layer_index, session->heads, session->kv_heads,
                   session->head_dim, session->max_context_tokens, chunk_start,
@@ -4371,12 +4502,22 @@ cudaError_t launch_cublas_session_prefill(
         err = cudaGetLastError();
         out->kernel_launches += 1;
       }
+      if (err == cudaSuccess) err = profile_stage_end(&attention_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
       if (err == cudaSuccess) {
         err = encoded_row_major_gemm_tokens(
             session->cublas, session->device_arena + layout.w_o,
             session->device_prefill_attn, session->hidden, attention_hidden,
             chunk_tokens, session->dtype, 0.0f, session->device_prefill_o);
         out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) {
+        err = profile_stage_end(&attention_output_projection_ns);
+      }
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
         hf_prefill_mlp_norm_kernel<<<chunk_tokens, kDecodeThreads, 0,
@@ -4387,6 +4528,10 @@ cudaError_t launch_cublas_session_prefill(
         err = cudaGetLastError();
         out->kernel_launches += 1;
       }
+      if (err == cudaSuccess) err = profile_stage_end(&norm_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
       if (err == cudaSuccess) {
         err = encoded_row_major_gemm_tokens(
             session->cublas,
@@ -4396,6 +4541,10 @@ cudaError_t launch_cublas_session_prefill(
             static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
             chunk_tokens, session->dtype, 0.0f, session->device_prefill_gate_up);
         out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&gate_up_projection_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
         const uint32_t blocks =
@@ -4409,12 +4558,20 @@ cudaError_t launch_cublas_session_prefill(
         err = cudaGetLastError();
         out->kernel_launches += 1;
       }
+      if (err == cudaSuccess) err = profile_stage_end(&mlp_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
       if (err == cudaSuccess) {
         err = encoded_row_major_gemm_tokens(
             session->cublas, session->device_arena + layout.w_down,
             session->device_prefill_ff, session->hidden, session->intermediate,
             chunk_tokens, session->dtype, 0.0f, session->device_prefill_down);
         out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&down_projection_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
       }
       if (err == cudaSuccess) {
         const uint32_t blocks =
@@ -4428,8 +4585,12 @@ cudaError_t launch_cublas_session_prefill(
         err = cudaGetLastError();
         out->kernel_launches += 1;
       }
+      if (err == cudaSuccess) err = profile_stage_end(&mlp_ns);
     }
     std::swap(hidden_in, hidden_out);
+  }
+  if (err == cudaSuccess) {
+    err = profile_stage_begin();
   }
   if (err == cudaSuccess) {
     hf_prefill_final_norm_last_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
@@ -4439,11 +4600,15 @@ cudaError_t launch_cublas_session_prefill(
     err = cudaGetLastError();
     out->kernel_launches += 1;
   }
+  if (err == cudaSuccess) err = profile_stage_end(&norm_ns);
   if (err == cudaSuccess) {
     hf_decode_set_step_kernel<<<1, 1, 0, session->stream>>>(
         session->device_step, prompt_token_count - 1u);
     err = cudaGetLastError();
     out->kernel_launches += 1;
+  }
+  if (err == cudaSuccess) {
+    err = profile_stage_begin();
   }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
@@ -4455,6 +4620,10 @@ cudaError_t launch_cublas_session_prefill(
         session->device_projection_input, 0.0f, device_logits);
     out->kernel_launches += 1;
   }
+  if (err == cudaSuccess) err = profile_stage_end(&lm_head_projection_ns);
+  if (err == cudaSuccess) {
+    err = profile_stage_begin();
+  }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
     hf_decode_final_head_reduce_kernel<<<1, kDecodeSampleThreads, 0,
@@ -4464,6 +4633,7 @@ cudaError_t launch_cublas_session_prefill(
     err = cudaGetLastError();
     out->kernel_launches += 1;
   }
+  if (err == cudaSuccess) err = profile_stage_end(&sampling_ns);
   if (err == cudaSuccess) {
     err = cudaEventRecord(session->device_stop, session->stream);
   }
@@ -4479,6 +4649,20 @@ cudaError_t launch_cublas_session_prefill(
       out->device_elapsed_ns = static_cast<uint64_t>(device_ms * 1000000.0f);
       if (out->device_elapsed_ns == 0) out->device_elapsed_ns = 1;
     }
+  }
+  if (err == cudaSuccess && collect_profile) {
+    out->qkv_projection_ns = qkv_projection_ns;
+    out->attention_output_projection_ns = attention_output_projection_ns;
+    out->gate_up_projection_ns = gate_up_projection_ns;
+    out->down_projection_ns = down_projection_ns;
+    out->lm_head_projection_ns = lm_head_projection_ns;
+    out->projection_ns = qkv_projection_ns + attention_output_projection_ns +
+                         gate_up_projection_ns + down_projection_ns +
+                         lm_head_projection_ns;
+    out->attention_ns = attention_ns;
+    out->mlp_ns = mlp_ns;
+    out->norm_ns = norm_ns;
+    out->sampling_ns = sampling_ns;
   }
   return err;
 }
@@ -5381,6 +5565,14 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   if (err == cudaSuccess) {
     failure_stage = kCreateStageStopEventCreate;
     err = cudaEventCreate(&session->device_stop);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageStartEventCreate;
+    err = cudaEventCreate(&session->profile_start);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageStopEventCreate;
+    err = cudaEventCreate(&session->profile_stop);
   }
   if (err != cudaSuccess) {
     fail(out, err, failure_stage);

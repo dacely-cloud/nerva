@@ -492,6 +492,14 @@ impl NervaCliLoggerInner {
         elapsed: std::time::Duration,
     ) {
         let stats = DecodeStats::from_output(output);
+        let prefill_profile_total_ns = output
+            .stream
+            .start
+            .projection_ns
+            .saturating_add(output.stream.start.attention_ns)
+            .saturating_add(output.stream.start.mlp_ns)
+            .saturating_add(output.stream.start.norm_ns)
+            .saturating_add(output.stream.start.sampling_ns);
         let profile_total_ns = stats
             .projection_ns
             .saturating_add(stats.attention_ns)
@@ -585,6 +593,56 @@ impl NervaCliLoggerInner {
             Tone::Dim,
         ));
         self.print_plain_report_block_line("");
+
+        if prefill_profile_total_ns != 0 {
+            self.print_plain_report_block_line(report_section_line(
+                self.color,
+                "PREFILL PROFILE",
+                Tone::Magenta,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "profiled total",
+                format::ms_from_ns(prefill_profile_total_ns),
+                Tone::Dim,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "projection",
+                output.stream.start.projection_ns,
+                prefill_profile_total_ns,
+                Tone::Blue,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "attention",
+                output.stream.start.attention_ns,
+                prefill_profile_total_ns,
+                Tone::Cyan,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "norm/cache",
+                output.stream.start.norm_ns,
+                prefill_profile_total_ns,
+                Tone::Yellow,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "mlp",
+                output.stream.start.mlp_ns,
+                prefill_profile_total_ns,
+                Tone::Magenta,
+            ));
+            self.print_plain_report_block_line(report_timing_line(
+                self.color,
+                "sample",
+                output.stream.start.sampling_ns,
+                prefill_profile_total_ns,
+                Tone::Green,
+            ));
+            self.print_plain_report_block_line("");
+        }
 
         self.print_plain_report_block_line(report_section_line(self.color, "DECODE", Tone::Cyan));
         self.print_plain_report_block_line(report_kv_line(
