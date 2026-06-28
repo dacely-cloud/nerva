@@ -75,6 +75,13 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionCreateResult {
 
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub(crate) struct NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest {
+    pub(crate) parent: *mut NervaCudaHfDecodeSequenceSession,
+    pub(crate) detailed_profile: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub(crate) struct NervaCudaHfDecodeSequenceSessionRunRequest {
     pub(crate) session: *mut NervaCudaHfDecodeSequenceSession,
     pub(crate) steps: u32,
@@ -336,6 +343,11 @@ unsafe extern "C" {
         request: *const NervaCudaHfDecodeSequenceBatchAdvanceRequest,
         out: *mut NervaCudaHfDecodeSequenceBatchAdvanceResult,
     ) -> c_int;
+    fn nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
+        request: *const NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest,
+        out: *mut NervaCudaHfDecodeSequenceSessionCreateResult,
+        session: *mut *mut NervaCudaHfDecodeSequenceSession,
+    ) -> c_int;
     fn nerva_cuda_hf_decode_sequence_session_destroy(
         session: *mut NervaCudaHfDecodeSequenceSession,
         out: *mut NervaCudaHfDecodeSequenceSessionCreateResult,
@@ -397,6 +409,14 @@ pub(crate) fn batch_advance_one_hf_decode_sequence(
     out: &mut NervaCudaHfDecodeSequenceBatchAdvanceResult,
 ) -> c_int {
     unsafe { nerva_cuda_hf_decode_sequence_batch_advance_one(request, out) }
+}
+
+pub(crate) fn fork_shared_weights_hf_decode_sequence_session(
+    request: &NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest,
+    out: &mut NervaCudaHfDecodeSequenceSessionCreateResult,
+    session: &mut *mut NervaCudaHfDecodeSequenceSession,
+) -> c_int {
+    unsafe { nerva_cuda_hf_decode_sequence_session_fork_shared_weights(request, out, session) }
 }
 
 pub(crate) fn destroy_hf_decode_sequence_session(

@@ -435,6 +435,39 @@ This is still not the full production queue scheduler. The remaining runtime
 work is to connect the real request queue to this grouping/execution path and
 prove Qwen throughput with multiple live requests.
 
+## Shared-Weight Sessions
+
+Continuous batching is not useful if every request duplicates the resident
+model weights. The native session layer now supports shared-weight forks:
+
+```text
+nerva_cuda_hf_decode_sequence_session_fork_shared_weights(...)
+
+CudaHfDecodeSequenceSession::fork_shared_weights(...)
+```
+
+A fork borrows the parent session's immutable device weight arena, device
+layout table, packed QKV projection replicas, and packed gate/up projection
+replicas through a reference-counted native shared-weight block. The fork owns
+its own KV cache, prompt buffer, token slots, scratch buffers, prefill scratch,
+CUDA stream, cuBLAS/cuDNN handles, CUDA events, graph cache, and projection
+plan descriptors.
+
+This changes the memory shape needed for production continuous batching:
+
+```text
+before:
+  request N = weights + packed projection replicas + KV/session state
+
+after:
+  first request = weights + packed projection replicas + KV/session state
+  forked request = KV/session state only
+```
+
+The cublas decode prepare path no longer writes the first hidden vector into
+the shared arena scratch slot, so forked decode sessions do not corrupt each
+other while sharing immutable weight storage.
+
 The runtime also has a continuous decode batch scheduler surface:
 
 ```text
@@ -464,10 +497,11 @@ The current RTX 5090 synthetic artifact is:
 docs/source/perf/synthetic_projection_batch_advance_probe.json
 ```
 
-It verifies matching tokens through the continuous runtime scheduler, five
-batched projection launches for a one-layer model (`QKV`, `W_O`, `gate/up`,
-`down`, `LM head`), zero hot-path allocations, and a small wall-clock win over
-two sequential one-token loop advances on the tiny synthetic model. This is not
-a Qwen throughput claim; it is the first hardware-backed proof that the full
-batched decode-step composition is callable through scheduler-facing runtime
-code and preserves token output for compatible sessions.
+It verifies matching tokens through shared-weight session forks and the
+continuous runtime scheduler, five batched projection launches for a one-layer
+model (`QKV`, `W_O`, `gate/up`, `down`, `LM head`), zero hot-path allocations,
+and a small wall-clock win over two sequential one-token loop advances on the
+tiny synthetic model. This is not a Qwen throughput claim; it is the first
+hardware-backed proof that the full batched decode-step composition is callable
+through scheduler-facing runtime code and preserves token output for compatible
+sessions without duplicating resident weights.

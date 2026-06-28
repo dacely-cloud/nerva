@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <new>
 #include <string>
 #include <unordered_map>
@@ -20,7 +21,6 @@
 #if NERVA_HAVE_CUDNN_FRONTEND
 #include <cudnn.h>
 #include <cudnn_frontend.h>
-#include <memory>
 #endif
 
 namespace {
@@ -181,6 +181,20 @@ struct LtGemmTokensPlan {
   cublasLtMatrixLayout_t c_desc = nullptr;
   cublasLtMatrixLayout_t d_desc = nullptr;
   bool ready = false;
+};
+
+struct SessionSharedWeights {
+  uint16_t *device_arena = nullptr;
+  SequenceLayerLayout *device_layouts = nullptr;
+  uint16_t *device_qkv_packed = nullptr;
+  uint16_t *device_gate_up_packed = nullptr;
+
+  ~SessionSharedWeights() {
+    cudaFree(device_gate_up_packed);
+    cudaFree(device_qkv_packed);
+    cudaFree(device_layouts);
+    cudaFree(device_arena);
+  }
 };
 
 constexpr uint32_t kGemvBackendLt = 0;
@@ -814,7 +828,6 @@ __global__ void hf_decode_prepare_first_attn_norm_encode_kernel(
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
     const uint16_t encoded = arena[embedding_offset + index];
-    arena[arena_layout.input + index] = encoded;
     s.input[index] = encoded_to_f32(encoded, dtype);
   }
   __syncthreads();
@@ -3791,6 +3804,7 @@ struct NervaCudaHfDecodeSequenceSession {
   NervaCudaSyntheticTokenSlot *device_slots = nullptr;
   uint32_t *device_step = nullptr;
   void *cublas_workspace = nullptr;
+  std::shared_ptr<SessionSharedWeights> shared_weights;
   cudaStream_t stream = nullptr;
   cublasHandle_t cublas = nullptr;
   cublasLtHandle_t cublas_lt = nullptr;
@@ -3888,8 +3902,10 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_kv_block_table);
   cudaFree(session->device_kv_values);
   cudaFree(session->device_kv_keys);
-  cudaFree(session->device_gate_up_packed);
-  cudaFree(session->device_qkv_packed);
+  if (session->shared_weights == nullptr) {
+    cudaFree(session->device_gate_up_packed);
+    cudaFree(session->device_qkv_packed);
+  }
   cudaFree(session->device_prefill_down);
   cudaFree(session->device_prefill_ff);
   cudaFree(session->device_prefill_gate_up);
@@ -3908,8 +3924,16 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_decode_q);
   cudaFree(session->device_projection_input);
   cudaFree(session->device_scratch);
-  cudaFree(session->device_layouts);
-  cudaFree(session->device_arena);
+  if (session->shared_weights == nullptr) {
+    cudaFree(session->device_layouts);
+    cudaFree(session->device_arena);
+  } else {
+    session->device_gate_up_packed = nullptr;
+    session->device_qkv_packed = nullptr;
+    session->device_layouts = nullptr;
+    session->device_arena = nullptr;
+    session->shared_weights.reset();
+  }
   cudaFreeHost(session->host_slots);
 }
 
@@ -6794,6 +6818,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     delete session;
     return -1;
   }
+  auto shared_weights = std::make_shared<SessionSharedWeights>();
+  shared_weights->device_arena = session->device_arena;
+  shared_weights->device_layouts = session->device_layouts;
+  shared_weights->device_qkv_packed = session->device_qkv_packed;
+  shared_weights->device_gate_up_packed = session->device_gate_up_packed;
+  session->shared_weights = shared_weights;
   session->h2d_bytes = out->h2d_bytes;
   session->load_staging_bytes = host_weight_bytes;
   session->setup_sync_calls = setup_sync_calls;
@@ -8462,6 +8492,302 @@ extern "C" int nerva_cuda_hf_decode_sequence_batch_advance_one(
   out->exact = 1;
   out->status = out->observed_tokens == out->block_tokens ? 0 : -1;
   return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
+    const NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest *request,
+    NervaCudaHfDecodeSequenceSessionCreateResult *out,
+    NervaCudaHfDecodeSequenceSession **session_out) {
+  if (out == nullptr || session_out == nullptr) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  *session_out = nullptr;
+  if (request == nullptr || request->parent == nullptr) {
+    out->failure_stage = kCreateStageInvalidRequest;
+    return -1;
+  }
+  NervaCudaHfDecodeSequenceSession *parent = request->parent;
+  if (parent->shared_weights == nullptr || !use_cublas_layer_path(parent)) {
+    out->failure_stage = kCreateStageInvalidRequest;
+    return -1;
+  }
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail(out, err, kCreateStageGetDeviceCount);
+  }
+  if (out->device_count <= 0) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorNoDevice);
+    out->failure_stage = kCreateStageGetDeviceCount;
+    return -1;
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail(out, err, kCreateStageSetDevice);
+  }
+
+  auto *session = new (std::nothrow) NervaCudaHfDecodeSequenceSession();
+  if (session == nullptr) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorMemoryAllocation);
+    out->failure_stage = kCreateStageSessionAlloc;
+    return -1;
+  }
+
+  session->dtype = parent->dtype;
+  session->hidden = parent->hidden;
+  session->heads = parent->heads;
+  session->kv_heads = parent->kv_heads;
+  session->head_dim = parent->head_dim;
+  session->head_threads = parent->head_threads;
+  session->intermediate = parent->intermediate;
+  session->vocab_size = parent->vocab_size;
+  session->layer_count = parent->layer_count;
+  session->max_context_tokens = parent->max_context_tokens;
+  session->kv_block_count = parent->kv_block_count;
+  session->kv_token_capacity = parent->kv_token_capacity;
+  session->prefill_chunk_tokens = parent->prefill_chunk_tokens;
+  session->detailed_profile = request->detailed_profile == 0 ? 0u : 1u;
+  session->rms_eps = parent->rms_eps;
+  session->rope_theta = parent->rope_theta;
+  session->arena_layout = parent->arena_layout;
+  session->arena_bytes = parent->arena_bytes;
+  session->resident_weight_bytes = parent->resident_weight_bytes;
+  session->layout_bytes = parent->layout_bytes;
+  session->scratch_bytes = parent->scratch_bytes;
+  session->projection_input_bytes = parent->projection_input_bytes;
+  session->prefill_hidden_bytes = parent->prefill_hidden_bytes;
+  session->prefill_norm_bytes = parent->prefill_norm_bytes;
+  session->prefill_qkv_bytes = parent->prefill_qkv_bytes;
+  session->prefill_qkv_encoded_bytes = parent->prefill_qkv_encoded_bytes;
+  session->prefill_attn_bytes = parent->prefill_attn_bytes;
+  session->prefill_o_bytes = parent->prefill_o_bytes;
+  session->prefill_gate_up_bytes = parent->prefill_gate_up_bytes;
+  session->prefill_ff_bytes = parent->prefill_ff_bytes;
+  session->prefill_down_bytes = parent->prefill_down_bytes;
+  session->decode_attention_values_bytes =
+      parent->decode_attention_values_bytes;
+  session->decode_attention_stats_bytes = parent->decode_attention_stats_bytes;
+  session->decode_attention_max_chunks = parent->decode_attention_max_chunks;
+  session->decode_q_bytes = parent->decode_q_bytes;
+  session->decode_seq_len_bytes = parent->decode_seq_len_bytes;
+  session->packed_qkv_bytes = parent->packed_qkv_bytes;
+  session->packed_gate_up_bytes = parent->packed_gate_up_bytes;
+  session->kv_bytes = parent->kv_bytes;
+  session->kv_block_table_bytes = parent->kv_block_table_bytes;
+  session->slots_bytes = parent->slots_bytes;
+  session->prompt_bytes = parent->prompt_bytes;
+  session->planned_weight_blocks = parent->planned_weight_blocks;
+  session->planned_gpu_resident_blocks = parent->planned_gpu_resident_blocks;
+  session->planned_gpu_staged_blocks = parent->planned_gpu_staged_blocks;
+  session->planned_weight_bytes = parent->planned_weight_bytes;
+  session->planned_gpu_resident_weight_bytes =
+      parent->planned_gpu_resident_weight_bytes;
+  session->planned_gpu_staged_weight_bytes =
+      parent->planned_gpu_staged_weight_bytes;
+  session->planned_weight_descriptor_count =
+      parent->planned_weight_descriptor_count;
+  session->planned_weight_descriptor_hash =
+      parent->planned_weight_descriptor_hash;
+  session->host_layouts = parent->host_layouts;
+  session->shared_weights = parent->shared_weights;
+  session->device_arena = session->shared_weights->device_arena;
+  session->device_layouts = session->shared_weights->device_layouts;
+  session->device_qkv_packed = session->shared_weights->device_qkv_packed;
+  session->device_gate_up_packed =
+      session->shared_weights->device_gate_up_packed;
+
+  int32_t failure_stage = kCreateStageHostSlotsAlloc;
+  err = cudaHostAlloc(reinterpret_cast<void **>(&session->host_slots),
+                      session->slots_bytes, cudaHostAllocDefault);
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageDeviceScratchAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_scratch),
+                     session->scratch_bytes);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageProjectionInputAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_projection_input),
+                     session->projection_input_bytes);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStagePrefillHiddenAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_hidden_a),
+                     session->prefill_hidden_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_hidden_b),
+                     session->prefill_hidden_bytes);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStagePrefillChunkAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_norm),
+                     session->prefill_norm_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_qkv),
+                     session->prefill_qkv_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_prefill_qkv_encoded),
+        session->prefill_qkv_encoded_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_attn),
+                     session->prefill_attn_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_o),
+                     session->prefill_o_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_gate_up),
+                     session->prefill_gate_up_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_ff),
+                     session->prefill_ff_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_down),
+                     session->prefill_down_bytes);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageDecodeAttentionAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_decode_attention_values),
+        session->decode_attention_values_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_decode_attention_m),
+                     session->decode_attention_stats_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_decode_attention_l),
+                     session->decode_attention_stats_bytes);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageDecodeSdpaAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_decode_q),
+                     session->decode_q_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_decode_seq_len_q),
+        sizeof(int32_t));
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_decode_seq_len_kv),
+        sizeof(int32_t));
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageKvKeysAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_keys),
+                     session->kv_bytes / 2);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageKvValuesAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_values),
+                     session->kv_bytes / 2);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_block_table),
+                     session->kv_block_table_bytes);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStagePromptTokensAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prompt_tokens),
+                     session->prompt_bytes);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageDeviceSlotsAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_slots),
+                     session->slots_bytes);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageDeviceStepAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_step),
+                     sizeof(uint32_t));
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageCublasWorkspaceAlloc;
+    err = cudaMalloc(&session->cublas_workspace, kCublasWorkspaceBytes);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageStreamCreate;
+    err = cudaStreamCreateWithFlags(&session->stream, cudaStreamNonBlocking);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageCublasCreate;
+    err = cublas_to_cuda(cublasCreate(&session->cublas));
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageCublasLtCreate;
+    err = cublas_to_cuda(cublasLtCreate(&session->cublas_lt));
+  }
+#if NERVA_HAVE_CUDNN_FRONTEND
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageCublasConfigure;
+    err = cudnn_to_cuda(cudnnCreate(&session->cudnn));
+  }
+#endif
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageCublasConfigure;
+    err = configure_cublas(session->cublas, session->stream,
+                           session->cublas_workspace,
+                           kCublasWorkspaceBytes);
+  }
+#if NERVA_HAVE_CUDNN_FRONTEND
+  if (err == cudaSuccess) {
+    err = cudnn_to_cuda(cudnnSetStream(session->cudnn, session->stream));
+  }
+#endif
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageStartEventCreate;
+    err = cudaEventCreate(&session->device_start);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageStopEventCreate;
+    err = cudaEventCreate(&session->device_stop);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageStartEventCreate;
+    err = cudaEventCreate(&session->profile_start);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageStopEventCreate;
+    err = cudaEventCreate(&session->profile_stop);
+  }
+  if (err == cudaSuccess) {
+    const uint32_t blocks =
+        (session->kv_block_count + kDecodeThreads - 1u) / kDecodeThreads;
+    hf_init_identity_kv_block_table_kernel<<<blocks, kDecodeThreads, 0,
+                                             session->stream>>>(
+        session->device_kv_block_table, session->kv_block_count);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageProjectionPlanAutotune;
+    err = autotune_session_lt_gemv_plans(session);
+  }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageSetupSynchronize;
+    err = cudaStreamSynchronize(session->stream);
+  }
+  if (err != cudaSuccess) {
+    fail(out, err, failure_stage);
+    free_session_fields(session);
+    delete session;
+    return -1;
+  }
+
+  session->setup_sync_calls = 1;
+  fill_create_result(session, out);
+  *session_out = session;
+  return 0;
 }
 
 extern "C" int nerva_cuda_hf_decode_sequence_session_destroy(

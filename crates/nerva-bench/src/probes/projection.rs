@@ -514,16 +514,28 @@ fn create_synthetic_batch_sessions(
         detailed_profile: false,
     };
     let mut sessions = Vec::with_capacity(count);
-    for _ in 0..count {
-        let created = config.create();
-        if created.summary.status != SmokeStatus::Ok {
-            return Err(created
+    if count == 0 {
+        return Ok(sessions);
+    }
+    let created = config.create();
+    if created.summary.status != SmokeStatus::Ok {
+        return Err(created
+            .summary
+            .error
+            .unwrap_or_else(|| "CUDA synthetic session create failed".to_string()));
+    }
+    let mut parent = created.session.unwrap();
+    for _ in 1..count {
+        let forked = parent.fork_shared_weights(false);
+        if forked.summary.status != SmokeStatus::Ok {
+            return Err(forked
                 .summary
                 .error
-                .unwrap_or_else(|| "CUDA synthetic session create failed".to_string()));
+                .unwrap_or_else(|| "CUDA synthetic shared-weight fork failed".to_string()));
         }
-        sessions.push(created.session.unwrap());
+        sessions.push(forked.session.unwrap());
     }
+    sessions.insert(0, parent);
     Ok(sessions)
 }
 
@@ -620,7 +632,7 @@ fn projection_batch_advance_probe_json(
         0
     };
     format!(
-        "{{\"schema\":\"nerva-projection-batch-advance-probe-v1\",\"status\":\"{}\",\"plan_reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"exact\":{},\"block_tokens\":{},\"observed_tokens\":{},\"sequential_wall_ns\":{},\"batch_wall_ns\":{},\"sequential_vs_batch_wall_speedup_x1000\":{},\"batch_projection_elapsed_ns\":{},\"projection_kernel_launches\":{},\"pack_kernel_launches\":{},\"scatter_kernel_launches\":{},\"dependency_kernel_launches\":{},\"sampling_kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"sequential_tokens\":{:?},\"batch_tokens\":{:?},\"executor_status\":\"continuous_runtime_batch_scheduler\"}}",
+        "{{\"schema\":\"nerva-projection-batch-advance-probe-v1\",\"status\":\"{}\",\"plan_reason\":\"{}\",\"ready_requests\":{},\"compatible_requests\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"shared_weight_forks\":true,\"exact\":{},\"block_tokens\":{},\"observed_tokens\":{},\"sequential_wall_ns\":{},\"batch_wall_ns\":{},\"sequential_vs_batch_wall_speedup_x1000\":{},\"batch_projection_elapsed_ns\":{},\"projection_kernel_launches\":{},\"pack_kernel_launches\":{},\"scatter_kernel_launches\":{},\"dependency_kernel_launches\":{},\"sampling_kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"sequential_tokens\":{:?},\"batch_tokens\":{:?},\"executor_status\":\"continuous_runtime_batch_scheduler\"}}",
         status,
         reason_name(input.plan.reason),
         input.ready_requests,

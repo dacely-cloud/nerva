@@ -5,11 +5,7 @@ use crate::decode::hf_sequence::ffi::NervaCudaHfDecodeSequenceResult;
 use crate::decode::hf_sequence::request::CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16;
 use crate::decode::hf_sequence::session::failures::{failed_create_summary, failed_run_summary};
 use crate::decode::hf_sequence::session::ffi::{
-    batch_advance_one_hf_decode_sequence, create_hf_decode_sequence_session,
-    destroy_hf_decode_sequence_session, execute_hf_decode_sequence_layer_projection_batch,
-    execute_hf_decode_sequence_projection_batch, plan_hf_decode_sequence_projection_batch,
-    run_hf_decode_sequence_session, NervaCudaHfDecodeSequenceBatchAdvanceRequest,
-    NervaCudaHfDecodeSequenceBatchAdvanceResult,
+    NervaCudaHfDecodeSequenceBatchAdvanceRequest, NervaCudaHfDecodeSequenceBatchAdvanceResult,
     NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteRequest,
     NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult,
     NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest,
@@ -17,6 +13,7 @@ use crate::decode::hf_sequence::session::ffi::{
     NervaCudaHfDecodeSequenceProjectionBatchPlanRequest,
     NervaCudaHfDecodeSequenceProjectionBatchPlanResult, NervaCudaHfDecodeSequenceSession,
     NervaCudaHfDecodeSequenceSessionCreateRequest, NervaCudaHfDecodeSequenceSessionCreateResult,
+    NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest,
     NervaCudaHfDecodeSequenceSessionRunRequest, PROJECTION_BATCH_KIND_ATTENTION_OUTPUT,
     PROJECTION_BATCH_KIND_DOWN, PROJECTION_BATCH_KIND_GATE_UP, PROJECTION_BATCH_KIND_LM_HEAD,
     PROJECTION_BATCH_KIND_QKV, PROJECTION_BATCH_PLAN_INSUFFICIENT_COMPATIBLE_READY,
@@ -24,12 +21,16 @@ use crate::decode::hf_sequence::session::ffi::{
     PROJECTION_BATCH_PLAN_INVALID_REQUEST, PROJECTION_BATCH_PLAN_NO_READY_SESSIONS,
     PROJECTION_BATCH_PLAN_NO_SESSIONS, PROJECTION_BATCH_PLAN_READY,
     PROJECTION_BATCH_PLAN_SHARED_WEIGHTS_UNPROVEN, PROJECTION_BATCH_PLAN_UNSUPPORTED_PROJECTION,
+    batch_advance_one_hf_decode_sequence, create_hf_decode_sequence_session,
+    destroy_hf_decode_sequence_session, execute_hf_decode_sequence_layer_projection_batch,
+    execute_hf_decode_sequence_projection_batch, fork_shared_weights_hf_decode_sequence_session,
+    plan_hf_decode_sequence_projection_batch, run_hf_decode_sequence_session,
 };
 use crate::decode::hf_sequence::session::helpers::{
     descriptor_ptr, planned_ptr, summary_from_run, validate_run,
 };
 use crate::decode::hf_sequence::session::summary::{
-    create_summary_from_result, CudaHfDecodeSequenceSessionCreateSummary,
+    CudaHfDecodeSequenceSessionCreateSummary, create_summary_from_result,
 };
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{
@@ -280,6 +281,34 @@ impl<'a> CudaHfDecodeSequenceSessionConfig<'a> {
 impl CudaHfDecodeSequenceSession {
     pub fn create_summary(&self) -> &CudaHfDecodeSequenceSessionCreateSummary {
         &self.create_summary
+    }
+
+    pub fn fork_shared_weights(
+        &mut self,
+        detailed_profile: bool,
+    ) -> CudaHfDecodeSequenceSessionCreateOutput {
+        let request = NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest {
+            parent: self.handle,
+            detailed_profile: detailed_profile as u32,
+        };
+        let mut handle = ptr::null_mut();
+        let mut out = NervaCudaHfDecodeSequenceSessionCreateResult::default();
+        let admission_memory = crate::smoke::probe::smoke();
+        let return_code =
+            fork_shared_weights_hf_decode_sequence_session(&request, &mut out, &mut handle);
+        let summary = create_summary_from_result(
+            return_code,
+            &out,
+            admission_memory.device_total_memory_bytes,
+            admission_memory.device_free_memory_bytes,
+        );
+        let session = (summary.status == SmokeStatus::Ok && !handle.is_null()).then(|| {
+            CudaHfDecodeSequenceSession {
+                handle,
+                create_summary: summary.clone(),
+            }
+        });
+        CudaHfDecodeSequenceSessionCreateOutput { summary, session }
     }
 
     pub(super) fn raw_handle(&mut self) -> *mut NervaCudaHfDecodeSequenceSession {

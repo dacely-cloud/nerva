@@ -484,6 +484,11 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeSequenceSessionCreateResult;
 
+typedef struct NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest {
+  NervaCudaHfDecodeSequenceSession *parent;
+  uint32_t detailed_profile;
+} NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest;
+
 typedef struct NervaCudaHfDecodeSequenceSessionRunRequest {
   NervaCudaHfDecodeSequenceSession *session;
   uint32_t steps;
@@ -894,6 +899,10 @@ int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
 int nerva_cuda_hf_decode_sequence_batch_advance_one(
     const NervaCudaHfDecodeSequenceBatchAdvanceRequest *request,
     NervaCudaHfDecodeSequenceBatchAdvanceResult *out);
+int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
+    const NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest *request,
+    NervaCudaHfDecodeSequenceSessionCreateResult *out,
+    NervaCudaHfDecodeSequenceSession **session_out);
 int nerva_cuda_hf_decode_sequence_session_destroy(
     NervaCudaHfDecodeSequenceSession *session,
     NervaCudaHfDecodeSequenceSessionCreateResult *out);
