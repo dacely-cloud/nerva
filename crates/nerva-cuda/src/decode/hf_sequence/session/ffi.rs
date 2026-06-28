@@ -242,6 +242,51 @@ pub(crate) struct NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult {
     pub(crate) hot_path_allocations: u64,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaHfDecodeSequenceBatchAdvanceRequest {
+    pub(crate) sessions: *mut *mut NervaCudaHfDecodeSequenceSession,
+    pub(crate) session_count: u32,
+    pub(crate) target_block_tokens: u32,
+    pub(crate) min_block_tokens: u32,
+    pub(crate) output_tokens: *mut u32,
+    pub(crate) output_token_capacity: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NervaCudaHfDecodeSequenceBatchAdvanceResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) device_count: i32,
+    pub(crate) reason: u32,
+    pub(crate) exact: u32,
+    pub(crate) requested_session_count: u32,
+    pub(crate) eligible_session_count: u32,
+    pub(crate) block_tokens: u32,
+    pub(crate) target_block_tokens: u32,
+    pub(crate) min_block_tokens: u32,
+    pub(crate) dtype: u32,
+    pub(crate) layer_count: u32,
+    pub(crate) observed_tokens: u32,
+    pub(crate) last_token: u32,
+    pub(crate) observed_token_hash: u64,
+    pub(crate) d2h_bytes: u64,
+    pub(crate) projection_elapsed_ns: u64,
+    pub(crate) qkv_elapsed_ns: u64,
+    pub(crate) attention_output_elapsed_ns: u64,
+    pub(crate) gate_up_elapsed_ns: u64,
+    pub(crate) down_elapsed_ns: u64,
+    pub(crate) lm_head_elapsed_ns: u64,
+    pub(crate) pack_kernel_launches: u64,
+    pub(crate) projection_kernel_launches: u64,
+    pub(crate) scatter_kernel_launches: u64,
+    pub(crate) dependency_kernel_launches: u64,
+    pub(crate) sampling_kernel_launches: u64,
+    pub(crate) sync_calls: u64,
+    pub(crate) hot_path_allocations: u64,
+}
+
 pub(crate) const PROJECTION_BATCH_PLAN_READY: u32 = 0;
 pub(crate) const PROJECTION_BATCH_PLAN_INVALID_REQUEST: u32 = 1;
 pub(crate) const PROJECTION_BATCH_PLAN_NO_SESSIONS: u32 = 2;
@@ -286,6 +331,10 @@ unsafe extern "C" {
     fn nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
         request: *const NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteRequest,
         out: *mut NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult,
+    ) -> c_int;
+    fn nerva_cuda_hf_decode_sequence_batch_advance_one(
+        request: *const NervaCudaHfDecodeSequenceBatchAdvanceRequest,
+        out: *mut NervaCudaHfDecodeSequenceBatchAdvanceResult,
     ) -> c_int;
     fn nerva_cuda_hf_decode_sequence_session_destroy(
         session: *mut NervaCudaHfDecodeSequenceSession,
@@ -341,6 +390,13 @@ pub(crate) fn execute_hf_decode_sequence_layer_projection_batch(
     out: &mut NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult,
 ) -> c_int {
     unsafe { nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(request, out) }
+}
+
+pub(crate) fn batch_advance_one_hf_decode_sequence(
+    request: &NervaCudaHfDecodeSequenceBatchAdvanceRequest,
+    out: &mut NervaCudaHfDecodeSequenceBatchAdvanceResult,
+) -> c_int {
+    unsafe { nerva_cuda_hf_decode_sequence_batch_advance_one(request, out) }
 }
 
 pub(crate) fn destroy_hf_decode_sequence_session(

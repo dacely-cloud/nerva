@@ -5,9 +5,11 @@ use crate::decode::hf_sequence::ffi::NervaCudaHfDecodeSequenceResult;
 use crate::decode::hf_sequence::request::CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16;
 use crate::decode::hf_sequence::session::failures::{failed_create_summary, failed_run_summary};
 use crate::decode::hf_sequence::session::ffi::{
-    create_hf_decode_sequence_session, destroy_hf_decode_sequence_session,
-    execute_hf_decode_sequence_layer_projection_batch, execute_hf_decode_sequence_projection_batch,
-    plan_hf_decode_sequence_projection_batch, run_hf_decode_sequence_session,
+    batch_advance_one_hf_decode_sequence, create_hf_decode_sequence_session,
+    destroy_hf_decode_sequence_session, execute_hf_decode_sequence_layer_projection_batch,
+    execute_hf_decode_sequence_projection_batch, plan_hf_decode_sequence_projection_batch,
+    run_hf_decode_sequence_session, NervaCudaHfDecodeSequenceBatchAdvanceRequest,
+    NervaCudaHfDecodeSequenceBatchAdvanceResult,
     NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteRequest,
     NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult,
     NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest,
@@ -161,6 +163,39 @@ pub struct CudaHfDecodeSequenceLayerProjectionBatchExecuteSummary {
     pub projection_kernel_launches: u64,
     pub scatter_kernel_launches: u64,
     pub dependency_kernel_launches: u64,
+    pub sync_calls: u64,
+    pub hot_path_allocations: u64,
+    pub cuda_error: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CudaHfDecodeSequenceBatchAdvanceSummary {
+    pub status: SmokeStatus,
+    pub reason: &'static str,
+    pub exact: bool,
+    pub requested_session_count: u32,
+    pub eligible_session_count: u32,
+    pub block_tokens: u32,
+    pub target_block_tokens: u32,
+    pub min_block_tokens: u32,
+    pub dtype: u32,
+    pub layer_count: u32,
+    pub observed_tokens: u32,
+    pub last_token: u32,
+    pub observed_token_hash: u64,
+    pub tokens: Vec<u32>,
+    pub d2h_bytes: u64,
+    pub projection_elapsed_ns: u64,
+    pub qkv_elapsed_ns: u64,
+    pub attention_output_elapsed_ns: u64,
+    pub gate_up_elapsed_ns: u64,
+    pub down_elapsed_ns: u64,
+    pub lm_head_elapsed_ns: u64,
+    pub pack_kernel_launches: u64,
+    pub projection_kernel_launches: u64,
+    pub scatter_kernel_launches: u64,
+    pub dependency_kernel_launches: u64,
+    pub sampling_kernel_launches: u64,
     pub sync_calls: u64,
     pub hot_path_allocations: u64,
     pub cuda_error: i32,
@@ -395,6 +430,29 @@ impl CudaHfDecodeSequenceSession {
         layer_projection_batch_execute_summary(return_code, &out)
     }
 
+    pub fn batch_advance_one(
+        sessions: &mut [&mut CudaHfDecodeSequenceSession],
+        target_block_tokens: u32,
+        min_block_tokens: u32,
+    ) -> CudaHfDecodeSequenceBatchAdvanceSummary {
+        let mut handles = sessions
+            .iter_mut()
+            .map(|session| session.raw_handle())
+            .collect::<Vec<_>>();
+        let mut tokens = vec![u32::MAX; handles.len()];
+        let request = NervaCudaHfDecodeSequenceBatchAdvanceRequest {
+            sessions: handles.as_mut_ptr(),
+            session_count: handles.len() as u32,
+            target_block_tokens,
+            min_block_tokens,
+            output_tokens: tokens.as_mut_ptr(),
+            output_token_capacity: tokens.len() as u32,
+        };
+        let mut out = NervaCudaHfDecodeSequenceBatchAdvanceResult::default();
+        let return_code = batch_advance_one_hf_decode_sequence(&request, &mut out);
+        batch_advance_summary(return_code, &out, tokens)
+    }
+
     fn execute_projection_batch(
         sessions: &mut [&mut CudaHfDecodeSequenceSession],
         target_block_tokens: u32,
@@ -567,6 +625,49 @@ fn layer_projection_batch_execute_summary(
         projection_kernel_launches: out.projection_kernel_launches,
         scatter_kernel_launches: out.scatter_kernel_launches,
         dependency_kernel_launches: out.dependency_kernel_launches,
+        sync_calls: out.sync_calls,
+        hot_path_allocations: out.hot_path_allocations,
+        cuda_error: out.cuda_error,
+    }
+}
+
+fn batch_advance_summary(
+    return_code: i32,
+    out: &NervaCudaHfDecodeSequenceBatchAdvanceResult,
+    tokens: Vec<u32>,
+) -> CudaHfDecodeSequenceBatchAdvanceSummary {
+    let status = if return_code == 0 && out.status == 0 {
+        SmokeStatus::Ok
+    } else {
+        SmokeStatus::Failed
+    };
+    CudaHfDecodeSequenceBatchAdvanceSummary {
+        status,
+        reason: projection_batch_reason_name(out.reason),
+        exact: out.exact != 0,
+        requested_session_count: out.requested_session_count,
+        eligible_session_count: out.eligible_session_count,
+        block_tokens: out.block_tokens,
+        target_block_tokens: out.target_block_tokens,
+        min_block_tokens: out.min_block_tokens,
+        dtype: out.dtype,
+        layer_count: out.layer_count,
+        observed_tokens: out.observed_tokens,
+        last_token: out.last_token,
+        observed_token_hash: out.observed_token_hash,
+        tokens,
+        d2h_bytes: out.d2h_bytes,
+        projection_elapsed_ns: out.projection_elapsed_ns,
+        qkv_elapsed_ns: out.qkv_elapsed_ns,
+        attention_output_elapsed_ns: out.attention_output_elapsed_ns,
+        gate_up_elapsed_ns: out.gate_up_elapsed_ns,
+        down_elapsed_ns: out.down_elapsed_ns,
+        lm_head_elapsed_ns: out.lm_head_elapsed_ns,
+        pack_kernel_launches: out.pack_kernel_launches,
+        projection_kernel_launches: out.projection_kernel_launches,
+        scatter_kernel_launches: out.scatter_kernel_launches,
+        dependency_kernel_launches: out.dependency_kernel_launches,
+        sampling_kernel_launches: out.sampling_kernel_launches,
         sync_calls: out.sync_calls,
         hot_path_allocations: out.hot_path_allocations,
         cuda_error: out.cuda_error,

@@ -363,3 +363,47 @@ current implementation still reuses the proven per-projection executor for each
 dense stage, so it is a correctness and integration contract first. The
 remaining performance work is to fuse the selection, stream synchronization,
 and event timing now that the layer dataflow itself is correct.
+
+## One-Token Batch Advance
+
+The CUDA session API now has a token-level batch executor:
+
+```text
+nerva_cuda_hf_decode_sequence_batch_advance_one(...)
+```
+
+This is the first primitive that composes the projection-batched layer
+transaction into a complete decode step for multiple active sessions:
+
+```text
+for each transformer layer:
+    run layer projection batch transaction
+
+run batched LM head projection
+run per-session argmax/sample reduction
+copy one completed token slot per selected session
+advance each selected session cursor
+```
+
+The eligibility contract intentionally excludes the first post-prefill token
+because `session_start` already computes that slot. A session becomes eligible
+for this batch path after that first slot has been consumed by the normal
+stateful loop. From that point, compatible resident sessions can advance one
+decode token together while sharing projection weight reads through `W * X`.
+
+The result reports:
+
+```text
+block_tokens / observed_tokens
+projection_elapsed_ns
+qkv_elapsed_ns / attention_output_elapsed_ns / gate_up_elapsed_ns / down_elapsed_ns / lm_head_elapsed_ns
+pack_kernel_launches / projection_kernel_launches / scatter_kernel_launches
+dependency_kernel_launches / sampling_kernel_launches
+sync_calls / hot_path_allocations
+```
+
+This is still a native primitive, not the production queue scheduler. The next
+runtime step is to have the normal scheduler drain the prefill-produced first
+token, group compatible ready sessions, call this one-token batch advance, and
+fall back to single-session graph replay when fewer than `min_block_tokens`
+sessions are eligible.
