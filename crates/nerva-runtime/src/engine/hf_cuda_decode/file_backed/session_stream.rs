@@ -17,7 +17,7 @@ use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDevi
 use crate::engine::runtime::Runtime;
 
 const TOKEN_MODE_MAX_ADVANCE_STEPS: usize = 1024;
-const TOKEN_MODE_EOS_FIRST_ADVANCE_STEPS: usize = 128;
+const TOKEN_MODE_EOS_FIRST_ADVANCE_STEPS: usize = 64;
 const TOKEN_MODE_EOS_RAMP_ADVANCE_STEPS: usize = 256;
 const TOKEN_MODE_EOS_RAMP_TOKENS: usize = TOKEN_MODE_MAX_ADVANCE_STEPS;
 
@@ -324,14 +324,14 @@ mod tests {
     fn token_mode_checks_eos_more_often_before_long_runs() {
         assert_eq!(
             current_token_mode_steps(3965, 0, 2048, 8192, 2048, true),
-            128
+            64
         );
         assert_eq!(
             current_token_mode_steps(3965, 0, 1024, 8192, 2048, true),
-            128
+            64
         );
         assert_eq!(
-            current_token_mode_steps(3965, 128, 1920, 8192, 2048, true),
+            current_token_mode_steps(3965, 64, 1984, 8192, 2048, true),
             256
         );
         assert_eq!(
@@ -342,10 +342,7 @@ mod tests {
             current_token_mode_steps(3965, 1152, 896, 8192, 2048, true),
             896
         );
-        assert_eq!(
-            current_token_mode_steps(3965, 0, 512, 8192, 2048, true),
-            128
-        );
+        assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 2048, true), 64);
         assert_eq!(current_token_mode_steps(3965, 0, 64, 8192, 2048, true), 64);
     }
 }
