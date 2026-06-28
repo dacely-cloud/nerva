@@ -339,96 +339,113 @@ impl NervaCliLoggerInner {
             .saturating_add(progress.norm_ns)
             .saturating_add(progress.sampling_ns);
         let untracked_ns = progress.wall_ns.saturating_sub(profiled_ns);
-        self.print_plain_line(
-            progress.phase.as_str(),
-            vec![
-                paint(
-                    self.color,
-                    Tone::Green,
-                    format!(
-                        "{}/{} ({percent:.1}%)",
-                        progress.generated, progress.requested
-                    ),
+        let mut fields = vec![
+            paint(
+                self.color,
+                Tone::Green,
+                format!(
+                    "{}/{} ({percent:.1}%)",
+                    progress.generated, progress.requested
                 ),
-                metric(self.color, "avg", avg_rate, Tone::Cyan),
-                metric(self.color, "inst", inst_rate, Tone::Green),
-                metric(
-                    self.color,
-                    "last",
-                    format::ms_from_ns(progress.wall_ns),
-                    Tone::Yellow,
+            ),
+            metric(self.color, "avg", avg_rate, Tone::Cyan),
+            metric(self.color, "inst", inst_rate, Tone::Green),
+        ];
+        if progress.chunk_requested > 1 {
+            let acceptance = progress.observed as f64 * 100.0 / progress.chunk_requested as f64;
+            fields.push(metric(
+                self.color,
+                "accept",
+                format!(
+                    "{}/{} ({acceptance:.1}%)",
+                    progress.observed, progress.chunk_requested
                 ),
-                metric(
-                    self.color,
-                    "gpu",
-                    format::ms_from_ns(progress.device_ns),
-                    Tone::Yellow,
-                ),
-                metric(
-                    self.color,
-                    "kv",
-                    progress.kv_tokens.to_string(),
-                    Tone::Magenta,
-                ),
-                metric(
-                    self.color,
-                    "profile",
-                    format::ms_from_ns(profiled_ns),
-                    Tone::Blue,
-                ),
-                metric(
-                    self.color,
-                    "untracked",
-                    format::ms_from_ns(untracked_ns),
-                    if untracked_ns > progress.wall_ns / 4 {
-                        Tone::Red
-                    } else {
-                        Tone::Dim
-                    },
-                ),
-                metric(
-                    self.color,
-                    "attn",
-                    format::ms_from_ns(progress.attention_ns),
-                    Tone::Cyan,
-                ),
-                metric(
-                    self.color,
-                    "kernels",
-                    progress.kernel_launches.to_string(),
-                    Tone::Magenta,
-                ),
-                metric(
-                    self.color,
-                    "graph",
-                    progress.graph_nodes.to_string(),
-                    Tone::Magenta,
-                ),
-                metric(
-                    self.color,
-                    "replay",
-                    progress.graph_replays.to_string(),
-                    Tone::Magenta,
-                ),
-                metric(
-                    self.color,
-                    "cache",
-                    progress.graph_cache_hits.to_string(),
-                    Tone::Blue,
-                ),
-                metric(
-                    self.color,
-                    "hot",
-                    progress.hot_path_allocations.to_string(),
-                    if progress.hot_path_allocations == 0 {
-                        Tone::Green
-                    } else {
-                        Tone::Red
-                    },
-                ),
-            ]
-            .join("  "),
-        );
+                if acceptance >= 50.0 {
+                    Tone::Green
+                } else if acceptance >= 25.0 {
+                    Tone::Yellow
+                } else {
+                    Tone::Red
+                },
+            ));
+        }
+        fields.extend([
+            metric(
+                self.color,
+                "last",
+                format::ms_from_ns(progress.wall_ns),
+                Tone::Yellow,
+            ),
+            metric(
+                self.color,
+                "gpu",
+                format::ms_from_ns(progress.device_ns),
+                Tone::Yellow,
+            ),
+            metric(
+                self.color,
+                "kv",
+                progress.kv_tokens.to_string(),
+                Tone::Magenta,
+            ),
+            metric(
+                self.color,
+                "profile",
+                format::ms_from_ns(profiled_ns),
+                Tone::Blue,
+            ),
+            metric(
+                self.color,
+                "untracked",
+                format::ms_from_ns(untracked_ns),
+                if untracked_ns > progress.wall_ns / 4 {
+                    Tone::Red
+                } else {
+                    Tone::Dim
+                },
+            ),
+            metric(
+                self.color,
+                "attn",
+                format::ms_from_ns(progress.attention_ns),
+                Tone::Cyan,
+            ),
+            metric(
+                self.color,
+                "kernels",
+                progress.kernel_launches.to_string(),
+                Tone::Magenta,
+            ),
+            metric(
+                self.color,
+                "graph",
+                progress.graph_nodes.to_string(),
+                Tone::Magenta,
+            ),
+            metric(
+                self.color,
+                "replay",
+                progress.graph_replays.to_string(),
+                Tone::Magenta,
+            ),
+            metric(
+                self.color,
+                "cache",
+                progress.graph_cache_hits.to_string(),
+                Tone::Blue,
+            ),
+            metric(
+                self.color,
+                "hot",
+                progress.hot_path_allocations.to_string(),
+                if progress.hot_path_allocations == 0 {
+                    Tone::Green
+                } else {
+                    Tone::Red
+                },
+            ),
+        ]);
+        self.print_plain_line(progress.phase.as_str(), fields.join("  "));
     }
 
     fn print_plain_prefill_progress(&mut self, progress: HfCudaDeviceSessionChunkProgress) {
@@ -490,268 +507,281 @@ impl NervaCliLoggerInner {
         elapsed: std::time::Duration,
     ) {
         let stats = DecodeStats::from_output(output);
+        let profile_total_ns = stats
+            .projection_ns
+            .saturating_add(stats.attention_ns)
+            .saturating_add(stats.mlp_ns)
+            .saturating_add(stats.norm_ns)
+            .saturating_add(stats.sampling_ns);
         self.print_plain_line(
             "report",
-            paint(self.color, Tone::Green, "NERVA performance report"),
+            paint(self.color, Tone::Green, "final performance report"),
         );
-        self.print_plain_report_row(
-            "summary",
-            vec![
-                metric(
-                    self.color,
-                    "generated",
-                    format!("{} tokens", output.tokens().len()),
-                    Tone::Green,
-                ),
-                metric(
-                    self.color,
-                    "stop",
-                    output.stop_reason().as_str(),
-                    Tone::Yellow,
-                ),
-                metric(self.color, "elapsed", format::duration(elapsed), Tone::Cyan),
-            ]
-            .join("  "),
-        );
-        self.print_plain_report_row(
-            "projection",
-            vec![
-                metric(
-                    self.color,
-                    "mode",
-                    output.stream.projection_mode.name(),
-                    Tone::Green,
-                ),
-                metric(
-                    self.color,
-                    "block",
-                    output.stream.projection_mode.block_tokens().to_string(),
-                    Tone::Cyan,
-                ),
-            ]
-            .join("  "),
-        );
-        self.print_plain_report_row(
-            "load",
-            vec![
-                metric(
-                    self.color,
-                    "weights",
-                    format::bytes(output.stream.create.resident_weight_bytes),
-                    Tone::Orange,
-                ),
-                metric(
-                    self.color,
-                    "H2D",
-                    format::bytes(output.stream.create.h2d_bytes),
-                    Tone::Yellow,
-                ),
-                metric(
-                    self.color,
-                    "time",
-                    format::duration(Duration::from_nanos(output.stream.load_wall_ns)),
-                    Tone::Cyan,
-                ),
-                metric(
-                    self.color,
-                    "bandwidth",
-                    format::gb_per_s(
-                        output.stream.create.h2d_bytes,
-                        Duration::from_nanos(output.stream.load_wall_ns.max(1)),
-                    ),
-                    Tone::Green,
-                ),
-            ]
-            .join("  "),
-        );
-        self.print_plain_report_row(
-            "",
-            vec![
-                metric(
-                    self.color,
-                    "tensors",
-                    output.stream.tensors_loaded.to_string(),
-                    Tone::Dim,
-                ),
-                metric(
-                    self.color,
-                    "descriptors",
-                    output
-                        .stream
-                        .create
-                        .planned_weight_descriptor_count
-                        .to_string(),
-                    Tone::Dim,
-                ),
-            ]
-            .join("  "),
-        );
-        self.print_plain_report_row(
-            "throughput",
-            metric(
-                self.color,
-                "decode",
-                format::tokens_per_s(stats.tokens, Duration::from_nanos(stats.wall_ns.max(1))),
-                Tone::Green,
+        self.print_plain_report_block_line(report_title_line(
+            self.color,
+            "NERVA PERFORMANCE REPORT",
+            Tone::Green,
+        ));
+        self.print_plain_report_block_line(report_section_line(self.color, "RUN", Tone::Green));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "generated",
+            format!("{} tokens", output.tokens().len()),
+            Tone::Green,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "stop reason",
+            output.stop_reason().as_str(),
+            Tone::Yellow,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "elapsed",
+            format::duration(elapsed),
+            Tone::Cyan,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "projection mode",
+            format!(
+                "{} x{}",
+                output.stream.projection_mode.name(),
+                output.stream.projection_mode.block_tokens()
             ),
-        );
-        self.print_plain_report_row(
-            "latency",
-            vec![
-                metric(
-                    self.color,
-                    "mean",
-                    format::ms_from_ns(stats.mean_ns()),
-                    Tone::Cyan,
+            Tone::Green,
+        ));
+        self.print_plain_report_block_line("");
+
+        self.print_plain_report_block_line(report_section_line(self.color, "LOAD", Tone::Orange));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "resident weights",
+            format::bytes(output.stream.create.resident_weight_bytes),
+            Tone::Orange,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "H2D copied",
+            format::bytes(output.stream.create.h2d_bytes),
+            Tone::Yellow,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "load wall",
+            format::duration(Duration::from_nanos(output.stream.load_wall_ns)),
+            Tone::Cyan,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "load bandwidth",
+            format::gb_per_s(
+                output.stream.create.h2d_bytes,
+                Duration::from_nanos(output.stream.load_wall_ns.max(1)),
+            ),
+            Tone::Green,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "tensors",
+            output.stream.tensors_loaded.to_string(),
+            Tone::Dim,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "descriptors",
+            output
+                .stream
+                .create
+                .planned_weight_descriptor_count
+                .to_string(),
+            Tone::Dim,
+        ));
+        self.print_plain_report_block_line("");
+
+        self.print_plain_report_block_line(report_section_line(self.color, "DECODE", Tone::Cyan));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "throughput",
+            format::tokens_per_s(stats.tokens, Duration::from_nanos(stats.wall_ns.max(1))),
+            Tone::Green,
+        ));
+        if output.stream.projection_mode.block_tokens() > 1 {
+            let acceptance = stats.acceptance();
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "verifier calls",
+                output.stream.chunks.len().to_string(),
+                Tone::Dim,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "accepted / draft",
+                format!(
+                    "{} / {} ({:.1}%)",
+                    stats.tokens,
+                    stats.draft_tokens,
+                    acceptance * 100.0
                 ),
-                metric(
+                acceptance_tone(acceptance),
+            ));
+            if acceptance < 0.35 {
+                self.print_plain_report_block_line(report_warning_line(
                     self.color,
-                    "p50",
-                    format::ms_from_ns(stats.p50_ns),
-                    Tone::Green,
-                ),
-                metric(
-                    self.color,
-                    "p95",
-                    format::ms_from_ns(stats.p95_ns),
-                    Tone::Yellow,
-                ),
-                metric(
-                    self.color,
-                    "p99",
-                    format::ms_from_ns(stats.p99_ns),
-                    Tone::Red,
-                ),
-            ]
-            .join("  "),
-        );
-        if let Some(drift) = decode_drift_line(output, self.color) {
-            self.print_plain_report_row("drift", drift);
+                    "block verifier is losing: drafter acceptance is too low; token mode is expected to be faster",
+                ));
+            }
         }
-        self.print_plain_report_row(
-            "time split",
-            vec![
-                metric(
-                    self.color,
-                    "projection",
-                    format::ms_from_ns(stats.projection_ns),
-                    Tone::Blue,
-                ),
-                metric(
-                    self.color,
-                    "attn",
-                    format::ms_from_ns(stats.attention_ns),
-                    Tone::Cyan,
-                ),
-                metric(
-                    self.color,
-                    "mlp",
-                    format::ms_from_ns(stats.mlp_ns),
-                    Tone::Magenta,
-                ),
-                metric(
-                    self.color,
-                    "norm",
-                    format::ms_from_ns(stats.norm_ns),
-                    Tone::Yellow,
-                ),
-                metric(
-                    self.color,
-                    "sample",
-                    format::ms_from_ns(stats.sampling_ns),
-                    Tone::Green,
-                ),
-            ]
-            .join("  "),
-        );
-        self.print_plain_report_row(
-            "cuda graph",
-            vec![
-                metric(
-                    self.color,
-                    "kernels",
-                    stats.kernel_launches.to_string(),
-                    Tone::Magenta,
-                ),
-                metric(
-                    self.color,
-                    "nodes",
-                    stats.graph_nodes.to_string(),
-                    Tone::Magenta,
-                ),
-                metric(
-                    self.color,
-                    "replays",
-                    stats.graph_replays.to_string(),
-                    Tone::Blue,
-                ),
-            ]
-            .join("  "),
-        );
-        self.print_plain_report_row(
-            "",
-            vec![
-                metric(
-                    self.color,
-                    "cache hits",
-                    stats.graph_cache_hits.to_string(),
-                    Tone::Green,
-                ),
-                metric(
-                    self.color,
-                    "sync calls",
-                    stats.sync_calls.to_string(),
-                    Tone::Yellow,
-                ),
-                metric(
-                    self.color,
-                    "hot alloc",
-                    stats.hot_path_allocations.to_string(),
-                    if stats.hot_path_allocations == 0 {
-                        Tone::Green
-                    } else {
-                        Tone::Red
-                    },
-                ),
-            ]
-            .join("  "),
-        );
-        self.print_plain_report_row(
-            "memory",
-            vec![
-                metric(
-                    self.color,
-                    "weights",
-                    format::bytes(output.stream.create.resident_weight_bytes),
-                    Tone::Orange,
-                ),
-                metric(
-                    self.color,
-                    "KV",
-                    format::bytes(output.stream.create.resident_kv_bytes),
-                    Tone::Blue,
-                ),
-            ]
-            .join("  "),
-        );
-        self.print_plain_report_row(
-            "",
-            vec![
-                metric(
-                    self.color,
-                    "decode H2D",
-                    format::bytes(stats.h2d_bytes),
-                    Tone::Yellow,
-                ),
-                metric(
-                    self.color,
-                    "D2H",
-                    format::bytes(stats.d2h_bytes),
-                    Tone::Cyan,
-                ),
-            ]
-            .join("  "),
-        );
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "mean latency",
+            format::ms_from_ns(stats.mean_ns()),
+            Tone::Cyan,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "p50 latency",
+            format::ms_from_ns(stats.p50_ns),
+            Tone::Green,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "p95 latency",
+            format::ms_from_ns(stats.p95_ns),
+            Tone::Yellow,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "p99 latency",
+            format::ms_from_ns(stats.p99_ns),
+            Tone::Red,
+        ));
+        if let Some(drift) = decode_drift(output) {
+            self.print_plain_report_block_line(report_drift_line(self.color, drift));
+        }
+        self.print_plain_report_block_line("");
+
+        self.print_plain_report_block_line(report_section_line(
+            self.color,
+            "TIME PROFILE",
+            Tone::Magenta,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "profiled total",
+            format::ms_from_ns(profile_total_ns),
+            Tone::Dim,
+        ));
+        self.print_plain_report_block_line(report_timing_line(
+            self.color,
+            "projection",
+            stats.projection_ns,
+            profile_total_ns,
+            Tone::Blue,
+        ));
+        self.print_plain_report_block_line(report_timing_line(
+            self.color,
+            "attention",
+            stats.attention_ns,
+            profile_total_ns,
+            Tone::Cyan,
+        ));
+        self.print_plain_report_block_line(report_timing_line(
+            self.color,
+            "norm",
+            stats.norm_ns,
+            profile_total_ns,
+            Tone::Yellow,
+        ));
+        self.print_plain_report_block_line(report_timing_line(
+            self.color,
+            "mlp",
+            stats.mlp_ns,
+            profile_total_ns,
+            Tone::Magenta,
+        ));
+        self.print_plain_report_block_line(report_timing_line(
+            self.color,
+            "sample",
+            stats.sampling_ns,
+            profile_total_ns,
+            Tone::Green,
+        ));
+        self.print_plain_report_block_line("");
+
+        self.print_plain_report_block_line(report_section_line(
+            self.color,
+            "CUDA GRAPH",
+            Tone::Magenta,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "replays",
+            stats.graph_replays.to_string(),
+            Tone::Blue,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "cache hits",
+            stats.graph_cache_hits.to_string(),
+            Tone::Green,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "kernels",
+            stats.kernel_launches.to_string(),
+            Tone::Magenta,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "graph nodes",
+            stats.graph_nodes.to_string(),
+            Tone::Magenta,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "sync calls",
+            stats.sync_calls.to_string(),
+            Tone::Yellow,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "hot allocations",
+            stats.hot_path_allocations.to_string(),
+            if stats.hot_path_allocations == 0 {
+                Tone::Green
+            } else {
+                Tone::Red
+            },
+        ));
+        self.print_plain_report_block_line("");
+
+        self.print_plain_report_block_line(report_section_line(self.color, "MEMORY", Tone::Blue));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "weights",
+            format::bytes(output.stream.create.resident_weight_bytes),
+            Tone::Orange,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "KV cache",
+            format::bytes(output.stream.create.resident_kv_bytes),
+            Tone::Blue,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "decode H2D",
+            format::bytes(stats.h2d_bytes),
+            Tone::Yellow,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "decode D2H",
+            format::bytes(stats.d2h_bytes),
+            Tone::Cyan,
+        ));
+        self.print_plain_report_block_line(report_rule_line(self.color));
     }
 
     fn print_plain_line(&mut self, phase: &str, message: impl AsRef<str>) {
@@ -777,39 +807,9 @@ impl NervaCliLoggerInner {
         );
     }
 
-    fn print_plain_report_row(&mut self, label: &str, message: impl AsRef<str>) {
-        const LABEL_WIDTH: usize = 12;
+    fn print_plain_report_block_line(&mut self, message: impl AsRef<str>) {
         self.last_plain_emit = Instant::now();
-        let label = if label.is_empty() {
-            String::new()
-        } else {
-            label.to_string()
-        };
-        if self.color.enabled() {
-            eprintln!(
-                "{}[{}]{} {}{:<8}{} {}{:<width$}{} {}",
-                code(self.color, Tone::Dim),
-                format::duration(self.state.boot.elapsed()),
-                reset(self.color),
-                code(self.color, phase_tone("report")),
-                "report",
-                reset(self.color),
-                code(self.color, Tone::Dim),
-                label,
-                reset(self.color),
-                message.as_ref(),
-                width = LABEL_WIDTH,
-            );
-            return;
-        }
-        eprintln!(
-            "[{}] {:<8} {:<width$} {}",
-            format::duration(self.state.boot.elapsed()),
-            "report",
-            label,
-            message.as_ref(),
-            width = LABEL_WIDTH,
-        );
+        eprintln!("{}", message.as_ref());
     }
 
     fn should_emit_plain_progress(&self) -> bool {
@@ -920,6 +920,18 @@ fn phase_tone(phase: &str) -> Tone {
     }
 }
 
+const REPORT_WIDTH: usize = 78;
+const REPORT_LABEL_WIDTH: usize = 18;
+const REPORT_BAR_WIDTH: usize = 32;
+
+#[derive(Clone, Copy, Debug)]
+struct DecodeDrift {
+    first_ns: u64,
+    last_ns: u64,
+    delta: f64,
+    tone: Tone,
+}
+
 fn metric(color: ColorMode, label: &str, value: impl AsRef<str>, value_tone: Tone) -> String {
     if color.enabled() {
         format!(
@@ -936,10 +948,143 @@ fn metric(color: ColorMode, label: &str, value: impl AsRef<str>, value_tone: Ton
     }
 }
 
-fn decode_drift_line(
-    output: &nerva_runtime::engine::hf_cuda_decode::file_backed::generate::HfCudaDeviceGenerateOutput,
+fn report_title_line(color: ColorMode, title: &str, tone: Tone) -> String {
+    let prefix = format!("+-- {title} ");
+    let dash_count = REPORT_WIDTH.saturating_sub(prefix.len() + 1);
+    paint(
+        color,
+        tone,
+        format!("{}{}+", prefix, "-".repeat(dash_count)),
+    )
+}
+
+fn report_rule_line(color: ColorMode) -> String {
+    paint(
+        color,
+        Tone::Dim,
+        format!("+{}+", "-".repeat(REPORT_WIDTH.saturating_sub(2))),
+    )
+}
+
+fn report_section_line(color: ColorMode, title: &str, tone: Tone) -> String {
+    let prefix = format!(":: {title} ");
+    let dash_count = REPORT_WIDTH.saturating_sub(prefix.len());
+    paint(color, tone, format!("{}{}", prefix, "-".repeat(dash_count)))
+}
+
+fn report_kv_line(
     color: ColorMode,
-) -> Option<String> {
+    label: &str,
+    value: impl AsRef<str>,
+    value_tone: Tone,
+) -> String {
+    let label = format!("    {:<width$}", label, width = REPORT_LABEL_WIDTH);
+    format!(
+        "{} {}",
+        paint(color, Tone::Dim, label),
+        paint(color, value_tone, value.as_ref())
+    )
+}
+
+fn report_warning_line(color: ColorMode, message: &str) -> String {
+    let label = format!("    {:<width$}", "warning", width = REPORT_LABEL_WIDTH);
+    format!(
+        "{} {}",
+        paint(color, Tone::Dim, label),
+        paint(color, Tone::Red, message)
+    )
+}
+
+fn report_timing_line(color: ColorMode, label: &str, ns: u64, total_ns: u64, tone: Tone) -> String {
+    let ratio = ratio(ns, total_ns);
+    let label = format!("    {:<width$}", label, width = REPORT_LABEL_WIDTH);
+    let value = format!("{:>12}", format::ms_from_ns(ns));
+    let pct = format!("{:>6.1}%", ratio * 100.0);
+    format!(
+        "{} {}  {}  {}",
+        paint(color, Tone::Dim, label),
+        paint(color, tone, value),
+        paint(color, tone, pct),
+        report_bar(color, ratio, tone)
+    )
+}
+
+fn report_drift_line(color: ColorMode, drift: DecodeDrift) -> String {
+    let label = format!("    {:<width$}", "decode drift", width = REPORT_LABEL_WIDTH);
+    let delta = format!("{:+.2}%", drift.delta);
+    let span = format!(
+        "{} -> {}",
+        format::ms_from_ns(drift.first_ns),
+        format::ms_from_ns(drift.last_ns)
+    );
+    let status = if drift.delta > 10.0 {
+        "critical"
+    } else if drift.delta > 2.0 {
+        "watch"
+    } else {
+        "stable"
+    };
+    format!(
+        "{} {}  {}  {}",
+        paint(color, Tone::Dim, label),
+        paint(color, drift.tone, delta),
+        paint(color, Tone::Dim, span),
+        paint(color, drift.tone, status)
+    )
+}
+
+fn report_bar(color: ColorMode, ratio: f64, tone: Tone) -> String {
+    let ratio = if ratio.is_finite() {
+        ratio.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let filled = if ratio > 0.0 {
+        ((ratio * REPORT_BAR_WIDTH as f64).round() as usize)
+            .max(1)
+            .min(REPORT_BAR_WIDTH)
+    } else {
+        0
+    };
+    let empty = REPORT_BAR_WIDTH.saturating_sub(filled);
+    let filled_bar = "#".repeat(filled);
+    let empty_bar = ".".repeat(empty);
+    if color.enabled() {
+        format!(
+            "{}{}{}{}{}{}",
+            code(color, tone),
+            filled_bar,
+            reset(color),
+            code(color, Tone::Dim),
+            empty_bar,
+            reset(color)
+        )
+    } else {
+        format!("{filled_bar}{empty_bar}")
+    }
+}
+
+fn acceptance_tone(acceptance: f64) -> Tone {
+    if acceptance >= 0.5 {
+        Tone::Green
+    } else if acceptance >= 0.25 {
+        Tone::Yellow
+    } else {
+        Tone::Red
+    }
+}
+
+fn ratio(value: u64, total: u64) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        value as f64 / total as f64
+    }
+}
+
+fn decode_drift(
+    output: &nerva_runtime::engine::hf_cuda_decode::file_backed::generate::HfCudaDeviceGenerateOutput,
+) -> Option<DecodeDrift> {
     let latencies = output
         .stream
         .chunks
@@ -973,14 +1118,12 @@ fn decode_drift_line(
     } else {
         Tone::Green
     };
-    Some(
-        vec![
-            metric(color, "first", format::ms_from_ns(first), Tone::Green),
-            metric(color, "last", format::ms_from_ns(last), tone_for_delta),
-            metric(color, "delta", format!("{delta:+.2}%"), tone_for_delta),
-        ]
-        .join("  "),
-    )
+    Some(DecodeDrift {
+        first_ns: first,
+        last_ns: last,
+        delta,
+        tone: tone_for_delta,
+    })
 }
 
 fn mean_ns(values: &[u64]) -> u64 {
