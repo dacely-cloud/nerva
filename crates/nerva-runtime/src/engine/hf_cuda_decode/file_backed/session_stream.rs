@@ -9,7 +9,9 @@ use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::causal_lm::types::HfCausalLmStopReason;
 use nerva_model::hf::tokenizer::stop_token_ids;
 
+use crate::engine::hf_cuda_decode::file_backed::block_verify::draft_ngram_block;
 use crate::engine::hf_cuda_decode::file_backed::progress::HfCudaDeviceSessionChunkProgress;
+use crate::engine::hf_cuda_decode::file_backed::projection_mode::HfCudaProjectionMode;
 use crate::engine::hf_cuda_decode::file_backed::run::summary_from_sequence;
 use crate::engine::hf_cuda_decode::file_backed::session::create_hf_causal_lm_cuda_shard_backed_device_only_session;
 use crate::engine::hf_cuda_decode::file_backed::session_stream_queue::BoundedHostOutputQueue;
@@ -26,7 +28,7 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
     queue_capacity: usize,
     compute_capability: Option<u32>,
 ) -> Result<HfCudaDeviceSessionStreamOutput> {
-    run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_progress(
+    run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_and_progress(
         runtime,
         dir,
         prompt_tokens,
@@ -35,6 +37,7 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
         chunks,
         queue_capacity,
         compute_capability,
+        HfCudaProjectionMode::Token,
         |_| {},
     )
 }
@@ -48,6 +51,37 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_progress<F>
     chunks: usize,
     queue_capacity: usize,
     compute_capability: Option<u32>,
+    progress: F,
+) -> Result<HfCudaDeviceSessionStreamOutput>
+where
+    F: FnMut(HfCudaDeviceSessionChunkProgress),
+{
+    run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_and_progress(
+        runtime,
+        dir,
+        prompt_tokens,
+        max_context_tokens,
+        chunk_steps,
+        chunks,
+        queue_capacity,
+        compute_capability,
+        HfCudaProjectionMode::Token,
+        progress,
+    )
+}
+
+pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_projection_mode_and_progress<
+    F,
+>(
+    runtime: &Runtime,
+    dir: impl AsRef<Path>,
+    prompt_tokens: &[TokenId],
+    max_context_tokens: usize,
+    chunk_steps: usize,
+    chunks: usize,
+    queue_capacity: usize,
+    compute_capability: Option<u32>,
+    projection_mode: HfCudaProjectionMode,
     mut progress: F,
 ) -> Result<HfCudaDeviceSessionStreamOutput>
 where
@@ -85,8 +119,9 @@ where
                 .unwrap_or_else(|| "CUDA HF session stream start failed".to_string()),
         });
     }
+    let requested_tokens = requested_token_budget(chunk_steps, chunks, projection_mode);
     progress(HfCudaDeviceSessionChunkProgress::from_prefill_summary(
-        chunk_steps.saturating_mul(chunks),
+        requested_tokens,
         prefill_wall_ns,
         &started.summary,
     ));
@@ -98,8 +133,27 @@ where
     let mut stop_reason = HfCausalLmStopReason::MaxSteps;
     let decode_started = Instant::now();
     for chunk_index in 0..chunks {
-        let sequence = loop_state.advance(chunk_steps);
-        let mut summary = summary_from_sequence(&sequence, chunk_steps)?;
+        if tokens.len() >= requested_tokens {
+            break;
+        }
+        let current_steps = current_chunk_steps(
+            chunk_steps,
+            requested_tokens.saturating_sub(tokens.len()),
+            projection_mode,
+        );
+        let sequence = match projection_mode {
+            HfCudaProjectionMode::Token => loop_state.advance(current_steps),
+            HfCudaProjectionMode::BlockVerify { .. } => {
+                let draft = draft_ngram_block(
+                    prompt_tokens,
+                    &tokens,
+                    current_steps,
+                    session.metadata.vocab_size,
+                );
+                loop_state.verify_block(&draft)
+            }
+        };
+        let mut summary = summary_from_sequence(&sequence, current_steps)?;
         summary.resident_weights = session.resident_weights.clone();
         let hit_stop = contains_stop_token(&summary.tokens, &stop_tokens);
         for (chunk_offset, token) in summary.tokens.iter().copied().enumerate() {
@@ -110,7 +164,7 @@ where
         let observed = summary.tokens.len();
         progress(HfCudaDeviceSessionChunkProgress::from_summary(
             tokens.len(),
-            chunk_steps.saturating_mul(chunks),
+            requested_tokens,
             chunk_index,
             hit_stop,
             &summary,
@@ -121,7 +175,10 @@ where
             stop_reason = HfCausalLmStopReason::EosToken;
             break;
         }
-        if observed < chunk_steps {
+        if observed == 0 {
+            break;
+        }
+        if matches!(projection_mode, HfCudaProjectionMode::Token) && observed < current_steps {
             break;
         }
     }
@@ -135,6 +192,7 @@ where
         bytes_loaded: session.bytes_loaded,
         data_hash: session.data_hash,
         data_hash_available: session.data_hash_available,
+        projection_mode,
         load_wall_ns,
         prefill_wall_ns,
         decode_wall_ns,
@@ -146,6 +204,30 @@ where
         queue: queue.summary(),
         stop_reason,
     })
+}
+
+fn requested_token_budget(
+    chunk_steps: usize,
+    chunks: usize,
+    projection_mode: HfCudaProjectionMode,
+) -> usize {
+    match projection_mode {
+        HfCudaProjectionMode::Token => chunk_steps.saturating_mul(chunks),
+        HfCudaProjectionMode::BlockVerify { .. } => chunks,
+    }
+}
+
+fn current_chunk_steps(
+    chunk_steps: usize,
+    remaining_tokens: usize,
+    projection_mode: HfCudaProjectionMode,
+) -> usize {
+    match projection_mode {
+        HfCudaProjectionMode::Token => chunk_steps.min(remaining_tokens),
+        HfCudaProjectionMode::BlockVerify { block_tokens } => {
+            chunk_steps.min(block_tokens).min(remaining_tokens)
+        }
+    }
 }
 
 fn duration_ns(duration: Duration) -> u64 {

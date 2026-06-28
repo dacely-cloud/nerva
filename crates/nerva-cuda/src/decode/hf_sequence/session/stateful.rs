@@ -2,7 +2,8 @@ use crate::decode::hf_sequence::ffi::NervaCudaHfDecodeSequenceResult;
 use crate::decode::hf_sequence::session::failures::failed_run_summary;
 use crate::decode::hf_sequence::session::ffi::{
     NervaCudaHfDecodeSequenceSessionAdvanceRequest, NervaCudaHfDecodeSequenceSessionStartRequest,
-    advance_hf_decode_sequence_session, start_hf_decode_sequence_session,
+    NervaCudaHfDecodeSequenceSessionVerifyBlockRequest, advance_hf_decode_sequence_session,
+    start_hf_decode_sequence_session, verify_hf_decode_sequence_session_block,
 };
 use crate::decode::hf_sequence::session::helpers::{summary_from_run, validate_run};
 use crate::decode::hf_sequence::session::request::CudaHfDecodeSequenceSession;
@@ -85,6 +86,38 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
                     .is_some_and(|eos| summary.tokens.last().is_some_and(|token| *token == eos)));
         summary
     }
+
+    pub fn verify_block(&mut self, draft_tokens: &[u32]) -> CudaHfDecodeSequenceSummary {
+        let create_summary = self.session.create_summary().clone();
+        if self.finished {
+            return failed_run_summary(
+                &create_summary,
+                draft_tokens.len(),
+                0,
+                "CUDA HF decode sequence loop is already finished".to_string(),
+            );
+        }
+        if let Some(error) = validate_draft_block(draft_tokens, create_summary.vocab_size) {
+            return failed_run_summary(&create_summary, draft_tokens.len(), 0, error);
+        }
+        let mut tokens = vec![0u32; draft_tokens.len()];
+        let request = NervaCudaHfDecodeSequenceSessionVerifyBlockRequest {
+            session: self.session.raw_handle(),
+            draft_tokens: draft_tokens.as_ptr(),
+            draft_token_count: draft_tokens.len() as u32,
+            output_tokens: tokens.as_mut_ptr(),
+            output_token_capacity: tokens.len() as u32,
+        };
+        let mut out = NervaCudaHfDecodeSequenceResult::default();
+        let return_code = verify_hf_decode_sequence_session_block(&request, &mut out);
+        tokens.truncate(out.observed_tokens.min(draft_tokens.len() as u32) as usize);
+        let summary = summary_from_run(return_code, &out, tokens, &create_summary);
+        self.finished = summary.status == SmokeStatus::Ok
+            && self
+                .eos_token
+                .is_some_and(|eos| summary.tokens.last().is_some_and(|token| *token == eos));
+        summary
+    }
 }
 
 fn validate_loop_start(prompt_tokens: &[u32], vocab_size: u32) -> Option<String> {
@@ -93,6 +126,18 @@ fn validate_loop_start(prompt_tokens: &[u32], vocab_size: u32) -> Option<String>
     }
     if prompt_tokens.iter().any(|token| *token >= vocab_size) {
         return Some("CUDA HF decode sequence loop prompt token is outside vocabulary".to_string());
+    }
+    None
+}
+
+fn validate_draft_block(draft_tokens: &[u32], vocab_size: u32) -> Option<String> {
+    if draft_tokens.is_empty() {
+        return Some(
+            "CUDA HF decode sequence block verification requires draft tokens".to_string(),
+        );
+    }
+    if draft_tokens.iter().any(|token| *token >= vocab_size) {
+        return Some("CUDA HF decode sequence draft token is outside vocabulary".to_string());
     }
     None
 }

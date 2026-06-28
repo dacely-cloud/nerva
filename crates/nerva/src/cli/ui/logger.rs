@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use nerva_runtime::engine::hf_cuda_decode::file_backed::progress::{
     HfCudaDeviceProgressPhase, HfCudaDeviceSessionChunkProgress,
 };
+use nerva_runtime::engine::hf_cuda_decode::file_backed::projection_mode::HfCudaProjectionMode;
 
 use crate::cli::ui::color::{ColorMode, Tone, code, paint, reset, stderr_color_mode};
 use crate::cli::ui::format;
@@ -102,6 +103,7 @@ impl NervaCliLogger {
         queue_capacity: usize,
         compute_capability: Option<u32>,
         stop_token_count: usize,
+        projection_mode: HfCudaProjectionMode,
     ) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.state.configure(ConfigureInput {
@@ -113,6 +115,7 @@ impl NervaCliLogger {
                 queue_capacity,
                 compute_capability,
                 stop_token_count,
+                projection_mode,
             });
             inner.configured();
         }
@@ -194,10 +197,12 @@ impl NervaCliLoggerInner {
                 self.print_plain_line(
                     "request",
                     format!(
-                        "prompt {} context {} output {} queue {} device {} stop_ids {}",
+                        "prompt {} context {} output {} projection {}x{} queue {} device {} stop_ids {}",
                         self.state.prompt,
                         self.state.context,
                         self.state.output_cap,
+                        self.state.projection_mode,
+                        self.state.projection_block,
                         self.state.queue,
                         self.state.compute,
                         self.state.stop_tokens

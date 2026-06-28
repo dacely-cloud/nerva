@@ -163,6 +163,7 @@ pub(crate) fn create_stage_label(stage: i32) -> &'static str {
         30 => "prefill_hidden_alloc",
         31 => "prefill_chunk_alloc",
         32 => "decode_attention_alloc",
+        33 => "verify_logits_alloc",
         _ => "unknown",
     }
 }

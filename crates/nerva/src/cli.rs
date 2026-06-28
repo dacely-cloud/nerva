@@ -52,14 +52,16 @@ fn print_error(reason: &str, _json_requested: bool) {
 fn usage_lines() -> &'static [&'static str] {
     &[
         "usage:",
-        "  cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--json] [--debug]",
-        "  cargo run -p nerva -- generate -m model -p prompt [-c context] [-o output] [--debug]",
+        "  cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--projection-mode token|block-verify] [--json] [--debug]",
+        "  cargo run -p nerva -- generate -m model -p prompt [-c context] [-o output] [--projection-mode token|block-verify] [--debug]",
         "",
         "aliases:",
         "  generate, chat, ask",
         "",
         "notes:",
         "  default output uses plain streaming logs on stderr",
+        "  --projection-mode block-verify enables exact greedy block verification",
+        "  --projection-block-tokens N sets the verifier block width",
         "  --debug enables the Ratatui dashboard with charts",
         "  NERVA_COLOR=never|ansi|truecolor|always controls log color",
     ]

@@ -1,7 +1,9 @@
+mod block_verify;
 mod descriptors;
 pub mod generate;
 mod load;
 pub mod progress;
+pub mod projection_mode;
 pub mod run;
 pub mod session;
 pub mod session_loop;
