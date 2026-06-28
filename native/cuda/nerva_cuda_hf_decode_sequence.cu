@@ -26,6 +26,7 @@ constexpr uint32_t kCompletionDeviceComplete = 1;
 constexpr uint32_t kWeightStrategyGpuResident = 1;
 constexpr uint32_t kWeightStrategyGpuStaged = 2;
 constexpr uint32_t kDecodeThreads = 256;
+constexpr uint32_t kDecodeNormThreads = 1024;
 constexpr uint32_t kHeadThreadsMax = 256;
 constexpr uint32_t kHeadThreadElements = 4;
 constexpr uint32_t kPrefillChunkBaseTokens = 1024;
@@ -3664,7 +3665,7 @@ cudaError_t launch_cublas_layer_session_step(
   if (err == cudaSuccess && session->layer_count > 0) {
     const SequenceLayerLayout first_layout = session->host_layouts[0];
     hf_decode_prepare_first_attn_norm_encode_kernel<<<
-        1, kDecodeThreads, 0, session->stream>>>(
+        1, kDecodeNormThreads, 0, session->stream>>>(
         session->device_arena, session->arena_layout, first_layout,
         session->dtype, session->hidden, attention_hidden, kv_hidden,
         session->intermediate, session->device_step, max_steps,
@@ -3823,7 +3824,8 @@ cudaError_t launch_cublas_layer_session_step(
           session->device_arena + layout.w_o, session->device_projection_input,
           0.0f, scratch.residual);
     if (err == cudaSuccess) {
-      hf_layer_mlp_norm_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+      hf_layer_mlp_norm_encode_kernel<<<1, kDecodeNormThreads, 0,
+                                        session->stream>>>(
           session->device_arena, layout, session->dtype, session->hidden,
           attention_hidden, kv_hidden, session->intermediate,
           session->device_step, max_steps, session->rms_eps,
@@ -3858,7 +3860,7 @@ cudaError_t launch_cublas_layer_session_step(
       const SequenceLayerLayout next_layout =
           session->host_layouts[layer_index + 1];
       hf_layer_finish_next_attn_norm_encode_kernel<<<
-          1, kDecodeThreads, 0, session->stream>>>(
+          1, kDecodeNormThreads, 0, session->stream>>>(
           session->device_arena, output_offset, next_layout, session->dtype,
           session->hidden, attention_hidden, kv_hidden, session->intermediate,
           session->device_step, max_steps, session->rms_eps,
@@ -3866,7 +3868,7 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     } else if (err == cudaSuccess) {
       hf_layer_finish_final_norm_encode_kernel<<<
-          1, kDecodeThreads, 0, session->stream>>>(
+          1, kDecodeNormThreads, 0, session->stream>>>(
           session->device_arena, session->arena_layout, session->dtype,
           session->hidden, attention_hidden, kv_hidden, session->intermediate,
           session->device_step, max_steps, session->rms_eps,
@@ -3926,7 +3928,7 @@ cudaError_t profile_cublas_layer_session_step(
   if (err == cudaSuccess && session->layer_count > 0) {
     const SequenceLayerLayout first_layout = session->host_layouts[0];
     hf_decode_prepare_first_attn_norm_encode_kernel<<<
-        1, kDecodeThreads, 0, session->stream>>>(
+        1, kDecodeNormThreads, 0, session->stream>>>(
         session->device_arena, session->arena_layout, first_layout,
         session->dtype, session->hidden, attention_hidden, kv_hidden,
         session->intermediate, session->device_step, max_steps,
@@ -4103,7 +4105,8 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess) {
-      hf_layer_mlp_norm_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+      hf_layer_mlp_norm_encode_kernel<<<1, kDecodeNormThreads, 0,
+                                        session->stream>>>(
           session->device_arena, layout, session->dtype, session->hidden,
           attention_hidden, kv_hidden, session->intermediate,
           session->device_step, max_steps, session->rms_eps,
@@ -4150,7 +4153,7 @@ cudaError_t profile_cublas_layer_session_step(
       const SequenceLayerLayout next_layout =
           session->host_layouts[layer_index + 1];
       hf_layer_finish_next_attn_norm_encode_kernel<<<
-          1, kDecodeThreads, 0, session->stream>>>(
+          1, kDecodeNormThreads, 0, session->stream>>>(
           session->device_arena, output_offset, next_layout, session->dtype,
           session->hidden, attention_hidden, kv_hidden, session->intermediate,
           session->device_step, max_steps, session->rms_eps,
@@ -4158,7 +4161,7 @@ cudaError_t profile_cublas_layer_session_step(
       err = cudaGetLastError();
     } else if (err == cudaSuccess) {
       hf_layer_finish_final_norm_encode_kernel<<<
-          1, kDecodeThreads, 0, session->stream>>>(
+          1, kDecodeNormThreads, 0, session->stream>>>(
           session->device_arena, session->arena_layout, session->dtype,
           session->hidden, attention_hidden, kv_hidden, session->intermediate,
           session->device_step, max_steps, session->rms_eps,
