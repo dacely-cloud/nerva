@@ -22,6 +22,9 @@ const BLOCK_VERIFY_INITIAL_PROBE_TOKENS: usize = 2;
 const BLOCK_VERIFY_FALLBACK_MIN_CALLS: usize = 1;
 const BLOCK_VERIFY_FALLBACK_MIN_DRAFT_TOKENS: usize = 2;
 const BLOCK_VERIFY_FALLBACK_ACCEPTED_PER_DRAFT: f64 = 0.60;
+const TOKEN_MODE_MAX_ADVANCE_STEPS: usize = 64;
+const DECODE_ATTENTION_CHUNK_TOKENS: usize = 64;
+const CHUNKED_DECODE_ATTENTION_THRESHOLD: usize = 128;
 
 pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
     runtime: &Runtime,
@@ -150,8 +153,13 @@ where
         let remaining_tokens = requested_tokens.saturating_sub(tokens.len());
         let (sequence, current_steps, wide_block_verify) = match projection_mode {
             HfCudaProjectionMode::Token => {
-                let current_steps =
-                    current_chunk_steps(chunk_steps, remaining_tokens, projection_mode);
+                let current_steps = current_token_mode_steps(
+                    prompt_tokens.len(),
+                    tokens.len(),
+                    remaining_tokens,
+                    max_context_tokens,
+                    queue_capacity,
+                );
                 (loop_state.advance(current_steps), current_steps, false)
             }
             HfCudaProjectionMode::BlockVerify { .. } if block_verify_token_fallback => {
@@ -280,17 +288,38 @@ fn requested_token_budget(
     }
 }
 
-fn current_chunk_steps(
-    chunk_steps: usize,
+fn current_token_mode_steps(
+    prompt_tokens: usize,
+    generated_tokens: usize,
     remaining_tokens: usize,
-    projection_mode: HfCudaProjectionMode,
+    max_context_tokens: usize,
+    queue_capacity: usize,
 ) -> usize {
-    match projection_mode {
-        HfCudaProjectionMode::Token => chunk_steps.min(remaining_tokens),
-        HfCudaProjectionMode::BlockVerify { block_tokens } => {
-            chunk_steps.min(block_tokens).min(remaining_tokens)
-        }
+    let used_context = prompt_tokens.saturating_add(generated_tokens);
+    let context_steps = max_context_tokens.saturating_sub(used_context).saturating_add(1);
+    let max_steps = TOKEN_MODE_MAX_ADVANCE_STEPS
+        .min(remaining_tokens)
+        .min(context_steps)
+        .min(queue_capacity);
+    if max_steps <= 1 {
+        return max_steps;
     }
+    let kv_tokens = used_context;
+    if kv_tokens == 0 {
+        return 1;
+    }
+    let boundary_steps = if kv_tokens <= CHUNKED_DECODE_ATTENTION_THRESHOLD {
+        CHUNKED_DECODE_ATTENTION_THRESHOLD
+            .saturating_sub(kv_tokens)
+            .saturating_add(1)
+    } else {
+        let chunks = kv_tokens.div_ceil(DECODE_ATTENTION_CHUNK_TOKENS);
+        chunks
+            .saturating_mul(DECODE_ATTENTION_CHUNK_TOKENS)
+            .saturating_sub(kv_tokens)
+            .saturating_add(1)
+    };
+    max_steps.min(boundary_steps.max(1))
 }
 
 fn duration_ns(duration: Duration) -> u64 {
@@ -345,5 +374,26 @@ fn validate_vocab(prompt_tokens: &[TokenId], vocab_size: usize) -> Result<()> {
         })
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::current_token_mode_steps;
+
+    #[test]
+    fn token_mode_batches_until_decode_attention_boundary() {
+        assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 128), 4);
+        assert_eq!(current_token_mode_steps(3965, 4, 508, 8192, 128), 64);
+        assert_eq!(current_token_mode_steps(3965, 68, 444, 8192, 128), 64);
+    }
+
+    #[test]
+    fn token_mode_respects_context_queue_and_remaining_budget() {
+        assert_eq!(current_token_mode_steps(16, 0, 512, 8192, 128), 64);
+        assert_eq!(current_token_mode_steps(120, 0, 512, 8192, 128), 9);
+        assert_eq!(current_token_mode_steps(3965, 0, 2, 8192, 128), 2);
+        assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 2), 2);
+        assert_eq!(current_token_mode_steps(1, 0, 512, 3, 128), 3);
     }
 }

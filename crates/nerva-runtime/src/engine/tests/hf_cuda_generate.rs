@@ -36,10 +36,23 @@ fn file_backed_hf_cuda_generate_uses_stateful_stream_path() {
     );
     assert_eq!(output.stream.queue.host_causality_edges, 0);
     assert_eq!(
-        output.stream.chunks[0].h2d_bytes + output.stream.chunks[1].h2d_bytes,
+        output
+            .stream
+            .chunks
+            .iter()
+            .map(|chunk| chunk.h2d_bytes)
+            .sum::<u64>(),
         0
     );
-    assert_eq!(output.stream.chunks[1].graph_cache_hits, 1);
+    assert!(
+        output
+            .stream
+            .chunks
+            .iter()
+            .map(|chunk| chunk.graph_replays)
+            .sum::<u64>()
+            >= 1
+    );
     assert!(
         output
             .stream

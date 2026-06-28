@@ -2320,6 +2320,35 @@ uint32_t observed_count(const NervaCudaHfDecodeSequenceRequest *request,
                             request->has_eos_token, request->eos_token, slots);
 }
 
+uint64_t saturating_mul_profile_value(uint64_t value, uint64_t scale) {
+  if (value != 0 && scale > UINT64_MAX / value) {
+    return UINT64_MAX;
+  }
+  return value * scale;
+}
+
+void scale_profile_counters(NervaCudaHfDecodeSequenceResult *out,
+                            uint64_t scale) {
+  if (out == nullptr || scale <= 1) {
+    return;
+  }
+  out->projection_ns = saturating_mul_profile_value(out->projection_ns, scale);
+  out->qkv_projection_ns =
+      saturating_mul_profile_value(out->qkv_projection_ns, scale);
+  out->attention_output_projection_ns =
+      saturating_mul_profile_value(out->attention_output_projection_ns, scale);
+  out->gate_up_projection_ns =
+      saturating_mul_profile_value(out->gate_up_projection_ns, scale);
+  out->down_projection_ns =
+      saturating_mul_profile_value(out->down_projection_ns, scale);
+  out->lm_head_projection_ns =
+      saturating_mul_profile_value(out->lm_head_projection_ns, scale);
+  out->attention_ns = saturating_mul_profile_value(out->attention_ns, scale);
+  out->mlp_ns = saturating_mul_profile_value(out->mlp_ns, scale);
+  out->norm_ns = saturating_mul_profile_value(out->norm_ns, scale);
+  out->sampling_ns = saturating_mul_profile_value(out->sampling_ns, scale);
+}
+
 }  // namespace
 
 struct NervaCudaHfDecodeSequenceSession {
@@ -4892,6 +4921,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
       }
     }
     if (out->status == 0) {
+      scale_profile_counters(out, out->observed_tokens);
       session->active_observed_tokens += out->observed_tokens;
       session->active_cursor =
           out->observed_tokens < request->steps ? session->max_context_tokens
