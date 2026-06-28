@@ -234,17 +234,30 @@ __device__ float silu(float value) {
 }
 
 __device__ float block_sum(float value) {
-  __shared__ float values[kDecodeThreads];
+  __shared__ float warp_sums[32];
   const uint32_t tid = threadIdx.x;
-  values[tid] = value;
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (tid < stride) {
-      values[tid] += values[tid + stride];
-    }
-    __syncthreads();
+  const uint32_t lane = tid & 31u;
+  const uint32_t warp = tid >> 5u;
+  for (uint32_t offset = 16; offset > 0; offset >>= 1) {
+    value += __shfl_down_sync(0xffffffffu, value, offset);
   }
-  return values[0];
+  if (lane == 0) {
+    warp_sums[warp] = value;
+  }
+  __syncthreads();
+  float total = 0.0f;
+  const uint32_t warp_count = (blockDim.x + 31u) >> 5u;
+  if (warp == 0) {
+    total = lane < warp_count ? warp_sums[lane] : 0.0f;
+    for (uint32_t offset = 16; offset > 0; offset >>= 1) {
+      total += __shfl_down_sync(0xffffffffu, total, offset);
+    }
+    if (lane == 0) {
+      warp_sums[0] = total;
+    }
+  }
+  __syncthreads();
+  return warp_sums[0];
 }
 
 __device__ __forceinline__ float warp_sum(float value) {
@@ -1262,8 +1275,7 @@ __global__ void hf_layer_attention_reduce_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const float *partial_values, const float *partial_m, const float *partial_l,
     uint16_t *projection_input) {
-  __shared__ float global_m_shared;
-  __shared__ float global_l_shared;
+  extern __shared__ float chunk_weights[];
   if (step_cursor != nullptr && *step_cursor >= max_steps) {
     return;
   }
@@ -1289,24 +1301,27 @@ __global__ void hf_layer_attention_reduce_kernel(
       global_l = global_l * old_scale + chunk_l * new_scale;
       global_m = next_m;
     }
-    global_m_shared = global_m;
-    global_l_shared = global_l;
+    for (uint32_t chunk = 0; chunk < attention_chunks; ++chunk) {
+      const uint64_t slot =
+          (static_cast<uint64_t>(head) * attention_chunks + chunk);
+      const float chunk_l = partial_l[slot];
+      if (global_l > 0.0f && isfinite(global_l) && chunk_l > 0.0f &&
+          isfinite(chunk_l)) {
+        chunk_weights[chunk] = expf(partial_m[slot] - global_m) / global_l;
+      } else {
+        chunk_weights[chunk] = 0.0f;
+      }
+    }
   }
   __syncthreads();
   const uint32_t head_start = head * head_dim;
   for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
     float value = 0.0f;
-    const float global_l = global_l_shared;
-    const float global_m = global_m_shared;
-    if (global_l > 0.0f && isfinite(global_l)) {
-      for (uint32_t chunk = 0; chunk < attention_chunks; ++chunk) {
+    for (uint32_t chunk = 0; chunk < attention_chunks; ++chunk) {
+      const float weight = chunk_weights[chunk];
+      if (weight != 0.0f) {
         const uint64_t slot =
             (static_cast<uint64_t>(head) * attention_chunks + chunk);
-        const float chunk_l = partial_l[slot];
-        if (chunk_l <= 0.0f || !isfinite(chunk_l)) {
-          continue;
-        }
-        const float weight = expf(partial_m[slot] - global_m) / global_l;
         value += partial_values[slot * head_dim + offset] * weight;
       }
     }
@@ -3526,7 +3541,10 @@ cudaError_t launch_cublas_layer_session_step(
         err = cudaGetLastError();
       }
       if (err == cudaSuccess) {
-        hf_layer_attention_reduce_kernel<<<session->heads, session->head_threads, 0,
+        const size_t reduce_shared_bytes =
+            static_cast<size_t>(attention_chunks) * sizeof(float);
+        hf_layer_attention_reduce_kernel<<<session->heads, session->head_threads,
+                                           reduce_shared_bytes,
                                            session->stream>>>(
             session->dtype, session->hidden, session->heads, session->kv_heads,
             session->head_dim, session->intermediate, session->device_step,
@@ -3761,7 +3779,10 @@ cudaError_t profile_cublas_layer_session_step(
         err = cudaGetLastError();
       }
       if (err == cudaSuccess) {
-        hf_layer_attention_reduce_kernel<<<session->heads, session->head_threads, 0,
+        const size_t reduce_shared_bytes =
+            static_cast<size_t>(attention_chunks) * sizeof(float);
+        hf_layer_attention_reduce_kernel<<<session->heads, session->head_threads,
+                                           reduce_shared_bytes,
                                            session->stream>>>(
             session->dtype, session->hidden, session->heads, session->kv_heads,
             session->head_dim, session->intermediate, session->device_step,
