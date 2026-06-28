@@ -2527,21 +2527,22 @@ cudaError_t create_lt_gemv_descriptors(
   const cudaDataType_t data_type = encoded_cuda_type(dtype);
   cublasStatus_t status =
       cublasLtMatmulDescCreate(op_desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
-  cublasOperation_t op = CUBLAS_OP_N;
+  cublasOperation_t op_a = CUBLAS_OP_N;
+  cublasOperation_t op_b = CUBLAS_OP_T;
   if (status == CUBLAS_STATUS_SUCCESS)
     status = cublasLtMatmulDescSetAttribute(
-        *op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op, sizeof(op));
+        *op_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op_a, sizeof(op_a));
   if (status == CUBLAS_STATUS_SUCCESS)
     status = cublasLtMatmulDescSetAttribute(
-        *op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op, sizeof(op));
+        *op_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op_b, sizeof(op_b));
   if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutCreate(a_desc, data_type, rows, cols, cols);
+    status = cublasLtMatrixLayoutCreate(a_desc, data_type, 1, cols, cols);
   if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutCreate(b_desc, data_type, cols, 1, 1);
+    status = cublasLtMatrixLayoutCreate(b_desc, data_type, rows, cols, cols);
   if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutCreate(c_desc, CUDA_R_32F, rows, 1, 1);
+    status = cublasLtMatrixLayoutCreate(c_desc, CUDA_R_32F, 1, rows, rows);
   if (status == CUBLAS_STATUS_SUCCESS)
-    status = cublasLtMatrixLayoutCreate(d_desc, CUDA_R_32F, rows, 1, 1);
+    status = cublasLtMatrixLayoutCreate(d_desc, CUDA_R_32F, 1, rows, rows);
   cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
   if (status == CUBLAS_STATUS_SUCCESS)
     status = cublasLtMatrixLayoutSetAttribute(
@@ -2600,7 +2601,7 @@ cudaError_t launch_lt_gemv_plan(
   }
   const float alpha = 1.0f;
   const cublasStatus_t status = cublasLtMatmul(
-      handle, plan->op_desc, &alpha, matrix, plan->a_desc, input, plan->b_desc,
+      handle, plan->op_desc, &alpha, input, plan->a_desc, matrix, plan->b_desc,
       &beta, output, plan->c_desc, output, plan->d_desc, algo, workspace,
       workspace_bytes, stream);
   return cublas_to_cuda(status);
@@ -2623,7 +2624,7 @@ cudaError_t encoded_row_major_gemv_lt(
       rows, cols, dtype, &op_desc, &a_desc, &b_desc, &c_desc, &d_desc);
   cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
   if (err == cudaSuccess)
-    status = cublasLtMatmul(handle, op_desc, &alpha, matrix, a_desc, input,
+    status = cublasLtMatmul(handle, op_desc, &alpha, input, a_desc, matrix,
                             b_desc, &beta, output, c_desc, output, d_desc,
                             nullptr, workspace, workspace_bytes, stream);
   destroy_lt_descriptors(op_desc, a_desc, b_desc, c_desc, d_desc);
@@ -2788,6 +2789,155 @@ cudaError_t time_cublas_gemv_candidate(
   return err;
 }
 
+cudaError_t time_lt_gemv_graph_candidate(
+    cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
+    size_t workspace_bytes, const LtGemvPlan *plan, const uint16_t *matrix,
+    const uint16_t *input, float *output, const cublasLtMatmulAlgo_t *algo,
+    uint64_t *avg_ns) {
+  if (avg_ns == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  *avg_ns = 0;
+  cudaError_t err = cudaStreamSynchronize(stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t graph_exec = nullptr;
+  err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = launch_lt_gemv_plan(handle, stream, workspace, workspace_bytes, plan,
+                            matrix, input, 0.0f, output, algo);
+  cudaError_t end_err = cudaStreamEndCapture(stream, &graph);
+  if (err != cudaSuccess) {
+    if (end_err == cudaSuccess && graph != nullptr) cudaGraphDestroy(graph);
+    return err;
+  }
+  if (end_err != cudaSuccess) {
+    if (graph != nullptr) cudaGraphDestroy(graph);
+    return end_err;
+  }
+  err = cudaGraphInstantiate(&graph_exec, graph, 0);
+  if (err != cudaSuccess) {
+    if (graph_exec != nullptr) cudaGraphExecDestroy(graph_exec);
+    if (graph != nullptr) cudaGraphDestroy(graph);
+    return err;
+  }
+
+  for (uint32_t index = 0; index < kLtGemvAutotuneWarmups; ++index) {
+    err = cudaGraphLaunch(graph_exec, stream);
+    if (err != cudaSuccess) break;
+  }
+  if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+
+  cudaEvent_t start = nullptr;
+  cudaEvent_t stop = nullptr;
+  if (err == cudaSuccess) err = cudaEventCreate(&start);
+  if (err == cudaSuccess) err = cudaEventCreate(&stop);
+  if (err == cudaSuccess) err = cudaEventRecord(start, stream);
+  for (uint32_t index = 0;
+       err == cudaSuccess && index < kLtGemvAutotuneIterations; ++index) {
+    err = cudaGraphLaunch(graph_exec, stream);
+  }
+  if (err == cudaSuccess) err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) err = cudaEventSynchronize(stop);
+  if (err == cudaSuccess) {
+    const uint64_t total_ns = cuda_event_elapsed_ns(start, stop);
+    *avg_ns = total_ns / kLtGemvAutotuneIterations;
+  }
+
+  if (stop != nullptr) {
+    cudaError_t cleanup_err = cudaEventDestroy(stop);
+    if (err == cudaSuccess) err = cleanup_err;
+  }
+  if (start != nullptr) {
+    cudaError_t cleanup_err = cudaEventDestroy(start);
+    if (err == cudaSuccess) err = cleanup_err;
+  }
+  cudaError_t cleanup_err = cudaGraphExecDestroy(graph_exec);
+  if (err == cudaSuccess && cleanup_err != cudaSuccess) err = cleanup_err;
+  cleanup_err = cudaGraphDestroy(graph);
+  if (err == cudaSuccess && cleanup_err != cudaSuccess) err = cleanup_err;
+  return err;
+}
+
+cudaError_t time_cublas_gemv_graph_candidate(
+    cublasHandle_t handle, cudaStream_t stream, const LtGemvPlan *plan,
+    const uint16_t *matrix, const uint16_t *input, float *output,
+    uint64_t *avg_ns) {
+  if (avg_ns == nullptr || plan == nullptr || !plan->ready) {
+    return cudaErrorInvalidValue;
+  }
+  *avg_ns = 0;
+  cudaError_t err = cudaStreamSynchronize(stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t graph_exec = nullptr;
+  err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = encoded_row_major_gemv_beta(handle, matrix, input, plan->rows,
+                                    plan->cols, plan->dtype, 0.0f, output);
+  cudaError_t end_err = cudaStreamEndCapture(stream, &graph);
+  if (err != cudaSuccess) {
+    if (end_err == cudaSuccess && graph != nullptr) cudaGraphDestroy(graph);
+    return err;
+  }
+  if (end_err != cudaSuccess) {
+    if (graph != nullptr) cudaGraphDestroy(graph);
+    return end_err;
+  }
+  err = cudaGraphInstantiate(&graph_exec, graph, 0);
+  if (err != cudaSuccess) {
+    if (graph_exec != nullptr) cudaGraphExecDestroy(graph_exec);
+    if (graph != nullptr) cudaGraphDestroy(graph);
+    return err;
+  }
+
+  for (uint32_t index = 0; index < kLtGemvAutotuneWarmups; ++index) {
+    err = cudaGraphLaunch(graph_exec, stream);
+    if (err != cudaSuccess) break;
+  }
+  if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+
+  cudaEvent_t start = nullptr;
+  cudaEvent_t stop = nullptr;
+  if (err == cudaSuccess) err = cudaEventCreate(&start);
+  if (err == cudaSuccess) err = cudaEventCreate(&stop);
+  if (err == cudaSuccess) err = cudaEventRecord(start, stream);
+  for (uint32_t index = 0;
+       err == cudaSuccess && index < kLtGemvAutotuneIterations; ++index) {
+    err = cudaGraphLaunch(graph_exec, stream);
+  }
+  if (err == cudaSuccess) err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) err = cudaEventSynchronize(stop);
+  if (err == cudaSuccess) {
+    const uint64_t total_ns = cuda_event_elapsed_ns(start, stop);
+    *avg_ns = total_ns / kLtGemvAutotuneIterations;
+  }
+
+  if (stop != nullptr) {
+    cudaError_t cleanup_err = cudaEventDestroy(stop);
+    if (err == cudaSuccess) err = cleanup_err;
+  }
+  if (start != nullptr) {
+    cudaError_t cleanup_err = cudaEventDestroy(start);
+    if (err == cudaSuccess) err = cleanup_err;
+  }
+  cudaError_t cleanup_err = cudaGraphExecDestroy(graph_exec);
+  if (err == cudaSuccess && cleanup_err != cudaSuccess) err = cleanup_err;
+  cleanup_err = cudaGraphDestroy(graph);
+  if (err == cudaSuccess && cleanup_err != cudaSuccess) err = cleanup_err;
+  return err;
+}
+
 cudaError_t autotune_lt_gemv_plan(
     cublasHandle_t cublas, cublasLtHandle_t cublas_lt, cudaStream_t stream,
     void *workspace, size_t workspace_bytes, LtGemvPlan *plan,
@@ -2843,6 +2993,64 @@ cudaError_t autotune_lt_gemv_plan(
       plan->has_algo = true;
       plan->selected_heuristic = index;
       plan->tuned_avg_ns = avg_ns;
+    }
+  }
+  uint64_t graph_best_avg_ns = 0;
+  uint32_t graph_best_backend = plan->backend;
+  bool graph_best_has_algo = plan->has_algo;
+  uint32_t graph_best_heuristic = plan->selected_heuristic;
+  cublasLtMatmulAlgo_t graph_best_algo = plan->algo;
+
+  auto consider_graph_candidate = [&](uint32_t backend, bool has_algo,
+                                      uint32_t heuristic_index,
+                                      const cublasLtMatmulAlgo_t *algo,
+                                      uint64_t avg_ns) {
+    if (avg_ns == 0) {
+      return;
+    }
+    if (graph_best_avg_ns == 0 || avg_ns < graph_best_avg_ns) {
+      graph_best_avg_ns = avg_ns;
+      graph_best_backend = backend;
+      graph_best_has_algo = has_algo;
+      graph_best_heuristic = heuristic_index;
+      if (algo != nullptr) {
+        graph_best_algo = *algo;
+      }
+    }
+  };
+
+  uint64_t graph_avg_ns = 0;
+  cudaError_t graph_err = time_cublas_gemv_graph_candidate(
+      cublas, stream, plan, matrix, input, output, &graph_avg_ns);
+  if (graph_err == cudaSuccess) {
+    consider_graph_candidate(kGemvBackendCublas, false, UINT32_MAX, nullptr,
+                             graph_avg_ns);
+  }
+  graph_avg_ns = 0;
+  graph_err = time_lt_gemv_graph_candidate(
+      cublas_lt, stream, workspace, workspace_bytes, plan, matrix, input,
+      output, nullptr, &graph_avg_ns);
+  if (graph_err == cudaSuccess) {
+    consider_graph_candidate(kGemvBackendLt, false, UINT32_MAX, nullptr,
+                             graph_avg_ns);
+  }
+  for (uint32_t index = 0; index < heuristic_count; ++index) {
+    graph_avg_ns = 0;
+    graph_err = time_lt_gemv_graph_candidate(
+        cublas_lt, stream, workspace, workspace_bytes, plan, matrix, input,
+        output, &heuristics[index].algo, &graph_avg_ns);
+    if (graph_err == cudaSuccess) {
+      consider_graph_candidate(kGemvBackendLt, true, index,
+                               &heuristics[index].algo, graph_avg_ns);
+    }
+  }
+  if (graph_best_avg_ns != 0) {
+    plan->backend = graph_best_backend;
+    plan->has_algo = graph_best_has_algo;
+    plan->selected_heuristic = graph_best_heuristic;
+    plan->tuned_avg_ns = graph_best_avg_ns;
+    if (graph_best_has_algo) {
+      plan->algo = graph_best_algo;
     }
   }
   return cudaSuccess;
