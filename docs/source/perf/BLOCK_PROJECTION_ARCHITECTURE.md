@@ -141,3 +141,55 @@ continuous batched decode over multiple resident sessions
 The single-request fallback remains `W * x`. The block path should only be
 selected when there are multiple exact hidden vectors available for the same
 projection matrix.
+
+## Continuous Projection Batch Planner
+
+The runtime now has a planner surface for exact continuous decode batching:
+
+```text
+crates/nerva-runtime/src/engine/hf_cuda_decode/projection_batch.rs
+```
+
+The planner does not pretend that unrelated requests are safe to merge. It only
+forms a projection batch when all selected sequences prove:
+
+```text
+same resident weight hash
+same dtype
+same transformer shape
+same vocabulary shape
+ready to decode one token
+not stopped
+has context capacity remaining
+```
+
+That is the exactness contract for turning multiple single-token states:
+
+```text
+x0, x1, x2, ...
+```
+
+into one projection block:
+
+```text
+X = [x0 x1 x2 ...]
+Y = W * X
+```
+
+The default target block is `8` because the measured Qwen3-8B projection bench
+shows strong per-token wins at `block_tokens=8`. The planner caps the selected
+request count to that target and returns no batch when fewer than two compatible
+ready sequences exist.
+
+This is the next runtime seam for the native executor:
+
+```text
+1. scheduler collects ready resident sessions
+2. planner selects an exact compatible projection batch
+3. native executor packs per-session hidden vectors into X
+4. project_encoded_rows(..., tokens = batch_size) runs W * X
+5. per-session attention/KV/sample state remains isolated
+```
+
+That preserves greedy/sampling semantics for each request. The only shared work
+is the dense projection read over identical weights.
