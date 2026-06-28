@@ -17,6 +17,9 @@ use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDevi
 use crate::engine::runtime::Runtime;
 
 const TOKEN_MODE_MAX_ADVANCE_STEPS: usize = 1024;
+const TOKEN_MODE_EOS_FIRST_ADVANCE_STEPS: usize = 128;
+const TOKEN_MODE_EOS_RAMP_ADVANCE_STEPS: usize = 256;
+const TOKEN_MODE_EOS_RAMP_TOKENS: usize = TOKEN_MODE_MAX_ADVANCE_STEPS;
 
 pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
     runtime: &Runtime,
@@ -69,9 +72,7 @@ where
     )
 }
 
-pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_and_progress<
-    F,
->(
+pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_and_progress<F>(
     runtime: &Runtime,
     dir: impl AsRef<Path>,
     prompt_tokens: &[TokenId],
@@ -143,6 +144,7 @@ where
             remaining_tokens,
             max_context_tokens,
             queue_capacity,
+            !stop_tokens.is_empty(),
         );
         let sequence = loop_state.advance(current_steps);
         let mut summary = summary_from_sequence(&sequence, current_steps)?;
@@ -203,12 +205,14 @@ fn current_token_mode_steps(
     remaining_tokens: usize,
     max_context_tokens: usize,
     queue_capacity: usize,
+    stop_tokens_known: bool,
 ) -> usize {
     let used_context = prompt_tokens.saturating_add(generated_tokens);
     let context_steps = max_context_tokens
         .saturating_sub(used_context)
         .saturating_add(1);
-    let max_steps = TOKEN_MODE_MAX_ADVANCE_STEPS
+    let advance_cap = token_mode_advance_cap(generated_tokens, remaining_tokens, stop_tokens_known);
+    let max_steps = advance_cap
         .min(remaining_tokens)
         .min(context_steps)
         .min(queue_capacity);
@@ -216,6 +220,24 @@ fn current_token_mode_steps(
         return max_steps;
     }
     max_steps
+}
+
+fn token_mode_advance_cap(
+    generated_tokens: usize,
+    remaining_tokens: usize,
+    stop_tokens_known: bool,
+) -> usize {
+    if !stop_tokens_known
+        || remaining_tokens < TOKEN_MODE_MAX_ADVANCE_STEPS
+        || generated_tokens >= TOKEN_MODE_EOS_RAMP_TOKENS
+    {
+        return TOKEN_MODE_MAX_ADVANCE_STEPS;
+    }
+    if generated_tokens == 0 {
+        TOKEN_MODE_EOS_FIRST_ADVANCE_STEPS
+    } else {
+        TOKEN_MODE_EOS_RAMP_ADVANCE_STEPS
+    }
 }
 
 fn duration_ns(duration: Duration) -> u64 {
@@ -279,17 +301,57 @@ mod tests {
 
     #[test]
     fn token_mode_batches_to_runtime_advance_cap() {
-        assert_eq!(current_token_mode_steps(3965, 0, 2048, 8192, 2048), 1024);
-        assert_eq!(current_token_mode_steps(3965, 1024, 1024, 8192, 2048), 1024);
-        assert_eq!(current_token_mode_steps(3965, 1536, 512, 8192, 2048), 512);
+        assert_eq!(
+            current_token_mode_steps(3965, 0, 2048, 8192, 2048, false),
+            1024
+        );
+        assert_eq!(
+            current_token_mode_steps(3965, 1024, 1024, 8192, 2048, false),
+            1024
+        );
+        assert_eq!(
+            current_token_mode_steps(3965, 1536, 512, 8192, 2048, false),
+            512
+        );
     }
 
     #[test]
     fn token_mode_respects_context_queue_and_remaining_budget() {
-        assert_eq!(current_token_mode_steps(16, 0, 512, 8192, 1024), 512);
-        assert_eq!(current_token_mode_steps(120, 0, 2048, 8192, 1024), 1024);
-        assert_eq!(current_token_mode_steps(3965, 0, 2, 8192, 1024), 2);
-        assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 2), 2);
-        assert_eq!(current_token_mode_steps(1, 0, 512, 3, 1024), 3);
+        assert_eq!(current_token_mode_steps(16, 0, 512, 8192, 1024, false), 512);
+        assert_eq!(
+            current_token_mode_steps(120, 0, 2048, 8192, 1024, false),
+            1024
+        );
+        assert_eq!(current_token_mode_steps(3965, 0, 2, 8192, 1024, false), 2);
+        assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 2, false), 2);
+        assert_eq!(current_token_mode_steps(1, 0, 512, 3, 1024, false), 3);
+    }
+
+    #[test]
+    fn token_mode_checks_eos_more_often_before_long_runs() {
+        assert_eq!(
+            current_token_mode_steps(3965, 0, 2048, 8192, 2048, true),
+            128
+        );
+        assert_eq!(
+            current_token_mode_steps(3965, 0, 1024, 8192, 2048, true),
+            128
+        );
+        assert_eq!(
+            current_token_mode_steps(3965, 128, 1920, 8192, 2048, true),
+            256
+        );
+        assert_eq!(
+            current_token_mode_steps(3965, 896, 1152, 8192, 2048, true),
+            256
+        );
+        assert_eq!(
+            current_token_mode_steps(3965, 1152, 896, 8192, 2048, true),
+            896
+        );
+        assert_eq!(
+            current_token_mode_steps(3965, 0, 512, 8192, 2048, true),
+            512
+        );
     }
 }
