@@ -140,6 +140,7 @@ struct LtGemvPlan {
   uint32_t rows = 0;
   uint32_t cols = 0;
   uint32_t dtype = 0;
+  uint32_t backend = 0;
   cublasLtMatmulDesc_t op_desc = nullptr;
   cublasLtMatrixLayout_t a_desc = nullptr;
   cublasLtMatrixLayout_t b_desc = nullptr;
@@ -152,6 +153,9 @@ struct LtGemvPlan {
   uint32_t selected_heuristic = UINT32_MAX;
   uint64_t tuned_avg_ns = 0;
 };
+
+constexpr uint32_t kGemvBackendLt = 0;
+constexpr uint32_t kGemvBackendCublas = 1;
 
 __host__ __device__ LayerScratch layer_scratch_ptrs(
     float *scratch, uint32_t hidden, uint32_t attention_hidden,
@@ -1097,34 +1101,42 @@ __global__ void hf_layer_attention_chunk_kernel(
     q_frag[item] = offset < head_dim ? s.q[head_start + offset] : 0.0f;
     acc[item] = 0.0f;
   }
-  for (uint32_t token = chunk_start; token < chunk_end; ++token) {
-    const uint64_t token_base = kv_cache_token_base(
-        layer_index, kv_block_count, kv_block_table, token, kv_hidden,
-        kv_start);
-    float partial = 0.0f;
+  for (uint32_t token = chunk_start; token < chunk_end;) {
+    const uint32_t logical_block = token / kKvCacheBlockTokens;
+    const uint32_t logical_block_end =
+        (logical_block + 1u) * kKvCacheBlockTokens;
+    const uint32_t block_limit =
+        logical_block_end < chunk_end ? logical_block_end : chunk_end;
+    uint64_t token_base = kv_cache_page_offset(
+        layer_index, kv_block_count, kv_block_table[logical_block],
+        token - logical_block * kKvCacheBlockTokens, kv_hidden, kv_start);
+    for (; token < block_limit; ++token, token_base += kv_hidden) {
+      float partial = 0.0f;
 #pragma unroll
-    for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
-      const uint32_t offset = threadIdx.x + item * blockDim.x;
-      if (offset < head_dim) {
-        partial += q_frag[item] *
-                   encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = threadIdx.x + item * blockDim.x;
+        if (offset < head_dim) {
+          partial += q_frag[item] *
+                     encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+        }
       }
-    }
-    const float score = block_sum(partial) * scale;
-    const float next_m = fmaxf(local_m, score);
-    const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
-    const float new_scale = expf(score - next_m);
+      const float score = block_sum(partial) * scale;
+      const float next_m = fmaxf(local_m, score);
+      const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+      const float new_scale = expf(score - next_m);
 #pragma unroll
-    for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
-      const uint32_t offset = threadIdx.x + item * blockDim.x;
-      if (offset < head_dim) {
-        acc[item] = acc[item] * old_scale +
-                    encoded_to_f32_typed<DType>(kv_values[token_base + offset]) *
-                        new_scale;
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = threadIdx.x + item * blockDim.x;
+        if (offset < head_dim) {
+          acc[item] =
+              acc[item] * old_scale +
+              encoded_to_f32_typed<DType>(kv_values[token_base + offset]) *
+                  new_scale;
+        }
       }
+      local_l = local_l * old_scale + new_scale;
+      local_m = next_m;
     }
-    local_l = local_l * old_scale + new_scale;
-    local_m = next_m;
   }
   if (threadIdx.x == 0) {
     partial_m[slot] = local_m;
@@ -1206,55 +1218,63 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
     q_frag[item] = offset < head_dim ? s.q[head_start + offset] : 0.0f;
     acc[item] = 0.0f;
   }
-  for (uint32_t token = chunk_start; token < chunk_end; ++token) {
-    const uint64_t token_base = kv_cache_token_base(
-        layer_index, kv_block_count, kv_block_table, token, kv_hidden,
-        kv_start);
-    for (uint32_t offset = threadIdx.x; offset < head_dim;
-         offset += blockDim.x) {
-      shared_k[offset] = encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
-      shared_v[offset] =
-          encoded_to_f32_typed<DType>(kv_values[token_base + offset]);
-    }
-    __syncthreads();
-    float partial = 0.0f;
-#pragma unroll
-    for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
-      const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
-      if (offset < head_dim) {
-        partial += q_frag[item] * shared_k[offset];
+  for (uint32_t token = chunk_start; token < chunk_end;) {
+    const uint32_t logical_block = token / kKvCacheBlockTokens;
+    const uint32_t logical_block_end =
+        (logical_block + 1u) * kKvCacheBlockTokens;
+    const uint32_t block_limit =
+        logical_block_end < chunk_end ? logical_block_end : chunk_end;
+    uint64_t token_base = kv_cache_page_offset(
+        layer_index, kv_block_count, kv_block_table[logical_block],
+        token - logical_block * kKvCacheBlockTokens, kv_hidden, kv_start);
+    for (; token < block_limit; ++token, token_base += kv_hidden) {
+      for (uint32_t offset = threadIdx.x; offset < head_dim;
+           offset += blockDim.x) {
+        shared_k[offset] =
+            encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+        shared_v[offset] =
+            encoded_to_f32_typed<DType>(kv_values[token_base + offset]);
       }
-    }
-    const float partial_sum = warp_sum(partial);
-    if (lane_in_warp == 0) {
-      reduce[q_in_group][warp_in_group] = partial_sum;
-    }
-    __syncthreads();
-    float old_scale = 0.0f;
-    float new_scale = 0.0f;
-    float next_m_value = local_m;
-    float next_l_value = local_l;
-    if (lane_in_warp == 0) {
-      const float score =
-          (reduce[q_in_group][0] + reduce[q_in_group][1]) * scale;
-      const float next_m = fmaxf(local_m, score);
-      old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
-      new_scale = expf(score - next_m);
-      next_l_value = local_l * old_scale + new_scale;
-      next_m_value = next_m;
-    }
-    old_scale = __shfl_sync(0xffffffffu, old_scale, 0);
-    new_scale = __shfl_sync(0xffffffffu, new_scale, 0);
-    local_l = __shfl_sync(0xffffffffu, next_l_value, 0);
-    local_m = __shfl_sync(0xffffffffu, next_m_value, 0);
+      __syncthreads();
+      float partial = 0.0f;
 #pragma unroll
-    for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
-      const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
-      if (offset < head_dim) {
-        acc[item] = acc[item] * old_scale + shared_v[offset] * new_scale;
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
+        if (offset < head_dim) {
+          partial += q_frag[item] * shared_k[offset];
+        }
       }
+      const float partial_sum = warp_sum(partial);
+      if (lane_in_warp == 0) {
+        reduce[q_in_group][warp_in_group] = partial_sum;
+      }
+      __syncthreads();
+      float old_scale = 0.0f;
+      float new_scale = 0.0f;
+      float next_m_value = local_m;
+      float next_l_value = local_l;
+      if (lane_in_warp == 0) {
+        const float score =
+            (reduce[q_in_group][0] + reduce[q_in_group][1]) * scale;
+        const float next_m = fmaxf(local_m, score);
+        old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+        new_scale = expf(score - next_m);
+        next_l_value = local_l * old_scale + new_scale;
+        next_m_value = next_m;
+      }
+      old_scale = __shfl_sync(0xffffffffu, old_scale, 0);
+      new_scale = __shfl_sync(0xffffffffu, new_scale, 0);
+      local_l = __shfl_sync(0xffffffffu, next_l_value, 0);
+      local_m = __shfl_sync(0xffffffffu, next_m_value, 0);
+#pragma unroll
+      for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+        const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
+        if (offset < head_dim) {
+          acc[item] = acc[item] * old_scale + shared_v[offset] * new_scale;
+        }
+      }
+      __syncthreads();
     }
-    __syncthreads();
   }
   if (lane == 0) {
     partial_m[slot] = local_m;
@@ -2361,6 +2381,22 @@ cudaError_t encoded_row_major_gemv_lt_planned(
                              matrix, input, beta, output, lt_gemv_algo(plan));
 }
 
+cudaError_t encoded_row_major_gemv_planned(
+    cublasHandle_t cublas, cublasLtHandle_t cublas_lt, cudaStream_t stream,
+    void *workspace, size_t workspace_bytes, const LtGemvPlan *plan,
+    const uint16_t *matrix, const uint16_t *input, float beta, float *output) {
+  if (plan == nullptr || !plan->ready) {
+    return cudaErrorInvalidValue;
+  }
+  if (plan->backend == kGemvBackendCublas) {
+    return encoded_row_major_gemv_beta(cublas, matrix, input, plan->rows,
+                                       plan->cols, plan->dtype, beta, output);
+  }
+  return encoded_row_major_gemv_lt_planned(cublas_lt, stream, workspace,
+                                           workspace_bytes, plan, matrix,
+                                           input, beta, output);
+}
+
 cudaError_t find_lt_gemv_heuristics(
     cublasLtHandle_t handle, const LtGemvPlan *plan,
     size_t workspace_bytes, cublasLtMatmulHeuristicResult_t *heuristics,
@@ -2449,28 +2485,85 @@ cudaError_t time_lt_gemv_candidate(
   return err;
 }
 
+cudaError_t time_cublas_gemv_candidate(
+    cublasHandle_t handle, cudaStream_t stream, const LtGemvPlan *plan,
+    const uint16_t *matrix, const uint16_t *input, float *output,
+    uint64_t *avg_ns) {
+  if (avg_ns == nullptr || plan == nullptr || !plan->ready) {
+    return cudaErrorInvalidValue;
+  }
+  *avg_ns = 0;
+  for (uint32_t index = 0; index < kLtGemvAutotuneWarmups; ++index) {
+    cudaError_t err = encoded_row_major_gemv_beta(
+        handle, matrix, input, plan->rows, plan->cols, plan->dtype, 0.0f,
+        output);
+    if (err != cudaSuccess) return err;
+  }
+  cudaError_t err = cudaStreamSynchronize(stream);
+  if (err != cudaSuccess) return err;
+  cudaEvent_t start = nullptr;
+  cudaEvent_t stop = nullptr;
+  err = cudaEventCreate(&start);
+  if (err == cudaSuccess) err = cudaEventCreate(&stop);
+  if (err == cudaSuccess) err = cudaEventRecord(start, stream);
+  for (uint32_t index = 0;
+       err == cudaSuccess && index < kLtGemvAutotuneIterations; ++index) {
+    err = encoded_row_major_gemv_beta(handle, matrix, input, plan->rows,
+                                      plan->cols, plan->dtype, 0.0f, output);
+  }
+  if (err == cudaSuccess) err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) err = cudaEventSynchronize(stop);
+  if (err == cudaSuccess) {
+    const uint64_t total_ns = cuda_event_elapsed_ns(start, stop);
+    *avg_ns = total_ns / kLtGemvAutotuneIterations;
+  }
+  if (stop != nullptr) {
+    cudaError_t cleanup_err = cudaEventDestroy(stop);
+    if (err == cudaSuccess) err = cleanup_err;
+  }
+  if (start != nullptr) {
+    cudaError_t cleanup_err = cudaEventDestroy(start);
+    if (err == cudaSuccess) err = cleanup_err;
+  }
+  return err;
+}
+
 cudaError_t autotune_lt_gemv_plan(
-    cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
-    size_t workspace_bytes, LtGemvPlan *plan, const uint16_t *matrix,
-    const uint16_t *input, float *output) {
+    cublasHandle_t cublas, cublasLtHandle_t cublas_lt, cudaStream_t stream,
+    void *workspace, size_t workspace_bytes, LtGemvPlan *plan,
+    const uint16_t *matrix, const uint16_t *input, float *output) {
   if (plan == nullptr || !plan->ready) {
     return cudaErrorInvalidValue;
   }
   uint64_t best_avg_ns = 0;
   cudaError_t err = time_lt_gemv_candidate(
-      handle, stream, workspace, workspace_bytes, plan, matrix, input, output,
-      nullptr, &best_avg_ns);
+      cublas_lt, stream, workspace, workspace_bytes, plan, matrix, input,
+      output, nullptr, &best_avg_ns);
   if (err != cudaSuccess) {
     return err;
   }
+  plan->backend = kGemvBackendLt;
   plan->has_algo = false;
   plan->selected_heuristic = UINT32_MAX;
   plan->tuned_avg_ns = best_avg_ns;
 
+  uint64_t cublas_avg_ns = 0;
+  const cudaError_t cublas_err =
+      time_cublas_gemv_candidate(cublas, stream, plan, matrix, input, output,
+                                 &cublas_avg_ns);
+  if (cublas_err == cudaSuccess && cublas_avg_ns != 0 &&
+      (best_avg_ns == 0 || cublas_avg_ns < best_avg_ns)) {
+    best_avg_ns = cublas_avg_ns;
+    plan->backend = kGemvBackendCublas;
+    plan->has_algo = false;
+    plan->selected_heuristic = UINT32_MAX;
+    plan->tuned_avg_ns = cublas_avg_ns;
+  }
+
   cublasLtMatmulHeuristicResult_t heuristics[kLtGemvMaxHeuristics]{};
   uint32_t heuristic_count = 0;
   const cudaError_t heuristic_err = find_lt_gemv_heuristics(
-      handle, plan, workspace_bytes, heuristics, &heuristic_count);
+      cublas_lt, plan, workspace_bytes, heuristics, &heuristic_count);
   if (heuristic_err != cudaSuccess) {
     return cudaSuccess;
   }
@@ -2478,13 +2571,14 @@ cudaError_t autotune_lt_gemv_plan(
   for (uint32_t index = 0; index < heuristic_count; ++index) {
     uint64_t avg_ns = 0;
     err = time_lt_gemv_candidate(
-        handle, stream, workspace, workspace_bytes, plan, matrix, input,
+        cublas_lt, stream, workspace, workspace_bytes, plan, matrix, input,
         output, &heuristics[index].algo, &avg_ns);
     if (err != cudaSuccess || avg_ns == 0) {
       continue;
     }
     if (best_avg_ns == 0 || avg_ns < best_avg_ns) {
       best_avg_ns = avg_ns;
+      plan->backend = kGemvBackendLt;
       plan->algo = heuristics[index].algo;
       plan->has_algo = true;
       plan->selected_heuristic = index;
@@ -3255,32 +3349,36 @@ cudaError_t autotune_session_lt_gemv_plans(
                               session->hidden, session->dtype);
   if (err == cudaSuccess)
     err = autotune_lt_gemv_plan(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &session->qkv_plan, session->device_qkv_packed,
-        session->device_projection_input, scratch.q);
+        session->cublas, session->cublas_lt, session->stream,
+        session->cublas_workspace, kCublasWorkspaceBytes, &session->qkv_plan,
+        session->device_qkv_packed, session->device_projection_input,
+        scratch.q);
   if (err == cudaSuccess)
     err = autotune_lt_gemv_plan(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &session->attention_output_plan,
+        session->cublas, session->cublas_lt, session->stream,
+        session->cublas_workspace, kCublasWorkspaceBytes,
+        &session->attention_output_plan,
         session->device_arena + layout.w_o, session->device_projection_input,
         scratch.residual);
   if (err == cudaSuccess)
     err = autotune_lt_gemv_plan(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &session->gate_up_plan,
+        session->cublas, session->cublas_lt, session->stream,
+        session->cublas_workspace, kCublasWorkspaceBytes,
+        &session->gate_up_plan,
         session->device_gate_up_packed, session->device_projection_input,
         scratch.gate);
   if (err == cudaSuccess)
     err = autotune_lt_gemv_plan(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &session->down_plan,
+        session->cublas, session->cublas_lt, session->stream,
+        session->cublas_workspace, kCublasWorkspaceBytes, &session->down_plan,
         session->device_arena + layout.w_down, session->device_projection_input,
         scratch.down);
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
     err = autotune_lt_gemv_plan(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &session->lm_head_plan,
+        session->cublas, session->cublas_lt, session->stream,
+        session->cublas_workspace, kCublasWorkspaceBytes,
+        &session->lm_head_plan,
         session->device_arena + session->arena_layout.lm_head,
         session->device_projection_input, device_logits);
   }
@@ -3454,9 +3552,9 @@ cudaError_t launch_cublas_layer_session_step(
        err == cudaSuccess && layer_index < session->layer_count;
        ++layer_index) {
     const SequenceLayerLayout layout = session->host_layouts[layer_index];
-    err = encoded_row_major_gemv_lt_planned(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &session->qkv_plan,
+    err = encoded_row_major_gemv_planned(
+        session->cublas, session->cublas_lt, session->stream,
+        session->cublas_workspace, kCublasWorkspaceBytes, &session->qkv_plan,
         session->device_qkv_packed +
             packed_shape.qkv_elements_per_layer * layer_index,
         session->device_projection_input, 0.0f, scratch.q);
@@ -3557,9 +3655,10 @@ cudaError_t launch_cublas_layer_session_step(
       }
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt_planned(
-          session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, &session->attention_output_plan,
+      err = encoded_row_major_gemv_planned(
+          session->cublas, session->cublas_lt, session->stream,
+          session->cublas_workspace, kCublasWorkspaceBytes,
+          &session->attention_output_plan,
           session->device_arena + layout.w_o, session->device_projection_input,
           0.0f, scratch.residual);
     if (err == cudaSuccess) {
@@ -3571,9 +3670,10 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt_planned(
-          session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, &session->gate_up_plan,
+      err = encoded_row_major_gemv_planned(
+          session->cublas, session->cublas_lt, session->stream,
+          session->cublas_workspace, kCublasWorkspaceBytes,
+          &session->gate_up_plan,
           session->device_gate_up_packed +
               packed_shape.gate_up_elements_per_layer * layer_index,
           session->device_projection_input, 0.0f, scratch.gate);
@@ -3588,9 +3688,9 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt_planned(
-          session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, &session->down_plan,
+      err = encoded_row_major_gemv_planned(
+          session->cublas, session->cublas_lt, session->stream,
+          session->cublas_workspace, kCublasWorkspaceBytes, &session->down_plan,
           session->device_arena + layout.w_down, session->device_projection_input,
           0.0f, scratch.down);
     if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
@@ -3618,9 +3718,10 @@ cudaError_t launch_cublas_layer_session_step(
   }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
-    err = encoded_row_major_gemv_lt_planned(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &session->lm_head_plan,
+    err = encoded_row_major_gemv_planned(
+        session->cublas, session->cublas_lt, session->stream,
+        session->cublas_workspace, kCublasWorkspaceBytes,
+        &session->lm_head_plan,
         session->device_arena + session->arena_layout.lm_head,
         session->device_projection_input, 0.0f, device_logits);
   }
@@ -3689,9 +3790,10 @@ cudaError_t profile_cublas_layer_session_step(
     const SequenceLayerLayout layout = session->host_layouts[layer_index];
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt_planned(
-          session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, &session->qkv_plan,
+      err = encoded_row_major_gemv_planned(
+          session->cublas, session->cublas_lt, session->stream,
+          session->cublas_workspace, kCublasWorkspaceBytes,
+          &session->qkv_plan,
           session->device_qkv_packed +
               packed_shape.qkv_elements_per_layer * layer_index,
           session->device_projection_input, 0.0f, scratch.q);
@@ -3798,9 +3900,10 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt_planned(
-          session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, &session->attention_output_plan,
+      err = encoded_row_major_gemv_planned(
+          session->cublas, session->cublas_lt, session->stream,
+          session->cublas_workspace, kCublasWorkspaceBytes,
+          &session->attention_output_plan,
           session->device_arena + layout.w_o, session->device_projection_input,
           0.0f, scratch.residual);
     if (err == cudaSuccess) {
@@ -3820,9 +3923,10 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt_planned(
-          session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, &session->gate_up_plan,
+      err = encoded_row_major_gemv_planned(
+          session->cublas, session->cublas_lt, session->stream,
+          session->cublas_workspace, kCublasWorkspaceBytes,
+          &session->gate_up_plan,
           session->device_gate_up_packed +
               packed_shape.gate_up_elements_per_layer * layer_index,
           session->device_projection_input, 0.0f, scratch.gate);
@@ -3843,9 +3947,9 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt_planned(
-          session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, &session->down_plan,
+      err = encoded_row_major_gemv_planned(
+          session->cublas, session->cublas_lt, session->stream,
+          session->cublas_workspace, kCublasWorkspaceBytes, &session->down_plan,
           session->device_arena + layout.w_down, session->device_projection_input,
           0.0f, scratch.down);
     if (err == cudaSuccess) err = profile_end(session, &down_projection_ns);
@@ -3879,9 +3983,10 @@ cudaError_t profile_cublas_layer_session_step(
   if (err == cudaSuccess) err = profile_begin(session);
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
-    err = encoded_row_major_gemv_lt_planned(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &session->lm_head_plan,
+    err = encoded_row_major_gemv_planned(
+        session->cublas, session->cublas_lt, session->stream,
+        session->cublas_workspace, kCublasWorkspaceBytes,
+        &session->lm_head_plan,
         session->device_arena + session->arena_layout.lm_head,
         session->device_projection_input, 0.0f, device_logits);
   }
@@ -4084,9 +4189,10 @@ cudaError_t launch_cublas_session_prefill(
   }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
-    err = encoded_row_major_gemv_lt_planned(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &session->lm_head_plan,
+    err = encoded_row_major_gemv_planned(
+        session->cublas, session->cublas_lt, session->stream,
+        session->cublas_workspace, kCublasWorkspaceBytes,
+        &session->lm_head_plan,
         session->device_arena + session->arena_layout.lm_head,
         session->device_projection_input, 0.0f, device_logits);
     out->kernel_launches += 1;
