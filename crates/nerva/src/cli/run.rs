@@ -191,7 +191,7 @@ fn generate_json_output(
                 )
             };
             format!(
-                "{{\"chunk_index\":{},\"draft_tokens\":{},\"tokens\":{},\"acceptance\":{},\"wall_ns\":{},\"device_ns\":{},\"tokens_per_second\":{},\"projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"graph_nodes\":{},\"graph_replays\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"h2d_bytes\":{},\"d2h_bytes\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{}}}",
+                "{{\"chunk_index\":{},\"draft_tokens\":{},\"tokens\":{},\"acceptance\":{},\"wall_ns\":{},\"device_ns\":{},\"tokens_per_second\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"graph_nodes\":{},\"graph_replays\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"h2d_bytes\":{},\"d2h_bytes\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{}}}",
                 index,
                 chunk.steps_requested,
                 chunk.tokens.len(),
@@ -200,6 +200,11 @@ fn generate_json_output(
                 chunk_device_ns,
                 tokens_per_second(chunk.tokens.len(), chunk_wall_ns as u128),
                 chunk.projection_ns,
+                chunk.qkv_projection_ns,
+                chunk.attention_output_projection_ns,
+                chunk.gate_up_projection_ns,
+                chunk.down_projection_ns,
+                chunk.lm_head_projection_ns,
                 chunk.attention_ns,
                 chunk.mlp_ns,
                 chunk.norm_ns,

@@ -39,6 +39,9 @@ constexpr uint32_t kGroupedGqaThreads =
     kGroupedGqaHeads * kGroupedGqaThreadsPerHead;
 constexpr uint32_t kGroupedGqaHeadDimMax =
     kGroupedGqaThreadsPerHead * kHeadThreadElements;
+constexpr uint32_t kLtGemvMaxHeuristics = 8;
+constexpr uint32_t kLtGemvAutotuneWarmups = 1;
+constexpr uint32_t kLtGemvAutotuneIterations = 3;
 constexpr uint32_t kChunkedDecodeAttentionThreshold = 128;
 constexpr uint64_t kMissingOffset = UINT64_MAX;
 constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ull;
@@ -82,6 +85,7 @@ enum CreateFailureStage : int32_t {
   kCreateStagePrefillChunkAlloc = 31,
   kCreateStageDecodeAttentionAlloc = 32,
   kCreateStageVerifyLogitsAlloc = 33,
+  kCreateStageProjectionPlanAutotune = 34,
 };
 
 struct SequenceArenaLayout {
@@ -130,6 +134,23 @@ struct LayerScratch {
   float *up;
   float *ff;
   float *down;
+};
+
+struct LtGemvPlan {
+  uint32_t rows = 0;
+  uint32_t cols = 0;
+  uint32_t dtype = 0;
+  cublasLtMatmulDesc_t op_desc = nullptr;
+  cublasLtMatrixLayout_t a_desc = nullptr;
+  cublasLtMatrixLayout_t b_desc = nullptr;
+  cublasLtMatrixLayout_t c_desc = nullptr;
+  cublasLtMatrixLayout_t d_desc = nullptr;
+  cublasLtMatmulAlgo_t algo{};
+  bool ready = false;
+  bool has_algo = false;
+  uint32_t heuristic_count = 0;
+  uint32_t selected_heuristic = UINT32_MAX;
+  uint64_t tuned_avg_ns = 0;
 };
 
 __host__ __device__ LayerScratch layer_scratch_ptrs(
@@ -224,6 +245,13 @@ __device__ float block_sum(float value) {
     __syncthreads();
   }
   return values[0];
+}
+
+__device__ __forceinline__ float warp_sum(float value) {
+  for (uint32_t offset = 16; offset > 0; offset >>= 1) {
+    value += __shfl_down_sync(0xffffffffu, value, offset);
+  }
+  return value;
 }
 
 __device__ void encoded_slice_to_f32(const uint16_t *input, uint32_t len,
@@ -1048,9 +1076,12 @@ __global__ void hf_layer_attention_chunk_kernel(
   const float scale = rsqrtf(static_cast<float>(head_dim));
   float local_m = -INFINITY;
   float local_l = 0.0f;
+  float q_frag[kHeadThreadElements];
   float acc[kHeadThreadElements];
 #pragma unroll
   for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = threadIdx.x + item * blockDim.x;
+    q_frag[item] = offset < head_dim ? s.q[head_start + offset] : 0.0f;
     acc[item] = 0.0f;
   }
   for (uint32_t token = chunk_start; token < chunk_end; ++token) {
@@ -1062,7 +1093,7 @@ __global__ void hf_layer_attention_chunk_kernel(
     for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
       const uint32_t offset = threadIdx.x + item * blockDim.x;
       if (offset < head_dim) {
-        partial += s.q[head_start + offset] *
+        partial += q_frag[item] *
                    encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
       }
     }
@@ -1106,9 +1137,7 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
   __shared__ uint32_t current_position_shared;
   __shared__ float shared_k[kGroupedGqaHeadDimMax];
   __shared__ float shared_v[kGroupedGqaHeadDimMax];
-  __shared__ float reduce[kGroupedGqaHeads][kGroupedGqaThreadsPerHead];
-  __shared__ float old_scales[kGroupedGqaHeads];
-  __shared__ float new_scales[kGroupedGqaHeads];
+  __shared__ float reduce[kGroupedGqaHeads][2];
   if (threadIdx.x == 0) {
     current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
   }
@@ -1145,6 +1174,8 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
   const uint32_t kv_start = kv_head * head_dim;
   const uint32_t q_in_group = threadIdx.x / kGroupedGqaThreadsPerHead;
   const uint32_t lane = threadIdx.x - q_in_group * kGroupedGqaThreadsPerHead;
+  const uint32_t lane_in_warp = lane & 31u;
+  const uint32_t warp_in_group = lane >> 5u;
   const uint32_t head = kv_head * kGroupedGqaHeads + q_in_group;
   const uint32_t head_start = head * head_dim;
   const uint64_t slot =
@@ -1154,9 +1185,12 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
   const float scale = rsqrtf(static_cast<float>(head_dim));
   float local_m = -INFINITY;
   float local_l = 0.0f;
+  float q_frag[kHeadThreadElements];
   float acc[kHeadThreadElements];
 #pragma unroll
   for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
+    const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
+    q_frag[item] = offset < head_dim ? s.q[head_start + offset] : 0.0f;
     acc[item] = 0.0f;
   }
   for (uint32_t token = chunk_start; token < chunk_end; ++token) {
@@ -1175,34 +1209,36 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
     for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
       const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
       if (offset < head_dim) {
-        partial += s.q[head_start + offset] * shared_k[offset];
+        partial += q_frag[item] * shared_k[offset];
       }
     }
-    reduce[q_in_group][lane] = partial;
+    const float partial_sum = warp_sum(partial);
+    if (lane_in_warp == 0) {
+      reduce[q_in_group][warp_in_group] = partial_sum;
+    }
     __syncthreads();
-    for (uint32_t stride = kGroupedGqaThreadsPerHead / 2; stride > 0;
-         stride >>= 1) {
-      if (lane < stride) {
-        reduce[q_in_group][lane] += reduce[q_in_group][lane + stride];
-      }
-      __syncthreads();
-    }
-    if (lane == 0) {
-      const float score = reduce[q_in_group][0] * scale;
+    float old_scale = 0.0f;
+    float new_scale = 0.0f;
+    float next_m_value = local_m;
+    float next_l_value = local_l;
+    if (lane_in_warp == 0) {
+      const float score =
+          (reduce[q_in_group][0] + reduce[q_in_group][1]) * scale;
       const float next_m = fmaxf(local_m, score);
-      old_scales[q_in_group] =
-          local_l == 0.0f ? 0.0f : expf(local_m - next_m);
-      new_scales[q_in_group] = expf(score - next_m);
-      local_l = local_l * old_scales[q_in_group] + new_scales[q_in_group];
-      local_m = next_m;
+      old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+      new_scale = expf(score - next_m);
+      next_l_value = local_l * old_scale + new_scale;
+      next_m_value = next_m;
     }
-    __syncthreads();
+    old_scale = __shfl_sync(0xffffffffu, old_scale, 0);
+    new_scale = __shfl_sync(0xffffffffu, new_scale, 0);
+    local_l = __shfl_sync(0xffffffffu, next_l_value, 0);
+    local_m = __shfl_sync(0xffffffffu, next_m_value, 0);
 #pragma unroll
     for (uint32_t item = 0; item < kHeadThreadElements; ++item) {
       const uint32_t offset = lane + item * kGroupedGqaThreadsPerHead;
       if (offset < head_dim) {
-        acc[item] = acc[item] * old_scales[q_in_group] +
-                    shared_v[offset] * new_scales[q_in_group];
+        acc[item] = acc[item] * old_scale + shared_v[offset] * new_scale;
       }
     }
     __syncthreads();
@@ -2175,6 +2211,15 @@ void destroy_lt_descriptors(cublasLtMatmulDesc_t op_desc,
   if (op_desc != nullptr) cublasLtMatmulDescDestroy(op_desc);
 }
 
+void destroy_lt_gemv_plan(LtGemvPlan *plan) {
+  if (plan == nullptr) {
+    return;
+  }
+  destroy_lt_descriptors(plan->op_desc, plan->a_desc, plan->b_desc,
+                         plan->c_desc, plan->d_desc);
+  *plan = LtGemvPlan{};
+}
+
 cudaError_t create_lt_gemv_descriptors(
     uint32_t rows, uint32_t cols, uint32_t dtype,
     cublasLtMatmulDesc_t *op_desc, cublasLtMatrixLayout_t *a_desc,
@@ -2226,6 +2271,46 @@ cudaError_t create_lt_gemv_descriptors(
   return cublas_to_cuda(status);
 }
 
+cudaError_t create_lt_gemv_plan(LtGemvPlan *plan, uint32_t rows,
+                                uint32_t cols, uint32_t dtype) {
+  if (plan == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  destroy_lt_gemv_plan(plan);
+  cudaError_t err = create_lt_gemv_descriptors(
+      rows, cols, dtype, &plan->op_desc, &plan->a_desc, &plan->b_desc,
+      &plan->c_desc, &plan->d_desc);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  plan->rows = rows;
+  plan->cols = cols;
+  plan->dtype = dtype;
+  plan->ready = true;
+  return cudaSuccess;
+}
+
+const cublasLtMatmulAlgo_t *lt_gemv_algo(const LtGemvPlan *plan) {
+  return plan != nullptr && plan->has_algo ? &plan->algo : nullptr;
+}
+
+cudaError_t launch_lt_gemv_plan(
+    cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
+    size_t workspace_bytes, const LtGemvPlan *plan, const uint16_t *matrix,
+    const uint16_t *input, float beta, float *output,
+    const cublasLtMatmulAlgo_t *algo) {
+  if (handle == nullptr || plan == nullptr || !plan->ready ||
+      matrix == nullptr || input == nullptr || output == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  const float alpha = 1.0f;
+  const cublasStatus_t status = cublasLtMatmul(
+      handle, plan->op_desc, &alpha, matrix, plan->a_desc, input, plan->b_desc,
+      &beta, output, plan->c_desc, output, plan->d_desc, algo, workspace,
+      workspace_bytes, stream);
+  return cublas_to_cuda(status);
+}
+
 cudaError_t encoded_row_major_gemv_lt(
     cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
     size_t workspace_bytes, const uint16_t *matrix, const uint16_t *input,
@@ -2248,6 +2333,150 @@ cudaError_t encoded_row_major_gemv_lt(
                             nullptr, workspace, workspace_bytes, stream);
   destroy_lt_descriptors(op_desc, a_desc, b_desc, c_desc, d_desc);
   return err == cudaSuccess ? cublas_to_cuda(status) : err;
+}
+
+cudaError_t encoded_row_major_gemv_lt_planned(
+    cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
+    size_t workspace_bytes, const LtGemvPlan *plan, const uint16_t *matrix,
+    const uint16_t *input, float beta, float *output) {
+  if (plan == nullptr || !plan->ready) {
+    return cudaErrorInvalidValue;
+  }
+  return launch_lt_gemv_plan(handle, stream, workspace, workspace_bytes, plan,
+                             matrix, input, beta, output, lt_gemv_algo(plan));
+}
+
+cudaError_t find_lt_gemv_heuristics(
+    cublasLtHandle_t handle, const LtGemvPlan *plan,
+    size_t workspace_bytes, cublasLtMatmulHeuristicResult_t *heuristics,
+    uint32_t *heuristic_count) {
+  if (handle == nullptr || plan == nullptr || !plan->ready ||
+      heuristics == nullptr || heuristic_count == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  *heuristic_count = 0;
+  cublasLtMatmulPreference_t preference = nullptr;
+  cublasStatus_t status = cublasLtMatmulPreferenceCreate(&preference);
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    return cublas_to_cuda(status);
+  }
+  status = cublasLtMatmulPreferenceSetAttribute(
+      preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace_bytes,
+      sizeof(workspace_bytes));
+  int returned_count = 0;
+  if (status == CUBLAS_STATUS_SUCCESS) {
+    status = cublasLtMatmulAlgoGetHeuristic(
+        handle, plan->op_desc, plan->a_desc, plan->b_desc, plan->c_desc,
+        plan->d_desc, preference, kLtGemvMaxHeuristics, heuristics,
+        &returned_count);
+  }
+  cublasLtMatmulPreferenceDestroy(preference);
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    return cublas_to_cuda(status);
+  }
+  *heuristic_count = returned_count > 0
+                         ? static_cast<uint32_t>(returned_count)
+                         : 0;
+  return cudaSuccess;
+}
+
+uint64_t cuda_event_elapsed_ns(cudaEvent_t start, cudaEvent_t stop) {
+  float elapsed_ms = 0.0f;
+  cudaError_t err = cudaEventElapsedTime(&elapsed_ms, start, stop);
+  if (err != cudaSuccess || elapsed_ms <= 0.0f) {
+    return 0;
+  }
+  const uint64_t ns = static_cast<uint64_t>(elapsed_ms * 1000000.0f);
+  return ns == 0 ? 1 : ns;
+}
+
+cudaError_t time_lt_gemv_candidate(
+    cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
+    size_t workspace_bytes, const LtGemvPlan *plan, const uint16_t *matrix,
+    const uint16_t *input, float *output, const cublasLtMatmulAlgo_t *algo,
+    uint64_t *avg_ns) {
+  if (avg_ns == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  *avg_ns = 0;
+  for (uint32_t index = 0; index < kLtGemvAutotuneWarmups; ++index) {
+    cudaError_t err = launch_lt_gemv_plan(
+        handle, stream, workspace, workspace_bytes, plan, matrix, input, 0.0f,
+        output, algo);
+    if (err != cudaSuccess) return err;
+  }
+  cudaError_t err = cudaStreamSynchronize(stream);
+  if (err != cudaSuccess) return err;
+  cudaEvent_t start = nullptr;
+  cudaEvent_t stop = nullptr;
+  err = cudaEventCreate(&start);
+  if (err == cudaSuccess) err = cudaEventCreate(&stop);
+  if (err == cudaSuccess) err = cudaEventRecord(start, stream);
+  for (uint32_t index = 0;
+       err == cudaSuccess && index < kLtGemvAutotuneIterations; ++index) {
+    err = launch_lt_gemv_plan(handle, stream, workspace, workspace_bytes, plan,
+                              matrix, input, 0.0f, output, algo);
+  }
+  if (err == cudaSuccess) err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) err = cudaEventSynchronize(stop);
+  if (err == cudaSuccess) {
+    const uint64_t total_ns = cuda_event_elapsed_ns(start, stop);
+    *avg_ns = total_ns / kLtGemvAutotuneIterations;
+  }
+  if (stop != nullptr) {
+    cudaError_t cleanup_err = cudaEventDestroy(stop);
+    if (err == cudaSuccess) err = cleanup_err;
+  }
+  if (start != nullptr) {
+    cudaError_t cleanup_err = cudaEventDestroy(start);
+    if (err == cudaSuccess) err = cleanup_err;
+  }
+  return err;
+}
+
+cudaError_t autotune_lt_gemv_plan(
+    cublasLtHandle_t handle, cudaStream_t stream, void *workspace,
+    size_t workspace_bytes, LtGemvPlan *plan, const uint16_t *matrix,
+    const uint16_t *input, float *output) {
+  if (plan == nullptr || !plan->ready) {
+    return cudaErrorInvalidValue;
+  }
+  uint64_t best_avg_ns = 0;
+  cudaError_t err = time_lt_gemv_candidate(
+      handle, stream, workspace, workspace_bytes, plan, matrix, input, output,
+      nullptr, &best_avg_ns);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  plan->has_algo = false;
+  plan->selected_heuristic = UINT32_MAX;
+  plan->tuned_avg_ns = best_avg_ns;
+
+  cublasLtMatmulHeuristicResult_t heuristics[kLtGemvMaxHeuristics]{};
+  uint32_t heuristic_count = 0;
+  const cudaError_t heuristic_err = find_lt_gemv_heuristics(
+      handle, plan, workspace_bytes, heuristics, &heuristic_count);
+  if (heuristic_err != cudaSuccess) {
+    return cudaSuccess;
+  }
+  plan->heuristic_count = heuristic_count;
+  for (uint32_t index = 0; index < heuristic_count; ++index) {
+    uint64_t avg_ns = 0;
+    err = time_lt_gemv_candidate(
+        handle, stream, workspace, workspace_bytes, plan, matrix, input,
+        output, &heuristics[index].algo, &avg_ns);
+    if (err != cudaSuccess || avg_ns == 0) {
+      continue;
+    }
+    if (best_avg_ns == 0 || avg_ns < best_avg_ns) {
+      best_avg_ns = avg_ns;
+      plan->algo = heuristics[index].algo;
+      plan->has_algo = true;
+      plan->selected_heuristic = index;
+      plan->tuned_avg_ns = avg_ns;
+    }
+  }
+  return cudaSuccess;
 }
 
 cudaError_t encoded_row_major_gemm_tokens(
@@ -2676,6 +2905,11 @@ struct NervaCudaHfDecodeSequenceSession {
   cudaStream_t stream = nullptr;
   cublasHandle_t cublas = nullptr;
   cublasLtHandle_t cublas_lt = nullptr;
+  LtGemvPlan qkv_plan;
+  LtGemvPlan attention_output_plan;
+  LtGemvPlan gate_up_plan;
+  LtGemvPlan down_plan;
+  LtGemvPlan lm_head_plan;
   cudaEvent_t device_start = nullptr;
   cudaEvent_t device_stop = nullptr;
   cudaGraph_t cached_graph = nullptr;
@@ -2727,6 +2961,11 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   }
   if (session->device_stop != nullptr) cudaEventDestroy(session->device_stop);
   if (session->device_start != nullptr) cudaEventDestroy(session->device_start);
+  destroy_lt_gemv_plan(&session->lm_head_plan);
+  destroy_lt_gemv_plan(&session->down_plan);
+  destroy_lt_gemv_plan(&session->gate_up_plan);
+  destroy_lt_gemv_plan(&session->attention_output_plan);
+  destroy_lt_gemv_plan(&session->qkv_plan);
   if (session->cublas_lt != nullptr) cublasLtDestroy(session->cublas_lt);
   if (session->cublas != nullptr) cublasDestroy(session->cublas);
   if (session->stream != nullptr) cudaStreamDestroy(session->stream);
@@ -2960,7 +3199,77 @@ bool use_cublas_layer_path(const NervaCudaHfDecodeSequenceSession *session) {
          session->device_projection_input != nullptr &&
          session->device_qkv_packed != nullptr &&
          session->device_gate_up_packed != nullptr &&
-         session->cublas != nullptr;
+         session->cublas != nullptr && session->cublas_lt != nullptr;
+}
+
+cudaError_t autotune_session_lt_gemv_plans(
+    NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr || !use_cublas_layer_path(session) ||
+      session->layer_count == 0) {
+    return cudaErrorInvalidValue;
+  }
+  const uint32_t attention_hidden = session->heads * session->head_dim;
+  const uint32_t kv_hidden = session->kv_heads * session->head_dim;
+  const PackedProjectionShape packed_shape = packed_projection_shape(
+      session->hidden, attention_hidden, kv_hidden, session->intermediate);
+  const SequenceLayerLayout layout = session->host_layouts[0];
+  LayerScratch scratch = layer_scratch_ptrs(
+      session->device_scratch, session->hidden, attention_hidden, kv_hidden,
+      session->intermediate);
+  cudaError_t err = cudaMemsetAsync(
+      session->device_projection_input, 0, session->projection_input_bytes,
+      session->stream);
+  if (err == cudaSuccess)
+    err = create_lt_gemv_plan(
+        &session->qkv_plan, static_cast<uint32_t>(packed_shape.qkv_rows),
+        session->hidden, session->dtype);
+  if (err == cudaSuccess)
+    err = create_lt_gemv_plan(&session->attention_output_plan,
+                              session->hidden, attention_hidden,
+                              session->dtype);
+  if (err == cudaSuccess)
+    err = create_lt_gemv_plan(
+        &session->gate_up_plan,
+        static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
+        session->dtype);
+  if (err == cudaSuccess)
+    err = create_lt_gemv_plan(&session->down_plan, session->hidden,
+                              session->intermediate, session->dtype);
+  if (err == cudaSuccess)
+    err = create_lt_gemv_plan(&session->lm_head_plan, session->vocab_size,
+                              session->hidden, session->dtype);
+  if (err == cudaSuccess)
+    err = autotune_lt_gemv_plan(
+        session->cublas_lt, session->stream, session->cublas_workspace,
+        kCublasWorkspaceBytes, &session->qkv_plan, session->device_qkv_packed,
+        session->device_projection_input, scratch.q);
+  if (err == cudaSuccess)
+    err = autotune_lt_gemv_plan(
+        session->cublas_lt, session->stream, session->cublas_workspace,
+        kCublasWorkspaceBytes, &session->attention_output_plan,
+        session->device_arena + layout.w_o, session->device_projection_input,
+        scratch.residual);
+  if (err == cudaSuccess)
+    err = autotune_lt_gemv_plan(
+        session->cublas_lt, session->stream, session->cublas_workspace,
+        kCublasWorkspaceBytes, &session->gate_up_plan,
+        session->device_gate_up_packed, session->device_projection_input,
+        scratch.gate);
+  if (err == cudaSuccess)
+    err = autotune_lt_gemv_plan(
+        session->cublas_lt, session->stream, session->cublas_workspace,
+        kCublasWorkspaceBytes, &session->down_plan,
+        session->device_arena + layout.w_down, session->device_projection_input,
+        scratch.down);
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    err = autotune_lt_gemv_plan(
+        session->cublas_lt, session->stream, session->cublas_workspace,
+        kCublasWorkspaceBytes, &session->lm_head_plan,
+        session->device_arena + session->arena_layout.lm_head,
+        session->device_projection_input, device_logits);
+  }
+  return err;
 }
 
 void copy_cached_profile(const NervaCudaHfDecodeSequenceSession *session,
@@ -3130,14 +3439,12 @@ cudaError_t launch_cublas_layer_session_step(
        err == cudaSuccess && layer_index < session->layer_count;
        ++layer_index) {
     const SequenceLayerLayout layout = session->host_layouts[layer_index];
-    err = encoded_row_major_gemv_lt(
+    err = encoded_row_major_gemv_lt_planned(
         session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes,
+        kCublasWorkspaceBytes, &session->qkv_plan,
         session->device_qkv_packed +
             packed_shape.qkv_elements_per_layer * layer_index,
-        session->device_projection_input,
-        static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
-        session->dtype, 0.0f, scratch.q);
+        session->device_projection_input, 0.0f, scratch.q);
     if (err == cudaSuccess && attention_chunks == 0) {
       hf_layer_qkv_attention_encode_kernel<<<session->heads, session->head_threads, 0,
                                              session->stream>>>(
@@ -3232,11 +3539,11 @@ cudaError_t launch_cublas_layer_session_step(
       }
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt(
+      err = encoded_row_major_gemv_lt_planned(
           session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, session->device_arena + layout.w_o,
-          session->device_projection_input, session->hidden, attention_hidden,
-          session->dtype, 0.0f, scratch.residual);
+          kCublasWorkspaceBytes, &session->attention_output_plan,
+          session->device_arena + layout.w_o, session->device_projection_input,
+          0.0f, scratch.residual);
     if (err == cudaSuccess) {
       hf_layer_mlp_norm_encode_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
           session->device_arena, layout, session->dtype, session->hidden,
@@ -3246,14 +3553,12 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt(
+      err = encoded_row_major_gemv_lt_planned(
           session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes,
+          kCublasWorkspaceBytes, &session->gate_up_plan,
           session->device_gate_up_packed +
               packed_shape.gate_up_elements_per_layer * layer_index,
-          session->device_projection_input,
-          static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
-          session->dtype, 0.0f, scratch.gate);
+          session->device_projection_input, 0.0f, scratch.gate);
     if (err == cudaSuccess) {
       const uint32_t ff_blocks =
           (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
@@ -3265,11 +3570,11 @@ cudaError_t launch_cublas_layer_session_step(
       err = cudaGetLastError();
     }
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt(
+      err = encoded_row_major_gemv_lt_planned(
           session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, session->device_arena + layout.w_down,
-          session->device_projection_input, session->hidden,
-          session->intermediate, session->dtype, 0.0f, scratch.down);
+          kCublasWorkspaceBytes, &session->down_plan,
+          session->device_arena + layout.w_down, session->device_projection_input,
+          0.0f, scratch.down);
     if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
       const SequenceLayerLayout next_layout =
           session->host_layouts[layer_index + 1];
@@ -3295,12 +3600,11 @@ cudaError_t launch_cublas_layer_session_step(
   }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
-    err = encoded_row_major_gemv_lt(
+    err = encoded_row_major_gemv_lt_planned(
         session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes,
+        kCublasWorkspaceBytes, &session->lm_head_plan,
         session->device_arena + session->arena_layout.lm_head,
-        session->device_projection_input, session->vocab_size, session->hidden,
-        session->dtype, 0.0f, device_logits);
+        session->device_projection_input, 0.0f, device_logits);
   }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
@@ -3367,14 +3671,12 @@ cudaError_t profile_cublas_layer_session_step(
     const SequenceLayerLayout layout = session->host_layouts[layer_index];
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt(
+      err = encoded_row_major_gemv_lt_planned(
           session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes,
+          kCublasWorkspaceBytes, &session->qkv_plan,
           session->device_qkv_packed +
               packed_shape.qkv_elements_per_layer * layer_index,
-          session->device_projection_input,
-          static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
-          session->dtype, 0.0f, scratch.q);
+          session->device_projection_input, 0.0f, scratch.q);
     if (err == cudaSuccess) err = profile_end(session, &qkv_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
@@ -3475,11 +3777,11 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt(
+      err = encoded_row_major_gemv_lt_planned(
           session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, session->device_arena + layout.w_o,
-          session->device_projection_input, session->hidden, attention_hidden,
-          session->dtype, 0.0f, scratch.residual);
+          kCublasWorkspaceBytes, &session->attention_output_plan,
+          session->device_arena + layout.w_o, session->device_projection_input,
+          0.0f, scratch.residual);
     if (err == cudaSuccess) {
       err = profile_end(session, &attention_output_projection_ns);
     }
@@ -3497,14 +3799,12 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt(
+      err = encoded_row_major_gemv_lt_planned(
           session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes,
+          kCublasWorkspaceBytes, &session->gate_up_plan,
           session->device_gate_up_packed +
               packed_shape.gate_up_elements_per_layer * layer_index,
-          session->device_projection_input,
-          static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
-          session->dtype, 0.0f, scratch.gate);
+          session->device_projection_input, 0.0f, scratch.gate);
     if (err == cudaSuccess) err = profile_end(session, &gate_up_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
@@ -3522,11 +3822,11 @@ cudaError_t profile_cublas_layer_session_step(
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess)
-      err = encoded_row_major_gemv_lt(
+      err = encoded_row_major_gemv_lt_planned(
           session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, session->device_arena + layout.w_down,
-          session->device_projection_input, session->hidden,
-          session->intermediate, session->dtype, 0.0f, scratch.down);
+          kCublasWorkspaceBytes, &session->down_plan,
+          session->device_arena + layout.w_down, session->device_projection_input,
+          0.0f, scratch.down);
     if (err == cudaSuccess) err = profile_end(session, &down_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
@@ -3558,12 +3858,11 @@ cudaError_t profile_cublas_layer_session_step(
   if (err == cudaSuccess) err = profile_begin(session);
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
-    err = encoded_row_major_gemv_lt(
+    err = encoded_row_major_gemv_lt_planned(
         session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes,
+        kCublasWorkspaceBytes, &session->lm_head_plan,
         session->device_arena + session->arena_layout.lm_head,
-        session->device_projection_input, session->vocab_size, session->hidden,
-        session->dtype, 0.0f, device_logits);
+        session->device_projection_input, 0.0f, device_logits);
   }
   if (err == cudaSuccess) err = profile_end(session, &lm_head_projection_ns);
 
@@ -3764,12 +4063,11 @@ cudaError_t launch_cublas_session_prefill(
   }
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
-    err = encoded_row_major_gemv_lt(
+    err = encoded_row_major_gemv_lt_planned(
         session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes,
+        kCublasWorkspaceBytes, &session->lm_head_plan,
         session->device_arena + session->arena_layout.lm_head,
-        session->device_projection_input, session->vocab_size, session->hidden,
-        session->dtype, 0.0f, device_logits);
+        session->device_projection_input, 0.0f, device_logits);
     out->kernel_launches += 1;
   }
   if (err == cudaSuccess) {
@@ -4921,6 +5219,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   if (err == cudaSuccess) {
     failure_stage = kCreateStagePackReplicas;
     err = pack_session_weight_replicas(session);
+  }
+  if (err == cudaSuccess && use_cublas_layer_path(session)) {
+    failure_stage = kCreateStageProjectionPlanAutotune;
+    err = autotune_session_lt_gemv_plans(session);
   }
   if (err == cudaSuccess) {
     failure_stage = kCreateStageWarmCublas;
