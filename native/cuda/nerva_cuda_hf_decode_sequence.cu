@@ -192,6 +192,10 @@ constexpr uint32_t kProjectionBatchPlanNoSessions = 2;
 constexpr uint32_t kProjectionBatchPlanNoReadySessions = 3;
 constexpr uint32_t kProjectionBatchPlanSharedWeightsUnproven = 4;
 constexpr uint32_t kProjectionBatchPlanInsufficientCompatibleReady = 5;
+constexpr uint32_t kProjectionBatchPlanUnsupportedProjection = 6;
+constexpr uint32_t kProjectionBatchPlanInvalidLayer = 7;
+constexpr uint32_t kProjectionBatchPlanInsufficientScratch = 8;
+constexpr uint32_t kProjectionBatchKindQkv = 1;
 
 __host__ __device__ LayerScratch layer_scratch_ptrs(
     float *scratch, uint32_t hidden, uint32_t attention_hidden,
@@ -2227,6 +2231,26 @@ __global__ void hf_pack_gate_up_weights_kernel(
   uint16_t *dst = packed + global_row * hidden;
   for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
     dst[col] = src[col];
+  }
+}
+
+__global__ void hf_projection_batch_pack_u16_kernel(
+    const uint16_t *src, uint16_t *dst, uint32_t cols, uint32_t token_index) {
+  const uint64_t offset = static_cast<uint64_t>(token_index) * cols;
+  const uint32_t stride = static_cast<uint32_t>(gridDim.x) * blockDim.x;
+  for (uint32_t col = blockIdx.x * blockDim.x + threadIdx.x; col < cols;
+       col += stride) {
+    dst[offset + col] = src[col];
+  }
+}
+
+__global__ void hf_projection_batch_scatter_f32_kernel(
+    const float *src, float *dst, uint32_t rows, uint32_t token_index) {
+  const uint64_t offset = static_cast<uint64_t>(token_index) * rows;
+  const uint32_t stride = static_cast<uint32_t>(gridDim.x) * blockDim.x;
+  for (uint32_t row = blockIdx.x * blockDim.x + threadIdx.x; row < rows;
+       row += stride) {
+    dst[row] = src[offset + row];
   }
 }
 
@@ -7323,6 +7347,261 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_plan(
   out->lm_head_output_bytes = vocab_size * token_f32;
   out->pack_input_bytes = max_input_cols * token_u16;
   out->max_projection_output_bytes = max_output_rows * token_f32;
+  out->hot_path_allocations = 0;
+  out->status = 0;
+  return 0;
+}
+
+extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
+    const NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest *request,
+    NervaCudaHfDecodeSequenceProjectionBatchExecuteResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  out->reason = kProjectionBatchPlanInvalidRequest;
+  if (request == nullptr) {
+    return -1;
+  }
+  out->requested_session_count = request->session_count;
+  out->target_block_tokens =
+      request->target_block_tokens == 0 ? 1u : request->target_block_tokens;
+  out->min_block_tokens =
+      request->min_block_tokens == 0 ? 1u : request->min_block_tokens;
+  out->projection_kind = request->projection_kind;
+  out->layer_index = request->layer_index;
+  if (request->session_count == 0) {
+    out->reason = kProjectionBatchPlanNoSessions;
+    out->status = 0;
+    return 0;
+  }
+  if (request->sessions == nullptr) {
+    return -1;
+  }
+  if (request->projection_kind != kProjectionBatchKindQkv) {
+    out->reason = kProjectionBatchPlanUnsupportedProjection;
+    out->status = 0;
+    return 0;
+  }
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    out->cuda_error = static_cast<int32_t>(err);
+    return -1;
+  }
+
+  auto ready_session = [](const NervaCudaHfDecodeSequenceSession *session) {
+    return session != nullptr && session->active_started &&
+           !session->active_finished && session->active_prompt_token_count != 0 &&
+           session->active_cursor < session->max_context_tokens &&
+           use_cublas_layer_path(session);
+  };
+  auto same_projection_model =
+      [](const NervaCudaHfDecodeSequenceSession *lhs,
+         const NervaCudaHfDecodeSequenceSession *rhs) {
+        return lhs->planned_weight_descriptor_hash != 0 &&
+               rhs->planned_weight_descriptor_hash != 0 &&
+               lhs->planned_weight_descriptor_hash ==
+                   rhs->planned_weight_descriptor_hash &&
+               lhs->dtype == rhs->dtype && lhs->hidden == rhs->hidden &&
+               lhs->heads == rhs->heads && lhs->kv_heads == rhs->kv_heads &&
+               lhs->head_dim == rhs->head_dim &&
+               lhs->intermediate == rhs->intermediate &&
+               lhs->vocab_size == rhs->vocab_size &&
+               lhs->layer_count == rhs->layer_count &&
+               lhs->resident_weight_bytes == rhs->resident_weight_bytes;
+      };
+
+  uint32_t ready_count = 0;
+  bool any_hash = false;
+  for (uint32_t index = 0; index < request->session_count; ++index) {
+    NervaCudaHfDecodeSequenceSession *session = request->sessions[index];
+    if (!ready_session(session)) {
+      continue;
+    }
+    ready_count += 1;
+    any_hash = any_hash || session->planned_weight_descriptor_hash != 0;
+  }
+  if (ready_count == 0) {
+    out->reason = kProjectionBatchPlanNoReadySessions;
+    out->status = 0;
+    return 0;
+  }
+  if (!any_hash) {
+    out->reason = kProjectionBatchPlanSharedWeightsUnproven;
+    out->status = 0;
+    return 0;
+  }
+
+  NervaCudaHfDecodeSequenceSession *best = nullptr;
+  uint32_t best_count = 0;
+  for (uint32_t candidate_index = 0; candidate_index < request->session_count;
+       ++candidate_index) {
+    NervaCudaHfDecodeSequenceSession *candidate =
+        request->sessions[candidate_index];
+    if (!ready_session(candidate) ||
+        candidate->planned_weight_descriptor_hash == 0 ||
+        request->layer_index >= candidate->layer_count) {
+      continue;
+    }
+    uint32_t compatible = 0;
+    for (uint32_t other_index = 0; other_index < request->session_count;
+         ++other_index) {
+      NervaCudaHfDecodeSequenceSession *other = request->sessions[other_index];
+      if (ready_session(other) && same_projection_model(candidate, other)) {
+        compatible += 1;
+      }
+    }
+    if (compatible > best_count) {
+      best = candidate;
+      best_count = compatible;
+    }
+  }
+
+  out->eligible_session_count = best_count;
+  if (best == nullptr || best_count < out->min_block_tokens) {
+    out->reason = kProjectionBatchPlanInsufficientCompatibleReady;
+    out->status = 0;
+    return 0;
+  }
+  if (request->layer_index >= best->layer_count) {
+    out->reason = kProjectionBatchPlanInvalidLayer;
+    out->status = 0;
+    return 0;
+  }
+
+  uint32_t block_tokens = 0;
+  for (uint32_t index = 0; index < request->session_count; ++index) {
+    NervaCudaHfDecodeSequenceSession *session = request->sessions[index];
+    if (ready_session(session) && same_projection_model(best, session)) {
+      block_tokens += 1;
+      if (block_tokens >= out->target_block_tokens) {
+        break;
+      }
+    }
+  }
+  if (block_tokens < out->min_block_tokens) {
+    out->reason = kProjectionBatchPlanInsufficientCompatibleReady;
+    out->status = 0;
+    return 0;
+  }
+
+  const uint32_t attention_hidden = best->heads * best->head_dim;
+  const uint32_t kv_hidden = best->kv_heads * best->head_dim;
+  const PackedProjectionShape packed_shape = packed_projection_shape(
+      best->hidden, attention_hidden, kv_hidden, best->intermediate);
+  const uint32_t rows = static_cast<uint32_t>(packed_shape.qkv_rows);
+  const uint32_t cols = best->hidden;
+  const uint64_t input_bytes =
+      static_cast<uint64_t>(cols) * block_tokens * sizeof(uint16_t);
+  const uint64_t output_bytes =
+      static_cast<uint64_t>(rows) * block_tokens * sizeof(float);
+  if (best->device_prefill_norm == nullptr || best->device_prefill_qkv == nullptr ||
+      best->prefill_norm_bytes < input_bytes ||
+      best->prefill_qkv_bytes < output_bytes) {
+    out->reason = kProjectionBatchPlanInsufficientScratch;
+    out->status = 0;
+    return 0;
+  }
+
+  uint16_t *batch_input = best->device_prefill_norm;
+  float *batch_output = best->device_prefill_qkv;
+  uint32_t selected_index = 0;
+  for (uint32_t index = 0; index < request->session_count &&
+                           selected_index < block_tokens;
+       ++index) {
+    NervaCudaHfDecodeSequenceSession *session = request->sessions[index];
+    if (!ready_session(session) || !same_projection_model(best, session)) {
+      continue;
+    }
+    selected_index += 1;
+    if (session != best) {
+      err = cudaStreamSynchronize(session->stream);
+      out->sync_calls += 1;
+      if (err != cudaSuccess) {
+        out->cuda_error = static_cast<int32_t>(err);
+        return -1;
+      }
+    }
+  }
+
+  err = cudaEventRecord(best->device_start, best->stream);
+  const uint32_t pack_blocks = ceil_div_u32(cols, kDecodeThreads);
+  selected_index = 0;
+  for (uint32_t index = 0; err == cudaSuccess && index < request->session_count &&
+                           selected_index < block_tokens;
+       ++index) {
+    NervaCudaHfDecodeSequenceSession *session = request->sessions[index];
+    if (!ready_session(session) || !same_projection_model(best, session)) {
+      continue;
+    }
+    hf_projection_batch_pack_u16_kernel<<<pack_blocks, kDecodeThreads, 0,
+                                          best->stream>>>(
+        session->device_projection_input, batch_input, cols, selected_index);
+    err = cudaGetLastError();
+    out->pack_kernel_launches += 1;
+    selected_index += 1;
+  }
+
+  const uint16_t *matrix =
+      best->device_qkv_packed +
+      packed_shape.qkv_elements_per_layer * request->layer_index;
+  if (err == cudaSuccess) {
+    err = project_encoded_rows(best, nullptr, matrix, batch_input, rows, cols,
+                               block_tokens, best->dtype, 0.0f, batch_output);
+    out->projection_kernel_launches += 1;
+  }
+
+  const uint32_t scatter_blocks = ceil_div_u32(rows, kDecodeThreads);
+  selected_index = 0;
+  for (uint32_t index = 0; err == cudaSuccess && index < request->session_count &&
+                           selected_index < block_tokens;
+       ++index) {
+    NervaCudaHfDecodeSequenceSession *session = request->sessions[index];
+    if (!ready_session(session) || !same_projection_model(best, session)) {
+      continue;
+    }
+    LayerScratch scratch = layer_scratch_ptrs(
+        session->device_scratch, session->hidden, attention_hidden, kv_hidden,
+        session->intermediate);
+    hf_projection_batch_scatter_f32_kernel<<<scatter_blocks, kDecodeThreads, 0,
+                                             best->stream>>>(
+        batch_output, scratch.q, rows, selected_index);
+    err = cudaGetLastError();
+    out->scatter_kernel_launches += 1;
+    selected_index += 1;
+  }
+  if (err == cudaSuccess) {
+    err = cudaEventRecord(best->device_stop, best->stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaEventSynchronize(best->device_stop);
+    out->sync_calls += 1;
+  }
+  if (err != cudaSuccess) {
+    out->cuda_error = static_cast<int32_t>(err);
+    return -1;
+  }
+
+  float elapsed_ms = 0.0f;
+  err = cudaEventElapsedTime(&elapsed_ms, best->device_start,
+                             best->device_stop);
+  if (err != cudaSuccess) {
+    out->cuda_error = static_cast<int32_t>(err);
+    return -1;
+  }
+  out->reason = kProjectionBatchPlanReady;
+  out->exact = 1;
+  out->block_tokens = block_tokens;
+  out->dtype = best->dtype;
+  out->rows = rows;
+  out->cols = cols;
+  out->input_bytes = input_bytes;
+  out->output_bytes = output_bytes;
+  out->elapsed_ns = elapsed_ms <= 0.0f
+                        ? 1
+                        : static_cast<uint64_t>(elapsed_ms * 1000000.0f);
   out->hot_path_allocations = 0;
   out->status = 0;
   return 0;

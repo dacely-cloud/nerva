@@ -291,3 +291,36 @@ next executor patch should allocate or reuse the reported staging buffers,
 pack columns from compatible sessions, run the existing `project_encoded_rows`
 path with `tokens = block_tokens`, and scatter output columns back to each
 session's private scratch state.
+
+The first narrow execution hook now exists for the QKV projection:
+
+```text
+nerva_cuda_hf_decode_sequence_projection_batch_execute(...)
+projection_kind = QKV
+```
+
+Current behavior:
+
+```text
+1. select active compatible sessions with the same descriptor hash and shape
+2. pack each session's encoded projection input into a row-major token block
+3. run one `project_encoded_rows(..., tokens = block_tokens)` QKV GEMM
+4. scatter each output row block back to that session's private Q/K/V scratch
+```
+
+The implementation uses existing per-session scratch as staging and reports
+zero hot-path allocations. The focused CUDA test creates two descriptor-backed
+sessions, starts both, verifies the native plan is exact, executes a block-2
+QKV projection, and checks:
+
+```text
+pack launches        2
+projection launches  1
+scatter launches     2
+hot allocations      0
+```
+
+This still is not full batched decode. The next steps are to apply the same
+pack/GEMM/scatter pattern to W_o, gate/up, down, and LM head, then move the
+call sites inside the decode scheduler instead of exposing them only as a
+probe-level session primitive.

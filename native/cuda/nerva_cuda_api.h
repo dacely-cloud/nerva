@@ -557,6 +557,41 @@ typedef struct NervaCudaHfDecodeSequenceProjectionBatchPlanResult {
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeSequenceProjectionBatchPlanResult;
 
+typedef struct NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest {
+  NervaCudaHfDecodeSequenceSession **sessions;
+  uint32_t session_count;
+  uint32_t target_block_tokens;
+  uint32_t min_block_tokens;
+  uint32_t projection_kind;
+  uint32_t layer_index;
+} NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest;
+
+typedef struct NervaCudaHfDecodeSequenceProjectionBatchExecuteResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t reason;
+  uint32_t exact;
+  uint32_t projection_kind;
+  uint32_t layer_index;
+  uint32_t requested_session_count;
+  uint32_t eligible_session_count;
+  uint32_t block_tokens;
+  uint32_t target_block_tokens;
+  uint32_t min_block_tokens;
+  uint32_t dtype;
+  uint32_t rows;
+  uint32_t cols;
+  uint64_t input_bytes;
+  uint64_t output_bytes;
+  uint64_t elapsed_ns;
+  uint64_t pack_kernel_launches;
+  uint64_t projection_kernel_launches;
+  uint64_t scatter_kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaHfDecodeSequenceProjectionBatchExecuteResult;
+
 typedef struct NervaCudaTinyDecodeResult {
   int32_t status;
   int32_t cuda_error;
@@ -760,6 +795,9 @@ int nerva_cuda_hf_decode_sequence_session_advance(
 int nerva_cuda_hf_decode_sequence_projection_batch_plan(
     const NervaCudaHfDecodeSequenceProjectionBatchPlanRequest *request,
     NervaCudaHfDecodeSequenceProjectionBatchPlanResult *out);
+int nerva_cuda_hf_decode_sequence_projection_batch_execute(
+    const NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest *request,
+    NervaCudaHfDecodeSequenceProjectionBatchExecuteResult *out);
 int nerva_cuda_hf_decode_sequence_session_destroy(
     NervaCudaHfDecodeSequenceSession *session,
     NervaCudaHfDecodeSequenceSessionCreateResult *out);

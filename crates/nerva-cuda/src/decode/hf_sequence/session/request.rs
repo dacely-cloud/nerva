@@ -6,14 +6,18 @@ use crate::decode::hf_sequence::request::CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16;
 use crate::decode::hf_sequence::session::failures::{failed_create_summary, failed_run_summary};
 use crate::decode::hf_sequence::session::ffi::{
     create_hf_decode_sequence_session, destroy_hf_decode_sequence_session,
-    plan_hf_decode_sequence_projection_batch, run_hf_decode_sequence_session,
+    execute_hf_decode_sequence_projection_batch, plan_hf_decode_sequence_projection_batch,
+    run_hf_decode_sequence_session, NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest,
+    NervaCudaHfDecodeSequenceProjectionBatchExecuteResult,
     NervaCudaHfDecodeSequenceProjectionBatchPlanRequest,
     NervaCudaHfDecodeSequenceProjectionBatchPlanResult, NervaCudaHfDecodeSequenceSession,
     NervaCudaHfDecodeSequenceSessionCreateRequest, NervaCudaHfDecodeSequenceSessionCreateResult,
-    NervaCudaHfDecodeSequenceSessionRunRequest,
-    PROJECTION_BATCH_PLAN_INSUFFICIENT_COMPATIBLE_READY, PROJECTION_BATCH_PLAN_INVALID_REQUEST,
-    PROJECTION_BATCH_PLAN_NO_READY_SESSIONS, PROJECTION_BATCH_PLAN_NO_SESSIONS,
-    PROJECTION_BATCH_PLAN_READY, PROJECTION_BATCH_PLAN_SHARED_WEIGHTS_UNPROVEN,
+    NervaCudaHfDecodeSequenceSessionRunRequest, PROJECTION_BATCH_KIND_QKV,
+    PROJECTION_BATCH_PLAN_INSUFFICIENT_COMPATIBLE_READY,
+    PROJECTION_BATCH_PLAN_INSUFFICIENT_SCRATCH, PROJECTION_BATCH_PLAN_INVALID_LAYER,
+    PROJECTION_BATCH_PLAN_INVALID_REQUEST, PROJECTION_BATCH_PLAN_NO_READY_SESSIONS,
+    PROJECTION_BATCH_PLAN_NO_SESSIONS, PROJECTION_BATCH_PLAN_READY,
+    PROJECTION_BATCH_PLAN_SHARED_WEIGHTS_UNPROVEN, PROJECTION_BATCH_PLAN_UNSUPPORTED_PROJECTION,
 };
 use crate::decode::hf_sequence::session::helpers::{
     descriptor_ptr, planned_ptr, summary_from_run, validate_run,
@@ -93,6 +97,32 @@ pub struct CudaHfDecodeSequenceProjectionBatchPlanSummary {
     pub lm_head_output_bytes: u64,
     pub pack_input_bytes: u64,
     pub max_projection_output_bytes: u64,
+    pub hot_path_allocations: u64,
+    pub cuda_error: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CudaHfDecodeSequenceProjectionBatchExecuteSummary {
+    pub status: SmokeStatus,
+    pub reason: &'static str,
+    pub exact: bool,
+    pub projection_kind: u32,
+    pub layer_index: u32,
+    pub requested_session_count: u32,
+    pub eligible_session_count: u32,
+    pub block_tokens: u32,
+    pub target_block_tokens: u32,
+    pub min_block_tokens: u32,
+    pub dtype: u32,
+    pub rows: u32,
+    pub cols: u32,
+    pub input_bytes: u64,
+    pub output_bytes: u64,
+    pub elapsed_ns: u64,
+    pub pack_kernel_launches: u64,
+    pub projection_kernel_launches: u64,
+    pub scatter_kernel_launches: u64,
+    pub sync_calls: u64,
     pub hot_path_allocations: u64,
     pub cuda_error: i32,
 }
@@ -229,6 +259,29 @@ impl CudaHfDecodeSequenceSession {
         let return_code = plan_hf_decode_sequence_projection_batch(&request, &mut out);
         projection_batch_plan_summary(return_code, &out)
     }
+
+    pub fn execute_qkv_projection_batch(
+        sessions: &mut [&mut CudaHfDecodeSequenceSession],
+        target_block_tokens: u32,
+        min_block_tokens: u32,
+        layer_index: u32,
+    ) -> CudaHfDecodeSequenceProjectionBatchExecuteSummary {
+        let mut handles = sessions
+            .iter_mut()
+            .map(|session| session.raw_handle())
+            .collect::<Vec<_>>();
+        let request = NervaCudaHfDecodeSequenceProjectionBatchExecuteRequest {
+            sessions: handles.as_mut_ptr(),
+            session_count: handles.len() as u32,
+            target_block_tokens,
+            min_block_tokens,
+            projection_kind: PROJECTION_BATCH_KIND_QKV,
+            layer_index,
+        };
+        let mut out = NervaCudaHfDecodeSequenceProjectionBatchExecuteResult::default();
+        let return_code = execute_hf_decode_sequence_projection_batch(&request, &mut out);
+        projection_batch_execute_summary(return_code, &out)
+    }
 }
 
 impl Drop for CudaHfDecodeSequenceSession {
@@ -305,6 +358,41 @@ fn projection_batch_plan_summary(
     }
 }
 
+fn projection_batch_execute_summary(
+    return_code: i32,
+    out: &NervaCudaHfDecodeSequenceProjectionBatchExecuteResult,
+) -> CudaHfDecodeSequenceProjectionBatchExecuteSummary {
+    let status = if return_code == 0 && out.status == 0 {
+        SmokeStatus::Ok
+    } else {
+        SmokeStatus::Failed
+    };
+    CudaHfDecodeSequenceProjectionBatchExecuteSummary {
+        status,
+        reason: projection_batch_reason_name(out.reason),
+        exact: out.exact != 0,
+        projection_kind: out.projection_kind,
+        layer_index: out.layer_index,
+        requested_session_count: out.requested_session_count,
+        eligible_session_count: out.eligible_session_count,
+        block_tokens: out.block_tokens,
+        target_block_tokens: out.target_block_tokens,
+        min_block_tokens: out.min_block_tokens,
+        dtype: out.dtype,
+        rows: out.rows,
+        cols: out.cols,
+        input_bytes: out.input_bytes,
+        output_bytes: out.output_bytes,
+        elapsed_ns: out.elapsed_ns,
+        pack_kernel_launches: out.pack_kernel_launches,
+        projection_kernel_launches: out.projection_kernel_launches,
+        scatter_kernel_launches: out.scatter_kernel_launches,
+        sync_calls: out.sync_calls,
+        hot_path_allocations: out.hot_path_allocations,
+        cuda_error: out.cuda_error,
+    }
+}
+
 fn projection_batch_reason_name(reason: u32) -> &'static str {
     match reason {
         PROJECTION_BATCH_PLAN_READY => "ready",
@@ -313,6 +401,9 @@ fn projection_batch_reason_name(reason: u32) -> &'static str {
         PROJECTION_BATCH_PLAN_NO_READY_SESSIONS => "no_ready_sessions",
         PROJECTION_BATCH_PLAN_SHARED_WEIGHTS_UNPROVEN => "shared_weights_unproven",
         PROJECTION_BATCH_PLAN_INSUFFICIENT_COMPATIBLE_READY => "insufficient_compatible_ready",
+        PROJECTION_BATCH_PLAN_UNSUPPORTED_PROJECTION => "unsupported_projection",
+        PROJECTION_BATCH_PLAN_INVALID_LAYER => "invalid_layer",
+        PROJECTION_BATCH_PLAN_INSUFFICIENT_SCRATCH => "insufficient_scratch",
         _ => "unknown",
     }
 }
