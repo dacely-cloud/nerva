@@ -1,5 +1,5 @@
 use crate::sampler::ffi::{
-    CUDA_ERROR_NO_DEVICE, NervaCudaGreedySamplerResult, run_greedy_sampler_smoke,
+    run_greedy_sampler_smoke, NervaCudaGreedySamplerResult, CUDA_ERROR_NO_DEVICE,
 };
 use crate::sampler::summary::CudaGreedySamplerSummary;
 use crate::smoke::status::SmokeStatus;

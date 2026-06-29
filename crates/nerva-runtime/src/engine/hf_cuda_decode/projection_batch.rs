@@ -1,5 +1,7 @@
 use nerva_core::types::dtype::DType;
 
+pub const NATIVE_PROJECTION_BATCH_MAX_TOKENS: usize = 32;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProjectionBatchConfig {
     pub target_block_tokens: usize,
@@ -12,6 +14,18 @@ impl ProjectionBatchConfig {
             target_block_tokens: target_block_tokens.max(1),
             min_block_tokens: min_block_tokens.max(1),
         }
+    }
+
+    pub fn effective_target_block_tokens(self) -> usize {
+        self.target_block_tokens
+            .max(1)
+            .min(NATIVE_PROJECTION_BATCH_MAX_TOKENS)
+    }
+
+    pub fn effective_min_block_tokens(self) -> usize {
+        self.min_block_tokens
+            .max(1)
+            .min(self.effective_target_block_tokens())
     }
 }
 
@@ -155,7 +169,7 @@ pub fn plan_exact_projection_batch(
         }
     }
 
-    if best_len < config.min_block_tokens {
+    if best_len < config.effective_min_block_tokens() {
         return ProjectionBatchPlan::empty(ProjectionBatchPlanReason::InsufficientCompatibleReady);
     }
 
@@ -163,7 +177,7 @@ pub fn plan_exact_projection_batch(
     let selected_request_ids = ready
         .iter()
         .filter(|candidate| model.proves_same_weights_as(&candidate.model))
-        .take(config.target_block_tokens)
+        .take(config.effective_target_block_tokens())
         .map(|candidate| candidate.request_id)
         .collect::<Vec<_>>();
 
@@ -233,6 +247,21 @@ mod tests {
         assert_eq!(plan.reason, ProjectionBatchPlanReason::Ready);
         assert_eq!(plan.block_tokens, 4);
         assert_eq!(plan.selected_request_ids, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn exact_projection_batch_caps_to_native_width() {
+        let candidates = (0..64)
+            .map(|index| candidate(index, model(9)))
+            .collect::<Vec<_>>();
+        let plan = plan_exact_projection_batch(&candidates, ProjectionBatchConfig::new(64, 64));
+
+        assert_eq!(plan.reason, ProjectionBatchPlanReason::Ready);
+        assert_eq!(plan.block_tokens, NATIVE_PROJECTION_BATCH_MAX_TOKENS);
+        assert_eq!(
+            plan.selected_request_ids,
+            (0..NATIVE_PROJECTION_BATCH_MAX_TOKENS as u64).collect::<Vec<_>>()
+        );
     }
 
     #[test]

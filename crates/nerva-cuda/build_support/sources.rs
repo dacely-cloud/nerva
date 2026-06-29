@@ -23,6 +23,7 @@ impl NativeCudaSources {
             "nerva_cuda_tiny_decode.cu",
             "nerva_cuda_tiered_attention.cu",
             "nerva_cuda_projection_bench.cu",
+            "nerva_cuda_experimental_rt.cu",
         ]
         .into_iter()
         .map(|source| native_dir.join(source))
@@ -53,6 +54,7 @@ pub(crate) fn print_env_rerun_directives() {
         "CMAKE_CUDA_ARCHITECTURES",
         "NERVA_CUDA_ARCH",
         "CUDA_ARCH",
+        "NERVA_OPTIX_SDK_ROOT",
     ] {
         println!("cargo:rerun-if-env-changed={var}");
     }

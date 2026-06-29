@@ -2748,6 +2748,27 @@ cudaError_t encoded_row_major_gemv(cublasHandle_t handle, const uint16_t *matrix
                                      0.0f, output);
 }
 
+cudaError_t encoded_row_major_gemv_strided_batched(
+    cublasHandle_t handle, const uint16_t *matrix, const uint16_t *input,
+    uint32_t rows, uint32_t cols, uint32_t tokens, uint32_t dtype, float beta,
+    float *output) {
+  if (rows == 0 || cols == 0 || tokens == 0 || rows > INT32_MAX ||
+      cols > INT32_MAX || tokens > INT32_MAX) {
+    return cudaErrorInvalidValue;
+  }
+  const float alpha = 1.0f;
+  const cudaDataType_t data_type = encoded_cuda_type(dtype);
+  const cublasStatus_t status = cublasGemmStridedBatchedEx(
+      handle, CUBLAS_OP_T, CUBLAS_OP_N, static_cast<int>(rows), 1,
+      static_cast<int>(cols), &alpha, matrix, data_type,
+      static_cast<int>(cols), 0, input, data_type, static_cast<int>(cols),
+      static_cast<long long>(cols), &beta, output, CUDA_R_32F,
+      static_cast<int>(rows), static_cast<long long>(rows),
+      static_cast<int>(tokens), CUBLAS_COMPUTE_32F,
+      CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+  return cublas_to_cuda(status);
+}
+
 void destroy_lt_descriptors(cublasLtMatmulDesc_t op_desc,
                             cublasLtMatrixLayout_t a_desc,
                             cublasLtMatrixLayout_t b_desc,
@@ -4310,6 +4331,16 @@ bool use_cublas_layer_path(const NervaCudaHfDecodeSequenceSession *session) {
          session->cublas != nullptr && session->cublas_lt != nullptr;
 }
 
+bool projection_batch_session_ready(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  const uint32_t attention_hidden = session->heads * session->head_dim;
+  return session->hidden >= 128 && attention_hidden == session->hidden &&
+         session->host_layouts.size() == session->layer_count &&
+         session->device_projection_input != nullptr &&
+         session->device_qkv_packed != nullptr &&
+         session->device_gate_up_packed != nullptr;
+}
+
 cudaError_t autotune_session_lt_gemv_plans(
     NervaCudaHfDecodeSequenceSession *session) {
   if (session == nullptr || !use_cublas_layer_path(session) ||
@@ -4380,6 +4411,39 @@ cudaError_t autotune_session_lt_gemv_plans(
         &session->lm_head_plan,
         session->device_arena + session->arena_layout.lm_head,
         session->device_projection_input, device_logits);
+  }
+  return err;
+}
+
+cudaError_t ensure_session_cublas_resources(
+    NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr || !projection_batch_session_ready(session)) {
+    return cudaErrorInvalidValue;
+  }
+  cudaError_t err = cudaSuccess;
+  if (session->cublas_workspace == nullptr) {
+    err = cudaMalloc(&session->cublas_workspace, kCublasWorkspaceBytes);
+  }
+  if (err == cudaSuccess && session->cublas == nullptr) {
+    err = cublas_to_cuda(cublasCreate(&session->cublas));
+  }
+  if (err == cudaSuccess && session->cublas_lt == nullptr) {
+    err = cublas_to_cuda(cublasLtCreate(&session->cublas_lt));
+  }
+  if (err == cudaSuccess) {
+    err = configure_cublas(session->cublas, session->stream,
+                           session->cublas_workspace,
+                           kCublasWorkspaceBytes);
+  }
+  if (err == cudaSuccess && !use_cublas_layer_path(session)) {
+    err = cudaErrorInvalidValue;
+  }
+  if (err == cudaSuccess && (!session->qkv_plan.ready ||
+                             !session->attention_output_plan.ready ||
+                             !session->gate_up_plan.ready ||
+                             !session->down_plan.ready ||
+                             !session->lm_head_plan.ready)) {
+    err = autotune_session_lt_gemv_plans(session);
   }
   return err;
 }
@@ -5551,33 +5615,6 @@ cudaError_t encoded_row_major_gemm_tokens_cached(
   if (session == nullptr) {
     return cudaErrorInvalidValue;
   }
-  for (LtGemmTokensPlan &plan : session->projection_block_plans) {
-    if (plan.ready && plan.rows == rows && plan.cols == cols &&
-        plan.tokens == tokens && plan.dtype == dtype) {
-      cudaError_t err = launch_lt_gemm_tokens_plan(
-          session->cublas_lt, session->stream, session->cublas_workspace,
-          kCublasWorkspaceBytes, &plan, matrix, input, beta, output);
-      if (err == cudaSuccess) {
-        return err;
-      }
-      return encoded_row_major_gemm_tokens(session->cublas, matrix, input, rows,
-                                           cols, tokens, dtype, beta, output);
-    }
-  }
-
-  session->projection_block_plans.emplace_back();
-  LtGemmTokensPlan &plan = session->projection_block_plans.back();
-  cudaError_t err = create_lt_gemm_tokens_plan(&plan, rows, cols, tokens, dtype);
-  if (err == cudaSuccess) {
-    err = launch_lt_gemm_tokens_plan(
-        session->cublas_lt, session->stream, session->cublas_workspace,
-        kCublasWorkspaceBytes, &plan, matrix, input, beta, output);
-  }
-  if (err == cudaSuccess) {
-    return err;
-  }
-  destroy_lt_gemm_tokens_plan(&plan);
-  session->projection_block_plans.pop_back();
   return encoded_row_major_gemm_tokens(session->cublas, matrix, input, rows,
                                        cols, tokens, dtype, beta, output);
 }
@@ -7332,13 +7369,19 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
   fill_session_result_header(session, out, request->steps, seed_token);
 
   cudaError_t err = cudaSuccess;
+  if (run_count != 0 && projection_batch_session_ready(session) &&
+      !use_cublas_layer_path(session)) {
+    err = ensure_session_cublas_resources(session);
+  }
   if (run_count != 0) {
     const uint32_t attention_chunks =
         decode_attention_chunks_for_cursor(session, target_cursor);
-    err = ensure_session_graph(session, session->max_context_tokens, prompt_count,
-                               session->active_has_eos_token,
-                               session->active_eos_token, attention_chunks,
-                               session->active_cursor, out);
+    if (err == cudaSuccess) {
+      err = ensure_session_graph(session, session->max_context_tokens, prompt_count,
+                                 session->active_has_eos_token,
+                                 session->active_eos_token, attention_chunks,
+                                 session->active_cursor, out);
+    }
   }
   if (err == cudaSuccess && run_count != 0)
     err = cudaEventRecord(session->device_start, session->stream);
@@ -7519,7 +7562,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_plan(
   }
 
   const uint32_t block_tokens =
-      std::min(best_count, out->target_block_tokens);
+      std::min(std::min(best_count, out->target_block_tokens),
+               kProjectionBatchWorkspaceTokens);
   const uint64_t attention_hidden =
       static_cast<uint64_t>(best->heads) * best->head_dim;
   const uint64_t kv_hidden =
@@ -7628,7 +7672,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     return session != nullptr && session->active_started &&
            !session->active_finished && session->active_prompt_token_count != 0 &&
            session->active_cursor < session->max_context_tokens &&
-           use_cublas_layer_path(session);
+           projection_batch_session_ready(session);
   };
   auto same_projection_model =
       [](const NervaCudaHfDecodeSequenceSession *lhs,
@@ -7703,13 +7747,20 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     out->status = 0;
     return 0;
   }
+  err = ensure_session_cublas_resources(best);
+  if (err != cudaSuccess) {
+    out->cuda_error = static_cast<int32_t>(err);
+    return -1;
+  }
 
+  const uint32_t max_block_tokens =
+      std::min(out->target_block_tokens, kProjectionBatchWorkspaceTokens);
   uint32_t block_tokens = 0;
   for (uint32_t index = 0; index < request->session_count; ++index) {
     NervaCudaHfDecodeSequenceSession *session = request->sessions[index];
     if (ready_session(session) && same_projection_model(best, session)) {
       block_tokens += 1;
-      if (block_tokens >= out->target_block_tokens) {
+      if (block_tokens >= max_block_tokens) {
         break;
       }
     }
@@ -7897,8 +7948,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
   }
 
   if (err == cudaSuccess) {
-    err = project_encoded_rows(best, nullptr, matrix, batch_input, rows, cols,
-                               block_tokens, best->dtype, 0.0f, batch_output);
+    const bool exact_projection =
+        block_tokens > 16 && request->projection_kind == kProjectionBatchKindQkv;
+    if (exact_projection) {
+      err = encoded_row_major_gemv_strided_batched(
+          best->cublas, matrix, batch_input, rows, cols, block_tokens,
+          best->dtype, 0.0f, batch_output);
+    } else {
+      err = project_encoded_rows(best, nullptr, matrix, batch_input, rows, cols,
+                                 block_tokens, best->dtype, 0.0f, batch_output);
+    }
     out->projection_kernel_launches += 1;
   }
 
@@ -8019,7 +8078,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
     return session != nullptr && session->active_started &&
            !session->active_finished && session->active_prompt_token_count != 0 &&
            session->active_cursor < session->max_context_tokens &&
-           use_cublas_layer_path(session);
+           projection_batch_session_ready(session);
   };
   auto same_projection_model =
       [](const NervaCudaHfDecodeSequenceSession *lhs,
@@ -8093,11 +8152,18 @@ extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
     out->status = 0;
     return 0;
   }
+  err = ensure_session_cublas_resources(best);
+  if (err != cudaSuccess) {
+    out->cuda_error = static_cast<int32_t>(err);
+    return -1;
+  }
 
+  const uint32_t max_block_tokens =
+      std::min(out->target_block_tokens, kProjectionBatchWorkspaceTokens);
   std::vector<NervaCudaHfDecodeSequenceSession *> selected;
-  selected.reserve(out->target_block_tokens);
+  selected.reserve(max_block_tokens);
   for (uint32_t index = 0; index < request->session_count &&
-                           selected.size() < out->target_block_tokens;
+                           selected.size() < max_block_tokens;
        ++index) {
     NervaCudaHfDecodeSequenceSession *session = request->sessions[index];
     if (ready_session(session) && same_projection_model(best, session)) {
@@ -8516,7 +8582,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_batch_advance_one(
     if (session == nullptr || !session->active_started ||
         session->active_finished || session->active_prompt_token_count == 0 ||
         session->active_cursor >= session->max_context_tokens ||
-        !use_cublas_layer_path(session)) {
+        !projection_batch_session_ready(session)) {
       return false;
     }
     const uint32_t prompt_count = session->active_prompt_token_count;
@@ -8591,11 +8657,18 @@ extern "C" int nerva_cuda_hf_decode_sequence_batch_advance_one(
     out->status = 0;
     return 0;
   }
+  err = ensure_session_cublas_resources(best);
+  if (err != cudaSuccess) {
+    out->cuda_error = static_cast<int32_t>(err);
+    return -1;
+  }
 
+  const uint32_t max_block_tokens =
+      std::min(out->target_block_tokens, kProjectionBatchWorkspaceTokens);
   std::vector<uint32_t> selected_indices;
-  selected_indices.reserve(out->target_block_tokens);
+  selected_indices.reserve(max_block_tokens);
   for (uint32_t index = 0; index < request->session_count &&
-                           selected_indices.size() < out->target_block_tokens;
+                           selected_indices.size() < max_block_tokens;
        ++index) {
     NervaCudaHfDecodeSequenceSession *session = request->sessions[index];
     if (ready_session(session) && same_projection_model(best, session)) {
@@ -8800,6 +8873,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
     out->failure_stage = kCreateStageInvalidRequest;
     return -1;
   }
+  const bool clone_active_state =
+      parent->active_started && !parent->active_finished &&
+      parent->active_prompt_token_count != 0;
 
   cudaError_t err = cudaGetDeviceCount(&out->device_count);
   if (err != cudaSuccess) {
@@ -8846,15 +8922,24 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
   session->projection_input_bytes = parent->projection_input_bytes;
   session->projection_batch_input_bytes = parent->projection_batch_input_bytes;
   session->projection_batch_output_bytes = parent->projection_batch_output_bytes;
-  session->prefill_hidden_bytes = parent->prefill_hidden_bytes;
-  session->prefill_norm_bytes = parent->prefill_norm_bytes;
-  session->prefill_qkv_bytes = parent->prefill_qkv_bytes;
-  session->prefill_qkv_encoded_bytes = parent->prefill_qkv_encoded_bytes;
-  session->prefill_attn_bytes = parent->prefill_attn_bytes;
-  session->prefill_o_bytes = parent->prefill_o_bytes;
-  session->prefill_gate_up_bytes = parent->prefill_gate_up_bytes;
-  session->prefill_ff_bytes = parent->prefill_ff_bytes;
-  session->prefill_down_bytes = parent->prefill_down_bytes;
+  session->prefill_hidden_bytes =
+      clone_active_state ? 0 : parent->prefill_hidden_bytes;
+  session->prefill_norm_bytes =
+      clone_active_state ? 0 : parent->prefill_norm_bytes;
+  session->prefill_qkv_bytes =
+      clone_active_state ? 0 : parent->prefill_qkv_bytes;
+  session->prefill_qkv_encoded_bytes =
+      clone_active_state ? 0 : parent->prefill_qkv_encoded_bytes;
+  session->prefill_attn_bytes =
+      clone_active_state ? 0 : parent->prefill_attn_bytes;
+  session->prefill_o_bytes =
+      clone_active_state ? 0 : parent->prefill_o_bytes;
+  session->prefill_gate_up_bytes =
+      clone_active_state ? 0 : parent->prefill_gate_up_bytes;
+  session->prefill_ff_bytes =
+      clone_active_state ? 0 : parent->prefill_ff_bytes;
+  session->prefill_down_bytes =
+      clone_active_state ? 0 : parent->prefill_down_bytes;
   session->decode_attention_values_bytes =
       parent->decode_attention_values_bytes;
   session->decode_attention_stats_bytes = parent->decode_attention_stats_bytes;
@@ -8910,46 +8995,46 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
         reinterpret_cast<void **>(&session->device_projection_batch_output),
         session->projection_batch_output_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_hidden_bytes != 0) {
     failure_stage = kCreateStagePrefillHiddenAlloc;
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_hidden_a),
                      session->prefill_hidden_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_hidden_bytes != 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_hidden_b),
                      session->prefill_hidden_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_norm_bytes != 0) {
     failure_stage = kCreateStagePrefillChunkAlloc;
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_norm),
                      session->prefill_norm_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_qkv_bytes != 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_qkv),
                      session->prefill_qkv_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_qkv_encoded_bytes != 0) {
     err = cudaMalloc(
         reinterpret_cast<void **>(&session->device_prefill_qkv_encoded),
         session->prefill_qkv_encoded_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_attn_bytes != 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_attn),
                      session->prefill_attn_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_o_bytes != 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_o),
                      session->prefill_o_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_gate_up_bytes != 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_gate_up),
                      session->prefill_gate_up_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_ff_bytes != 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_ff),
                      session->prefill_ff_bytes);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && session->prefill_down_bytes != 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_down),
                      session->prefill_down_bytes);
   }
@@ -9011,7 +9096,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_step),
                      sizeof(uint32_t));
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && !clone_active_state) {
     failure_stage = kCreateStageCublasWorkspaceAlloc;
     err = cudaMalloc(&session->cublas_workspace, kCublasWorkspaceBytes);
   }
@@ -9019,28 +9104,28 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
     failure_stage = kCreateStageStreamCreate;
     err = cudaStreamCreateWithFlags(&session->stream, cudaStreamNonBlocking);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && !clone_active_state) {
     failure_stage = kCreateStageCublasCreate;
     err = cublas_to_cuda(cublasCreate(&session->cublas));
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && !clone_active_state) {
     failure_stage = kCreateStageCublasLtCreate;
     err = cublas_to_cuda(cublasLtCreate(&session->cublas_lt));
   }
 #if NERVA_HAVE_CUDNN_FRONTEND
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && !clone_active_state) {
     failure_stage = kCreateStageCublasConfigure;
     err = cudnn_to_cuda(cudnnCreate(&session->cudnn));
   }
 #endif
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && !clone_active_state) {
     failure_stage = kCreateStageCublasConfigure;
     err = configure_cublas(session->cublas, session->stream,
                            session->cublas_workspace,
                            kCublasWorkspaceBytes);
   }
 #if NERVA_HAVE_CUDNN_FRONTEND
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && !clone_active_state) {
     err = cudnn_to_cuda(cudnnSetStream(session->cudnn, session->stream));
   }
 #endif
@@ -9068,9 +9153,49 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
         session->device_kv_block_table, session->kv_block_count);
     err = cudaGetLastError();
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && !clone_active_state) {
     failure_stage = kCreateStageProjectionPlanAutotune;
     err = autotune_session_lt_gemv_plans(session);
+  }
+  if (err == cudaSuccess && clone_active_state) {
+    failure_stage = kCreateStageSetupSynchronize;
+    err = cudaStreamSynchronize(parent->stream);
+  }
+  if (err == cudaSuccess && clone_active_state) {
+    memcpy(session->host_slots, parent->host_slots, session->slots_bytes);
+    err = cudaMemcpyAsync(session->device_prompt_tokens,
+                          parent->device_prompt_tokens, session->prompt_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state) {
+    err = cudaMemcpyAsync(session->device_slots, parent->device_slots,
+                          session->slots_bytes, cudaMemcpyDeviceToDevice,
+                          session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state) {
+    err = cudaMemcpyAsync(session->device_step, parent->device_step,
+                          sizeof(uint32_t), cudaMemcpyDeviceToDevice,
+                          session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state) {
+    err = cudaMemcpyAsync(session->device_kv_keys, parent->device_kv_keys,
+                          session->kv_bytes / 2, cudaMemcpyDeviceToDevice,
+                          session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state) {
+    err = cudaMemcpyAsync(session->device_kv_values, parent->device_kv_values,
+                          session->kv_bytes / 2, cudaMemcpyDeviceToDevice,
+                          session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state) {
+    session->active_prompt_token_count = parent->active_prompt_token_count;
+    session->active_has_eos_token = parent->active_has_eos_token;
+    session->active_eos_token = parent->active_eos_token;
+    session->active_seed_token = parent->active_seed_token;
+    session->active_observed_tokens = parent->active_observed_tokens;
+    session->active_cursor = parent->active_cursor;
+    session->active_started = parent->active_started;
+    session->active_finished = parent->active_finished;
   }
   if (err == cudaSuccess) {
     failure_stage = kCreateStageSetupSynchronize;
@@ -9083,7 +9208,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
     return -1;
   }
 
-  session->setup_sync_calls = 1;
+  session->setup_sync_calls = clone_active_state ? 2 : 1;
   session->projection_batch_own_stream_synchronized = 1;
   fill_create_result(session, out);
   *session_out = session;

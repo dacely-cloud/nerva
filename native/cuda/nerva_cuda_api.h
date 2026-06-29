@@ -855,6 +855,64 @@ typedef struct NervaCudaProjectionBenchResult {
   uint64_t block_cublaslt_effective_bandwidth_bps;
 } NervaCudaProjectionBenchResult;
 
+typedef struct NervaCudaExperimentalRtCandidateBenchRequest {
+  uint32_t pages;
+  uint32_t page_tokens;
+  uint32_t dims;
+  uint32_t query_count;
+  uint32_t candidates_per_query;
+  uint32_t iterations;
+  uint32_t warmup_iterations;
+} NervaCudaExperimentalRtCandidateBenchRequest;
+
+typedef struct NervaCudaExperimentalRtCandidateBenchResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t device_ordinal;
+  int32_t compute_capability_major;
+  int32_t compute_capability_minor;
+  uint32_t pages;
+  uint32_t page_tokens;
+  uint32_t dims;
+  uint32_t query_count;
+  uint32_t candidates_per_query;
+  uint32_t iterations;
+  uint32_t warmup_iterations;
+  uint32_t rt_core_capable;
+  uint32_t real_rt_backend_available;
+  uint32_t rt_headers_available;
+  uint32_t optix_headers_available;
+  uint32_t vulkan_headers_available;
+  uint32_t vulkan_shader_compiler_available;
+  uint32_t vulkan_loader_available;
+  uint32_t vulkan_rt_extensions_available;
+  uint32_t vulkan_physical_devices;
+  uint64_t descriptor_bytes;
+  uint64_t query_bytes;
+  uint64_t candidate_id_bytes;
+  uint64_t output_bytes;
+  uint64_t dense_selector_total_ns;
+  uint64_t dense_selector_avg_ns;
+  uint64_t software_selector_total_ns;
+  uint64_t software_selector_avg_ns;
+  uint64_t rerank_total_ns;
+  uint64_t rerank_avg_ns;
+  uint64_t selector_plus_rerank_avg_ns;
+  uint64_t dense_vs_selector_speedup_x1000;
+  uint64_t dense_vs_selector_plus_rerank_speedup_x1000;
+  uint64_t candidate_fraction_ppm;
+  uint64_t selected_hash;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t device_allocations;
+  uint64_t device_frees;
+  uint64_t device_arena_bytes;
+  uint64_t hot_path_allocations;
+  char backend[64];
+  char reason[192];
+} NervaCudaExperimentalRtCandidateBenchResult;
+
 int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out);
 int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      uint32_t ring_capacity,
@@ -916,6 +974,9 @@ int nerva_cuda_backend_contract_smoke(NervaCudaBackendContractResult *out,
                                       uint64_t pinned_bytes);
 int nerva_cuda_projection_bench(const NervaCudaProjectionBenchRequest *request,
                                 NervaCudaProjectionBenchResult *out);
+int nerva_cuda_experimental_rt_candidate_bench(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    NervaCudaExperimentalRtCandidateBenchResult *out);
 
 #ifdef __cplusplus
 }

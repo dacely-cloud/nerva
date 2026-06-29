@@ -7,6 +7,7 @@ pub mod attention;
 pub mod backend;
 pub mod block;
 pub mod decode;
+pub mod experimental_rt;
 pub mod graph;
 pub(crate) mod json;
 pub mod projection;

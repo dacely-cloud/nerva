@@ -35,6 +35,27 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
                 loop_state: None,
             };
         }
+        let summary = Self::start_session(session, prompt_tokens, eos_token);
+        let loop_state = (summary.status == SmokeStatus::Ok).then_some(Self {
+            session,
+            eos_token,
+            finished: false,
+        });
+        CudaHfDecodeSequenceLoopStart {
+            summary,
+            loop_state,
+        }
+    }
+
+    pub fn start_session(
+        session: &mut CudaHfDecodeSequenceSession,
+        prompt_tokens: &[u32],
+        eos_token: Option<u32>,
+    ) -> CudaHfDecodeSequenceSummary {
+        let create_summary = session.create_summary().clone();
+        if let Some(error) = validate_loop_start(prompt_tokens, create_summary.vocab_size) {
+            return failed_run_summary(&create_summary, 0, 0, error);
+        }
         let request = NervaCudaHfDecodeSequenceSessionStartRequest {
             session: session.raw_handle(),
             prompt_tokens: prompt_tokens.as_ptr(),
@@ -44,15 +65,17 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
         };
         let mut out = NervaCudaHfDecodeSequenceResult::default();
         let return_code = start_hf_decode_sequence_session(&request, &mut out);
-        let summary = summary_from_run(return_code, &out, Vec::new(), &create_summary);
-        let loop_state = (summary.status == SmokeStatus::Ok).then_some(Self {
+        summary_from_run(return_code, &out, Vec::new(), &create_summary)
+    }
+
+    pub fn from_started(
+        session: &'a mut CudaHfDecodeSequenceSession,
+        eos_token: Option<u32>,
+    ) -> Self {
+        Self {
             session,
             eos_token,
             finished: false,
-        });
-        CudaHfDecodeSequenceLoopStart {
-            summary,
-            loop_state,
         }
     }
 

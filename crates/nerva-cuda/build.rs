@@ -28,9 +28,25 @@ fn main() {
     );
 
     let cudnn = cudnn_frontend_paths();
+    let cuda_include = cuda_include_dir(cuda_root.as_ref());
+    let optix_include = optix_include_dir(&manifest_dir);
+    if let Some(optix_include) = optix_include.as_ref() {
+        println!(
+            "cargo:warning=nerva-cuda using OptiX headers at {}",
+            optix_include.display()
+        );
+        println!("cargo:rerun-if-changed={}", optix_include.display());
+    }
     print_link_directives(&out_dir, cuda_root.as_ref(), cudnn.as_ref());
-    let cuda_objects =
-        compile_cuda_sources(&sources, &out_dir, &nvcc, cuda_arches.as_slice(), cudnn.as_ref());
+    let cuda_objects = compile_cuda_sources(
+        &sources,
+        &out_dir,
+        &nvcc,
+        cuda_arches.as_slice(),
+        cudnn.as_ref(),
+        cuda_include.as_ref(),
+        optix_include.as_ref(),
+    );
     archive_cuda_objects(&archive, cuda_objects.as_slice());
 }
 
@@ -66,6 +82,33 @@ fn cudnn_frontend_paths() -> Option<CudnnFrontendPaths> {
     None
 }
 
+fn optix_include_dir(manifest_dir: &PathBuf) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(root) = env::var("NERVA_OPTIX_SDK_ROOT") {
+        let root = PathBuf::from(root);
+        candidates.push(root.join("include"));
+        candidates.push(root);
+    }
+    candidates.push(manifest_dir.join("../../third_party/optix-sdk/include"));
+    candidates.push(PathBuf::from("/usr/local/optix-sdk/include"));
+    candidates.push(PathBuf::from("/opt/nvidia/optix-sdk/include"));
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("optix.h").is_file())
+}
+
+fn cuda_include_dir(cuda_root: Option<&PathBuf>) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(cuda_root) = cuda_root {
+        candidates.push(cuda_root.join("include"));
+    }
+    candidates.push(PathBuf::from("/usr/local/cuda/include"));
+    candidates.push(PathBuf::from("/usr/include"));
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("nvrtc.h").is_file())
+}
+
 fn print_link_directives(
     out_dir: &PathBuf,
     cuda_root: Option<&PathBuf>,
@@ -88,10 +131,16 @@ fn print_link_directives(
                 let _ = std::os::unix::fs::symlink(&real_name, &link_name);
             }
         }
-        println!("cargo:rustc-link-search=native={}", cudnn.cudnn_lib.display());
+        println!(
+            "cargo:rustc-link-search=native={}",
+            cudnn.cudnn_lib.display()
+        );
         println!("cargo:rustc-link-search=native={}", out_dir.display());
         if cfg!(target_os = "linux") {
-            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", cudnn.cudnn_lib.display());
+            println!(
+                "cargo:rustc-link-arg=-Wl,-rpath,{}",
+                cudnn.cudnn_lib.display()
+            );
         }
         println!("cargo:rustc-link-lib=dylib=cudnn");
     }
@@ -109,6 +158,8 @@ fn compile_cuda_sources(
     nvcc: &PathBuf,
     cuda_arches: &[String],
     cudnn: Option<&CudnnFrontendPaths>,
+    cuda_include: Option<&PathBuf>,
+    optix_include: Option<&PathBuf>,
 ) -> Vec<PathBuf> {
     let mut cuda_objects = Vec::with_capacity(sources.cuda_sources.len());
     for cuda_source in &sources.cuda_sources {
@@ -129,6 +180,19 @@ fn compile_cuda_sources(
                 .arg(&cudnn.frontend_include)
                 .arg("-I")
                 .arg(&cudnn.cudnn_include);
+        }
+        if let Some(optix_include) = optix_include {
+            command.arg("-I").arg(optix_include);
+            command.arg(format!(
+                "-DNERVA_OPTIX_INCLUDE_DIR=\"{}\"",
+                optix_include.display()
+            ));
+        }
+        if let Some(cuda_include) = cuda_include {
+            command.arg(format!(
+                "-DNERVA_CUDA_INCLUDE_DIR=\"{}\"",
+                cuda_include.display()
+            ));
         }
         command
             .arg("-I")

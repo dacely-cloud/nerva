@@ -1,10 +1,10 @@
 use core::ptr;
 
 use crate::decode::ffi::{
-    CUDA_ERROR_NO_DEVICE, NervaCudaHfDecodeStepRequest, NervaCudaHfDecodeStepResult,
-    run_hf_decode_step_u16,
+    run_hf_decode_step_u16, NervaCudaHfDecodeStepRequest, NervaCudaHfDecodeStepResult,
+    CUDA_ERROR_NO_DEVICE,
 };
-use crate::decode::hf_step::summary::{CudaHfDecodeStepSummary, empty_summary};
+use crate::decode::hf_step::summary::{empty_summary, CudaHfDecodeStepSummary};
 use crate::smoke::status::SmokeStatus;
 pub const CUDA_HF_DECODE_STEP_DTYPE_F16: u32 = 0;
 pub const CUDA_HF_DECODE_STEP_DTYPE_BF16: u32 = 1;

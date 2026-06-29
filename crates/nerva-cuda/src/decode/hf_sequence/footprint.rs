@@ -83,11 +83,8 @@ pub fn estimate_sequence_footprint(
         vocab_size,
     )?;
     let kv_block_count = context_tokens.div_ceil(KV_CACHE_BLOCK_TOKENS);
-    let kv_token_capacity = checked_mul(
-        kv_block_count,
-        KV_CACHE_BLOCK_TOKENS,
-        "KV token capacity",
-    )?;
+    let kv_token_capacity =
+        checked_mul(kv_block_count, KV_CACHE_BLOCK_TOKENS, "KV token capacity")?;
     let resident_kv_bytes = checked_mul(
         checked_mul(layer_count, kv_token_capacity, "KV layer tokens")?,
         checked_mul(kv_hidden, U16_BYTES * 2, "KV token bytes")?,

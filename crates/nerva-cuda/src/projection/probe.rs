@@ -1,5 +1,5 @@
 use crate::projection::ffi::{
-    NervaCudaProjectionBenchRequest, NervaCudaProjectionBenchResult, run_projection_bench,
+    run_projection_bench, NervaCudaProjectionBenchRequest, NervaCudaProjectionBenchResult,
 };
 use crate::projection::summary::CudaProjectionBenchSummary;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;

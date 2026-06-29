@@ -1,9 +1,9 @@
 use crate::decode::ffi::CUDA_ERROR_NO_DEVICE;
 use crate::decode::hf_chain::ffi::{
-    NervaCudaHfDecodeChainRequest, NervaCudaHfDecodeChainResult, run_hf_decode_chain_u16,
+    run_hf_decode_chain_u16, NervaCudaHfDecodeChainRequest, NervaCudaHfDecodeChainResult,
 };
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
-use crate::decode::hf_chain::summary::{CudaHfDecodeChainSummary, empty_summary};
+use crate::decode::hf_chain::summary::{empty_summary, CudaHfDecodeChainSummary};
 use crate::smoke::status::SmokeStatus;
 
 pub const CUDA_HF_DECODE_CHAIN_DTYPE_F16: u32 = 0;

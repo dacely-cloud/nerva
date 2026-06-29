@@ -1,6 +1,6 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::ffi::{
-    NervaCudaHfDecodeSequenceRequest, NervaCudaHfDecodeSequenceResult, run_hf_decode_sequence_u16,
+    run_hf_decode_sequence_u16, NervaCudaHfDecodeSequenceRequest, NervaCudaHfDecodeSequenceResult,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::status::{sequence_failure_reason, sequence_status_from_result};

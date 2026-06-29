@@ -1,5 +1,5 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
-use crate::decode::hf_chain::request::{CUDA_HF_DECODE_CHAIN_DTYPE_F16, CudaHfDecodeChainRequest};
+use crate::decode::hf_chain::request::{CudaHfDecodeChainRequest, CUDA_HF_DECODE_CHAIN_DTYPE_F16};
 use crate::decode::hf_chain::summary::CudaHfDecodeChainSummary;
 use crate::smoke::status::SmokeStatus;
 

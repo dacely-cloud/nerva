@@ -23,6 +23,7 @@ use crate::engine::hf_cuda_decode::projection_batch::{
 use crate::engine::hf_cuda_decode::summary::HfCudaResidentWeightSummary;
 use crate::engine::runtime::Runtime;
 
+#[derive(Clone, Debug)]
 pub struct HfCudaSharedForkBatchOutput {
     pub metadata: HfModelMetadata,
     pub dtype: nerva_core::types::dtype::DType,
@@ -110,6 +111,7 @@ pub fn run_hf_causal_lm_cuda_shared_fork_batch_probe(
     target_block_tokens: usize,
     min_block_tokens: usize,
     compute_capability: Option<u32>,
+    projection_batch_enabled: bool,
     detailed_profile: bool,
 ) -> Result<HfCudaSharedForkBatchOutput> {
     validate_args(
@@ -152,7 +154,23 @@ pub fn run_hf_causal_lm_cuda_shared_fork_batch_probe(
         .eos_token_id
         .or_else(|| stop_tokens.first().copied());
 
-    let mut sessions = Vec::with_capacity(request_count);
+    let prompt = prompt_tokens
+        .iter()
+        .map(|token| token.0)
+        .collect::<Vec<_>>();
+    let prefill_started = Instant::now();
+    let root_started =
+        CudaHfDecodeSequenceLoop::start_session(&mut root.session, &prompt, device_stop_token);
+    if root_started.status != SmokeStatus::Ok {
+        return Err(NervaError::InvalidArgument {
+            reason: root_started
+                .error
+                .clone()
+                .unwrap_or_else(|| "CUDA HF shared fork batch prefill failed".to_string()),
+        });
+    }
+
+    let mut fork_sessions = Vec::with_capacity(request_count.saturating_sub(1));
     let mut fork_creates = Vec::with_capacity(request_count.saturating_sub(1));
     for _ in 1..request_count {
         let forked = root.session.fork_shared_weights(detailed_profile);
@@ -166,20 +184,20 @@ pub fn run_hf_causal_lm_cuda_shared_fork_batch_probe(
             });
         }
         fork_creates.push(forked.summary);
-        sessions.push(forked.session.unwrap());
+        fork_sessions.push(forked.session.unwrap());
     }
+    let mut sessions = Vec::with_capacity(request_count);
     sessions.insert(0, root.session);
-
-    let prompt = prompt_tokens
-        .iter()
-        .map(|token| token.0)
-        .collect::<Vec<_>>();
+    sessions.extend(fork_sessions);
     let mut tokens_by_request = vec![Vec::new(); request_count];
     let mut stopped_by_request = vec![false; request_count];
-    let prefill_started = Instant::now();
-    let started = start_loops(&mut sessions, &prompt, device_stop_token)?;
     let prefill_wall_ns = duration_ns(prefill_started.elapsed());
-    let mut loops = started.loops;
+    let mut start_summaries = Vec::with_capacity(request_count);
+    start_summaries.push(root_started.clone());
+    for _ in 1..request_count {
+        start_summaries.push(forked_active_start_summary(&root_started));
+    }
+    let mut loops = started_loops_from_active_sessions(&mut sessions, device_stop_token);
 
     let first_decode_started = Instant::now();
     let first_token_summaries = drain_first_tokens(
@@ -200,6 +218,7 @@ pub fn run_hf_causal_lm_cuda_shared_fork_batch_probe(
         max_context_tokens,
         target_block_tokens,
         min_block_tokens,
+        projection_batch_enabled,
         &stop_tokens,
         &mut tokens_by_request,
         &mut stopped_by_request,
@@ -225,7 +244,7 @@ pub fn run_hf_causal_lm_cuda_shared_fork_batch_probe(
         min_block_tokens: min_block_tokens.max(1),
         create,
         fork_creates,
-        start_summaries: started.summaries,
+        start_summaries,
         first_token_summaries,
         tokens_by_request,
         stopped_by_request,
@@ -234,33 +253,45 @@ pub fn run_hf_causal_lm_cuda_shared_fork_batch_probe(
     })
 }
 
-struct StartedLoops<'a> {
-    loops: Vec<CudaHfDecodeSequenceLoop<'a>>,
-    summaries: Vec<CudaHfDecodeSequenceSummary>,
+fn started_loops_from_active_sessions<'a>(
+    sessions: &'a mut [CudaHfDecodeSequenceSession],
+    device_stop_token: Option<u32>,
+) -> Vec<CudaHfDecodeSequenceLoop<'a>> {
+    let mut loops = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        loops.push(CudaHfDecodeSequenceLoop::from_started(
+            session,
+            device_stop_token,
+        ));
+    }
+    loops
 }
 
-fn start_loops<'a>(
-    sessions: &'a mut [CudaHfDecodeSequenceSession],
-    prompt_tokens: &[u32],
-    device_stop_token: Option<u32>,
-) -> Result<StartedLoops<'a>> {
-    let mut loops = Vec::with_capacity(sessions.len());
-    let mut summaries = Vec::with_capacity(sessions.len());
-    for session in sessions {
-        let started = CudaHfDecodeSequenceLoop::start(session, prompt_tokens, device_stop_token);
-        if started.summary.status != SmokeStatus::Ok {
-            return Err(NervaError::InvalidArgument {
-                reason: started
-                    .summary
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "CUDA HF shared fork batch prefill failed".to_string()),
-            });
-        }
-        summaries.push(started.summary);
-        loops.push(started.loop_state.unwrap());
-    }
-    Ok(StartedLoops { loops, summaries })
+fn forked_active_start_summary(root: &CudaHfDecodeSequenceSummary) -> CudaHfDecodeSequenceSummary {
+    let mut summary = root.clone();
+    summary.h2d_bytes = 0;
+    summary.d2h_bytes = 0;
+    summary.graph_replays = 0;
+    summary.graph_nodes = 0;
+    summary.graph_launches = 0;
+    summary.graph_captures = 0;
+    summary.graph_cache_hits = 0;
+    summary.kernel_launches = 0;
+    summary.device_elapsed_ns = 0;
+    summary.projection_ns = 0;
+    summary.qkv_projection_ns = 0;
+    summary.attention_output_projection_ns = 0;
+    summary.gate_up_projection_ns = 0;
+    summary.down_projection_ns = 0;
+    summary.lm_head_projection_ns = 0;
+    summary.attention_ns = 0;
+    summary.mlp_ns = 0;
+    summary.norm_ns = 0;
+    summary.sampling_ns = 0;
+    summary.sync_calls = 0;
+    summary.host_causality_edges = 0;
+    summary.hot_path_allocations = 0;
+    summary
 }
 
 fn drain_first_tokens(
@@ -301,6 +332,7 @@ fn advance_continuous_until_done(
     max_context_tokens: usize,
     target_block_tokens: usize,
     min_block_tokens: usize,
+    projection_batch_enabled: bool,
     stop_tokens: &[u32],
     tokens_by_request: &mut [Vec<TokenId>],
     stopped_by_request: &mut [bool],
@@ -335,7 +367,11 @@ fn advance_continuous_until_done(
             break;
         }
 
-        let output = advance_continuous_decode_batch_once(entries, config);
+        let output = if projection_batch_enabled {
+            advance_continuous_decode_batch_once(entries, config)
+        } else {
+            advance_continuous_decode_batch_sequential_once(entries)
+        };
         summary.scheduler_steps += 1;
         summary.last_plan_reason = output.plan.projection.reason.as_str();
         if output.used_batched_projection() {
@@ -394,6 +430,66 @@ fn advance_continuous_until_done(
         }
     }
     summary
+}
+
+fn advance_continuous_decode_batch_sequential_once<'a, 'session>(
+    entries: Vec<CudaDecodeLoopBatchEntry<'a, 'session>>,
+) -> crate::engine::hf_cuda_decode::continuous_batch::CudaContinuousDecodeBatchOutput {
+    let candidates = entries
+        .iter()
+        .map(|entry| entry.candidate)
+        .collect::<Vec<_>>();
+    let selected_indices = Vec::new();
+    let fallback_indices = (0..candidates.len()).collect::<Vec<_>>();
+    let projection = crate::engine::hf_cuda_decode::projection_batch::ProjectionBatchPlan {
+        reason:
+            crate::engine::hf_cuda_decode::projection_batch::ProjectionBatchPlanReason::NoCandidates,
+        exact: false,
+        block_tokens: 0,
+        selected_request_ids: Vec::new(),
+        model: None,
+    };
+    let plan = crate::engine::hf_cuda_decode::continuous_batch::ContinuousProjectionBatchPlan {
+        projection,
+        selected_indices,
+        selected_groups: Vec::new(),
+        fallback_indices,
+    };
+    let mut indexed = entries
+        .into_iter()
+        .enumerate()
+        .map(|(input_index, entry)| (input_index, entry))
+        .collect::<Vec<_>>();
+    let mut records = Vec::new();
+    let mut loop_refs = indexed
+        .iter_mut()
+        .map(|(_, entry)| &mut *entry.loop_state)
+        .collect::<Vec<_>>();
+    let fallback =
+        crate::engine::hf_cuda_decode::batch_advance::advance_decode_loops_sequential_once(
+            &mut loop_refs,
+            "projection_batch_disabled",
+        );
+    for (index, (input_index, entry)) in indexed.iter().enumerate() {
+        records.push(
+            crate::engine::hf_cuda_decode::continuous_batch::CudaContinuousDecodeLoopRecord {
+                input_index: *input_index,
+                request_id: entry.candidate.request_id,
+                tokens: fallback
+                    .tokens_by_loop
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_default(),
+                mode: fallback.mode,
+            },
+        );
+    }
+    crate::engine::hf_cuda_decode::continuous_batch::CudaContinuousDecodeBatchOutput {
+        plan,
+        records,
+        selected: Vec::new(),
+        fallback: Some(fallback),
+    }
 }
 
 fn accumulate_batch_summary(

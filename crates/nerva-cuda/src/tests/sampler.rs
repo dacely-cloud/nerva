@@ -1,4 +1,4 @@
-use crate::sampler::hf_head::request::{CUDA_HF_SAMPLER_DTYPE_F16, CudaHfSamplerRequest};
+use crate::sampler::hf_head::request::{CudaHfSamplerRequest, CUDA_HF_SAMPLER_DTYPE_F16};
 use crate::sampler::hf_head::summary::CudaHfSamplerSummary;
 use crate::sampler::summary::CudaGreedySamplerSummary;
 use crate::smoke::status::SmokeStatus;

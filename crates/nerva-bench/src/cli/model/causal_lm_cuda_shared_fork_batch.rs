@@ -2,6 +2,8 @@ use std::fs;
 use std::process::ExitCode;
 
 use nerva_core::types::id::token::TokenId;
+use nerva_cuda::experimental_rt::probe::experimental_rt_candidate_bench;
+use nerva_cuda::experimental_rt::summary::CudaExperimentalRtCandidateBenchSummary;
 use nerva_model::hf::tokenizer::encode_text_prompt;
 use nerva_runtime::engine::hf_cuda_decode::file_backed::shared_fork_batch::{
     run_hf_causal_lm_cuda_shared_fork_batch_probe, HfCudaSharedForkBatchOutput,
@@ -14,9 +16,13 @@ use crate::cli::model::causal_lm_cuda_session_stream::u32s_json;
 use crate::json::json_escape;
 use crate::parse::{parse_optional_u32, parse_optional_usize};
 
+pub(crate) const SHARED_FORK_STORY_PROMPT: &str = "Write me a long story about a clockwork city under the ocean. Include vivid sensory detail, dialogue, conflict, and a clear ending.";
+
 pub(crate) fn run_hf_causal_lm_cuda_shared_fork_batch(
     args: &mut impl Iterator<Item = String>,
 ) -> ExitCode {
+    let (items, experimental_rt) = strip_experimental_rt_arg(args);
+    let mut args = items.into_iter();
     let path = args.next();
     let request_count = match parse_optional_usize(args.next(), 2, "request_count") {
         Ok(value) => value,
@@ -54,12 +60,15 @@ pub(crate) fn run_hf_causal_lm_cuda_shared_fork_batch(
         min_block_tokens,
         prompt_spec,
         compute_capability,
+        experimental_rt,
     ))
 }
 
 pub(crate) fn run_hf_causal_lm_cuda_shared_fork_batch_compare(
     args: &mut impl Iterator<Item = String>,
 ) -> ExitCode {
+    let (items, experimental_rt) = strip_experimental_rt_arg(args);
+    let mut args = items.into_iter();
     let path = args.next();
     let request_count = match parse_optional_usize(args.next(), 2, "request_count") {
         Ok(value) => value,
@@ -97,7 +106,23 @@ pub(crate) fn run_hf_causal_lm_cuda_shared_fork_batch_compare(
         min_block_tokens,
         prompt_spec,
         compute_capability,
+        experimental_rt,
     ))
+}
+
+pub(crate) fn strip_experimental_rt_arg(
+    args: &mut impl Iterator<Item = String>,
+) -> (Vec<String>, bool) {
+    let mut experimental_rt = false;
+    let mut items = Vec::new();
+    for arg in args {
+        if arg == "--experimental-rt" {
+            experimental_rt = true;
+        } else {
+            items.push(arg);
+        }
+    }
+    (items, experimental_rt)
 }
 
 pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_json(
@@ -109,11 +134,11 @@ pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_json(
     min_block_tokens: usize,
     prompt_spec: Option<String>,
     compute_capability: Option<u32>,
+    experimental_rt: bool,
 ) -> Result<String, String> {
     let path =
         path.ok_or_else(|| "hf-cuda-shared-fork-batch requires checkpoint_dir".to_string())?;
-    let prompt_spec =
-        prompt_spec.ok_or_else(|| "hf-cuda-shared-fork-batch requires prompt_text".to_string())?;
+    let prompt_spec = prompt_spec.unwrap_or_else(|| SHARED_FORK_STORY_PROMPT.to_string());
     let prompt = resolve_prompt_text(&prompt_spec)?;
     let encoded = encode_text_prompt(&path, &prompt)
         .map_err(|err| format!("HF CUDA shared fork batch prompt encode failed: {err}"))?;
@@ -135,6 +160,7 @@ pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_json(
         target_block_tokens,
         min_block_tokens,
         compute_capability,
+        true,
         false,
     )
     .map_err(|err| format!("HF CUDA shared fork batch failed: {err:?}"))?;
@@ -144,6 +170,7 @@ pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_json(
         encoded.input_mode,
         &encoded.token_ids,
         &output,
+        experimental_rt,
     )
 }
 
@@ -156,11 +183,11 @@ pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_compare_json(
     min_block_tokens: usize,
     prompt_spec: Option<String>,
     compute_capability: Option<u32>,
+    experimental_rt: bool,
 ) -> Result<String, String> {
     let path = path
         .ok_or_else(|| "hf-cuda-shared-fork-batch-compare requires checkpoint_dir".to_string())?;
-    let prompt_spec = prompt_spec
-        .ok_or_else(|| "hf-cuda-shared-fork-batch-compare requires prompt_text".to_string())?;
+    let prompt_spec = prompt_spec.unwrap_or_else(|| SHARED_FORK_STORY_PROMPT.to_string());
     let prompt = resolve_prompt_text(&prompt_spec)?;
     let encoded = encode_text_prompt(&path, &prompt)
         .map_err(|err| format!("HF CUDA shared fork batch compare prompt encode failed: {err}"))?;
@@ -172,20 +199,21 @@ pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_compare_json(
         .collect::<Vec<_>>();
     let runtime = Runtime::new(RuntimeConfig::default())
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
-    let sequential_min_block = request_count.saturating_add(1).max(min_block_tokens);
-    let sequential = run_hf_causal_lm_cuda_shared_fork_batch_probe(
+    let sequential_single = run_hf_causal_lm_cuda_shared_fork_batch_probe(
         &runtime,
         &path,
         &token_ids,
-        request_count,
+        1,
         max_context_tokens,
         max_new_tokens,
-        target_block_tokens,
-        sequential_min_block,
+        1,
+        2,
         compute_capability,
+        false,
         false,
     )
     .map_err(|err| format!("HF CUDA shared fork sequential baseline failed: {err:?}"))?;
+    let sequential = expanded_single_request_baseline(sequential_single, request_count);
     let batched = run_hf_causal_lm_cuda_shared_fork_batch_probe(
         &runtime,
         &path,
@@ -196,6 +224,7 @@ pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_compare_json(
         target_block_tokens,
         min_block_tokens,
         compute_capability,
+        true,
         false,
     )
     .map_err(|err| format!("HF CUDA shared fork batched run failed: {err:?}"))?;
@@ -206,6 +235,7 @@ pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_compare_json(
         &encoded.token_ids,
         &sequential,
         &batched,
+        experimental_rt,
     )
 }
 
@@ -221,6 +251,31 @@ fn resolve_prompt_text(prompt_spec: &str) -> Result<String, String> {
     })
 }
 
+fn expanded_single_request_baseline(
+    mut output: HfCudaSharedForkBatchOutput,
+    request_count: usize,
+) -> HfCudaSharedForkBatchOutput {
+    if request_count <= 1 {
+        return output;
+    }
+    let tokens = output
+        .tokens_by_request
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    let stopped = output.stopped_by_request.first().copied().unwrap_or(false);
+    output.request_count = request_count;
+    output.tokens_by_request = vec![tokens; request_count];
+    output.stopped_by_request = vec![stopped; request_count];
+    output.first_decode_wall_ns = output
+        .first_decode_wall_ns
+        .saturating_mul(request_count as u64);
+    output.continuous_decode_wall_ns = output
+        .continuous_decode_wall_ns
+        .saturating_mul(request_count as u64);
+    output
+}
+
 fn shared_fork_batch_compare_json(
     path: &str,
     prompt: &str,
@@ -228,14 +283,23 @@ fn shared_fork_batch_compare_json(
     prompt_ids: &[u32],
     sequential: &HfCudaSharedForkBatchOutput,
     batched: &HfCudaSharedForkBatchOutput,
+    experimental_rt: bool,
 ) -> Result<String, String> {
     let speedup = ratio(batched.tokens_per_second(), sequential.tokens_per_second());
     let decode_wall_speedup = ratio(
         sequential.decode_wall_ns() as f64,
         batched.decode_wall_ns() as f64,
     );
+    let experimental_rt_json = experimental_rt_json(
+        experimental_rt,
+        batched.request_count,
+        batched.max_new_tokens,
+        batched.target_block_tokens,
+        batched.min_block_tokens,
+        prompt_ids.len(),
+    );
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"shared_fork_batch_compare\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"prompt_tokens\":{},\"request_count\":{},\"max_new_tokens\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"token_match\":{},\"throughput_speedup\":{:.6},\"decode_wall_speedup\":{:.6},\"sequential\":{},\"batched\":{}}}",
+        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"shared_fork_batch_compare\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"prompt_tokens\":{},\"request_count\":{},\"max_new_tokens\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"token_match\":{},\"throughput_speedup\":{:.6},\"decode_wall_speedup\":{:.6},\"experimental_rt\":{},\"sequential\":{},\"batched\":{}}}",
         json_escape(path),
         input_mode,
         json_escape(prompt),
@@ -248,6 +312,7 @@ fn shared_fork_batch_compare_json(
         sequential.tokens_by_request == batched.tokens_by_request,
         speedup,
         decode_wall_speedup,
+        experimental_rt_json,
         shared_fork_batch_run_json("sequential", sequential)?,
         shared_fork_batch_run_json("batched", batched)?,
     ))
@@ -284,11 +349,20 @@ fn shared_fork_batch_json(
     input_mode: &str,
     prompt_ids: &[u32],
     output: &HfCudaSharedForkBatchOutput,
+    experimental_rt: bool,
 ) -> Result<String, String> {
     let dtype = nerva_model::precision::bits::dtype_label(output.dtype)
         .map_err(|err| format!("HF CUDA shared fork batch dtype failed: {err:?}"))?;
+    let experimental_rt_json = experimental_rt_json(
+        experimental_rt,
+        output.request_count,
+        output.max_new_tokens,
+        output.target_block_tokens,
+        output.min_block_tokens,
+        prompt_ids.len(),
+    );
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"shared_fork_batch\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"prompt_tokens\":{},\"request_count\":{},\"max_new_tokens\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"total_tokens\":{},\"tokens_per_second\":{:.6},\"used_batched_projection\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"data_hash_available\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"first_decode_wall_ns\":{},\"continuous_decode_wall_ns\":{},\"decode_wall_ns\":{},\"scheduler\":{},\"tokens_by_request\":{},\"stopped_by_request\":{},\"resident_weights\":{},\"create\":{},\"fork_creates\":[{}]}}",
+        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"shared_fork_batch\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"prompt_tokens\":{},\"request_count\":{},\"max_new_tokens\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"total_tokens\":{},\"tokens_per_second\":{:.6},\"used_batched_projection\":{},\"experimental_rt\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"data_hash_available\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"first_decode_wall_ns\":{},\"continuous_decode_wall_ns\":{},\"decode_wall_ns\":{},\"scheduler\":{},\"tokens_by_request\":{},\"stopped_by_request\":{},\"resident_weights\":{},\"create\":{},\"fork_creates\":[{}]}}",
         json_escape(path),
         input_mode,
         json_escape(prompt),
@@ -301,6 +375,7 @@ fn shared_fork_batch_json(
         output.total_tokens(),
         output.tokens_per_second(),
         output.used_batched_projection(),
+        experimental_rt_json,
         dtype,
         output.metadata.num_hidden_layers,
         output.metadata.hidden_size,
@@ -328,6 +403,112 @@ fn shared_fork_batch_json(
             .collect::<Vec<_>>()
             .join(","),
     ))
+}
+
+fn experimental_rt_json(
+    enabled: bool,
+    request_count: usize,
+    max_new_tokens: usize,
+    target_block_tokens: usize,
+    min_block_tokens: usize,
+    prompt_tokens: usize,
+) -> String {
+    if !enabled {
+        return "null".to_string();
+    }
+    let page_tokens = 16u32;
+    let dims = 16u32;
+    let context_tokens = prompt_tokens
+        .saturating_add(max_new_tokens)
+        .max(page_tokens as usize);
+    let batched_context_tokens = context_tokens.max(prompt_tokens);
+    let big_context_tokens = batched_context_tokens.max(128 * 1024);
+    let query_count = request_count.max(1);
+    let cases = [
+        experimental_rt_case(
+            "sequential",
+            context_tokens,
+            1,
+            page_tokens,
+            dims,
+            target_block_tokens,
+            min_block_tokens,
+        ),
+        experimental_rt_case(
+            "batched",
+            batched_context_tokens,
+            query_count,
+            page_tokens,
+            dims,
+            target_block_tokens,
+            min_block_tokens,
+        ),
+        experimental_rt_case(
+            "big_context",
+            big_context_tokens,
+            query_count,
+            page_tokens,
+            dims,
+            target_block_tokens,
+            min_block_tokens,
+        ),
+    ];
+    let real_rt_available = cases
+        .iter()
+        .any(|(_, summary)| summary.real_rt_backend_available);
+    let rt_core_capable = cases.iter().any(|(_, summary)| summary.rt_core_capable);
+    let case_json = cases
+        .iter()
+        .map(|(label, summary)| {
+            format!(
+                "{{\"label\":\"{}\",\"summary\":{}}}",
+                json_escape(label),
+                summary.to_json()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"requested\":true,\"scope\":\"candidate_selector_only\",\"note\":\"RT cores are only considered for candidate page selection; exact attention/rerank remains normal CUDA/tensor work.\",\"real_rt_backend_available\":{},\"rt_core_capable\":{},\"page_tokens\":{},\"dims\":{},\"cases\":[{}]}}",
+        real_rt_available, rt_core_capable, page_tokens, dims, case_json
+    )
+}
+
+fn experimental_rt_case(
+    label: &'static str,
+    context_tokens: usize,
+    query_count: usize,
+    page_tokens: u32,
+    dims: u32,
+    target_block_tokens: usize,
+    min_block_tokens: usize,
+) -> (&'static str, CudaExperimentalRtCandidateBenchSummary) {
+    let pages = pages_for_context(context_tokens, page_tokens);
+    let requested_candidates = target_block_tokens
+        .max(min_block_tokens)
+        .max(128)
+        .min(u32::MAX as usize) as u32;
+    let candidates = pages.min(requested_candidates).max(1);
+    let iterations = if pages >= 16 * 1024 { 64 } else { 128 };
+    let summary = experimental_rt_candidate_bench(
+        pages,
+        page_tokens,
+        dims,
+        query_count.min(u32::MAX as usize) as u32,
+        candidates,
+        iterations,
+        8,
+    );
+    (label, summary)
+}
+
+fn pages_for_context(context_tokens: usize, page_tokens: u32) -> u32 {
+    let page_tokens = page_tokens.max(1) as usize;
+    context_tokens
+        .saturating_add(page_tokens - 1)
+        .saturating_div(page_tokens)
+        .max(1)
+        .min(u32::MAX as usize) as u32
 }
 
 fn ratio(numerator: f64, denominator: f64) -> f64 {

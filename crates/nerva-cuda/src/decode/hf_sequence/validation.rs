@@ -1,5 +1,5 @@
 use crate::decode::hf_sequence::request::{
-    CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CudaHfDecodeSequenceRequest,
+    CudaHfDecodeSequenceRequest, CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
 };
 use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 

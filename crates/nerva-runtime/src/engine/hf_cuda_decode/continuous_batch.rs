@@ -173,11 +173,11 @@ fn continuous_projection_groups(
 }
 
 fn split_projection_group(indices: Vec<usize>, config: ProjectionBatchConfig) -> Vec<Vec<usize>> {
-    if indices.len() < config.min_block_tokens {
+    let target = config.effective_target_block_tokens();
+    let min = config.effective_min_block_tokens();
+    if indices.len() < min {
         return Vec::new();
     }
-    let target = config.target_block_tokens.max(config.min_block_tokens);
-    let min = config.min_block_tokens;
     let mut groups = Vec::new();
     let mut start = 0usize;
     while start < indices.len() {
@@ -211,8 +211,8 @@ fn advance_selected_entries_once(
     let output = advance_decode_loops_once(
         &mut loop_refs,
         CudaDecodeBatchAdvanceConfig::new(
-            u32::try_from(config.target_block_tokens).unwrap_or(u32::MAX),
-            u32::try_from(config.min_block_tokens).unwrap_or(u32::MAX),
+            u32::try_from(config.effective_target_block_tokens()).unwrap_or(u32::MAX),
+            u32::try_from(config.effective_min_block_tokens()).unwrap_or(u32::MAX),
         ),
     );
     push_records(entries, &output, records);
@@ -339,6 +339,20 @@ mod tests {
         assert_eq!(
             plan.selected_groups,
             vec![(0..15).collect::<Vec<_>>(), vec![15, 16]]
+        );
+        assert!(plan.fallback_indices.is_empty());
+    }
+
+    #[test]
+    fn continuous_plan_caps_groups_to_native_width() {
+        let candidates = (0..64)
+            .map(|index| candidate(index as u64, 7))
+            .collect::<Vec<_>>();
+        let plan = plan_continuous_projection_batch(&candidates, ProjectionBatchConfig::new(64, 2));
+
+        assert_eq!(
+            plan.selected_groups,
+            vec![(0..32).collect::<Vec<_>>(), (32..64).collect::<Vec<_>>()]
         );
         assert!(plan.fallback_indices.is_empty());
     }

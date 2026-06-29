@@ -1,4 +1,4 @@
-use crate::decode::ffi::{CUDA_ERROR_NO_DEVICE, NervaCudaTinyDecodeResult, run_tiny_decode_smoke};
+use crate::decode::ffi::{run_tiny_decode_smoke, NervaCudaTinyDecodeResult, CUDA_ERROR_NO_DEVICE};
 use crate::decode::summary::CudaTinyDecodeSummary;
 use crate::smoke::status::SmokeStatus;
 

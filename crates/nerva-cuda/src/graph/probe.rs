@@ -1,5 +1,5 @@
 use crate::graph::ffi::{
-    CUDA_ERROR_NO_DEVICE, NervaCudaSyntheticGraphResult, run_synthetic_graph_smoke,
+    run_synthetic_graph_smoke, NervaCudaSyntheticGraphResult, CUDA_ERROR_NO_DEVICE,
 };
 use crate::graph::summary::CudaSyntheticGraphSummary;
 use crate::smoke::status::SmokeStatus;

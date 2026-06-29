@@ -1,4 +1,4 @@
-use crate::block::forward::request::{CUDA_BLOCK_DTYPE_F16, CudaBlockForwardRequest};
+use crate::block::forward::request::{CudaBlockForwardRequest, CUDA_BLOCK_DTYPE_F16};
 use crate::block::summary::{CudaLoadedTinyBlockSummary, CudaTinyBlockSummary};
 use crate::smoke::status::SmokeStatus;
 

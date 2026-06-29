@@ -213,10 +213,28 @@ add_library(nerva_cuda STATIC
     nerva_cuda_tiny_decode.cu
     nerva_cuda_tiered_attention.cu
     nerva_cuda_projection_bench.cu
+    nerva_cuda_experimental_rt.cu
     smoke_kernel.cu
     token_ring_kernels.cu
     synthetic_decode.cu
 )
 
 target_include_directories(nerva_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(DEFINED ENV{NERVA_OPTIX_SDK_ROOT} AND EXISTS "$ENV{NERVA_OPTIX_SDK_ROOT}/include/optix.h")
+    target_include_directories(nerva_cuda PUBLIC "$ENV{NERVA_OPTIX_SDK_ROOT}/include")
+    target_compile_definitions(nerva_cuda PUBLIC "NERVA_OPTIX_INCLUDE_DIR=\"$ENV{NERVA_OPTIX_SDK_ROOT}/include\"")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/optix-sdk/include/optix.h")
+    target_include_directories(nerva_cuda PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/optix-sdk/include")
+    target_compile_definitions(nerva_cuda PUBLIC "NERVA_OPTIX_INCLUDE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/optix-sdk/include\"")
+elseif(EXISTS "/usr/local/optix-sdk/include/optix.h")
+    target_include_directories(nerva_cuda PUBLIC "/usr/local/optix-sdk/include")
+    target_compile_definitions(nerva_cuda PUBLIC "NERVA_OPTIX_INCLUDE_DIR=\"/usr/local/optix-sdk/include\"")
+elseif(EXISTS "/opt/nvidia/optix-sdk/include/optix.h")
+    target_include_directories(nerva_cuda PUBLIC "/opt/nvidia/optix-sdk/include")
+    target_compile_definitions(nerva_cuda PUBLIC "NERVA_OPTIX_INCLUDE_DIR=\"/opt/nvidia/optix-sdk/include\"")
+endif()
+if(CUDAToolkit_INCLUDE_DIRS)
+    list(GET CUDAToolkit_INCLUDE_DIRS 0 NERVA_CUDA_INCLUDE_DIR)
+    target_compile_definitions(nerva_cuda PUBLIC "NERVA_CUDA_INCLUDE_DIR=\"${NERVA_CUDA_INCLUDE_DIR}\"")
+endif()
 target_link_libraries(nerva_cuda PUBLIC CUDA::cudart CUDA::cublas)

@@ -1,4 +1,4 @@
-use crate::decode::hf_step::request::{CUDA_HF_DECODE_STEP_DTYPE_F16, CudaHfDecodeStepRequest};
+use crate::decode::hf_step::request::{CudaHfDecodeStepRequest, CUDA_HF_DECODE_STEP_DTYPE_F16};
 use crate::decode::hf_step::summary::CudaHfDecodeStepSummary;
 use crate::decode::summary::CudaTinyDecodeSummary;
 use crate::smoke::status::SmokeStatus;
