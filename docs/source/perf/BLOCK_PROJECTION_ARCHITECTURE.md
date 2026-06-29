@@ -530,9 +530,10 @@ docs/source/perf/qwen3_8b_shared_fork_batch_probe.json
 requests             2
 max context          1024
 max new tokens       4/request
-aggregate decode     188.03 tok/s
+aggregate decode     208.36 tok/s
 batched steps        3/3
 fallback steps       0
+batch sync calls     6
 hot-path allocations 0
 tokens/request       [11, 358, 2776, 4460]
 ```
@@ -561,9 +562,9 @@ The current tiny Qwen3-8B comparison artifact is:
 ```text
 docs/source/perf/qwen3_8b_shared_fork_batch_compare.json
 
-sequential fallback  130.58 tok/s
-batched projection   187.32 tok/s
-decode speedup       1.43x
+sequential fallback  130.38 tok/s
+batched projection   208.72 tok/s
+decode speedup       1.60x
 token match          true
 ```
 
@@ -572,3 +573,10 @@ batching can lower projection weight-stream pressure for multiple live requests
 without changing tokens. The run is intentionally short; longer prompts,
 larger request groups, and production queue integration are still required
 before claiming final serving performance.
+
+The default batched serving path no longer synchronizes per projection stage for
+timing. It synchronizes peer streams once at batch entry and then defers layer
+syncs until the final token-copy sync. This reduced the tiny Qwen comparison's
+batched sync count from 1089 to 6. Per-stage projection elapsed buckets are
+therefore zero in default artifacts; run with profiling enabled when detailed
+CUDA stage timing is needed.

@@ -1,6 +1,6 @@
 {
   "schema": "nerva-hf-cuda-shared-fork-batch-compare-v1",
-  "measurement_date": "2026-06-28",
+  "measurement_date": "2026-06-29",
   "host": "RTX 5090",
   "model": "Qwen3-8B local safetensors snapshot",
   "command": "cargo run -p nerva-bench --release -- hf-cuda-shared-fork-batch-compare /root/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218 2 1024 4 2 2 \"Hello\" 120",
@@ -12,12 +12,12 @@
   "min_block_tokens": 2,
   "prompt_tokens": 1,
   "token_match": true,
-  "throughput_speedup": 1.434510,
-  "decode_wall_speedup": 1.434510,
+  "throughput_speedup": 1.600844,
+  "decode_wall_speedup": 1.600844,
   "sequential": {
     "total_tokens": 8,
-    "tokens_per_second": 130.584179,
-    "decode_wall_ns": 61263164,
+    "tokens_per_second": 130.379930,
+    "decode_wall_ns": 61359137,
     "used_batched_projection": false,
     "scheduler_steps": 3,
     "batched_steps": 0,
@@ -26,14 +26,15 @@
   },
   "batched": {
     "total_tokens": 8,
-    "tokens_per_second": 187.324356,
-    "decode_wall_ns": 42706673,
+    "tokens_per_second": 208.717929,
+    "decode_wall_ns": 38329242,
     "used_batched_projection": true,
     "scheduler_steps": 3,
     "batched_steps": 3,
     "fallback_steps": 0,
-    "batch_projection_elapsed_ns": 34701088,
+    "batch_projection_elapsed_ns": 0,
     "batch_projection_kernel_launches": 435,
+    "batch_sync_calls": 6,
     "batch_hot_path_allocations": 0,
     "last_plan_reason": "ready",
     "last_batch_reason": "batched"
@@ -43,5 +44,6 @@
     [11, 358, 2776, 4460]
   ],
   "shared_weight_proof": "direct_shared_weight_fork_lineage",
-  "decode_status": "tiny_real_qwen_comparison_not_full_throughput_claim"
+  "decode_status": "tiny_real_qwen_comparison_not_full_throughput_claim",
+  "profiling_status": "default_path_stage_timing_disabled_use_profiling_for_elapsed_buckets"
 }

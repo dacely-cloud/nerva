@@ -138,7 +138,7 @@ fn hf_decode_sequence_projection_batch_executes_all_projection_kinds_for_two_ses
         lm_head: &lm_head,
         weight_plan: Some(weight_plan),
         weight_blocks: &weight_blocks,
-        detailed_profile: false,
+        detailed_profile: true,
     };
     let created_a = config.create();
     if created_a.summary.status != SmokeStatus::Ok {
@@ -285,7 +285,7 @@ fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions()
         lm_head: &lm_head,
         weight_plan: Some(weight_plan),
         weight_blocks: &weight_blocks,
-        detailed_profile: false,
+        detailed_profile: true,
     };
     let created_a = config.create();
     if created_a.summary.status != SmokeStatus::Ok {
@@ -437,6 +437,7 @@ fn hf_decode_sequence_loop_batch_advance_one_executes_second_token_for_two_loops
     assert_eq!(batch.tokens, vec![0, 0]);
     assert_eq!(batch.projection_kernel_launches, 5);
     assert_eq!(batch.sampling_kernel_launches, 2);
+    assert_eq!(batch.sync_calls, 2);
     assert_eq!(batch.hot_path_allocations, 0);
 }
 
