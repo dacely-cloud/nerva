@@ -341,7 +341,7 @@ fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions()
 }
 
 #[test]
-fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_twelve_sessions() {
+fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_thirty_two_sessions() {
     let _guard = super::cuda_test_lock();
 
     let one = 0x3c00;
@@ -402,7 +402,7 @@ fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_twelve_sessions(
         detailed_profile: true,
     };
     let mut sessions = Vec::new();
-    for _ in 0..12 {
+    for _ in 0..32 {
         let created = config.create();
         if created.summary.status != SmokeStatus::Ok {
             return;
@@ -424,20 +424,20 @@ fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_twelve_sessions(
 
     let batch = {
         let mut session_refs = sessions.iter_mut().collect::<Vec<_>>();
-        CudaHfDecodeSequenceSession::batch_advance_one(&mut session_refs, 12, 2)
+        CudaHfDecodeSequenceSession::batch_advance_one(&mut session_refs, 32, 2)
     };
     assert_eq!(batch.status, SmokeStatus::Ok);
     assert_eq!(batch.reason, "ready");
     assert!(batch.exact);
-    assert_eq!(batch.block_tokens, 12);
+    assert_eq!(batch.block_tokens, 32);
     assert_eq!(batch.layer_count, 1);
-    assert_eq!(batch.observed_tokens, 12);
-    assert_eq!(batch.tokens, vec![0; 12]);
+    assert_eq!(batch.observed_tokens, 32);
+    assert_eq!(batch.tokens, vec![0; 32]);
     assert_eq!(batch.projection_kernel_launches, 5);
     assert_eq!(batch.pack_kernel_launches, 5);
     assert_eq!(batch.scatter_kernel_launches, 5);
     assert!(batch.dependency_kernel_launches > 0);
-    assert_eq!(batch.sampling_kernel_launches, 12);
+    assert_eq!(batch.sampling_kernel_launches, 32);
     assert!(batch.projection_elapsed_ns > 0);
     assert!(batch.lm_head_elapsed_ns > 0);
     assert_eq!(batch.hot_path_allocations, 0);

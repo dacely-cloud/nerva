@@ -39,6 +39,7 @@ constexpr uint32_t kHeadThreadsMax = 256;
 constexpr uint32_t kHeadThreadElements = 4;
 constexpr uint32_t kPrefillChunkBaseTokens = 1024;
 constexpr uint32_t kPrefillChunkMaxTokens = 8192;
+constexpr uint32_t kProjectionBatchWorkspaceTokens = 32;
 constexpr uint32_t kKvCacheBlockTokens = 16;
 constexpr uint32_t kDecodeAttentionChunkTokens = 64;
 constexpr uint32_t kGroupedGqaHeads = 4;
@@ -2267,7 +2268,13 @@ __global__ void hf_projection_batch_pack_small_u16_kernel(
     const uint16_t *src6, const uint16_t *src7, const uint16_t *src8,
     const uint16_t *src9, const uint16_t *src10, const uint16_t *src11,
     const uint16_t *src12, const uint16_t *src13, const uint16_t *src14,
-    const uint16_t *src15, uint16_t *dst, uint32_t cols, uint32_t tokens) {
+    const uint16_t *src15, const uint16_t *src16, const uint16_t *src17,
+    const uint16_t *src18, const uint16_t *src19, const uint16_t *src20,
+    const uint16_t *src21, const uint16_t *src22, const uint16_t *src23,
+    const uint16_t *src24, const uint16_t *src25, const uint16_t *src26,
+    const uint16_t *src27, const uint16_t *src28, const uint16_t *src29,
+    const uint16_t *src30, const uint16_t *src31, uint16_t *dst,
+    uint32_t cols, uint32_t tokens) {
   const uint64_t total = static_cast<uint64_t>(cols) * tokens;
   const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
   for (uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x +
@@ -2290,7 +2297,23 @@ __global__ void hf_projection_batch_pack_small_u16_kernel(
                           : token == 12 ? src12
                           : token == 13 ? src13
                           : token == 14 ? src14
-                                        : src15;
+                          : token == 15 ? src15
+                          : token == 16 ? src16
+                          : token == 17 ? src17
+                          : token == 18 ? src18
+                          : token == 19 ? src19
+                          : token == 20 ? src20
+                          : token == 21 ? src21
+                          : token == 22 ? src22
+                          : token == 23 ? src23
+                          : token == 24 ? src24
+                          : token == 25 ? src25
+                          : token == 26 ? src26
+                          : token == 27 ? src27
+                          : token == 28 ? src28
+                          : token == 29 ? src29
+                          : token == 30 ? src30
+                                        : src31;
     dst[index] = src[col];
   }
 }
@@ -2309,7 +2332,11 @@ __global__ void hf_projection_batch_scatter_small_f32_kernel(
     const float *src, float *dst0, float *dst1, float *dst2, float *dst3,
     float *dst4, float *dst5, float *dst6, float *dst7, float *dst8,
     float *dst9, float *dst10, float *dst11, float *dst12, float *dst13,
-    float *dst14, float *dst15, uint32_t rows, uint32_t tokens) {
+    float *dst14, float *dst15, float *dst16, float *dst17, float *dst18,
+    float *dst19, float *dst20, float *dst21, float *dst22, float *dst23,
+    float *dst24, float *dst25, float *dst26, float *dst27, float *dst28,
+    float *dst29, float *dst30, float *dst31, uint32_t rows,
+    uint32_t tokens) {
   const uint64_t total = static_cast<uint64_t>(rows) * tokens;
   const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
   for (uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x +
@@ -2332,7 +2359,23 @@ __global__ void hf_projection_batch_scatter_small_f32_kernel(
                  : token == 12 ? dst12
                  : token == 13 ? dst13
                  : token == 14 ? dst14
-                               : dst15;
+                 : token == 15 ? dst15
+                 : token == 16 ? dst16
+                 : token == 17 ? dst17
+                 : token == 18 ? dst18
+                 : token == 19 ? dst19
+                 : token == 20 ? dst20
+                 : token == 21 ? dst21
+                 : token == 22 ? dst22
+                 : token == 23 ? dst23
+                 : token == 24 ? dst24
+                 : token == 25 ? dst25
+                 : token == 26 ? dst26
+                 : token == 27 ? dst27
+                 : token == 28 ? dst28
+                 : token == 29 ? dst29
+                 : token == 30 ? dst30
+                               : dst31;
     dst[row] = src[index];
   }
 }
@@ -3806,6 +3849,8 @@ struct NervaCudaHfDecodeSequenceSession {
   uint64_t layout_bytes = 0;
   uint64_t scratch_bytes = 0;
   uint64_t projection_input_bytes = 0;
+  uint64_t projection_batch_input_bytes = 0;
+  uint64_t projection_batch_output_bytes = 0;
   uint64_t prefill_hidden_bytes = 0;
   uint64_t prefill_norm_bytes = 0;
   uint64_t prefill_qkv_bytes = 0;
@@ -3844,6 +3889,8 @@ struct NervaCudaHfDecodeSequenceSession {
   SequenceLayerLayout *device_layouts = nullptr;
   float *device_scratch = nullptr;
   uint16_t *device_projection_input = nullptr;
+  uint16_t *device_projection_batch_input = nullptr;
+  float *device_projection_batch_output = nullptr;
   uint16_t *device_prefill_hidden_a = nullptr;
   uint16_t *device_prefill_hidden_b = nullptr;
   uint16_t *device_prefill_norm = nullptr;
@@ -4024,6 +4071,8 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_decode_seq_len_kv);
   cudaFree(session->device_decode_seq_len_q);
   cudaFree(session->device_decode_q);
+  cudaFree(session->device_projection_batch_output);
+  cudaFree(session->device_projection_batch_input);
   cudaFree(session->device_projection_input);
   cudaFree(session->device_scratch);
   if (session->shared_weights == nullptr) {
@@ -4069,7 +4118,8 @@ void reset_session_graph(NervaCudaHfDecodeSequenceSession *session) {
 uint64_t session_device_footprint(
     const NervaCudaHfDecodeSequenceSession *session) {
   return session->arena_bytes + session->layout_bytes + session->scratch_bytes +
-         session->projection_input_bytes + session->prefill_hidden_bytes * 2 +
+         session->projection_input_bytes + session->projection_batch_input_bytes +
+         session->projection_batch_output_bytes + session->prefill_hidden_bytes * 2 +
          session->prefill_norm_bytes + session->prefill_qkv_bytes +
          session->prefill_qkv_encoded_bytes +
          session->prefill_attn_bytes + session->prefill_o_bytes +
@@ -4086,7 +4136,8 @@ uint64_t session_device_footprint(
 uint64_t session_fixed_footprint_without_prefill_chunk(
     const NervaCudaHfDecodeSequenceSession *session) {
   return session->arena_bytes + session->layout_bytes + session->scratch_bytes +
-         session->projection_input_bytes + session->prefill_hidden_bytes * 2 +
+         session->projection_input_bytes + session->projection_batch_input_bytes +
+         session->projection_batch_output_bytes + session->prefill_hidden_bytes * 2 +
          session->decode_attention_values_bytes +
          session->decode_attention_stats_bytes * 2 + session->decode_q_bytes +
          session->decode_seq_len_bytes +
@@ -6568,6 +6619,13 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       should_pack_cublas_weights(request->hidden, attention_hidden);
   const PackedProjectionShape packed_shape = packed_projection_shape(
       hidden, attention_hidden, kv_hidden, intermediate);
+  const uint64_t projection_batch_output_rows =
+      std::max<uint64_t>(vocab_size,
+                         std::max<uint64_t>(
+                             static_cast<uint64_t>(packed_shape.qkv_rows),
+                             std::max<uint64_t>(
+                                 static_cast<uint64_t>(packed_shape.gate_up_rows),
+                                 hidden)));
   session->dtype = request->dtype;
   session->hidden = request->hidden;
   session->heads = request->heads;
@@ -6587,6 +6645,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);
   session->scratch_bytes = scratch_elements * sizeof(float);
   session->projection_input_bytes = projection_input_elements * sizeof(uint16_t);
+  session->projection_batch_input_bytes =
+      projection_input_elements *
+      static_cast<uint64_t>(kProjectionBatchWorkspaceTokens) * sizeof(uint16_t);
+  session->projection_batch_output_bytes =
+      projection_batch_output_rows *
+      static_cast<uint64_t>(kProjectionBatchWorkspaceTokens) * sizeof(float);
   session->prefill_hidden_bytes =
       static_cast<uint64_t>(request->max_context_tokens) * hidden *
       sizeof(uint16_t);
@@ -6690,6 +6754,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     failure_stage = kCreateStageProjectionInputAlloc;
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_projection_input),
                      session->projection_input_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_projection_batch_input),
+        session->projection_batch_input_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_projection_batch_output),
+        session->projection_batch_output_bytes);
   }
   if (err == cudaSuccess) {
     failure_stage = kCreateStagePrefillHiddenAlloc;
@@ -7653,8 +7727,6 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
   uint32_t rows = 0;
   uint32_t cols = 0;
   const uint16_t *matrix = nullptr;
-  float *batch_output = nullptr;
-  uint64_t batch_output_capacity = 0;
   const SequenceLayerLayout layout =
       layer_projection ? best->host_layouts[request->layer_index]
                        : SequenceLayerLayout{};
@@ -7664,55 +7736,45 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
       cols = best->hidden;
       matrix = best->device_qkv_packed +
                packed_shape.qkv_elements_per_layer * request->layer_index;
-      batch_output = best->device_prefill_qkv;
-      batch_output_capacity = best->prefill_qkv_bytes;
       break;
     case kProjectionBatchKindAttentionOutput:
       rows = best->hidden;
       cols = attention_hidden;
       matrix = best->device_arena + layout.w_o;
-      batch_output = best->device_prefill_o;
-      batch_output_capacity = best->prefill_o_bytes;
       break;
     case kProjectionBatchKindGateUp:
       rows = static_cast<uint32_t>(packed_shape.gate_up_rows);
       cols = best->hidden;
       matrix = best->device_gate_up_packed +
                packed_shape.gate_up_elements_per_layer * request->layer_index;
-      batch_output = best->device_prefill_gate_up;
-      batch_output_capacity = best->prefill_gate_up_bytes;
       break;
     case kProjectionBatchKindDown:
       rows = best->hidden;
       cols = best->intermediate;
       matrix = best->device_arena + layout.w_down;
-      batch_output = best->device_prefill_down;
-      batch_output_capacity = best->prefill_down_bytes;
       break;
     case kProjectionBatchKindLmHead:
       rows = best->vocab_size;
       cols = best->hidden;
       matrix = best->device_arena + best->arena_layout.lm_head;
-      batch_output = best->device_prefill_gate_up;
-      batch_output_capacity = best->prefill_gate_up_bytes;
       break;
     default:
       break;
   }
+  uint16_t *batch_input = best->device_projection_batch_input;
+  float *batch_output = best->device_projection_batch_output;
   const uint64_t input_bytes =
       static_cast<uint64_t>(cols) * block_tokens * sizeof(uint16_t);
   const uint64_t output_bytes =
       static_cast<uint64_t>(rows) * block_tokens * sizeof(float);
   if (rows == 0 || cols == 0 || matrix == nullptr || batch_output == nullptr ||
-      best->device_prefill_norm == nullptr ||
-      best->prefill_norm_bytes < input_bytes ||
-      batch_output_capacity < output_bytes) {
+      batch_input == nullptr || best->projection_batch_input_bytes < input_bytes ||
+      best->projection_batch_output_bytes < output_bytes) {
     out->reason = kProjectionBatchPlanInsufficientScratch;
     out->status = 0;
     return 0;
   }
 
-  uint16_t *batch_input = best->device_prefill_norm;
   auto scatter_destination =
       [&](NervaCudaHfDecodeSequenceSession *session) -> float * {
     LayerScratch scratch = layer_scratch_ptrs(
@@ -7757,11 +7819,15 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     }
   }
 
-  const bool use_small_fused_batch = block_tokens >= 2 && block_tokens <= 16;
-  const uint16_t *pack_src[16] = {
+  const bool use_small_fused_batch = block_tokens >= 2 && block_tokens <= 32;
+  const uint16_t *pack_src[32] = {
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
       nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
       nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
-  float *scatter_dst[16] = {
+  float *scatter_dst[32] = {
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
       nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
       nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
   if (use_small_fused_batch) {
@@ -7804,7 +7870,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
         pack_src[0], pack_src[1], pack_src[2], pack_src[3], pack_src[4],
         pack_src[5], pack_src[6], pack_src[7], pack_src[8], pack_src[9],
         pack_src[10], pack_src[11], pack_src[12], pack_src[13], pack_src[14],
-        pack_src[15], batch_input, cols, block_tokens);
+        pack_src[15], pack_src[16], pack_src[17], pack_src[18], pack_src[19],
+        pack_src[20], pack_src[21], pack_src[22], pack_src[23], pack_src[24],
+        pack_src[25], pack_src[26], pack_src[27], pack_src[28], pack_src[29],
+        pack_src[30], pack_src[31], batch_input, cols, block_tokens);
     err = cudaGetLastError();
     out->pack_kernel_launches += 1;
   } else {
@@ -7842,7 +7911,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
         scatter_dst[3], scatter_dst[4], scatter_dst[5], scatter_dst[6],
         scatter_dst[7], scatter_dst[8], scatter_dst[9], scatter_dst[10],
         scatter_dst[11], scatter_dst[12], scatter_dst[13], scatter_dst[14],
-        scatter_dst[15], rows, block_tokens);
+        scatter_dst[15], scatter_dst[16], scatter_dst[17], scatter_dst[18],
+        scatter_dst[19], scatter_dst[20], scatter_dst[21], scatter_dst[22],
+        scatter_dst[23], scatter_dst[24], scatter_dst[25], scatter_dst[26],
+        scatter_dst[27], scatter_dst[28], scatter_dst[29], scatter_dst[30],
+        scatter_dst[31], rows, block_tokens);
     err = cudaGetLastError();
     out->scatter_kernel_launches += 1;
   } else {
@@ -8771,6 +8844,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
   session->layout_bytes = parent->layout_bytes;
   session->scratch_bytes = parent->scratch_bytes;
   session->projection_input_bytes = parent->projection_input_bytes;
+  session->projection_batch_input_bytes = parent->projection_batch_input_bytes;
+  session->projection_batch_output_bytes = parent->projection_batch_output_bytes;
   session->prefill_hidden_bytes = parent->prefill_hidden_bytes;
   session->prefill_norm_bytes = parent->prefill_norm_bytes;
   session->prefill_qkv_bytes = parent->prefill_qkv_bytes;
@@ -8824,6 +8899,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
     failure_stage = kCreateStageProjectionInputAlloc;
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_projection_input),
                      session->projection_input_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_projection_batch_input),
+        session->projection_batch_input_bytes);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_projection_batch_output),
+        session->projection_batch_output_bytes);
   }
   if (err == cudaSuccess) {
     failure_stage = kCreateStagePrefillHiddenAlloc;

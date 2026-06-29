@@ -18,7 +18,7 @@ impl ProjectionBatchConfig {
 impl Default for ProjectionBatchConfig {
     fn default() -> Self {
         Self {
-            target_block_tokens: 16,
+            target_block_tokens: 32,
             min_block_tokens: 2,
         }
     }
