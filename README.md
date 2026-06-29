@@ -30,7 +30,7 @@ Memory residency, device-first token state, heterogeneous CPU/GPU execution, and
 - [Overview](#overview)
   - [What NERVA is](#what-nerva-is)
   - [The thesis](#the-thesis)
-  - [What the measurements say](#what-the-measurements-say)
+  - [Measured Qwen3-8B performance](#measured-qwen3-8b-performance)
 - [The architecture](#the-architecture)
   - [Why inference needs a new machine](#why-inference-needs-a-new-machine)
   - [What changes](#what-changes)
@@ -53,8 +53,12 @@ Memory residency, device-first token state, heterogeneous CPU/GPU execution, and
 - [Positioning](#positioning)
   - [Relationship to vLLM and rvLLM](#relationship-to-vllm-and-rvllm)
   - [What NERVA is not](#what-nerva-is-not)
-- [Status and direction](#status-and-direction)
-  - [Current stage](#current-stage)
+- [Experimental work](#experimental-work)
+  - [RT-core candidate selection](#rt-core-candidate-selection)
+  - [MoE support](#moe-support)
+  - [Long-context residency](#long-context-residency)
+- [Development state](#development-state)
+  - [Current implementation status](#current-implementation-status)
   - [Long-term goal](#long-term-goal)
 - [Implementation and running it](#implementation-and-running-it)
   - [Current implementation](#current-implementation)
@@ -79,32 +83,47 @@ Current inference engines usually start from a GPU-first assumption. They put th
 
 NERVA starts from a different assumption. The runtime should know where every meaningful block of data lives, who owns it, when it is needed next, whether it is hot or cold, whether it is cheaper to move it or compute beside it, and whether a synchronization is truly required for correctness. From there, inference gets scheduled around the critical path rather than blindly executed as a GPU command loop.
 
-### What the measurements say
+### Measured Qwen3-8B performance
 
-The redesign is anchored in measurement rather than intuition. On an RTX 5090 with 32 GB of VRAM running Qwen3-0.6B, once the model is loaded and warm, answer latency is dominated by the decode loop, the repeated single-token forward passes, and not by prefill, model loading, detokenization, or sampling. For a single prompt of 128 input tokens and 64 output tokens, the first token lands in about 6.61 ms while the full 64-token answer takes about 108.27 ms, so the 63 decode steps after the first account for roughly 94 percent of the answer latency.
+The current real-model baseline is Qwen3-8B BF16 on an RTX 5090. The checked-in artifacts compare NERVA's resident CUDA decode path against a vLLM short-decode latency run on the same local safetensors snapshot. This is a narrow batch-one decode comparison, not a production serving claim.
 
-| Workload, batch / input / output | Average latency |
+| Engine | Artifact | Output tokens | Throughput | p99/token | Notes |
+|---|---|---:|---:|---:|---|
+| NERVA | `docs/source/perf/qwen3_8b_nerva_cuda_generate.json` | 2 | 97.56 tok/s | 10.30 ms | CUDA graph replay, 291 graph nodes/token, `hot_path_allocations: 0` |
+| vLLM | `docs/source/perf/qwen3_8b_vllm_latency.json` | 2 | 89.33 tok/s | 11.66 ms | `vllm bench latency`, request avg 22.39 ms |
+
+The token-parity artifact also checks that the short greedy decode emits the same tokens as vLLM:
+
+| Artifact | Matched | Mismatched | Missing | Extra |
+|---|---:|---:|---:|---:|
+| `docs/source/parity/qwen3_8b_token_parity.json` | 2 | 0 | 0 | 0 |
+
+The Qwen3-8B profile currently says the batch-one bottleneck is projection, not sampling or host traffic:
+
+| NERVA profile bucket | ns/token |
 |---|---:|
-| 1 / 128 / 1, first token | 6.61 ms |
-| 1 / 128 / 64, full answer | 108.27 ms |
-| 8 / 128 / 1 | 19.00 ms |
-| 8 / 128 / 64 | 151.80 ms |
+| QKV / output / MLP / LM-head projection | 10,426,479 |
+| Norm kernels | 996,512 |
+| Attention | 292,699 |
+| MLP elementwise | 141,472 |
+| Sampling | 104,704 |
 
-Profiling a warm single-prompt decode shows the cost concentrating in dense linear algebra, with attention second and KV-cache writes, sampling, and host-device copies far behind. The chart below reproduces the profiler's own kernel buckets for that run, so it reflects relative kernel cost rather than a strict partition of wall time.
+The other checked-in Qwen3-8B result is about amortizing projection work across compatible requests. With 32 short requests, target block size 32, and token identity preserved, the shared-fork batch comparison reaches 1184.47 tok/s versus 127.76 tok/s for the sequential path, a 9.27x decode-wall speedup in that probe.
 
-```mermaid
-pie showData
-    title Profiled decode-path CUDA time by kernel bucket, ms
-    "Dense GEMV / GEMM" : 64.6
-    "aten::mm matmul" : 12.4
-    "FlashAttention split-KV" : 10.4
-    "FlashAttention combine" : 6.6
-    "Prefill context step" : 8.2
-    "KV-cache write" : 2.7
-    "Sampling" : 0.5
-```
+| Artifact | Sequential | Batched | Speedup | Token match |
+|---|---:|---:|---:|---|
+| `docs/source/perf/qwen3_8b_shared_fork_batch_compare_32req_target32.json` | 127.76 tok/s | 1184.47 tok/s | 9.27x | true |
 
-That is the whole reason NERVA puts decode, residency, and the critical path at the center. The wall to attack is per-token dense GEMV and GEMM, attention overhead, and per-step launch and synchronization cost at batch one, not PCIe bandwidth, model loading, or detokenization, which the same measurements rank as minor for this workload.
+The block projection microbench explains why batching matters. At `block_tokens = 8`, exact BF16 block projection improves graph replay per-token cost by 2.59x to 7.81x on the measured Qwen3-8B hot shapes:
+
+| Shape | Per-token graph speedup |
+|---|---:|
+| QKV | 4.81x |
+| Gate/up | 7.76x |
+| Down | 2.59x |
+| LM head | 7.81x |
+
+The practical read is simple: NERVA's current Qwen3-8B path works, matches the vLLM short-token artifact, and is already competitive on a narrow latency check. The next performance work is to make the projection batching path usable for real continuous batching and to prove whether sparse long-context attention can reduce full decode latency without unacceptable quality loss.
 
 ---
 
@@ -458,40 +477,100 @@ NERVA is also not a Python or PyTorch wrapper, and it is not a thin scheduler bo
 
 ---
 
-## Status and direction
+## Experimental work
 
-### Current stage
+### RT-core candidate selection
 
-The current development stage is runtime foundation plus deterministic block, FP16/BF16 precision-block, single-model, vLLM-style token-identity parity, header-only safetensors validation, file-backed safetensors prefetch, tiered-attention, warm-compute, kernel-contract, execution-transaction, memory/fabric-loop, residency, token-policy, phase-handoff, shared-queue, fabric-topology, fabric-backend capability, DPDK UDP protocol, transport-path, transport-registration, stage-pipeline, and same-node multi-GPU probes. The first target is not a serving system; it is a runtime that proves it can initialize the device when one is visible, own memory, allocate static arenas, replay a synthetic decode graph, keep token state on device, emit token ledgers, avoid hot-path allocation, run exact reference and 16-bit Transformer block paths, inspect real model files without bulk payload reads, read planned tensor ranges from safetensors shards, run one exact tiny greedy decode path, compare that token stream against a vLLM-style token artifact, execute exact blockwise attention across DRAM and VRAM tiers, choose CPU/GPU compute placement from visible candidate costs, validate kernel buffer contracts, plan execution transactions with block-version dependencies and classified syncs, advance bounded disk-read, prefetch, staging, eviction, and transport-buffer preparation work ahead of use, make KV residency decisions visible, classify device-fast, host-policy, and hybrid token paths with explicit policy barriers, enforce phase-owned block handoffs with version publication and explicit rejection of stale or uncoordinated writers, pass block handles through bounded preallocated shared queues without copying tensor payloads into queue metadata, report GPU/RDMA PCI-root and NUMA affinity from sysfs, classify RDMA and DPDK backend readiness without claiming unverified direct GPU memory, plan DPDK UDP activation chunks with bounded credits and selective retransmit, prove transport registration cache reuse and stale-mapping rejection, plan activation-only stage boundaries without inter-stage weight movement, and plan same-node GPU islands without treating aggregate VRAM as one coherent allocation.
+NERVA has an experimental RT path for long-context page candidate selection. It uses OptiX hardware traversal to select candidate KV pages, then uses CUDA for exact rerank and attention-stage work. The point is not to run the Transformer on RT cores. The point is to use RT cores for the search-like part of far-context selection, then feed the selected pages back into the normal decode pipeline.
+
+Current knobs:
 
 ```bash
-cargo run -p nerva-bench -- smoke
-cargo run -p nerva-bench -- cuda-graph 1024 64 1
-cargo run -p nerva-bench -- synthetic 1024 64
-cargo run -p nerva-bench -- token-policy
-cargo run -p nerva-bench -- phase-handoff
-cargo run -p nerva-bench -- shared-queue
-cargo run -p nerva-bench -- transaction
-cargo run -p nerva-bench -- memory-loop
-cargo run -p nerva-bench -- block
-cargo run -p nerva-bench -- precision
-cargo run -p nerva-bench -- model 8
-cargo run -p nerva-bench -- vllm-parity path/to/vllm_tokens.json 8
-cargo run -p nerva-bench -- attention
-cargo run -p nerva-bench -- warm
-cargo run -p nerva-bench -- contracts
-cargo run -p nerva-bench -- kv
-cargo run -p nerva-bench -- fabric-topology
-cargo run -p nerva-bench -- fabric-backends
-cargo run -p nerva-bench -- dpdk-udp
-cargo run -p nerva-bench -- transport
-cargo run -p nerva-bench -- transport-matrix
-cargo run -p nerva-bench -- transport-registration
-cargo run -p nerva-bench -- stage-pipeline
-cargo run -p nerva-bench -- multi-gpu
+cargo run -p nerva-bench -- experimental-rt 524288 8 512 64 64 36
+cargo run -p nerva-bench -- experimental-rt-sweep 524288 8 1024 64 64 1 36
+cargo run -p nerva-bench -- experimental-rt-matrix 16 64 36
+cargo run -p nerva -- -m qwen3-8b -p "Tell me a story" -c 32768 -o 2048 --rt
 ```
 
-The `precision` probe runs the same block structure through explicit FP16 and BF16 encoded weights, inputs, outputs, and preallocated scratch, then checks bit-level parity against the reference output encoded to the same dtype. The `safetensors` probes validate single-file and sharded HF tensor metadata by reading bounded headers rather than scanning full payloads, and `resident-shards` reads the planned tensor ranges from shard files into a reusable staging buffer while reporting disk-read events, copy events, ready blocks, and a data hash. The `model` probe is intentionally tiny: a deterministic f32 reference model with exact greedy token parity and ledger checks. The `vllm-parity` probe consumes a vLLM-style token JSON artifact and compares exact token identity, first mismatch, missing/extra token counts, output hashes, and hot-path allocation status against NERVA's deterministic token stream. The `attention` probe is also small, but it verifies exact online-softmax merging across warm DRAM and hot VRAM KV blocks. The `warm` probe compares exact CPU-resident, GPU-resident, GPU-staged, and hybrid dense matvec candidates, records the selected execution owner, and proves the staged path can lose to compute-near-data. The `contracts` probe validates the first decode-kernel contract shape: launch bounds, device-resident buffers, and no hot-path allocation permission. The `transaction` probe plans a decode transaction over resident blocks, validates block readiness and versions, records execution decisions, and separates hard device dependencies from soft host visibility. The `token-policy` probe verifies that device-fast and hybrid validation paths keep next-token causality on the device ring, while host-bound policy work introduces an explicit `PolicySync` and a counted host causality edge. The `phase-handoff` probe validates CPU, GPU, and NIC ownership transfer through a phase transition, increments block versions on publication, records classified `PhaseHandoff` syncs, and rejects stale versions, unready blocks, illegal shared-read mutations, and wrong-owner writer attempts. The `shared-queue` probe validates a bounded preallocated descriptor/completion queue with atomic-control queue blocks, single-producer/single-consumer ownership checks, overflow rejection, and zero tensor payload bytes copied into queue metadata. The `memory-loop` probe plans and executes bounded ahead-of-use disk-read, prefetch, staging, eviction, and transport-buffer preparation tasks while ledgering residency decisions, copy events, phase handoffs, overlap, and zero forbidden pageable or per-token registration behavior. The `kv` probe exercises a small KV page pool with prefetch, demotion, eviction, copy attribution, and visible-stall ledger events. The `fabric-topology` probe reads Linux sysfs to report the GPU PCI bus, RDMA devices, NIC netdevs, NUMA locality, PCI root-complex affinity, IOMMU mode, peer-memory module state, and whether the runtime must degrade to pinned-host staging. The `fabric-backends` probe classifies RDMA direct, RDMA pinned-host, DPDK GPU-buffer, DPDK pinned-host, kernel UDP, and TCP-control readiness from sysfs, module state, hugepages, in-tree shim presence, and `pkg-config libdpdk` evidence. The `dpdk-udp` probe plans a decode activation transfer as bounded message chunks with preposted receives, credit windows, sender retention, receiver bitmaps, range NACKs, selective retransmit, no per-packet ACKs, preallocated mbufs/rings, and pinned-host fallback when GPU buffers are not verified. The `transport` and `transport-matrix` probes classify legal direct, pinned-host, CPU-produced, and mapped-pinned paths with explicit fallback accounting. The `transport-registration` probe prepares registrations before hot-path entry, reuses them by block and replica identity, rejects stale allocation/version observations, and records attempted hot-path registration as a rejected invariant violation rather than a performed registration. The `stage-pipeline` probe validates stage-local weight and KV ownership while moving only decode activations across stage boundaries. The `multi-gpu` probe validates same-node GPU island planning, keeps hot allocations below per-GPU VRAM, keeps DRAM backing explicit for stage-owned weights, assigns NIC-near egress, and rejects inter-GPU weight movement or global all-reduce as the default. The next milestones are to connect these contracts to a larger real-model execution path, broader residency planning, CPU/GPU compute-near-data experiments, and distributed execution.
+The measured 512k-token synthetic selector point on an RTX 5090 is:
+
+| Field | Value |
+|---|---:|
+| Context tokens | 524,288 |
+| Pages, page size | 8,192 pages, 64 tokens/page |
+| Query count | 8 |
+| Candidate pages/query | 512 |
+| Dense selector | 28.664 us |
+| OptiX selector | 9.485 us |
+| OptiX selector + CUDA rerank | 13.644 us |
+| Selector speedup | 3.02x |
+| Selector + rerank speedup | 2.10x |
+| Estimated RT attention KV fraction | 78,125 ppm |
+| Attention-mass recall | 954,498 ppm avg |
+
+The same run reports synthetic full dense attention at 5.238 ms/layer and the RT selected-page attention stage at 1.211 ms/layer, or 1.202 ms/layer with selector/local overlap modeled. That is a useful attention-stage result, but it is not yet a proven full Qwen decode win. Full decode still has projection, MLP, sampling, graph, and quality effects, and sparse selected-page decode can change outputs unless the candidate set preserves the relevant attention mass.
+
+The current real-model integration has three modes:
+
+| Mode | Purpose |
+|---|---|
+| `--rt-mode shadow` | Launch the selector and report counters while dense decode remains authoritative. |
+| `--rt-mode sparse` | Use selected pages in the sparse attention path when the selected page count is below dense page count. |
+| `--rt-mode auto` | Enable sparse mode only when the runtime can use it; otherwise fall back explicitly. |
+
+The open performance question is whether RT-selected far pages plus local/sink attention reduce full per-token latency at 32k and above without losing quality. The selector result is promising; full decode improvement remains under measurement.
+
+### MoE support
+
+Qwen3-MoE support is being built as real MoE support, not as fake dense projection naming. The model parser recognizes Qwen3-MoE metadata, sparse MLP layer schedules, router weights, per-expert gate/up/down tensors, top-k routing settings, and optional shared-expert tensors.
+
+Current implemented pieces:
+
+| Area | Current state |
+|---|---|
+| Qwen3-MoE config parsing | `Qwen3MoeForCausalLM`, `num_experts`, `num_experts_per_tok`, `moe_intermediate_size`, `mlp_only_layers`, QK norm, and shared-expert fields are parsed. |
+| Manifest layout | Per-expert tensors are emitted as real HF names such as `model.layers.N.mlp.experts.E.gate_proj.weight`, `up_proj.weight`, and `down_proj.weight`. |
+| Real configs covered by tests | Qwen3-30B-A3B produces 18,867 manifest entries; Qwen3-Coder-480B-A35B produces 30,321 manifest entries. |
+| Runtime limits | Native exact-runtime contract currently caps experts at 256 and top-k at 16. |
+| Shared experts | `shared_expert.gate_proj`, `shared_expert.up_proj`, `shared_expert.down_proj`, and `shared_expert_gate.weight` are represented. |
+
+Qwen3.5 / Qwen3.5-MoE configs are recognized separately, but hybrid linear-attention models are rejected until the runtime implements the required Qwen3.5 attention pieces, including GatedDeltaNet state handling and the Qwen3.5 full-attention differences. That rejection is deliberate; it prevents a config parser match from becoming a false runtime support claim.
+
+### Long-context residency
+
+The long-context target is still exact inference with a managed hot/warm/cold KV hierarchy. Recent KV pages stay hot in VRAM, warm pages can move to DRAM, cold pages are retained outside the decode-critical set, and selection logic decides which far pages must return to the hot path. RT candidate selection is one candidate mechanism for that far-page search. It does not replace attention, projection, or sampling.
+
+The planned correctness rule is unchanged: if NERVA claims exact mode, it must not silently drop context. Sparse or selected-page modes must be labeled as experimental unless they prove parity or a quality bound for the workload being run.
+
+## Development state
+
+### Current implementation status
+
+NERVA is currently a single-GPU, CUDA-first runtime with a real Qwen3-8B CUDA path and a set of probes that lock down the runtime contracts before the system grows into a production server.
+
+Implemented or actively wired:
+
+| Area | Status |
+|---|---|
+| Qwen3-8B BF16 CUDA decode | Real local safetensors path, tokenizer path, CUDA graph decode, Qwen3 QK norm, and checked-in vLLM parity/perf artifacts. |
+| Runtime contracts | Static arenas, device token state, token ledgers, graph replay, no hot-path allocation checks, classified syncs, and explicit host/device causality accounting. |
+| Safetensors handling | Header validation, sharded manifest planning, bounded file-range reads, file-backed prefetch, descriptor hashes, and staged resident weights. |
+| Exact small-model probes | f32, FP16, and BF16 block/model paths with token or bit parity against reference paths. |
+| Attention and KV probes | Exact online-softmax blockwise attention, KV page residency decisions, prefetch, demotion, eviction, and stall ledger events. |
+| Warm compute | CPU-resident, GPU-resident, GPU-staged, and hybrid matvec candidates are measured instead of assumed. |
+| Transport groundwork | Fabric topology, RDMA/DPDK/backend capability classification, DPDK UDP chunk planning, registration-cache invariants, stage-pipeline planning, and same-node multi-GPU island planning. |
+| Experimental RT | OptiX-backed candidate selection, CUDA rerank, selected-page sparse attention counters, shadow/sparse/auto modes, and synthetic attention-stage estimates. |
+| MoE groundwork | Qwen3-MoE parser, manifest, shared-expert roles, loader wiring, native contract limits, and real-config manifest tests. |
+
+Not finished:
+
+| Area | Current limitation |
+|---|---|
+| Production serving | No production scheduler/API server yet. |
+| Full RT decode proof | Candidate selection is measured; full Qwen decode speedup and quality bounds are still being tested. |
+| Long-context overprovisioning | Hot/warm/cold KV design exists, but exact multi-tier long-context decode is not complete. |
+| Qwen3.5 hybrid attention | Configs are recognized and intentionally rejected until the required attention runtime exists. |
+| Distributed execution | Transport and stage probes exist; multi-host inference is still future work. |
 
 ### Long-term goal
 
@@ -539,9 +618,13 @@ This repository is in the runtime foundation stage, so it is not a production mo
 | Safetensors file prefetch | Resident shard prefetch reads planned file ranges from safetensors shards, validates complete block coverage, records disk-read/copy events, and hashes read bytes. |
 | Single model | One exact tiny f32 greedy decode path checks deterministic token parity and per-token ledgers. |
 | Precision single model | One exact tiny FP16 and BF16 Transformer greedy decode path uses encoded weights, encoded embeddings, encoded LM head, reusable scratch, per-token ledgers, and token parity. |
+| Qwen3-8B CUDA decode | The `qwen3-8b` alias resolves to the local Qwen/Qwen3-8B HF snapshot, loads BF16 safetensors, runs Qwen3 QK norm, and emits JSON decode metrics from the CUDA path. |
+| Qwen3-8B vLLM comparison | Checked-in artifacts record NERVA/vLLM short-decode latency and exact token identity parity for the local Qwen3-8B snapshot. |
 | vLLM token parity | A vLLM-style token artifact is compared against NERVA token IDs with exact mismatch, missing, extra, and hash accounting. |
 | Tiered attention | Exact online-softmax blockwise attention merges warm DRAM and hot VRAM KV blocks without changing semantics. |
+| Experimental RT selector | OptiX-backed page candidate selection, CUDA rerank, synthetic attention-stage estimates, and Qwen decode shadow/sparse/auto flags are wired for measurement. |
 | Warm compute | Exact dense matvec candidates compare CPU-resident, GPU-resident, GPU-staged, and hybrid execution with selected-owner ledgering. |
+| Qwen3-MoE groundwork | Qwen3-MoE parser, real per-expert manifest entries, shared-expert roles, native contract limits, and loader wiring are present; full production MoE decode remains under development. |
 | Kernel contracts | Decode-kernel contract descriptors validate launch bounds, device-resident buffers, and zero hot-path allocation permission. |
 | Residency probe | KV page placement across DRAM and VRAM produces explicit prefetch, demotion, eviction, copy, stall, and residency-decision ledger entries. |
 | Fabric topology | Linux sysfs topology discovery reports GPU/RDMA PCI bus IDs, NUMA affinity, PCI root-complex affinity, IOMMU mode, peer-memory module state, and explicit GPUDirect-to-pinned-host degradation. |
@@ -592,6 +675,10 @@ cargo run -p nerva-bench -- transport-matrix
 cargo run -p nerva-bench -- transport-registration
 cargo run -p nerva-bench -- stage-pipeline
 cargo run -p nerva-bench -- multi-gpu
+cargo run -p nerva-bench -- experimental-rt 524288 8 512 64 64 36
+cargo run -p nerva-bench -- experimental-rt-matrix 16 64 36
+cargo run -p nerva-bench -- hf-cuda-shared-fork-batch-compare path/to/qwen3-8b 32 128 4 32 2 "Hello" 120
+cargo run -p nerva -- -m qwen3-8b -p "Tell me a story" -c 32768 -o 2048
 ```
 
-The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, exact token parity for the f32 model probe, exact FP16/BF16 token parity for the precision model probe, exact FP16/BF16 bit parity for the precision block probe, bounded safetensors `header_bytes` and `payload_bytes`, safetensors file-prefetch `disk_read_events`, `ready_blocks`, and `data_hash`, exact vLLM-style token identity parity, exact dense-reference parity for the attention tests, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, token-policy `policy_syncs`, token-policy `device_fast_host_dependencies: 0`, phase-handoff `phase_handoff_syncs`, phase-handoff `owner_mismatch_rejections`, shared-queue `queue_full_rejections`, shared-queue `payload_bytes_in_queue: 0`, transaction `block_version_dependencies`, transaction `hard_syncs`, transaction `soft_visibility_syncs`, transaction `phase_handoff_syncs`, memory-loop `queue_overflows: 0`, memory-loop `pageable_copies: 0`, memory-loop `per_token_registrations: 0`, memory-loop `page_faults: 0`, fabric-topology `false_direct_claims: 0`, fabric-topology `degraded_to_pinned_host` when GPUDirect is not verified, fabric-backend `false_direct_claims: 0`, fabric-backend `explicit_degradations`, fabric-backend `dpdk_pkg_config`, DPDK UDP `direct_gpu_memory_claimed: false`, DPDK UDP `ack_packets: 0`, DPDK UDP `selective_retransmits`, warm-compute `execution_decisions`, contract `device_resident_buffers`, explicit KV residency transfer and stall ledger events, transport `pageable_copies: 0`, transport `per_token_registrations: 0`, transport-registration `cache_hits`, transport-registration `stale_address_rejections`, transport-registration `per_token_registrations: 0`, stage-pipeline `inter_stage_weight_bytes: 0`, stage-pipeline `all_reduce_bytes: 0`, multi-gpu `aggregate_vram_pool_claimed: false`, multi-gpu `inter_gpu_weight_bytes: 0`, and multi-gpu `all_reduce_bytes: 0`.
+The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, exact token parity for the f32 model probe, exact FP16/BF16 token parity for the precision model probe, exact FP16/BF16 bit parity for the precision block probe, bounded safetensors `header_bytes` and `payload_bytes`, safetensors file-prefetch `disk_read_events`, `ready_blocks`, and `data_hash`, exact vLLM-style token identity parity, Qwen3-8B `token_match: true` for shared-fork comparisons, exact dense-reference parity for the attention tests, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, token-policy `policy_syncs`, token-policy `device_fast_host_dependencies: 0`, phase-handoff `phase_handoff_syncs`, phase-handoff `owner_mismatch_rejections`, shared-queue `queue_full_rejections`, shared-queue `payload_bytes_in_queue: 0`, transaction `block_version_dependencies`, transaction `hard_syncs`, transaction `soft_visibility_syncs`, transaction `phase_handoff_syncs`, memory-loop `queue_overflows: 0`, memory-loop `pageable_copies: 0`, memory-loop `per_token_registrations: 0`, memory-loop `page_faults: 0`, fabric-topology `false_direct_claims: 0`, fabric-topology `degraded_to_pinned_host` when GPUDirect is not verified, fabric-backend `false_direct_claims: 0`, fabric-backend `explicit_degradations`, fabric-backend `dpdk_pkg_config`, DPDK UDP `direct_gpu_memory_claimed: false`, DPDK UDP `ack_packets: 0`, DPDK UDP `selective_retransmits`, warm-compute `execution_decisions`, contract `device_resident_buffers`, explicit KV residency transfer and stall ledger events, experimental RT `real_rt_backend_available`, `candidate_parity_checked`, `candidate_parity_mismatches: 0`, `attention_mass_recall_*`, and `full_decode_latency_measured: false` on derived estimates, transport `pageable_copies: 0`, transport `per_token_registrations: 0`, transport-registration `cache_hits`, transport-registration `stale_address_rejections`, transport-registration `per_token_registrations: 0`, stage-pipeline `inter_stage_weight_bytes: 0`, stage-pipeline `all_reduce_bytes: 0`, multi-gpu `aggregate_vram_pool_claimed: false`, multi-gpu `inter_gpu_weight_bytes: 0`, and multi-gpu `all_reduce_bytes: 0`.
