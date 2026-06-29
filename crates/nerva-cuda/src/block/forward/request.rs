@@ -1,8 +1,8 @@
 use core::ptr;
 
 use crate::block::ffi::{
-    run_block_forward_u16, NervaCudaBlockForwardRequest, NervaCudaBlockForwardResult,
-    CUDA_ERROR_NO_DEVICE,
+    CUDA_ERROR_NO_DEVICE, NervaCudaBlockForwardRequest, NervaCudaBlockForwardResult,
+    run_block_forward_u16,
 };
 use crate::block::forward::summary::CudaBlockForwardSummary;
 use crate::smoke::status::SmokeStatus;

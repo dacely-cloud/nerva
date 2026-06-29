@@ -1,7 +1,7 @@
 use crate::sampler::ffi::{
-    run_hf_sample_u16, NervaCudaHfSamplerRequest, NervaCudaHfSamplerResult, CUDA_ERROR_NO_DEVICE,
+    CUDA_ERROR_NO_DEVICE, NervaCudaHfSamplerRequest, NervaCudaHfSamplerResult, run_hf_sample_u16,
 };
-use crate::sampler::hf_head::summary::{empty_summary, CudaHfSamplerSummary};
+use crate::sampler::hf_head::summary::{CudaHfSamplerSummary, empty_summary};
 use crate::smoke::status::SmokeStatus;
 
 pub const CUDA_HF_SAMPLER_DTYPE_F16: u32 = 0;

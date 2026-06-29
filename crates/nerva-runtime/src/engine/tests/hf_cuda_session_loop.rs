@@ -7,7 +7,7 @@ use crate::engine::tests::hf_fixture::{remove_hf_checkpoint_dir, write_kv_hf_che
 
 #[test]
 fn file_backed_hf_cuda_session_loop_advances_without_prompt_h2d() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     if crate::capabilities::discovery::cuda_smoke().status != SmokeStatus::Ok {
         return;

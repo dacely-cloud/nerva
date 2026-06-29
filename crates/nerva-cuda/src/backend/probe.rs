@@ -1,6 +1,6 @@
-use crate::backend::ffi::{run_backend_contract_smoke, NervaCudaBackendContractResult};
+use crate::backend::ffi::{NervaCudaBackendContractResult, run_backend_contract_smoke};
 use crate::backend::summary::CudaBackendContractSummary;
-use crate::smoke::ffi::{c_char_array_to_string, CUDA_ERROR_NO_DEVICE};
+use crate::smoke::ffi::{CUDA_ERROR_NO_DEVICE, c_char_array_to_string};
 use crate::smoke::status::SmokeStatus;
 
 pub fn backend_contract_smoke(

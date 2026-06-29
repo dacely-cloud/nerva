@@ -70,6 +70,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
     };
     let rt_decode = HfCudaRtDecodeConfig {
         enabled: parsed.rt,
+        mode: rt_mode_code(&parsed.rt_mode)?,
         ..HfCudaRtDecodeConfig::default()
     };
     let queue_capacity = parsed.queue_capacity.unwrap_or(DEFAULT_QUEUE_CAPACITY);
@@ -285,6 +286,23 @@ fn generate_json_output(
         chunks,
         token_critical_paths
     ))
+}
+
+fn rt_mode_code(mode: &str) -> Result<u32, String> {
+    match mode {
+        "auto" => Ok(1),
+        "shadow" => Ok(2),
+        "sparse" => Ok(3),
+        _ => Err(format!("invalid --rt-mode: {mode}")),
+    }
+}
+
+fn rt_mode_name(mode: u32) -> &'static str {
+    match mode {
+        2 => "shadow",
+        3 => "sparse",
+        _ => "auto",
+    }
 }
 
 fn tokens_per_second(tokens: usize, elapsed_ns: u128) -> String {

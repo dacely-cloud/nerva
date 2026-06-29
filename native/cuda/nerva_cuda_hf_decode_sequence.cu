@@ -25,6 +25,14 @@
 #include <unordered_map>
 #include <vector>
 
+extern "C" int nerva_cuda_rt_candidate_selector_create(
+    uint32_t pages, uint32_t page_tokens, uint32_t query_count,
+    uint32_t candidates_per_query, uint32_t *candidate_pages, void *stream,
+    void **selector_out, int32_t *cuda_error_out);
+extern "C" int nerva_cuda_rt_candidate_selector_launch(
+    void *selector, void *stream, int32_t *cuda_error_out);
+extern "C" void nerva_cuda_rt_candidate_selector_destroy(void *selector);
+
 #if NERVA_HAVE_CUDNN_FRONTEND
 #include <cudnn.h>
 #include <cudnn_frontend.h>
@@ -68,7 +76,7 @@ enum CreateFailureStage : int32_t {
   kCreateStageDecodeAttentionAlloc = 32,
   kCreateStageDecodeSdpaAlloc = 33,
   kCreateStageProjectionPlanAutotune = 34,
-  kCreateStageExperimentalRtDecodeUnsupported = 35,
+  kCreateStageExperimentalRtDecodeInit = 35,
 };
 
 struct SessionSharedWeights {
@@ -273,6 +281,11 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t experimental_rt_pages = 0;
   uint32_t experimental_rt_local_window_tokens = 0;
   uint32_t experimental_rt_sink_tokens = 0;
+  uint32_t experimental_rt_query_count = 0;
+  uint64_t experimental_rt_candidate_pages_bytes = 0;
+  uint64_t experimental_rt_shadow_launches = 0;
+  void *experimental_rt_selector = nullptr;
+  uint32_t *device_experimental_rt_candidate_pages = nullptr;
   float rms_eps = 0.0f;
   float rope_theta = 0.0f;
   SequenceArenaLayout arena_layout{};
@@ -449,6 +462,12 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   if (session == nullptr) {
     return;
   }
+  if (session->experimental_rt_selector != nullptr) {
+    nerva_cuda_rt_candidate_selector_destroy(session->experimental_rt_selector);
+    session->experimental_rt_selector = nullptr;
+  }
+  cudaFree(session->device_experimental_rt_candidate_pages);
+  session->device_experimental_rt_candidate_pages = nullptr;
   if (session->cached_graph_exec != nullptr) {
     cudaGraphExecDestroy(session->cached_graph_exec);
   }
@@ -564,7 +583,8 @@ uint64_t session_device_footprint(
          session->decode_seq_len_bytes +
          session->packed_qkv_bytes + session->packed_gate_up_bytes + session->kv_bytes +
          session->kv_block_table_bytes +
-         session->prompt_bytes + session->slots_bytes + sizeof(uint32_t) +
+         session->prompt_bytes + session->slots_bytes +
+         session->experimental_rt_candidate_pages_bytes + sizeof(uint32_t) +
          kCublasWorkspaceBytes;
 }
 
@@ -578,7 +598,8 @@ uint64_t session_fixed_footprint_without_prefill_chunk(
          session->decode_seq_len_bytes +
          session->packed_qkv_bytes + session->packed_gate_up_bytes + session->kv_bytes +
          session->kv_block_table_bytes +
-         session->prompt_bytes + session->slots_bytes + sizeof(uint32_t) +
+         session->prompt_bytes + session->slots_bytes +
+         session->experimental_rt_candidate_pages_bytes + sizeof(uint32_t) +
          kCublasWorkspaceBytes;
 }
 
@@ -590,6 +611,81 @@ uint64_t sat_add_u64(uint64_t lhs, uint64_t rhs) {
 uint64_t sat_mul_u64(uint64_t lhs, uint64_t rhs) {
   if (lhs != 0 && rhs > UINT64_MAX / lhs) return UINT64_MAX;
   return lhs * rhs;
+}
+
+uint32_t ceil_div_u32(uint32_t value, uint32_t divisor);
+
+uint32_t clamp_nonzero_u32(uint32_t value, uint32_t fallback) {
+  return value == 0 ? fallback : value;
+}
+
+cudaError_t initialize_experimental_rt_shadow_selector(
+    NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr || session->experimental_rt_decode_requested == 0) {
+    return cudaSuccess;
+  }
+  const uint32_t page_tokens =
+      clamp_nonzero_u32(session->experimental_rt_page_tokens, 64u);
+  const uint32_t pages = ceil_div_u32(session->max_context_tokens, page_tokens);
+  if (pages == 0) {
+    return cudaErrorInvalidValue;
+  }
+  const uint32_t requested_candidates =
+      clamp_nonzero_u32(session->experimental_rt_pages, pages);
+  const uint32_t candidates = requested_candidates < pages ? requested_candidates : pages;
+  const uint32_t query_count = session->kv_heads == 0 ? 1u : session->kv_heads;
+  const uint64_t candidate_count =
+      static_cast<uint64_t>(query_count) * candidates;
+  if (candidate_count == 0 ||
+      candidate_count > UINT64_MAX / sizeof(uint32_t)) {
+    return cudaErrorInvalidValue;
+  }
+  session->experimental_rt_page_tokens = page_tokens;
+  session->experimental_rt_pages = candidates;
+  session->experimental_rt_query_count = query_count;
+  session->experimental_rt_candidate_pages_bytes =
+      candidate_count * sizeof(uint32_t);
+  cudaError_t err = cudaMalloc(
+      reinterpret_cast<void **>(&session->device_experimental_rt_candidate_pages),
+      session->experimental_rt_candidate_pages_bytes);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  int32_t rt_cuda_error = static_cast<int32_t>(cudaSuccess);
+  void *selector = nullptr;
+  const int rt_status = nerva_cuda_rt_candidate_selector_create(
+      pages, page_tokens, query_count, candidates,
+      session->device_experimental_rt_candidate_pages, session->stream,
+      &selector, &rt_cuda_error);
+  if (rt_status != 0 || selector == nullptr) {
+    cudaFree(session->device_experimental_rt_candidate_pages);
+    session->device_experimental_rt_candidate_pages = nullptr;
+    session->experimental_rt_candidate_pages_bytes = 0;
+    return rt_cuda_error == static_cast<int32_t>(cudaSuccess)
+               ? cudaErrorNotSupported
+               : static_cast<cudaError_t>(rt_cuda_error);
+  }
+  session->experimental_rt_selector = selector;
+  session->experimental_rt_decode_enabled = 1;
+  return cudaSuccess;
+}
+
+cudaError_t launch_experimental_rt_shadow_selector(
+    NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr || session->experimental_rt_decode_enabled == 0 ||
+      session->experimental_rt_selector == nullptr) {
+    return cudaSuccess;
+  }
+  int32_t rt_cuda_error = static_cast<int32_t>(cudaSuccess);
+  const int rt_status = nerva_cuda_rt_candidate_selector_launch(
+      session->experimental_rt_selector, session->stream, &rt_cuda_error);
+  if (rt_status != 0) {
+    return rt_cuda_error == static_cast<int32_t>(cudaSuccess)
+               ? cudaErrorUnknown
+               : static_cast<cudaError_t>(rt_cuda_error);
+  }
+  session->experimental_rt_shadow_launches += 1;
+  return cudaSuccess;
 }
 
 uint64_t prefill_chunk_scratch_bytes(uint64_t chunk_tokens,
@@ -2866,11 +2962,6 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     out->failure_stage = kCreateStageInvalidRequest;
     return -1;
   }
-  if (request->experimental_rt_decode != 0) {
-    out->failure_stage = kCreateStageExperimentalRtDecodeUnsupported;
-    return -1;
-  }
-
   cudaError_t err = cudaGetDeviceCount(&out->device_count);
   if (err != cudaSuccess) {
     return fail(out, err, kCreateStageGetDeviceCount);
@@ -3265,6 +3356,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     failure_stage = kCreateStageStopEventCreate;
     err = cudaEventCreate(&session->profile_stop);
   }
+  if (err == cudaSuccess && session->experimental_rt_decode_requested != 0) {
+    failure_stage = kCreateStageExperimentalRtDecodeInit;
+    err = initialize_experimental_rt_shadow_selector(session);
+  }
   if (err != cudaSuccess) {
     fail(out, err, failure_stage);
     cudaFreeHost(host_arena);
@@ -3508,6 +3603,13 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
   }
   if (err == cudaSuccess) err = cudaEventRecord(session->device_start, session->stream);
   for (uint32_t step = 0; err == cudaSuccess && step < context_steps; ++step) {
+    err = launch_experimental_rt_shadow_selector(session);
+    if (err == cudaSuccess && session->experimental_rt_decode_enabled != 0) {
+      out->kernel_launches += 1;
+    }
+    if (err != cudaSuccess) {
+      break;
+    }
     err = cudaGraphLaunch(session->cached_graph_exec, session->stream);
     if (err == cudaSuccess) {
       out->graph_replays += 1;
@@ -3699,6 +3801,13 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
   if (err == cudaSuccess && run_count != 0)
     err = cudaEventRecord(session->device_start, session->stream);
   for (uint32_t step = 0; err == cudaSuccess && step < run_count; ++step) {
+    err = launch_experimental_rt_shadow_selector(session);
+    if (err == cudaSuccess && session->experimental_rt_decode_enabled != 0) {
+      out->kernel_launches += 1;
+    }
+    if (err != cudaSuccess) {
+      break;
+    }
     err = cudaGraphLaunch(session->cached_graph_exec, session->stream);
     if (err == cudaSuccess) {
       out->graph_replays += 1;
@@ -5177,7 +5286,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
   session->detailed_profile = request->detailed_profile == 0 ? 0u : 1u;
   session->experimental_rt_decode_requested =
       parent->experimental_rt_decode_requested;
-  session->experimental_rt_decode_enabled = parent->experimental_rt_decode_enabled;
+  session->experimental_rt_decode_enabled = 0;
   session->experimental_rt_page_tokens = parent->experimental_rt_page_tokens;
   session->experimental_rt_pages = parent->experimental_rt_pages;
   session->experimental_rt_local_window_tokens =
@@ -5415,6 +5524,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
   if (err == cudaSuccess) {
     failure_stage = kCreateStageStopEventCreate;
     err = cudaEventCreate(&session->profile_stop);
+  }
+  if (err == cudaSuccess && session->experimental_rt_decode_requested != 0) {
+    failure_stage = kCreateStageExperimentalRtDecodeInit;
+    err = initialize_experimental_rt_shadow_selector(session);
   }
   if (err == cudaSuccess) {
     const uint32_t blocks =

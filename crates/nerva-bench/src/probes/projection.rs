@@ -8,16 +8,16 @@ use nerva_cuda::decode::hf_sequence::session::request::{
 };
 use nerva_cuda::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use nerva_cuda::decode::hf_sequence::weight_plan::{
-    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
-    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
+    CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_runtime::engine::hf_cuda_decode::continuous_batch::{
-    advance_continuous_decode_batch_once, CudaDecodeLoopBatchEntry,
+    CudaDecodeLoopBatchEntry, advance_continuous_decode_batch_once,
 };
 use nerva_runtime::engine::hf_cuda_decode::projection_batch::{
-    plan_exact_projection_batch, ProjectionBatchCandidate, ProjectionBatchConfig,
-    ProjectionBatchModelKey, ProjectionBatchPlanReason,
+    ProjectionBatchCandidate, ProjectionBatchConfig, ProjectionBatchModelKey,
+    ProjectionBatchPlanReason, plan_exact_projection_batch,
 };
 
 use crate::json::json_escape;
@@ -513,6 +513,7 @@ fn create_synthetic_batch_sessions(
         weight_plan: Some(weight_plan),
         weight_blocks: &weight_blocks,
         detailed_profile: false,
+        experimental_rt: Default::default(),
     };
     let mut sessions = Vec::with_capacity(count);
     if count == 0 {

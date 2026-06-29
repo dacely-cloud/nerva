@@ -43,16 +43,22 @@ use crate::smoke::status::SmokeStatus;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CudaHfDecodeSequenceExperimentalRtConfig {
     pub enabled: bool,
+    pub mode: u32,
     pub page_tokens: u32,
     pub pages: u32,
     pub local_window_tokens: u32,
     pub sink_tokens: u32,
 }
 
+pub const CUDA_HF_EXPERIMENTAL_RT_MODE_AUTO: u32 = 1;
+pub const CUDA_HF_EXPERIMENTAL_RT_MODE_SHADOW: u32 = 2;
+pub const CUDA_HF_EXPERIMENTAL_RT_MODE_SPARSE: u32 = 3;
+
 impl Default for CudaHfDecodeSequenceExperimentalRtConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            mode: CUDA_HF_EXPERIMENTAL_RT_MODE_AUTO,
             page_tokens: 64,
             pages: 512,
             local_window_tokens: 8192,
@@ -299,6 +305,7 @@ impl<'a> CudaHfDecodeSequenceSessionConfig<'a> {
             planned_weight_descriptor_hash: plan.descriptor_hash,
             detailed_profile: self.detailed_profile as u32,
             experimental_rt_decode: self.experimental_rt.enabled as u32,
+            experimental_rt_mode: self.experimental_rt.mode,
             experimental_rt_page_tokens: self.experimental_rt.page_tokens,
             experimental_rt_pages: self.experimental_rt.pages,
             experimental_rt_local_window_tokens: self.experimental_rt.local_window_tokens,

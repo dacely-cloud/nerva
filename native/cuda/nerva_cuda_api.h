@@ -457,6 +457,7 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateRequest {
   uint64_t planned_weight_descriptor_hash;
   uint32_t detailed_profile;
   uint32_t experimental_rt_decode;
+  uint32_t experimental_rt_mode;
   uint32_t experimental_rt_page_tokens;
   uint32_t experimental_rt_pages;
   uint32_t experimental_rt_local_window_tokens;
@@ -492,6 +493,7 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
   uint64_t planned_weight_descriptor_hash;
   uint32_t experimental_rt_decode_requested;
   uint32_t experimental_rt_decode_enabled;
+  uint32_t experimental_rt_mode;
   uint32_t experimental_rt_page_tokens;
   uint32_t experimental_rt_pages;
   uint32_t experimental_rt_local_window_tokens;

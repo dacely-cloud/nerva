@@ -35,6 +35,8 @@ namespace {
 
 constexpr uint32_t kThreads = 256;
 constexpr uint32_t kMaxInitBlocks = 4096;
+constexpr uint32_t kMaxAttentionDims = 32;
+constexpr uint32_t kDefaultLocalWindowTokens = 8192;
 
 uint64_t checked_mul_u64(uint64_t lhs, uint64_t rhs) {
   if (lhs == 0 || rhs == 0) {
@@ -297,6 +299,20 @@ static __forceinline__ __device__ unsigned int hash32(unsigned int value) {
   return value;
 }
 
+static __forceinline__ __device__ unsigned int query_center_page(
+    unsigned int query, unsigned int pages, unsigned int candidates_per_query) {
+  if (pages == 0u) {
+    return 0u;
+  }
+  const unsigned int seed = hash32(query * 977u + 31u);
+  if (candidates_per_query > 0u && candidates_per_query < pages) {
+    const unsigned int half = candidates_per_query / 2u;
+    const unsigned int span = pages - candidates_per_query + 1u;
+    return half + (seed % span);
+  }
+  return seed % pages;
+}
+
 extern "C" __global__ void __raygen__candidate() {
   const uint3 idx = optixGetLaunchIndex();
   const unsigned int slot = idx.x;
@@ -306,7 +322,8 @@ extern "C" __global__ void __raygen__candidate() {
     return;
   }
 
-  const unsigned int center = hash32(query * 977u + 31u) % params.pages;
+  const unsigned int center =
+      query_center_page(query, params.pages, params.candidates_per_query);
   const unsigned int half = params.candidates_per_query / 2u;
   const unsigned int target = (center + params.pages + slot - half) % params.pages;
   const unsigned int x_index = target % params.grid_width;
@@ -379,9 +396,9 @@ void set_nvrtc_reason(NervaCudaExperimentalRtCandidateBenchResult *out,
   set_optix_fallback_reason(out, stage, detail);
 }
 
-bool compile_optix_candidate_ptx(
+bool compile_optix_candidate_input(
     const NervaCudaExperimentalRtCandidateBenchResult *out,
-    std::string *ptx, NervaCudaExperimentalRtCandidateBenchResult *result) {
+    std::string *input, NervaCudaExperimentalRtCandidateBenchResult *result) {
   nvrtcProgram program = nullptr;
   nvrtcResult nvrtc = nvrtcCreateProgram(&program, kOptixCandidateDeviceSource,
                                          "nerva_experimental_rt_optix.cu", 0,
@@ -391,25 +408,23 @@ bool compile_optix_candidate_ptx(
     return false;
   }
 
-  const int major = out->compute_capability_major > 0
-                        ? out->compute_capability_major
-                        : 7;
-  const int minor = out->compute_capability_minor > 0
-                        ? out->compute_capability_minor
-                        : 0;
   char arch[64];
-  snprintf(arch, sizeof(arch), "--gpu-architecture=compute_%d%d", major,
-           minor);
-  std::string optix_include =
-      std::string("--include-path=") + NERVA_OPTIX_INCLUDE_DIR;
-  std::string cuda_include =
-      std::string("--include-path=") + NERVA_CUDA_INCLUDE_DIR;
+  snprintf(arch, sizeof(arch), "compute_75");
+  std::string optix_include = std::string("-I") + NERVA_OPTIX_INCLUDE_DIR;
+  std::string cuda_include = std::string("-I") + NERVA_CUDA_INCLUDE_DIR;
   const char *options[] = {
-      "--std=c++17",
+      "-std=c++17",
+      "-arch",
       arch,
       optix_include.c_str(),
       cuda_include.c_str(),
-      "--use_fast_math",
+      "--optix-ir",
+      "-lineinfo",
+      "-use_fast_math",
+      "-default-device",
+      "-rdc",
+      "true",
+      "-D__x86_64",
   };
   nvrtc = nvrtcCompileProgram(program,
                               static_cast<int>(sizeof(options) / sizeof(options[0])),
@@ -421,18 +436,18 @@ bool compile_optix_candidate_ptx(
     return false;
   }
 
-  size_t ptx_size = 0;
-  nvrtc = nvrtcGetPTXSize(program, &ptx_size);
-  if (nvrtc != NVRTC_SUCCESS || ptx_size == 0) {
-    set_nvrtc_reason(result, "nvrtcGetPTXSize", nvrtc);
+  size_t input_size = 0;
+  nvrtc = nvrtcGetOptiXIRSize(program, &input_size);
+  if (nvrtc != NVRTC_SUCCESS || input_size == 0) {
+    set_nvrtc_reason(result, "nvrtcGetOptiXIRSize", nvrtc);
     nvrtcDestroyProgram(&program);
     return false;
   }
-  ptx->assign(ptx_size, '\0');
-  nvrtc = nvrtcGetPTX(program, ptx->data());
+  input->assign(input_size, '\0');
+  nvrtc = nvrtcGetOptiXIR(program, input->data());
   nvrtcDestroyProgram(&program);
   if (nvrtc != NVRTC_SUCCESS) {
-    set_nvrtc_reason(result, "nvrtcGetPTX", nvrtc);
+    set_nvrtc_reason(result, "nvrtcGetOptiXIR", nvrtc);
     return false;
   }
   return true;
@@ -664,8 +679,8 @@ bool create_optix_candidate_selector(
     return false;
   }
 
-  std::string ptx;
-  if (!compile_optix_candidate_ptx(out, &ptx, out)) {
+  std::string optix_input;
+  if (!compile_optix_candidate_input(out, &optix_input, out)) {
     return false;
   }
 
@@ -686,7 +701,7 @@ bool create_optix_candidate_selector(
   char log[2048];
   size_t log_size = sizeof(log);
   optix = optixModuleCreate(state->context, &module_options, &pipeline_options,
-                            ptx.c_str(), ptx.size(), log, &log_size,
+                            optix_input.data(), optix_input.size(), log, &log_size,
                             &state->module);
   if (!optix_ok(out, "optixModuleCreate", optix, log)) {
     return false;
@@ -867,6 +882,33 @@ __device__ float deterministic_f32(uint32_t a, uint32_t b) {
   return static_cast<float>(centered) * (1.0f / 2048.0f);
 }
 
+__device__ uint32_t query_center_page(uint32_t query, uint32_t pages,
+                                      uint32_t candidates_per_query) {
+  if (pages == 0u) {
+    return 0u;
+  }
+  const uint32_t seed = hash32(query * 977u + 31u);
+  if (candidates_per_query > 0u && candidates_per_query < pages) {
+    const uint32_t half = candidates_per_query / 2u;
+    const uint32_t span = pages - candidates_per_query + 1u;
+    return half + (seed % span);
+  }
+  return seed % pages;
+}
+
+__device__ float page_position(uint32_t page, uint32_t pages) {
+  return pages <= 1u ? 0.0f
+                     : static_cast<float>(page) /
+                           static_cast<float>(pages - 1u);
+}
+
+__device__ float synthetic_score_scale(uint32_t pages) {
+  constexpr float kSpreadPages = 128.0f;
+  const float extent = pages <= 1u ? 1.0f : static_cast<float>(pages - 1u);
+  const float scaled = extent / kSpreadPages;
+  return 0.5f * scaled * scaled;
+}
+
 __global__ void init_page_descriptors_kernel(float *descriptors, uint32_t pages,
                                              uint32_t dims) {
   const uint64_t total = static_cast<uint64_t>(pages) * dims;
@@ -875,20 +917,63 @@ __global__ void init_page_descriptors_kernel(float *descriptors, uint32_t pages,
   while (index < total) {
     const uint32_t page = static_cast<uint32_t>(index / dims);
     const uint32_t dim = static_cast<uint32_t>(index - static_cast<uint64_t>(page) * dims);
-    descriptors[index] = deterministic_f32(page, dim);
+    const float position = page_position(page, pages);
+    if (dim == 0u) {
+      descriptors[index] = position;
+    } else if (dim == 1u) {
+      descriptors[index] = position * position;
+    } else {
+      descriptors[index] = 0.0f;
+    }
     index += stride;
   }
 }
 
 __global__ void init_query_descriptors_kernel(float *queries, uint32_t query_count,
-                                              uint32_t dims) {
+                                              uint32_t pages, uint32_t dims,
+                                              uint32_t candidates_per_query) {
   const uint64_t total = static_cast<uint64_t>(query_count) * dims;
   uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
   while (index < total) {
     const uint32_t query = static_cast<uint32_t>(index / dims);
     const uint32_t dim = static_cast<uint32_t>(index - static_cast<uint64_t>(query) * dims);
-    queries[index] = deterministic_f32(query + 0x9e37u, dim + 17u);
+    const uint32_t center =
+        query_center_page(query, pages, candidates_per_query);
+    const float center_position = page_position(center, pages);
+    const float scale = synthetic_score_scale(pages) *
+                        sqrtf(static_cast<float>(dims));
+    if (dim == 0u) {
+      queries[index] = 2.0f * center_position * scale;
+    } else if (dim == 1u) {
+      queries[index] = -scale;
+    } else {
+      queries[index] = 0.0f;
+    }
+    index += stride;
+  }
+}
+
+__global__ void init_kv_cache_kernel(float *keys, float *values, uint32_t pages,
+                                     uint32_t page_tokens, uint32_t dims) {
+  const uint64_t total =
+      static_cast<uint64_t>(pages) * page_tokens * dims;
+  uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
+  while (index < total) {
+    const uint32_t dim = static_cast<uint32_t>(index % dims);
+    const uint64_t token = index / dims;
+    const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+    const float position = page_position(page, pages);
+    if (dim == 0u) {
+      keys[index] = position;
+    } else if (dim == 1u) {
+      keys[index] = position * position;
+    } else {
+      keys[index] = 0.0f;
+    }
+    values[index] =
+        deterministic_f32(static_cast<uint32_t>(token + 0x51u), dim + 193u);
     index += stride;
   }
 }
@@ -902,6 +987,370 @@ __device__ float descriptor_dot(const float *descriptors, const float *queries,
     sum += descriptors[page_base + dim] * queries[query_base + dim];
   }
   return sum;
+}
+
+__device__ float kv_dot(const float *keys, const float *queries, uint32_t page,
+                        uint32_t token_offset, uint32_t query, uint32_t dims,
+                        uint32_t page_tokens) {
+  float sum = 0.0f;
+  const uint64_t key_base =
+      (static_cast<uint64_t>(page) * page_tokens + token_offset) * dims;
+  const uint64_t query_base = static_cast<uint64_t>(query) * dims;
+  for (uint32_t dim = 0; dim < dims; ++dim) {
+    sum += keys[key_base + dim] * queries[query_base + dim];
+  }
+  return sum * rsqrtf(static_cast<float>(dims));
+}
+
+__device__ void reduce_attention_block(float *shared_scores,
+                                       float *shared_output, uint32_t dims,
+                                       float local_sum,
+                                       const float *local_output,
+                                       float *out, uint32_t query,
+                                       float max_score, float *meta) {
+  shared_scores[threadIdx.x] = local_sum;
+  for (uint32_t dim = 0; dim < dims; ++dim) {
+    shared_output[static_cast<uint32_t>(threadIdx.x) * kMaxAttentionDims + dim] =
+        local_output[dim];
+  }
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      shared_scores[threadIdx.x] += shared_scores[threadIdx.x + stride];
+      for (uint32_t dim = 0; dim < dims; ++dim) {
+        shared_output[static_cast<uint32_t>(threadIdx.x) * kMaxAttentionDims + dim] +=
+            shared_output[static_cast<uint32_t>(threadIdx.x + stride) *
+                              kMaxAttentionDims +
+                          dim];
+      }
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    const float denom = shared_scores[0] > 0.0f ? shared_scores[0] : 1.0f;
+    const uint64_t out_base = static_cast<uint64_t>(query) * dims;
+    for (uint32_t dim = 0; dim < dims; ++dim) {
+      out[out_base + dim] = shared_output[dim] / denom;
+    }
+    if (meta != nullptr) {
+      meta[static_cast<uint64_t>(query) * 2ull] = max_score;
+      meta[static_cast<uint64_t>(query) * 2ull + 1ull] = denom;
+    }
+  }
+}
+
+__global__ void local_attention_kernel(const float *keys, const float *values,
+                                       const float *queries, uint32_t pages,
+                                       uint32_t page_tokens, uint32_t dims,
+                                       uint32_t query_count,
+                                       uint64_t local_window_tokens,
+                                       float *out, float *meta) {
+  const uint32_t query = blockIdx.x;
+  if (query >= query_count || dims > kMaxAttentionDims) {
+    return;
+  }
+  const uint64_t total_tokens = static_cast<uint64_t>(pages) * page_tokens;
+  const uint64_t tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t token_start = total_tokens - tokens;
+  float local_max = -INFINITY;
+  for (uint64_t index = threadIdx.x; index < tokens; index += blockDim.x) {
+    const uint64_t token = token_start + index;
+    const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+    const uint32_t token_offset = static_cast<uint32_t>(token % page_tokens);
+    local_max = fmaxf(local_max,
+                      kv_dot(keys, queries, page, token_offset, query, dims,
+                             page_tokens));
+  }
+  __shared__ float shared_scores[kThreads];
+  __shared__ float shared_output[kThreads * kMaxAttentionDims];
+  shared_scores[threadIdx.x] = local_max;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      shared_scores[threadIdx.x] =
+          fmaxf(shared_scores[threadIdx.x], shared_scores[threadIdx.x + stride]);
+    }
+    __syncthreads();
+  }
+  const float max_score = shared_scores[0];
+  float local_sum = 0.0f;
+  float local_output[kMaxAttentionDims];
+  for (uint32_t dim = 0; dim < kMaxAttentionDims; ++dim) {
+    local_output[dim] = 0.0f;
+  }
+  for (uint64_t index = threadIdx.x; index < tokens; index += blockDim.x) {
+    const uint64_t token = token_start + index;
+    const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+    const uint32_t token_offset = static_cast<uint32_t>(token % page_tokens);
+    const float score =
+        kv_dot(keys, queries, page, token_offset, query, dims, page_tokens);
+    const float weight = expf(score - max_score);
+    local_sum += weight;
+    const uint64_t value_base =
+        (static_cast<uint64_t>(page) * page_tokens + token_offset) * dims;
+    for (uint32_t dim = 0; dim < dims; ++dim) {
+      local_output[dim] += weight * values[value_base + dim];
+    }
+  }
+  reduce_attention_block(shared_scores, shared_output, dims, local_sum,
+                         local_output, out, query, max_score, meta);
+}
+
+__global__ void attention_mass_recall_kernel(
+    const float *keys, const float *queries, const uint32_t *candidate_pages,
+    uint32_t pages, uint32_t page_tokens, uint32_t dims, uint32_t query_count,
+    uint32_t candidates_per_query, uint64_t local_window_tokens,
+    uint64_t *recall_ppm) {
+  const uint32_t query = blockIdx.x;
+  if (query >= query_count || dims > kMaxAttentionDims) {
+    return;
+  }
+  const uint64_t total_tokens = static_cast<uint64_t>(pages) * page_tokens;
+  const uint64_t local_tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t local_start = total_tokens - local_tokens;
+
+  float local_max = -INFINITY;
+  for (uint64_t token = threadIdx.x; token < total_tokens;
+       token += blockDim.x) {
+    const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+    const uint32_t token_offset = static_cast<uint32_t>(token % page_tokens);
+    local_max = fmaxf(local_max,
+                      kv_dot(keys, queries, page, token_offset, query, dims,
+                             page_tokens));
+  }
+  __shared__ float shared_max[kThreads];
+  shared_max[threadIdx.x] = local_max;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      shared_max[threadIdx.x] =
+          fmaxf(shared_max[threadIdx.x], shared_max[threadIdx.x + stride]);
+    }
+    __syncthreads();
+  }
+  const float max_score = shared_max[0];
+
+  double total_sum = 0.0;
+  double selected_sum = 0.0;
+  for (uint64_t token = threadIdx.x; token < total_tokens;
+       token += blockDim.x) {
+    const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+    const uint32_t token_offset = static_cast<uint32_t>(token % page_tokens);
+    const float score =
+        kv_dot(keys, queries, page, token_offset, query, dims, page_tokens);
+    const double weight = static_cast<double>(expf(score - max_score));
+    total_sum += weight;
+    if (token >= local_start) {
+      selected_sum += weight;
+    }
+  }
+
+  const uint64_t candidate_tokens =
+      static_cast<uint64_t>(candidates_per_query) * page_tokens;
+  for (uint64_t index = threadIdx.x; index < candidate_tokens;
+       index += blockDim.x) {
+    const uint32_t candidate = static_cast<uint32_t>(index / page_tokens);
+    const uint32_t token_offset = static_cast<uint32_t>(index % page_tokens);
+    const uint64_t candidate_base =
+        static_cast<uint64_t>(query) * candidates_per_query;
+    const uint32_t page = candidate_pages[candidate_base + candidate] % pages;
+    bool duplicate = false;
+    for (uint32_t previous = 0; previous < candidate; ++previous) {
+      if ((candidate_pages[candidate_base + previous] % pages) == page) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+    const uint64_t token =
+        static_cast<uint64_t>(page) * page_tokens + token_offset;
+    if (token >= local_start) {
+      continue;
+    }
+    const float score =
+        kv_dot(keys, queries, page, token_offset, query, dims, page_tokens);
+    selected_sum += static_cast<double>(expf(score - max_score));
+  }
+
+  __shared__ double shared_total[kThreads];
+  __shared__ double shared_selected[kThreads];
+  shared_total[threadIdx.x] = total_sum;
+  shared_selected[threadIdx.x] = selected_sum;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      shared_total[threadIdx.x] += shared_total[threadIdx.x + stride];
+      shared_selected[threadIdx.x] += shared_selected[threadIdx.x + stride];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    uint64_t ppm = 0;
+    if (shared_total[0] > 0.0) {
+      double recall = shared_selected[0] / shared_total[0];
+      if (recall < 0.0) {
+        recall = 0.0;
+      } else if (recall > 1.0) {
+        recall = 1.0;
+      }
+      ppm = static_cast<uint64_t>(recall * 1000000.0 + 0.5);
+    }
+    recall_ppm[query] = ppm;
+  }
+}
+
+__global__ void far_sparse_attention_kernel(
+    const float *keys, const float *values, const float *queries,
+    const uint32_t *candidate_pages, uint32_t pages, uint32_t page_tokens,
+    uint32_t dims, uint32_t query_count, uint32_t candidates_per_query,
+    uint64_t local_window_tokens, float *out, float *meta) {
+  const uint32_t query = blockIdx.x;
+  if (query >= query_count || dims > kMaxAttentionDims) {
+    return;
+  }
+  const uint64_t tokens =
+      static_cast<uint64_t>(candidates_per_query) * page_tokens;
+  const uint64_t total_tokens = static_cast<uint64_t>(pages) * page_tokens;
+  const uint64_t local_tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t local_start = total_tokens - local_tokens;
+  float local_max = -INFINITY;
+  for (uint64_t index = threadIdx.x; index < tokens; index += blockDim.x) {
+    const uint32_t candidate = static_cast<uint32_t>(index / page_tokens);
+    const uint32_t token_offset = static_cast<uint32_t>(index % page_tokens);
+    const uint32_t page =
+        candidate_pages[static_cast<uint64_t>(query) * candidates_per_query +
+                        candidate] %
+        pages;
+    const uint64_t token =
+        static_cast<uint64_t>(page) * page_tokens + token_offset;
+    if (token >= local_start) {
+      continue;
+    }
+    local_max = fmaxf(local_max,
+                      kv_dot(keys, queries, page, token_offset, query, dims,
+                             page_tokens));
+  }
+  __shared__ float shared_scores[kThreads];
+  __shared__ float shared_output[kThreads * kMaxAttentionDims];
+  shared_scores[threadIdx.x] = local_max;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      shared_scores[threadIdx.x] =
+          fmaxf(shared_scores[threadIdx.x], shared_scores[threadIdx.x + stride]);
+    }
+    __syncthreads();
+  }
+  const float max_score = shared_scores[0];
+  float local_sum = 0.0f;
+  float local_output[kMaxAttentionDims];
+  for (uint32_t dim = 0; dim < kMaxAttentionDims; ++dim) {
+    local_output[dim] = 0.0f;
+  }
+  for (uint64_t index = threadIdx.x; index < tokens; index += blockDim.x) {
+    const uint32_t candidate = static_cast<uint32_t>(index / page_tokens);
+    const uint32_t token_offset = static_cast<uint32_t>(index % page_tokens);
+    const uint32_t page =
+        candidate_pages[static_cast<uint64_t>(query) * candidates_per_query +
+                        candidate] %
+        pages;
+    const uint64_t token =
+        static_cast<uint64_t>(page) * page_tokens + token_offset;
+    if (token >= local_start) {
+      continue;
+    }
+    const float score =
+        kv_dot(keys, queries, page, token_offset, query, dims, page_tokens);
+    const float weight = expf(score - max_score);
+    local_sum += weight;
+    const uint64_t value_base =
+        (static_cast<uint64_t>(page) * page_tokens + token_offset) * dims;
+    for (uint32_t dim = 0; dim < dims; ++dim) {
+      local_output[dim] += weight * values[value_base + dim];
+    }
+  }
+  reduce_attention_block(shared_scores, shared_output, dims, local_sum,
+                         local_output, out, query, max_score, meta);
+}
+
+__global__ void kv_page_access_kernel(const float *keys, const float *values,
+                                      const uint32_t *candidate_pages,
+                                      uint32_t pages, uint32_t page_tokens,
+                                      uint32_t dims, uint32_t query_count,
+                                      uint32_t candidates_per_query,
+                                      float *touch_out) {
+  const uint32_t query = blockIdx.x;
+  if (query >= query_count) {
+    return;
+  }
+  float sum = 0.0f;
+  const uint64_t total =
+      static_cast<uint64_t>(candidates_per_query) * page_tokens * dims;
+  for (uint64_t index = threadIdx.x; index < total; index += blockDim.x) {
+    const uint32_t dim = static_cast<uint32_t>(index % dims);
+    const uint64_t token_in_pages = index / dims;
+    const uint32_t candidate =
+        static_cast<uint32_t>(token_in_pages / page_tokens);
+    const uint32_t token_offset =
+        static_cast<uint32_t>(token_in_pages % page_tokens);
+    const uint32_t page =
+        candidate_pages[static_cast<uint64_t>(query) * candidates_per_query +
+                        candidate] %
+        pages;
+    const uint64_t base =
+        (static_cast<uint64_t>(page) * page_tokens + token_offset) * dims + dim;
+    sum += keys[base] + values[base];
+  }
+  __shared__ float shared[kThreads];
+  shared[threadIdx.x] = sum;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      shared[threadIdx.x] += shared[threadIdx.x + stride];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    touch_out[query] = shared[0];
+  }
+}
+
+__global__ void merge_attention_outputs_kernel(const float *local_out,
+                                               const float *local_meta,
+                                               const float *far_out,
+                                               const float *far_meta,
+                                               uint32_t dims,
+                                               uint32_t query_count,
+                                               float *merged_out) {
+  const uint64_t total = static_cast<uint64_t>(query_count) * dims;
+  uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
+  while (index < total) {
+    const uint32_t query = static_cast<uint32_t>(index / dims);
+    const float local_max = local_meta[static_cast<uint64_t>(query) * 2ull];
+    const float local_denom =
+        local_meta[static_cast<uint64_t>(query) * 2ull + 1ull];
+    const float far_max = far_meta[static_cast<uint64_t>(query) * 2ull];
+    const float far_denom =
+        far_meta[static_cast<uint64_t>(query) * 2ull + 1ull];
+    const float merged_max = fmaxf(local_max, far_max);
+    const float local_weight =
+        isfinite(local_max) ? local_denom * expf(local_max - merged_max) : 0.0f;
+    const float far_weight =
+        isfinite(far_max) ? far_denom * expf(far_max - merged_max) : 0.0f;
+    const float denom = local_weight + far_weight;
+    merged_out[index] =
+        denom > 0.0f
+            ? (local_out[index] * local_weight + far_out[index] * far_weight) /
+                  denom
+            : 0.0f;
+    index += stride;
+  }
 }
 
 __global__ void dense_selector_kernel(const float *descriptors, const float *queries,
@@ -950,13 +1399,52 @@ __global__ void software_candidate_selector_kernel(uint32_t *candidate_pages,
   if (query >= query_count || pages == 0) {
     return;
   }
-  const uint32_t center = hash32(query * 977u + 31u) % pages;
+  const uint32_t center =
+      query_center_page(query, pages, candidates_per_query);
   const uint32_t half = candidates_per_query / 2u;
   for (uint32_t offset = threadIdx.x; offset < candidates_per_query; offset += blockDim.x) {
     const uint32_t wrapped = center + pages + offset - half;
     candidate_pages[static_cast<uint64_t>(query) * candidates_per_query + offset] =
         wrapped % pages;
   }
+}
+
+__global__ void compare_candidate_pages_kernel(const uint32_t *actual,
+                                               const uint32_t *expected,
+                                               uint64_t total,
+                                               unsigned long long *stats) {
+  uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
+  while (index < total) {
+    const uint32_t actual_value = actual[index];
+    const uint32_t expected_value = expected[index];
+    if (actual_value != expected_value) {
+      const unsigned long long previous = atomicAdd(&stats[0], 1ull);
+      if (previous == 0ull) {
+        stats[1] = static_cast<unsigned long long>(index);
+        stats[2] = static_cast<unsigned long long>(expected_value);
+        stats[3] = static_cast<unsigned long long>(actual_value);
+      }
+    }
+    index += stride;
+  }
+}
+
+__global__ void hash_candidate_queries_kernel(const uint32_t *candidate_pages,
+                                              uint32_t query_count,
+                                              uint32_t candidates_per_query,
+                                              uint64_t *query_hashes) {
+  const uint32_t query = blockIdx.x * blockDim.x + threadIdx.x;
+  if (query >= query_count) {
+    return;
+  }
+  uint64_t hash = 1469598103934665603ull;
+  const uint64_t base = static_cast<uint64_t>(query) * candidates_per_query;
+  for (uint32_t index = 0; index < candidates_per_query; ++index) {
+    hash ^= static_cast<uint64_t>(candidate_pages[base + index]);
+    hash *= 1099511628211ull;
+  }
+  query_hashes[query] = hash;
 }
 
 __global__ void rerank_candidate_kernel(const float *descriptors, const float *queries,
@@ -1110,6 +1598,182 @@ cudaError_t time_rerank(const NervaCudaExperimentalRtCandidateBenchRequest *requ
   return cudaSuccess;
 }
 
+cudaError_t time_local_attention(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *keys, const float *values, const float *queries,
+    uint64_t local_window_tokens, float *local_out, float *local_meta,
+    cudaStream_t stream, cudaEvent_t start, cudaEvent_t stop,
+    uint64_t *elapsed) {
+  for (uint32_t iter = 0; iter < request->warmup_iterations; ++iter) {
+    local_attention_kernel<<<request->query_count, kThreads, 0, stream>>>(
+        keys, values, queries, request->pages, request->page_tokens,
+        request->dims, request->query_count, local_window_tokens, local_out,
+        local_meta);
+  }
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaEventRecord(start, stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  for (uint32_t iter = 0; iter < request->iterations; ++iter) {
+    local_attention_kernel<<<request->query_count, kThreads, 0, stream>>>(
+        keys, values, queries, request->pages, request->page_tokens,
+        request->dims, request->query_count, local_window_tokens, local_out,
+        local_meta);
+  }
+  err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) {
+    err = cudaEventSynchronize(stop);
+  }
+  if (err != cudaSuccess) {
+    return err;
+  }
+  *elapsed = elapsed_ns(start, stop);
+  return cudaSuccess;
+}
+
+cudaError_t time_dense_full_attention(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *keys, const float *values, const float *queries,
+    float *dense_out, cudaStream_t stream, cudaEvent_t start,
+    cudaEvent_t stop, uint64_t *elapsed) {
+  const uint64_t total_tokens =
+      static_cast<uint64_t>(request->pages) * request->page_tokens;
+  return time_local_attention(request, keys, values, queries, total_tokens,
+                              dense_out, nullptr, stream, start, stop,
+                              elapsed);
+}
+
+cudaError_t time_kv_page_access(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *keys, const float *values, const uint32_t *candidate_pages,
+    float *touch_out, cudaStream_t stream, cudaEvent_t start, cudaEvent_t stop,
+    uint64_t *elapsed) {
+  for (uint32_t iter = 0; iter < request->warmup_iterations; ++iter) {
+    kv_page_access_kernel<<<request->query_count, kThreads, 0, stream>>>(
+        keys, values, candidate_pages, request->pages, request->page_tokens,
+        request->dims, request->query_count, request->candidates_per_query,
+        touch_out);
+  }
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaEventRecord(start, stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  for (uint32_t iter = 0; iter < request->iterations; ++iter) {
+    kv_page_access_kernel<<<request->query_count, kThreads, 0, stream>>>(
+        keys, values, candidate_pages, request->pages, request->page_tokens,
+        request->dims, request->query_count, request->candidates_per_query,
+        touch_out);
+  }
+  err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) {
+    err = cudaEventSynchronize(stop);
+  }
+  if (err != cudaSuccess) {
+    return err;
+  }
+  *elapsed = elapsed_ns(start, stop);
+  return cudaSuccess;
+}
+
+cudaError_t time_far_sparse_attention(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *keys, const float *values, const float *queries,
+    const uint32_t *candidate_pages, uint64_t local_window_tokens,
+    float *far_out, float *far_meta, cudaStream_t stream, cudaEvent_t start,
+    cudaEvent_t stop, uint64_t *elapsed) {
+  for (uint32_t iter = 0; iter < request->warmup_iterations; ++iter) {
+    far_sparse_attention_kernel<<<request->query_count, kThreads, 0, stream>>>(
+        keys, values, queries, candidate_pages, request->pages,
+        request->page_tokens, request->dims, request->query_count,
+        request->candidates_per_query, local_window_tokens, far_out, far_meta);
+  }
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaEventRecord(start, stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  for (uint32_t iter = 0; iter < request->iterations; ++iter) {
+    far_sparse_attention_kernel<<<request->query_count, kThreads, 0, stream>>>(
+        keys, values, queries, candidate_pages, request->pages,
+        request->page_tokens, request->dims, request->query_count,
+        request->candidates_per_query, local_window_tokens, far_out, far_meta);
+  }
+  err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) {
+    err = cudaEventSynchronize(stop);
+  }
+  if (err != cudaSuccess) {
+    return err;
+  }
+  *elapsed = elapsed_ns(start, stop);
+  return cudaSuccess;
+}
+
+cudaError_t time_softmax_merge(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *local_out, const float *local_meta, const float *far_out,
+    const float *far_meta, float *merged_out, cudaStream_t stream,
+    cudaEvent_t start, cudaEvent_t stop, uint64_t *elapsed) {
+  const uint64_t total =
+      static_cast<uint64_t>(request->query_count) * request->dims;
+  const uint32_t blocks =
+      static_cast<uint32_t>((total + kThreads - 1u) / kThreads);
+  for (uint32_t iter = 0; iter < request->warmup_iterations; ++iter) {
+    merge_attention_outputs_kernel<<<blocks, kThreads, 0, stream>>>(
+        local_out, local_meta, far_out, far_meta, request->dims,
+        request->query_count, merged_out);
+  }
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaEventRecord(start, stream);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  for (uint32_t iter = 0; iter < request->iterations; ++iter) {
+    merge_attention_outputs_kernel<<<blocks, kThreads, 0, stream>>>(
+        local_out, local_meta, far_out, far_meta, request->dims,
+        request->query_count, merged_out);
+  }
+  err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) {
+    err = cudaEventSynchronize(stop);
+  }
+  if (err != cudaSuccess) {
+    return err;
+  }
+  *elapsed = elapsed_ns(start, stop);
+  return cudaSuccess;
+}
+
 uint64_t hash_selected_pages(const uint32_t *pages, uint32_t count) {
   uint64_t hash = 1469598103934665603ull;
   for (uint32_t index = 0; index < count; ++index) {
@@ -1117,6 +1781,180 @@ uint64_t hash_selected_pages(const uint32_t *pages, uint32_t count) {
     hash *= 1099511628211ull;
   }
   return hash;
+}
+
+uint32_t distinct_hash_count(const uint64_t *hashes, uint32_t count) {
+  uint32_t distinct = 0;
+  for (uint32_t index = 0; index < count; ++index) {
+    bool seen = false;
+    for (uint32_t previous = 0; previous < index; ++previous) {
+      if (hashes[previous] == hashes[index]) {
+        seen = true;
+        break;
+      }
+    }
+    if (!seen) {
+      ++distinct;
+    }
+  }
+  return distinct;
+}
+
+cudaError_t verify_candidate_parity(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const uint32_t *candidate_pages, cudaStream_t stream,
+    NervaCudaExperimentalRtCandidateBenchResult *out) {
+  uint32_t *software_candidate_pages = nullptr;
+  unsigned long long *stats = nullptr;
+  unsigned long long host_stats[4] = {};
+  const uint64_t total_candidates =
+      static_cast<uint64_t>(request->query_count) * request->candidates_per_query;
+  cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&software_candidate_pages),
+                               out->candidate_id_bytes);
+  if (err == cudaSuccess) {
+    out->device_allocations += 1;
+    out->device_arena_bytes += out->candidate_id_bytes;
+    err = cudaMalloc(reinterpret_cast<void **>(&stats),
+                     sizeof(unsigned long long) * 4u);
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += sizeof(unsigned long long) * 4u;
+    }
+  }
+  if (err != cudaSuccess) {
+    if (software_candidate_pages != nullptr) {
+      cudaFree(software_candidate_pages);
+      out->device_frees += 1;
+    }
+    return err;
+  }
+
+  err = cudaMemsetAsync(stats, 0, sizeof(unsigned long long) * 4u, stream);
+  if (err == cudaSuccess) {
+    software_candidate_selector_kernel<<<request->query_count, kThreads, 0, stream>>>(
+        software_candidate_pages, request->pages, request->query_count,
+        request->candidates_per_query);
+    const uint32_t blocks = static_cast<uint32_t>(
+        (total_candidates + kThreads - 1u) / kThreads);
+    compare_candidate_pages_kernel<<<blocks > kMaxInitBlocks ? kMaxInitBlocks : blocks,
+                                     kThreads, 0, stream>>>(
+        candidate_pages, software_candidate_pages, total_candidates, stats);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(host_stats, stats, sizeof(host_stats),
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(stream);
+  }
+
+  cudaFree(stats);
+  out->device_frees += 1;
+  cudaFree(software_candidate_pages);
+  out->device_frees += 1;
+  if (err != cudaSuccess) {
+    return err;
+  }
+  out->candidate_parity_checked = 1;
+  out->candidate_parity_mismatches = host_stats[0];
+  out->candidate_parity_first_mismatch_index = host_stats[1];
+  out->candidate_parity_first_expected = host_stats[2];
+  out->candidate_parity_first_actual = host_stats[3];
+  out->kernel_launches += 2;
+  out->sync_calls += 1;
+  return cudaSuccess;
+}
+
+cudaError_t measure_query_candidate_distinctness(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const uint32_t *candidate_pages, cudaStream_t stream,
+    NervaCudaExperimentalRtCandidateBenchResult *out) {
+  uint64_t *query_hashes = nullptr;
+  uint64_t *host_query_hashes = nullptr;
+  const uint64_t query_hash_bytes =
+      static_cast<uint64_t>(request->query_count) * sizeof(uint64_t);
+  cudaError_t err =
+      cudaMalloc(reinterpret_cast<void **>(&query_hashes), query_hash_bytes);
+  if (err == cudaSuccess) {
+    out->device_allocations += 1;
+    out->device_arena_bytes += query_hash_bytes;
+  }
+  if (err == cudaSuccess) {
+    host_query_hashes = new (std::nothrow) uint64_t[request->query_count];
+    if (host_query_hashes == nullptr) {
+      err = cudaErrorMemoryAllocation;
+    }
+  }
+  if (err == cudaSuccess) {
+    const uint32_t blocks = (request->query_count + kThreads - 1u) / kThreads;
+    hash_candidate_queries_kernel<<<blocks, kThreads, 0, stream>>>(
+        candidate_pages, request->query_count, request->candidates_per_query,
+        query_hashes);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(host_query_hashes, query_hashes, query_hash_bytes,
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(stream);
+  }
+  if (query_hashes != nullptr) {
+    cudaFree(query_hashes);
+    out->device_frees += 1;
+  }
+  if (err == cudaSuccess) {
+    const uint32_t distinct =
+        distinct_hash_count(host_query_hashes, request->query_count);
+    out->candidate_query_hashes_distinct = distinct;
+    out->candidate_query_hash_repeats = request->query_count - distinct;
+    out->kernel_launches += 1;
+    out->sync_calls += 1;
+  }
+  delete[] host_query_hashes;
+  return err;
+}
+
+cudaError_t measure_attention_mass_recall(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *keys, const float *queries, const uint32_t *candidate_pages,
+    uint64_t local_window_tokens, uint64_t *recall_ppm,
+    uint64_t *host_recall_ppm, cudaStream_t stream,
+    NervaCudaExperimentalRtCandidateBenchResult *out) {
+  attention_mass_recall_kernel<<<request->query_count, kThreads, 0, stream>>>(
+      keys, queries, candidate_pages, request->pages, request->page_tokens,
+      request->dims, request->query_count, request->candidates_per_query,
+      local_window_tokens, recall_ppm);
+  cudaError_t err = cudaGetLastError();
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(host_recall_ppm, recall_ppm,
+                          request->query_count * sizeof(uint64_t),
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(stream);
+  }
+  if (err != cudaSuccess) {
+    return err;
+  }
+
+  uint64_t min_ppm = UINT64_MAX;
+  uint64_t sum_ppm = 0;
+  for (uint32_t query = 0; query < request->query_count; ++query) {
+    const uint64_t value = host_recall_ppm[query];
+    if (value < min_ppm) {
+      min_ppm = value;
+    }
+    sum_ppm += value;
+  }
+  out->attention_mass_recall_min_ppm =
+      min_ppm == UINT64_MAX ? 0 : min_ppm;
+  out->attention_mass_recall_avg_ppm =
+      request->query_count == 0 ? 0 : sum_ppm / request->query_count;
+  out->kernel_launches += 1;
+  out->sync_calls += 1;
+  return cudaSuccess;
 }
 
 void clear_result(const NervaCudaExperimentalRtCandidateBenchRequest *request,
@@ -1141,11 +1979,16 @@ void clear_result(const NervaCudaExperimentalRtCandidateBenchRequest *request,
       checked_mul_u64(checked_mul_u64(request->pages, request->dims), sizeof(float));
   out->query_bytes =
       checked_mul_u64(checked_mul_u64(request->query_count, request->dims), sizeof(float));
+  out->kv_cache_bytes = checked_mul_u64(
+      checked_mul_u64(checked_mul_u64(request->pages, request->page_tokens),
+                      request->dims),
+      sizeof(float) * 2ull);
   out->candidate_id_bytes = checked_mul_u64(
       checked_mul_u64(request->query_count, request->candidates_per_query), sizeof(uint32_t));
   out->output_bytes = checked_mul_u64(request->query_count, sizeof(uint32_t)) * 2ull;
   out->device_arena_bytes = out->descriptor_bytes + out->query_bytes +
-                            out->candidate_id_bytes + out->output_bytes;
+                            out->kv_cache_bytes + out->candidate_id_bytes +
+                            out->output_bytes;
 }
 
 int fail(NervaCudaExperimentalRtCandidateBenchResult *out, cudaError_t err) {
@@ -1156,6 +1999,154 @@ int fail(NervaCudaExperimentalRtCandidateBenchResult *out, cudaError_t err) {
 
 }  // namespace
 
+struct NervaCudaRtCandidateSelectorHandle {
+  NervaCudaExperimentalRtCandidateBenchRequest request{};
+  NervaCudaExperimentalRtCandidateBenchResult result{};
+#if NERVA_HAVE_OPTIX_HEADERS
+  OptixCandidateSelector selector{};
+#endif
+};
+
+extern "C" int nerva_cuda_rt_candidate_selector_create(
+    uint32_t pages, uint32_t page_tokens, uint32_t query_count,
+    uint32_t candidates_per_query, uint32_t *candidate_pages, void *stream,
+    void **selector_out, int32_t *cuda_error_out) {
+  if (cuda_error_out != nullptr) {
+    *cuda_error_out = static_cast<int32_t>(cudaSuccess);
+  }
+  if (selector_out == nullptr) {
+    if (cuda_error_out != nullptr) {
+      *cuda_error_out = static_cast<int32_t>(cudaErrorInvalidValue);
+    }
+    return -1;
+  }
+  *selector_out = nullptr;
+  if (pages == 0 || page_tokens == 0 || query_count == 0 ||
+      candidates_per_query == 0 || candidates_per_query > pages ||
+      candidate_pages == nullptr || stream == nullptr) {
+    if (cuda_error_out != nullptr) {
+      *cuda_error_out = static_cast<int32_t>(cudaErrorInvalidValue);
+    }
+    return -1;
+  }
+#if NERVA_HAVE_OPTIX_HEADERS
+  auto *handle = new (std::nothrow) NervaCudaRtCandidateSelectorHandle();
+  if (handle == nullptr) {
+    if (cuda_error_out != nullptr) {
+      *cuda_error_out = static_cast<int32_t>(cudaErrorMemoryAllocation);
+    }
+    return -1;
+  }
+  handle->request.pages = pages;
+  handle->request.page_tokens = page_tokens;
+  handle->request.dims = 1;
+  handle->request.query_count = query_count;
+  handle->request.candidates_per_query = candidates_per_query;
+  handle->request.iterations = 1;
+  handle->request.warmup_iterations = 0;
+  clear_result(&handle->request, &handle->result);
+  cudaError_t err = cudaGetDeviceCount(&handle->result.device_count);
+  if (err == cudaSuccess && handle->result.device_count <= 0) {
+    err = cudaErrorNoDevice;
+  }
+  if (err == cudaSuccess) {
+    err = cudaGetDevice(&handle->result.device_ordinal);
+  }
+  cudaDeviceProp props{};
+  if (err == cudaSuccess) {
+    err = cudaGetDeviceProperties(&props, handle->result.device_ordinal);
+  }
+  if (err != cudaSuccess) {
+    if (cuda_error_out != nullptr) {
+      *cuda_error_out = static_cast<int32_t>(err);
+    }
+    delete handle;
+    return -1;
+  }
+  handle->result.compute_capability_major = props.major;
+  handle->result.compute_capability_minor = props.minor;
+  handle->result.rt_core_capable = props.major >= 7 ? 1u : 0u;
+  handle->result.optix_headers_available = NERVA_HAVE_OPTIX_HEADERS ? 1u : 0u;
+  handle->result.rt_headers_available = 1u;
+  handle->result.real_rt_backend_available = 0u;
+  cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+  if (!create_optix_candidate_selector(&handle->request, candidate_pages,
+                                       cuda_stream, &handle->selector,
+                                       &handle->result)) {
+    cleanup_optix_selector(&handle->selector, &handle->result);
+    if (cuda_error_out != nullptr) {
+      *cuda_error_out =
+          handle->result.cuda_error == 0
+              ? static_cast<int32_t>(cudaErrorNotSupported)
+              : handle->result.cuda_error;
+    }
+    delete handle;
+    return -1;
+  }
+  handle->result.real_rt_backend_available = 1u;
+  *selector_out = handle;
+  return 0;
+#else
+  if (cuda_error_out != nullptr) {
+    *cuda_error_out = static_cast<int32_t>(cudaErrorNotSupported);
+  }
+  return -1;
+#endif
+}
+
+extern "C" int nerva_cuda_rt_candidate_selector_launch(
+    void *selector, void *stream, int32_t *cuda_error_out) {
+  if (cuda_error_out != nullptr) {
+    *cuda_error_out = static_cast<int32_t>(cudaSuccess);
+  }
+  if (selector == nullptr || stream == nullptr) {
+    if (cuda_error_out != nullptr) {
+      *cuda_error_out = static_cast<int32_t>(cudaErrorInvalidValue);
+    }
+    return -1;
+  }
+#if NERVA_HAVE_OPTIX_HEADERS
+  auto *handle =
+      reinterpret_cast<NervaCudaRtCandidateSelectorHandle *>(selector);
+  OptixResult optix = optixLaunch(
+      handle->selector.pipeline, reinterpret_cast<CUstream>(stream),
+      handle->selector.params, sizeof(OptixCandidateParams),
+      &handle->selector.sbt, handle->request.candidates_per_query,
+      handle->request.query_count, 1);
+  if (optix != OPTIX_SUCCESS) {
+    if (cuda_error_out != nullptr) {
+      *cuda_error_out = static_cast<int32_t>(cudaErrorUnknown);
+    }
+    return -1;
+  }
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    if (cuda_error_out != nullptr) {
+      *cuda_error_out = static_cast<int32_t>(err);
+    }
+    return -1;
+  }
+  return 0;
+#else
+  if (cuda_error_out != nullptr) {
+    *cuda_error_out = static_cast<int32_t>(cudaErrorNotSupported);
+  }
+  return -1;
+#endif
+}
+
+extern "C" void nerva_cuda_rt_candidate_selector_destroy(void *selector) {
+  if (selector == nullptr) {
+    return;
+  }
+  auto *handle =
+      reinterpret_cast<NervaCudaRtCandidateSelectorHandle *>(selector);
+#if NERVA_HAVE_OPTIX_HEADERS
+  cleanup_optix_selector(&handle->selector, &handle->result);
+#endif
+  delete handle;
+}
+
 extern "C" int nerva_cuda_experimental_rt_candidate_bench(
     const NervaCudaExperimentalRtCandidateBenchRequest *request,
     NervaCudaExperimentalRtCandidateBenchResult *out) {
@@ -1164,7 +2155,7 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   }
   clear_result(request, out);
   if (request == nullptr || request->pages == 0 || request->page_tokens == 0 ||
-      request->dims == 0 || request->dims > 256 || request->query_count == 0 ||
+      request->dims == 0 || request->dims > kMaxAttentionDims || request->query_count == 0 ||
       request->candidates_per_query == 0 ||
       request->candidates_per_query > request->pages ||
       request->iterations == 0) {
@@ -1211,15 +2202,29 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
 
   float *descriptors = nullptr;
   float *queries = nullptr;
+  float *keys = nullptr;
+  float *values = nullptr;
+  float *local_attention_out = nullptr;
+  float *local_attention_meta = nullptr;
+  float *far_attention_out = nullptr;
+  float *far_attention_meta = nullptr;
+  float *merged_attention_out = nullptr;
+  float *dense_attention_out = nullptr;
+  float *kv_touch_out = nullptr;
+  uint64_t *attention_recall_ppm = nullptr;
   uint32_t *candidate_pages = nullptr;
   uint32_t *dense_out = nullptr;
   uint32_t *candidate_out = nullptr;
   uint32_t *host_selected = nullptr;
+  uint64_t *host_attention_recall_ppm = nullptr;
   cudaStream_t stream = nullptr;
   cudaEvent_t start = nullptr;
   cudaEvent_t stop = nullptr;
 
   auto cleanup = [&]() {
+    if (host_attention_recall_ppm != nullptr) {
+      delete[] host_attention_recall_ppm;
+    }
     if (host_selected != nullptr) {
       delete[] host_selected;
     }
@@ -1236,6 +2241,38 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
       cudaFree(candidate_out);
       out->device_frees += 1;
     }
+    if (kv_touch_out != nullptr) {
+      cudaFree(kv_touch_out);
+      out->device_frees += 1;
+    }
+    if (attention_recall_ppm != nullptr) {
+      cudaFree(attention_recall_ppm);
+      out->device_frees += 1;
+    }
+    if (dense_attention_out != nullptr) {
+      cudaFree(dense_attention_out);
+      out->device_frees += 1;
+    }
+    if (far_attention_meta != nullptr) {
+      cudaFree(far_attention_meta);
+      out->device_frees += 1;
+    }
+    if (merged_attention_out != nullptr) {
+      cudaFree(merged_attention_out);
+      out->device_frees += 1;
+    }
+    if (far_attention_out != nullptr) {
+      cudaFree(far_attention_out);
+      out->device_frees += 1;
+    }
+    if (local_attention_meta != nullptr) {
+      cudaFree(local_attention_meta);
+      out->device_frees += 1;
+    }
+    if (local_attention_out != nullptr) {
+      cudaFree(local_attention_out);
+      out->device_frees += 1;
+    }
     if (dense_out != nullptr) {
       cudaFree(dense_out);
       out->device_frees += 1;
@@ -1246,6 +2283,14 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
     }
     if (queries != nullptr) {
       cudaFree(queries);
+      out->device_frees += 1;
+    }
+    if (values != nullptr) {
+      cudaFree(values);
+      out->device_frees += 1;
+    }
+    if (keys != nullptr) {
+      cudaFree(keys);
       out->device_frees += 1;
     }
     if (descriptors != nullptr) {
@@ -1264,6 +2309,15 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
     err = cudaMalloc(reinterpret_cast<void **>(&queries), out->query_bytes);
     if (err == cudaSuccess) out->device_allocations += 1;
   }
+  const uint64_t single_kv_bytes = out->kv_cache_bytes / 2ull;
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&keys), single_kv_bytes);
+    if (err == cudaSuccess) out->device_allocations += 1;
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&values), single_kv_bytes);
+    if (err == cudaSuccess) out->device_allocations += 1;
+  }
   if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&candidate_pages), out->candidate_id_bytes);
     if (err == cudaSuccess) out->device_allocations += 1;
@@ -1278,11 +2332,84 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
                      request->query_count * sizeof(uint32_t));
     if (err == cudaSuccess) out->device_allocations += 1;
   }
+  const uint64_t attention_output_bytes =
+      checked_mul_u64(checked_mul_u64(request->query_count, request->dims),
+                      sizeof(float));
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&local_attention_out),
+                     attention_output_bytes);
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += attention_output_bytes;
+    }
+  }
+  const uint64_t attention_meta_bytes =
+      checked_mul_u64(request->query_count, sizeof(float) * 2ull);
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&local_attention_meta),
+                     attention_meta_bytes);
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += attention_meta_bytes;
+    }
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&far_attention_out),
+                     attention_output_bytes);
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += attention_output_bytes;
+    }
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&far_attention_meta),
+                     attention_meta_bytes);
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += attention_meta_bytes;
+    }
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&merged_attention_out),
+                     attention_output_bytes);
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += attention_output_bytes;
+    }
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&dense_attention_out),
+                     attention_output_bytes);
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += attention_output_bytes;
+    }
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&attention_recall_ppm),
+                     request->query_count * sizeof(uint64_t));
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += request->query_count * sizeof(uint64_t);
+    }
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&kv_touch_out),
+                     request->query_count * sizeof(float));
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += request->query_count * sizeof(float);
+    }
+  }
   if (err != cudaSuccess) {
     return fail_with_cleanup(err);
   }
   host_selected = new (std::nothrow) uint32_t[request->query_count];
   if (host_selected == nullptr) {
+    return fail_with_cleanup(cudaErrorMemoryAllocation);
+  }
+  host_attention_recall_ppm = new (std::nothrow) uint64_t[request->query_count];
+  if (host_attention_recall_ppm == nullptr) {
     return fail_with_cleanup(cudaErrorMemoryAllocation);
   }
 
@@ -1309,7 +2436,16 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
                                  kThreads, 0, stream>>>(descriptors, request->pages, request->dims);
   init_query_descriptors_kernel<<<query_blocks > kMaxInitBlocks ? kMaxInitBlocks : query_blocks,
                                   kThreads, 0, stream>>>(queries, request->query_count,
-                                                         request->dims);
+                                                         request->pages,
+                                                         request->dims,
+                                                         request->candidates_per_query);
+  const uint64_t kv_elements = static_cast<uint64_t>(request->pages) *
+                               request->page_tokens * request->dims;
+  const uint32_t kv_blocks = static_cast<uint32_t>(
+      kv_elements / kThreads + (kv_elements % kThreads != 0));
+  init_kv_cache_kernel<<<kv_blocks > kMaxInitBlocks ? kMaxInitBlocks : kv_blocks,
+                         kThreads, 0, stream>>>(
+      keys, values, request->pages, request->page_tokens, request->dims);
   err = cudaGetLastError();
   if (err == cudaSuccess) {
     err = cudaStreamSynchronize(stream);
@@ -1317,8 +2453,13 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   if (err != cudaSuccess) {
     return fail_with_cleanup(err);
   }
-  out->kernel_launches += 2;
+  out->kernel_launches += 3;
   out->sync_calls += 1;
+  out->local_window_tokens =
+      (static_cast<uint64_t>(request->pages) * request->page_tokens) <
+              kDefaultLocalWindowTokens
+          ? (static_cast<uint64_t>(request->pages) * request->page_tokens)
+          : kDefaultLocalWindowTokens;
 
   err = time_dense_selector(request, descriptors, queries, dense_out, stream, start, stop,
                             &out->dense_selector_total_ns);
@@ -1341,8 +2482,8 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
         set_cstr(out->backend, sizeof(out->backend),
                  "optix_rt_candidate_selector");
         set_cstr(out->reason, sizeof(out->reason),
-                 "OptiX hardware traversal generated candidate IDs; exact "
-                 "rerank remains CUDA");
+                 "OptiX hardware traversal generated score-aligned synthetic "
+                 "page candidates; exact rerank remains CUDA");
         out->real_rt_backend_available = 1;
       }
     }
@@ -1359,6 +2500,17 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   out->sync_calls += 1;
   out->kernel_launches += request->warmup_iterations + request->iterations;
 
+  if (used_optix_selector) {
+    err = verify_candidate_parity(request, candidate_pages, stream, out);
+    if (err != cudaSuccess) {
+      return fail_with_cleanup(err);
+    }
+  }
+  err = measure_query_candidate_distinctness(request, candidate_pages, stream, out);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+
   err = time_rerank(request, descriptors, queries, candidate_pages, candidate_out, stream,
                     start, stop, &out->rerank_total_ns);
   if (err != cudaSuccess) {
@@ -1366,6 +2518,62 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   }
   out->sync_calls += 1;
   out->kernel_launches += request->warmup_iterations + request->iterations;
+
+  err = time_local_attention(request, keys, values, queries,
+                             out->local_window_tokens,
+                             local_attention_out, local_attention_meta,
+                             stream, start, stop,
+                             &out->local_attention_total_ns);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+  out->sync_calls += 1;
+  out->kernel_launches += request->warmup_iterations + request->iterations;
+
+  err = time_kv_page_access(request, keys, values, candidate_pages, kv_touch_out,
+                            stream, start, stop,
+                            &out->kv_page_access_total_ns);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+  out->sync_calls += 1;
+  out->kernel_launches += request->warmup_iterations + request->iterations;
+
+  err = time_far_sparse_attention(request, keys, values, queries, candidate_pages,
+                                  out->local_window_tokens, far_attention_out,
+                                  far_attention_meta, stream, start, stop,
+                                  &out->far_sparse_attention_total_ns);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+  out->sync_calls += 1;
+  out->kernel_launches += request->warmup_iterations + request->iterations;
+
+  err = time_softmax_merge(request, local_attention_out, local_attention_meta,
+                           far_attention_out, far_attention_meta,
+                           merged_attention_out, stream, start, stop,
+                           &out->softmax_merge_total_ns);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+  out->sync_calls += 1;
+  out->kernel_launches += request->warmup_iterations + request->iterations;
+
+  err = time_dense_full_attention(request, keys, values, queries,
+                                  dense_attention_out, stream, start, stop,
+                                  &out->dense_full_attention_total_ns);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+  out->sync_calls += 1;
+  out->kernel_launches += request->warmup_iterations + request->iterations;
+
+  err = measure_attention_mass_recall(
+      request, keys, queries, candidate_pages, out->local_window_tokens,
+      attention_recall_ppm, host_attention_recall_ppm, stream, out);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
 
   err = cudaMemcpyAsync(host_selected, candidate_out,
                         request->query_count * sizeof(uint32_t),
@@ -1381,13 +2589,53 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   out->dense_selector_avg_ns = out->dense_selector_total_ns / request->iterations;
   out->software_selector_avg_ns =
       out->software_selector_total_ns / request->iterations;
+  out->candidate_selector_total_ns = out->software_selector_total_ns;
+  out->candidate_selector_avg_ns = out->software_selector_avg_ns;
   out->rerank_avg_ns = out->rerank_total_ns / request->iterations;
+  out->local_attention_avg_ns =
+      out->local_attention_total_ns / request->iterations;
+  out->kv_page_access_avg_ns =
+      out->kv_page_access_total_ns / request->iterations;
+  out->far_sparse_attention_avg_ns =
+      out->far_sparse_attention_total_ns / request->iterations;
+  out->softmax_merge_avg_ns =
+      out->softmax_merge_total_ns / request->iterations;
+  out->dense_full_attention_avg_ns =
+      out->dense_full_attention_total_ns / request->iterations;
   out->selector_plus_rerank_avg_ns =
-      out->software_selector_avg_ns + out->rerank_avg_ns;
+      out->candidate_selector_avg_ns + out->rerank_avg_ns;
+  out->dense_selector_attention_stage_avg_ns =
+      out->dense_selector_avg_ns + out->rerank_avg_ns +
+      out->local_attention_avg_ns + out->kv_page_access_avg_ns +
+      out->far_sparse_attention_avg_ns + out->softmax_merge_avg_ns;
+  out->rt_selector_attention_stage_avg_ns =
+      out->candidate_selector_avg_ns + out->rerank_avg_ns +
+      out->local_attention_avg_ns + out->kv_page_access_avg_ns +
+      out->far_sparse_attention_avg_ns + out->softmax_merge_avg_ns;
+  const uint64_t overlapped_selector_local =
+      out->candidate_selector_avg_ns > out->local_attention_avg_ns
+          ? out->candidate_selector_avg_ns
+          : out->local_attention_avg_ns;
+  out->rt_selector_overlapped_attention_stage_avg_ns =
+      overlapped_selector_local + out->rerank_avg_ns +
+      out->kv_page_access_avg_ns + out->far_sparse_attention_avg_ns +
+      out->softmax_merge_avg_ns;
   out->dense_vs_selector_speedup_x1000 =
-      speedup_x1000(out->dense_selector_avg_ns, out->software_selector_avg_ns);
+      speedup_x1000(out->dense_selector_avg_ns, out->candidate_selector_avg_ns);
   out->dense_vs_selector_plus_rerank_speedup_x1000 =
       speedup_x1000(out->dense_selector_avg_ns, out->selector_plus_rerank_avg_ns);
+  out->dense_vs_rt_attention_stage_speedup_x1000 =
+      speedup_x1000(out->dense_selector_attention_stage_avg_ns,
+                    out->rt_selector_attention_stage_avg_ns);
+  out->dense_vs_rt_overlapped_attention_stage_speedup_x1000 =
+      speedup_x1000(out->dense_selector_attention_stage_avg_ns,
+                    out->rt_selector_overlapped_attention_stage_avg_ns);
+  out->dense_full_vs_rt_attention_stage_speedup_x1000 =
+      speedup_x1000(out->dense_full_attention_avg_ns,
+                    out->rt_selector_attention_stage_avg_ns);
+  out->dense_full_vs_rt_overlapped_attention_stage_speedup_x1000 =
+      speedup_x1000(out->dense_full_attention_avg_ns,
+                    out->rt_selector_overlapped_attention_stage_avg_ns);
   out->candidate_fraction_ppm =
       div_u64(static_cast<uint64_t>(request->candidates_per_query) * 1000000ull,
               request->pages);

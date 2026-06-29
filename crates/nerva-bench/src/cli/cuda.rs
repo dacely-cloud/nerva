@@ -146,7 +146,13 @@ fn run_experimental_rt(args: &mut impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let page_tokens = 16u32;
+    let page_tokens = match parse_optional_u32(args.next(), 64, "page_tokens") {
+        Ok(page_tokens) => page_tokens.max(1),
+        Err(reason) => {
+            eprintln!("{reason}");
+            return ExitCode::from(2);
+        }
+    };
     let dims = 16u32;
     let pages = context_tokens
         .saturating_add(page_tokens as usize - 1)
@@ -163,7 +169,7 @@ fn run_experimental_rt(args: &mut impl Iterator<Item = String>) -> ExitCode {
         8,
     );
     let json = format!(
-        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"mode\":\"experimental_rt_candidate\",\"scope\":\"candidate_selector_only\",\"context_tokens\":{},\"summary\":{}}}",
+        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"mode\":\"experimental_rt_candidate\",\"scope\":\"attention_stage_synthetic\",\"context_tokens\":{},\"summary\":{}}}",
         if summary.passed() { "ok" } else { "failed" },
         context_tokens,
         summary.to_json(),

@@ -67,12 +67,16 @@ fn projection_bench_summary_reports_selected_strategy() {
     assert!(summary.passed());
     assert_eq!(summary.selected_strategy_name(), "custom_row_major");
     assert_eq!(summary.selected_graph_strategy_name(), "custom_row_major");
-    assert!(summary
-        .to_json()
-        .contains("\"selected_strategy\":\"custom_row_major\""));
-    assert!(summary
-        .to_json()
-        .contains("\"selected_graph_strategy\":\"custom_row_major\""));
+    assert!(
+        summary
+            .to_json()
+            .contains("\"selected_strategy\":\"custom_row_major\"")
+    );
+    assert!(
+        summary
+            .to_json()
+            .contains("\"selected_graph_strategy\":\"custom_row_major\"")
+    );
 }
 
 #[test]

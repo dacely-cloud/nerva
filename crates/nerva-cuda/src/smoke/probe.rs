@@ -1,6 +1,6 @@
 use crate::smoke::ffi::{
-    c_char_array_to_string, run_device_smoke, NervaCudaDeviceSmokeResult, CUDA_ERROR_NO_DEVICE,
-    SMOKE_WORD,
+    CUDA_ERROR_NO_DEVICE, NervaCudaDeviceSmokeResult, SMOKE_WORD, c_char_array_to_string,
+    run_device_smoke,
 };
 use crate::smoke::status::SmokeStatus;
 use crate::smoke::summary::CudaSmokeSummary;

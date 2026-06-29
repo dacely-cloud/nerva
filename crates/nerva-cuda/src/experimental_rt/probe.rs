@@ -1,9 +1,9 @@
 use crate::experimental_rt::ffi::{
-    run_experimental_rt_candidate_bench, NervaCudaExperimentalRtCandidateBenchRequest,
-    NervaCudaExperimentalRtCandidateBenchResult,
+    NervaCudaExperimentalRtCandidateBenchRequest, NervaCudaExperimentalRtCandidateBenchResult,
+    run_experimental_rt_candidate_bench,
 };
 use crate::experimental_rt::summary::CudaExperimentalRtCandidateBenchSummary;
-use crate::smoke::ffi::{c_char_array_to_string, CUDA_ERROR_NO_DEVICE};
+use crate::smoke::ffi::{CUDA_ERROR_NO_DEVICE, c_char_array_to_string};
 use crate::smoke::status::SmokeStatus;
 
 pub fn experimental_rt_candidate_bench(
@@ -54,12 +54,15 @@ pub fn experimental_rt_candidate_bench(
             vulkan_physical_devices: out.vulkan_physical_devices,
             descriptor_bytes: out.descriptor_bytes,
             query_bytes: out.query_bytes,
+            kv_cache_bytes: out.kv_cache_bytes,
             candidate_id_bytes: out.candidate_id_bytes,
             output_bytes: out.output_bytes,
             dense_selector_total_ns: out.dense_selector_total_ns,
             dense_selector_avg_ns: out.dense_selector_avg_ns,
             software_selector_total_ns: out.software_selector_total_ns,
             software_selector_avg_ns: out.software_selector_avg_ns,
+            candidate_selector_total_ns: out.candidate_selector_total_ns,
+            candidate_selector_avg_ns: out.candidate_selector_avg_ns,
             rerank_total_ns: out.rerank_total_ns,
             rerank_avg_ns: out.rerank_avg_ns,
             selector_plus_rerank_avg_ns: out.selector_plus_rerank_avg_ns,
@@ -67,6 +70,38 @@ pub fn experimental_rt_candidate_bench(
             dense_vs_selector_plus_rerank_speedup_x1000: out
                 .dense_vs_selector_plus_rerank_speedup_x1000,
             candidate_fraction_ppm: out.candidate_fraction_ppm,
+            candidate_parity_checked: out.candidate_parity_checked != 0,
+            candidate_parity_mismatches: out.candidate_parity_mismatches,
+            candidate_parity_first_mismatch_index: out.candidate_parity_first_mismatch_index,
+            candidate_parity_first_expected: out.candidate_parity_first_expected,
+            candidate_parity_first_actual: out.candidate_parity_first_actual,
+            candidate_query_hashes_distinct: out.candidate_query_hashes_distinct,
+            candidate_query_hash_repeats: out.candidate_query_hash_repeats,
+            local_window_tokens: out.local_window_tokens,
+            local_attention_total_ns: out.local_attention_total_ns,
+            local_attention_avg_ns: out.local_attention_avg_ns,
+            kv_page_access_total_ns: out.kv_page_access_total_ns,
+            kv_page_access_avg_ns: out.kv_page_access_avg_ns,
+            far_sparse_attention_total_ns: out.far_sparse_attention_total_ns,
+            far_sparse_attention_avg_ns: out.far_sparse_attention_avg_ns,
+            softmax_merge_total_ns: out.softmax_merge_total_ns,
+            softmax_merge_avg_ns: out.softmax_merge_avg_ns,
+            dense_full_attention_total_ns: out.dense_full_attention_total_ns,
+            dense_full_attention_avg_ns: out.dense_full_attention_avg_ns,
+            attention_mass_recall_min_ppm: out.attention_mass_recall_min_ppm,
+            attention_mass_recall_avg_ppm: out.attention_mass_recall_avg_ppm,
+            dense_selector_attention_stage_avg_ns: out.dense_selector_attention_stage_avg_ns,
+            rt_selector_attention_stage_avg_ns: out.rt_selector_attention_stage_avg_ns,
+            rt_selector_overlapped_attention_stage_avg_ns: out
+                .rt_selector_overlapped_attention_stage_avg_ns,
+            dense_vs_rt_attention_stage_speedup_x1000: out
+                .dense_vs_rt_attention_stage_speedup_x1000,
+            dense_vs_rt_overlapped_attention_stage_speedup_x1000: out
+                .dense_vs_rt_overlapped_attention_stage_speedup_x1000,
+            dense_full_vs_rt_attention_stage_speedup_x1000: out
+                .dense_full_vs_rt_attention_stage_speedup_x1000,
+            dense_full_vs_rt_overlapped_attention_stage_speedup_x1000: out
+                .dense_full_vs_rt_overlapped_attention_stage_speedup_x1000,
             selected_hash: out.selected_hash,
             kernel_launches: out.kernel_launches,
             sync_calls: out.sync_calls,

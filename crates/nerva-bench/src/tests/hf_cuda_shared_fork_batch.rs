@@ -1,6 +1,6 @@
 use crate::cli::model::causal_lm_cuda_shared_fork_batch::{
-    hf_causal_lm_cuda_shared_fork_batch_compare_json, hf_causal_lm_cuda_shared_fork_batch_json,
-    strip_experimental_rt_arg, SHARED_FORK_STORY_PROMPT,
+    SHARED_FORK_STORY_PROMPT, hf_causal_lm_cuda_shared_fork_batch_compare_json,
+    hf_causal_lm_cuda_shared_fork_batch_json, strip_experimental_rt_arg,
 };
 
 #[test]

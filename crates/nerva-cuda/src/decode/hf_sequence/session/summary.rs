@@ -189,7 +189,7 @@ pub(crate) fn create_stage_label(stage: i32) -> &'static str {
         32 => "decode_attention_alloc",
         33 => "decode_sdpa_alloc",
         34 => "projection_plan_autotune",
-        35 => "experimental_rt_decode_unsupported",
+        35 => "experimental_rt_decode_init",
         _ => "unknown",
     }
 }

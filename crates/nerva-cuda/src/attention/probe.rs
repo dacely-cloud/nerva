@@ -1,5 +1,5 @@
 use crate::attention::ffi::{
-    run_tiered_attention_smoke, NervaCudaTieredAttentionResult, CUDA_ERROR_NO_DEVICE,
+    CUDA_ERROR_NO_DEVICE, NervaCudaTieredAttentionResult, run_tiered_attention_smoke,
 };
 use crate::attention::summary::CudaTieredAttentionSummary;
 use crate::smoke::status::SmokeStatus;

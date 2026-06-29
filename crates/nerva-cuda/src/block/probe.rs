@@ -1,6 +1,6 @@
 use crate::block::ffi::{
-    run_loaded_tiny_block_smoke, run_tiny_block_smoke, NervaCudaLoadedTinyBlockResult,
-    NervaCudaTinyBlockResult, CUDA_ERROR_NO_DEVICE,
+    CUDA_ERROR_NO_DEVICE, NervaCudaLoadedTinyBlockResult, NervaCudaTinyBlockResult,
+    run_loaded_tiny_block_smoke, run_tiny_block_smoke,
 };
 use crate::block::summary::{CudaLoadedTinyBlockSummary, CudaTinyBlockSummary};
 use crate::smoke::status::SmokeStatus;

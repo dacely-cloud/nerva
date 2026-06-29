@@ -23,6 +23,7 @@ pub(crate) struct GenerateArgs {
     pub top_k: u32,
     pub seed: u64,
     pub rt: bool,
+    pub rt_mode: String,
     pub profiling: bool,
     pub json: bool,
     pub debug: bool,
@@ -43,6 +44,7 @@ impl Default for GenerateArgs {
             top_k: DEFAULT_TOP_K,
             seed: DEFAULT_SEED,
             rt: false,
+            rt_mode: "auto".to_string(),
             profiling: false,
             json: false,
             debug: false,
@@ -90,6 +92,8 @@ struct ClapGenerateArgs {
     seed: u64,
     #[arg(long = "rt")]
     rt: bool,
+    #[arg(long = "rt-mode", value_parser = ["auto", "shadow", "sparse"])]
+    rt_mode: Option<String>,
     #[arg(long = "raw", conflicts_with = "chat")]
     raw: bool,
     #[arg(long = "chat")]
@@ -111,11 +115,12 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
     let parsed = ClapGenerateArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
     if parsed.help {
         return Err(
-            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [-rt|--rt] [--profiling] [--chat|--raw] [--json] [--debug]"
+            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--profiling] [--chat|--raw] [--json] [--debug]"
                 .to_string(),
         );
     }
     validate_sampling(parsed.temperature, parsed.top_p)?;
+    let rt_mode = parsed.rt_mode.unwrap_or_else(|| "auto".to_string());
     Ok(GenerateArgs {
         model: parsed.model,
         prompt: parsed.prompt,
@@ -134,7 +139,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
         top_p: parsed.top_p,
         top_k: parsed.top_k,
         seed: parsed.seed,
-        rt: parsed.rt,
+        rt: parsed.rt || rt_mode != "auto",
+        rt_mode,
         profiling: parsed.profiling,
         json: parsed.json,
         debug: parsed.debug,
@@ -217,8 +223,20 @@ mod tests {
         assert_eq!(parsed.top_k, 40);
         assert_eq!(parsed.seed, 123);
         assert!(parsed.rt);
+        assert_eq!(parsed.rt_mode, "auto");
         assert!(parsed.debug);
         assert!(!parsed.profiling);
+    }
+
+    #[test]
+    fn rt_mode_enables_rt() {
+        let args = ["-m", "qwen3-8b", "-p", "hello", "--rt-mode", "shadow"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let parsed = parse_args(&args).unwrap();
+        assert!(parsed.rt);
+        assert_eq!(parsed.rt_mode, "shadow");
     }
 
     #[test]

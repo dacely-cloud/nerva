@@ -6,8 +6,8 @@ use nerva_cuda::experimental_rt::probe::experimental_rt_candidate_bench;
 use nerva_cuda::experimental_rt::summary::CudaExperimentalRtCandidateBenchSummary;
 use nerva_model::hf::tokenizer::encode_text_prompt;
 use nerva_runtime::engine::hf_cuda_decode::file_backed::shared_fork_batch::{
-    run_hf_causal_lm_cuda_shared_fork_batch_probe, HfCudaSharedForkBatchOutput,
-    HfCudaSharedForkBatchSchedulerSummary,
+    HfCudaSharedForkBatchOutput, HfCudaSharedForkBatchSchedulerSummary,
+    run_hf_causal_lm_cuda_shared_fork_batch_probe,
 };
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
@@ -469,7 +469,7 @@ fn experimental_rt_json(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"requested\":true,\"scope\":\"candidate_selector_only\",\"note\":\"RT cores are only considered for candidate page selection; exact attention/rerank remains normal CUDA/tensor work.\",\"real_rt_backend_available\":{},\"rt_core_capable\":{},\"page_tokens\":{},\"dims\":{},\"cases\":[{}]}}",
+        "{{\"requested\":true,\"scope\":\"attention_stage_synthetic\",\"note\":\"RT cores are used for page candidate selection; summary includes exact CUDA rerank, local/far sparse attention, and online-softmax merge timing.\",\"real_rt_backend_available\":{},\"rt_core_capable\":{},\"page_tokens\":{},\"dims\":{},\"cases\":[{}]}}",
         real_rt_available, rt_core_capable, page_tokens, dims, case_json
     )
 }

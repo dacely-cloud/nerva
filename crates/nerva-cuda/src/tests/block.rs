@@ -1,4 +1,4 @@
-use crate::block::forward::request::{CudaBlockForwardRequest, CUDA_BLOCK_DTYPE_F16};
+use crate::block::forward::request::{CUDA_BLOCK_DTYPE_F16, CudaBlockForwardRequest};
 use crate::block::summary::{CudaLoadedTinyBlockSummary, CudaTinyBlockSummary};
 use crate::smoke::status::SmokeStatus;
 
@@ -56,7 +56,7 @@ fn loaded_tiny_block_summary_serializes_residency_fields() {
 
 #[test]
 fn generic_block_forward_runs_loaded_tiny_weights() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let zero = 0x0000;
     let half = 0x3800;

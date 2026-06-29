@@ -15,7 +15,7 @@ use crate::engine::tests::hf_fixture::{
 
 #[test]
 fn cuda_loaded_hf_layer_matches_cpu_exact_layer() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let loaded = load_hf_causal_lm_smoke_fixture().unwrap();
     let summary = run_loaded_hf_layer_on_cuda(&loaded.model, 0, TokenId(0)).unwrap();
@@ -41,7 +41,7 @@ fn cuda_loaded_hf_layer_matches_cpu_exact_layer() {
 
 #[test]
 fn cuda_loaded_hf_seed_decode_matches_cpu_exact_decode() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let loaded = load_hf_causal_lm_smoke_fixture().unwrap();
     let summary = run_hf_causal_lm_cuda_seed_decode(&loaded.model, TokenId(0), 4).unwrap();
@@ -81,7 +81,7 @@ fn cuda_loaded_hf_seed_decode_matches_cpu_exact_decode() {
 
 #[test]
 fn cuda_loaded_hf_seed_decode_uses_chain_for_multi_layer_model() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let dir = write_cycle_hf_checkpoint_dir("nerva-hf-cuda-chain", 2);
     let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
@@ -107,7 +107,7 @@ fn cuda_loaded_hf_seed_decode_uses_chain_for_multi_layer_model() {
 
 #[test]
 fn cuda_loaded_hf_seed_decode_matches_kv_context_model() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let dir = write_kv_hf_checkpoint_dir("nerva-hf-cuda-kv");
     let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
@@ -139,7 +139,7 @@ fn cuda_loaded_hf_seed_decode_matches_kv_context_model() {
 
 #[test]
 fn cuda_loaded_hf_prompt_decode_uses_full_prompt_context() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let dir = write_kv_hf_checkpoint_dir("nerva-hf-cuda-prompt-kv");
     let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
@@ -169,7 +169,7 @@ fn cuda_loaded_hf_prompt_decode_uses_full_prompt_context() {
 
 #[test]
 fn cuda_loaded_hf_prompt_decode_reports_resident_weight_plan() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let dir = write_kv_hf_checkpoint_dir("nerva-hf-cuda-resident-plan");
     let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();

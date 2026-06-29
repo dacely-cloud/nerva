@@ -7,7 +7,7 @@ use crate::engine::tests::hf_fixture::{remove_hf_checkpoint_dir, write_cycle_hf_
 
 #[test]
 fn loaded_hf_cuda_decode_passes_resident_weight_contract_to_native() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let dir = write_cycle_hf_checkpoint_dir("nerva-hf-cuda-contract", 1);
     let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();

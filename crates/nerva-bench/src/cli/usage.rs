@@ -7,7 +7,7 @@ const COMMANDS: &[&str] = &[
     "cuda-attention",
     "cuda-sampler",
     "cuda-tiny-decode [steps] [ring_capacity] [seed_token]",
-    "experimental-rt [context_tokens] [query_count] [candidates_per_query] [iterations]",
+    "experimental-rt [context_tokens] [query_count] [candidates_per_query] [iterations] [page_tokens]",
     "capabilities",
     "backend-contract",
     "hot-path-guard",

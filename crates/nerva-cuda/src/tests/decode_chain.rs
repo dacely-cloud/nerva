@@ -1,5 +1,5 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
-use crate::decode::hf_chain::request::{CudaHfDecodeChainRequest, CUDA_HF_DECODE_CHAIN_DTYPE_F16};
+use crate::decode::hf_chain::request::{CUDA_HF_DECODE_CHAIN_DTYPE_F16, CudaHfDecodeChainRequest};
 use crate::decode::hf_chain::summary::CudaHfDecodeChainSummary;
 use crate::smoke::status::SmokeStatus;
 
@@ -40,7 +40,7 @@ fn hf_decode_chain_summary_serializes_layer_count() {
 
 #[test]
 fn hf_decode_chain_runs_two_layers_and_final_head_when_device_is_available() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let one = 0x3c00;
     let zero = 0x0000;
