@@ -4,7 +4,8 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
 use nerva_cuda::decode::hf_sequence::session::request::{
-    CudaHfDecodeSequenceSession, CudaHfDecodeSequenceSessionConfig,
+    CudaHfDecodeSequenceExperimentalRtConfig, CudaHfDecodeSequenceSession,
+    CudaHfDecodeSequenceSessionConfig,
 };
 use nerva_cuda::decode::hf_sequence::session::summary::CudaHfDecodeSequenceSessionCreateSummary;
 use nerva_cuda::smoke::status::SmokeStatus;
@@ -78,6 +79,24 @@ pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling(
     compute_capability: Option<u32>,
     detailed_profile: bool,
 ) -> Result<HfCudaShardBackedDeviceOnlySession> {
+    create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling_and_rt(
+        runtime,
+        dir,
+        max_context_tokens,
+        compute_capability,
+        detailed_profile,
+        CudaHfDecodeSequenceExperimentalRtConfig::default(),
+    )
+}
+
+pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling_and_rt(
+    runtime: &Runtime,
+    dir: impl AsRef<Path>,
+    max_context_tokens: usize,
+    compute_capability: Option<u32>,
+    detailed_profile: bool,
+    experimental_rt: CudaHfDecodeSequenceExperimentalRtConfig,
+) -> Result<HfCudaShardBackedDeviceOnlySession> {
     if max_context_tokens == 0 {
         return Err(NervaError::InvalidArgument {
             reason: "HF CUDA shard-backed session capacity must be non-zero".to_string(),
@@ -106,6 +125,7 @@ pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling(
         weight_plan: Some(weight_plan),
         weight_blocks: &resident_weights.descriptors,
         detailed_profile,
+        experimental_rt,
     }
     .create();
     if created.summary.status != SmokeStatus::Ok {

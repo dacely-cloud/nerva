@@ -3,8 +3,8 @@ use nerva_model::hf::tokenizer::{
     decode_generated_text, encode_text_prompt, format_prompt_for_model, stop_token_ids,
 };
 use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
-    HfCudaDeviceGenerateOutput,
-    run_hf_causal_lm_cuda_shard_backed_device_generate_with_profiling_and_progress,
+    HfCudaDeviceGenerateOutput, HfCudaRtDecodeConfig, HfCudaSamplerConfig,
+    run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress,
 };
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
@@ -62,6 +62,16 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
     let compute_capability = parsed
         .compute_capability
         .or_else(detect_cuda_compute_capability);
+    let sampler = HfCudaSamplerConfig {
+        temperature: parsed.temperature,
+        top_p: parsed.top_p,
+        top_k: parsed.top_k,
+        seed: parsed.seed,
+    };
+    let rt_decode = HfCudaRtDecodeConfig {
+        enabled: parsed.rt,
+        ..HfCudaRtDecodeConfig::default()
+    };
     let queue_capacity = parsed.queue_capacity.unwrap_or(DEFAULT_QUEUE_CAPACITY);
     let stop_token_ids = stop_token_ids(&model_path_string)?;
     let mut logger = NervaCliLogger::new(parsed.json, parsed.debug);
@@ -85,7 +95,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
     let _native_progress = logger.native_load_progress_guard();
     let _ticker = logger.ticker_guard();
     let output =
-        run_hf_causal_lm_cuda_shard_backed_device_generate_with_profiling_and_progress(
+        run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress(
             &runtime,
             &model_path_string,
             &prompt_tokens,
@@ -93,7 +103,9 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
             output_tokens,
             queue_capacity,
             compute_capability,
+            sampler,
             parsed.profiling,
+            rt_decode,
             |progress| logger.decode_progress(progress),
         )
         .map_err(|err| format!("generation failed: {err:?}"))?;
@@ -106,6 +118,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
             formatted.mode,
             &encoded.token_ids,
             &output,
+            sampler,
             start.elapsed(),
         )
         .map(|output| GenerateResult {
@@ -130,6 +143,7 @@ fn generate_json_output(
     prompt_mode: &str,
     prompt_ids: &[u32],
     output: &HfCudaDeviceGenerateOutput,
+    sampler: HfCudaSamplerConfig,
     elapsed: std::time::Duration,
 ) -> Result<String, String> {
     let generated_text = decode_generated_text(path, output.tokens())?
@@ -212,11 +226,21 @@ fn generate_json_output(
         .collect::<Vec<_>>()
         .join(",");
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"prefill_chunk_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
+        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"page_tokens\":{},\"pages\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
         env!("CARGO_PKG_VERSION"),
         json_escape(path),
         input_mode,
         prompt_mode,
+        sampler.temperature,
+        sampler.top_p,
+        sampler.top_k,
+        sampler.seed,
+        output.stream.create.experimental_rt_decode_requested,
+        output.stream.create.experimental_rt_decode_enabled,
+        output.stream.create.experimental_rt_page_tokens,
+        output.stream.create.experimental_rt_pages,
+        output.stream.create.experimental_rt_local_window_tokens,
+        output.stream.create.experimental_rt_sink_tokens,
         output.stream.create.prefill_chunk_tokens,
         output.stream.create.head_threads,
         json_escape(prompt),

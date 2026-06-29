@@ -1,7 +1,9 @@
 use std::os::raw::{c_int, c_void};
 
 use crate::decode::hf_chain::ffi::NervaCudaHfDecodeChainLayer;
-use crate::decode::hf_sequence::ffi::NervaCudaHfDecodeSequenceResult;
+use crate::decode::hf_sequence::ffi::{
+    NervaCudaHfDecodeSamplerConfig, NervaCudaHfDecodeSequenceResult,
+};
 use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightBlock;
 
 pub(crate) type NervaCudaHfDecodeSequenceSession = c_void;
@@ -34,6 +36,11 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionCreateRequest {
     pub(crate) planned_weight_descriptor_count: u32,
     pub(crate) planned_weight_descriptor_hash: u64,
     pub(crate) detailed_profile: u32,
+    pub(crate) experimental_rt_decode: u32,
+    pub(crate) experimental_rt_page_tokens: u32,
+    pub(crate) experimental_rt_pages: u32,
+    pub(crate) experimental_rt_local_window_tokens: u32,
+    pub(crate) experimental_rt_sink_tokens: u32,
 }
 
 #[repr(C)]
@@ -65,6 +72,12 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionCreateResult {
     pub(crate) descriptor_gpu_staged_h2d_bytes: u64,
     pub(crate) planned_weight_descriptor_count: u32,
     pub(crate) planned_weight_descriptor_hash: u64,
+    pub(crate) experimental_rt_decode_requested: u32,
+    pub(crate) experimental_rt_decode_enabled: u32,
+    pub(crate) experimental_rt_page_tokens: u32,
+    pub(crate) experimental_rt_pages: u32,
+    pub(crate) experimental_rt_local_window_tokens: u32,
+    pub(crate) experimental_rt_sink_tokens: u32,
     pub(crate) resident_kv_bytes: u64,
     pub(crate) device_arena_bytes: u64,
     pub(crate) pinned_host_bytes: u64,
@@ -92,6 +105,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionRunRequest {
     pub(crate) eos_token: u32,
     pub(crate) output_tokens: *mut u32,
     pub(crate) output_token_capacity: u32,
+    pub(crate) sampler: NervaCudaHfDecodeSamplerConfig,
 }
 
 #[repr(C)]
@@ -102,6 +116,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionStartRequest {
     pub(crate) prompt_token_count: u32,
     pub(crate) has_eos_token: u32,
     pub(crate) eos_token: u32,
+    pub(crate) sampler: NervaCudaHfDecodeSamplerConfig,
 }
 
 #[repr(C)]

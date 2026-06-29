@@ -163,11 +163,16 @@ fn compile_cuda_sources(
 ) -> Vec<PathBuf> {
     let mut cuda_objects = Vec::with_capacity(sources.cuda_sources.len());
     for cuda_source in &sources.cuda_sources {
-        let object_name = cuda_source
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|stem| format!("{stem}.o"))
-            .expect("CUDA source must have a valid file stem");
+        let relative_source = cuda_source
+            .strip_prefix(&sources.native_dir)
+            .unwrap_or(cuda_source);
+        let object_stem = relative_source
+            .with_extension("")
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("__");
+        let object_name = format!("{object_stem}.o");
         let cuda_object = out_dir.join(object_name);
         let mut command = Command::new(nvcc);
         command.arg("-std=c++17").arg("-Xcompiler").arg("-fPIC");

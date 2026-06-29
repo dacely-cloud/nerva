@@ -74,11 +74,7 @@ fn optional_len(value: Option<&[u16]>) -> Result<u64, String> {
 }
 
 fn marker(value: Option<&[u16]>, elements: u64) -> u64 {
-    if value.is_some() {
-        elements
-    } else {
-        0
-    }
+    if value.is_some() { elements } else { 0 }
 }
 
 fn checked_add(left: u64, right: u64, label: &str) -> Result<u64, String> {

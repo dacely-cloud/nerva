@@ -329,6 +329,14 @@ typedef struct NervaCudaHfDecodeSequenceWeightBlock {
   uint32_t reserved;
 } NervaCudaHfDecodeSequenceWeightBlock;
 
+typedef struct NervaCudaHfDecodeSamplerConfig {
+  float temperature;
+  float top_p;
+  uint32_t top_k;
+  uint32_t reserved;
+  uint64_t seed;
+} NervaCudaHfDecodeSamplerConfig;
+
 typedef struct NervaCudaHfDecodeSequenceRequest {
   uint32_t dtype;
   uint32_t hidden;
@@ -361,6 +369,7 @@ typedef struct NervaCudaHfDecodeSequenceRequest {
   uint64_t planned_weight_descriptor_hash;
   uint32_t *output_tokens;
   uint32_t output_token_capacity;
+  NervaCudaHfDecodeSamplerConfig sampler;
 } NervaCudaHfDecodeSequenceRequest;
 
 typedef struct NervaCudaHfDecodeSequenceResult {
@@ -447,6 +456,11 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateRequest {
   uint32_t planned_weight_descriptor_count;
   uint64_t planned_weight_descriptor_hash;
   uint32_t detailed_profile;
+  uint32_t experimental_rt_decode;
+  uint32_t experimental_rt_page_tokens;
+  uint32_t experimental_rt_pages;
+  uint32_t experimental_rt_local_window_tokens;
+  uint32_t experimental_rt_sink_tokens;
 } NervaCudaHfDecodeSequenceSessionCreateRequest;
 
 typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
@@ -476,6 +490,12 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
   uint64_t descriptor_gpu_staged_h2d_bytes;
   uint32_t planned_weight_descriptor_count;
   uint64_t planned_weight_descriptor_hash;
+  uint32_t experimental_rt_decode_requested;
+  uint32_t experimental_rt_decode_enabled;
+  uint32_t experimental_rt_page_tokens;
+  uint32_t experimental_rt_pages;
+  uint32_t experimental_rt_local_window_tokens;
+  uint32_t experimental_rt_sink_tokens;
   uint64_t resident_kv_bytes;
   uint64_t device_arena_bytes;
   uint64_t pinned_host_bytes;
@@ -499,6 +519,7 @@ typedef struct NervaCudaHfDecodeSequenceSessionRunRequest {
   uint32_t eos_token;
   uint32_t *output_tokens;
   uint32_t output_token_capacity;
+  NervaCudaHfDecodeSamplerConfig sampler;
 } NervaCudaHfDecodeSequenceSessionRunRequest;
 
 typedef struct NervaCudaHfDecodeSequenceSessionStartRequest {
@@ -507,6 +528,7 @@ typedef struct NervaCudaHfDecodeSequenceSessionStartRequest {
   uint32_t prompt_token_count;
   uint32_t has_eos_token;
   uint32_t eos_token;
+  NervaCudaHfDecodeSamplerConfig sampler;
 } NervaCudaHfDecodeSequenceSessionStartRequest;
 
 typedef struct NervaCudaHfDecodeSequenceSessionAdvanceRequest {
@@ -890,18 +912,48 @@ typedef struct NervaCudaExperimentalRtCandidateBenchResult {
   uint32_t vulkan_physical_devices;
   uint64_t descriptor_bytes;
   uint64_t query_bytes;
+  uint64_t kv_cache_bytes;
   uint64_t candidate_id_bytes;
   uint64_t output_bytes;
   uint64_t dense_selector_total_ns;
   uint64_t dense_selector_avg_ns;
   uint64_t software_selector_total_ns;
   uint64_t software_selector_avg_ns;
+  uint64_t candidate_selector_total_ns;
+  uint64_t candidate_selector_avg_ns;
   uint64_t rerank_total_ns;
   uint64_t rerank_avg_ns;
   uint64_t selector_plus_rerank_avg_ns;
   uint64_t dense_vs_selector_speedup_x1000;
   uint64_t dense_vs_selector_plus_rerank_speedup_x1000;
   uint64_t candidate_fraction_ppm;
+  uint64_t candidate_parity_checked;
+  uint64_t candidate_parity_mismatches;
+  uint64_t candidate_parity_first_mismatch_index;
+  uint64_t candidate_parity_first_expected;
+  uint64_t candidate_parity_first_actual;
+  uint64_t candidate_query_hashes_distinct;
+  uint64_t candidate_query_hash_repeats;
+  uint64_t local_window_tokens;
+  uint64_t local_attention_total_ns;
+  uint64_t local_attention_avg_ns;
+  uint64_t kv_page_access_total_ns;
+  uint64_t kv_page_access_avg_ns;
+  uint64_t far_sparse_attention_total_ns;
+  uint64_t far_sparse_attention_avg_ns;
+  uint64_t softmax_merge_total_ns;
+  uint64_t softmax_merge_avg_ns;
+  uint64_t dense_full_attention_total_ns;
+  uint64_t dense_full_attention_avg_ns;
+  uint64_t attention_mass_recall_min_ppm;
+  uint64_t attention_mass_recall_avg_ppm;
+  uint64_t dense_selector_attention_stage_avg_ns;
+  uint64_t rt_selector_attention_stage_avg_ns;
+  uint64_t rt_selector_overlapped_attention_stage_avg_ns;
+  uint64_t dense_vs_rt_attention_stage_speedup_x1000;
+  uint64_t dense_vs_rt_overlapped_attention_stage_speedup_x1000;
+  uint64_t dense_full_vs_rt_attention_stage_speedup_x1000;
+  uint64_t dense_full_vs_rt_overlapped_attention_stage_speedup_x1000;
   uint64_t selected_hash;
   uint64_t kernel_launches;
   uint64_t sync_calls;

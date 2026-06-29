@@ -4,6 +4,8 @@ use std::time::Instant;
 
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
+use nerva_cuda::decode::hf_sequence::request::CudaHfDecodeSamplerConfig;
+use nerva_cuda::decode::hf_sequence::session::request::CudaHfDecodeSequenceExperimentalRtConfig;
 use nerva_cuda::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::causal_lm::types::HfCausalLmStopReason;
@@ -11,7 +13,7 @@ use nerva_model::hf::tokenizer::stop_token_ids;
 
 use crate::engine::hf_cuda_decode::file_backed::progress::HfCudaDeviceSessionChunkProgress;
 use crate::engine::hf_cuda_decode::file_backed::run::summary_from_sequence;
-use crate::engine::hf_cuda_decode::file_backed::session::create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling;
+use crate::engine::hf_cuda_decode::file_backed::session::create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling_and_rt;
 use crate::engine::hf_cuda_decode::file_backed::session_stream_queue::BoundedHostOutputQueue;
 use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 use crate::engine::runtime::Runtime;
@@ -68,6 +70,7 @@ where
         chunks,
         queue_capacity,
         compute_capability,
+        CudaHfDecodeSamplerConfig::greedy(),
         false,
         progress,
     )
@@ -82,7 +85,41 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_a
     chunks: usize,
     queue_capacity: usize,
     compute_capability: Option<u32>,
+    sampler: CudaHfDecodeSamplerConfig,
     detailed_profile: bool,
+    progress: F,
+) -> Result<HfCudaDeviceSessionStreamOutput>
+where
+    F: FnMut(HfCudaDeviceSessionChunkProgress),
+{
+    run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_rt_and_progress(
+        runtime,
+        dir,
+        prompt_tokens,
+        max_context_tokens,
+        chunk_steps,
+        chunks,
+        queue_capacity,
+        compute_capability,
+        sampler,
+        detailed_profile,
+        CudaHfDecodeSequenceExperimentalRtConfig::default(),
+        progress,
+    )
+}
+
+pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_rt_and_progress<F>(
+    runtime: &Runtime,
+    dir: impl AsRef<Path>,
+    prompt_tokens: &[TokenId],
+    max_context_tokens: usize,
+    chunk_steps: usize,
+    chunks: usize,
+    queue_capacity: usize,
+    compute_capability: Option<u32>,
+    sampler: CudaHfDecodeSamplerConfig,
+    detailed_profile: bool,
+    experimental_rt: CudaHfDecodeSequenceExperimentalRtConfig,
     mut progress: F,
 ) -> Result<HfCudaDeviceSessionStreamOutput>
 where
@@ -91,13 +128,15 @@ where
     validate_args(prompt_tokens, chunk_steps, chunks, queue_capacity)?;
     let dir = dir.as_ref();
     let load_started = Instant::now();
-    let mut session = create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling(
-        runtime,
-        dir,
-        max_context_tokens,
-        compute_capability,
-        detailed_profile,
-    )?;
+    let mut session =
+        create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling_and_rt(
+            runtime,
+            dir,
+            max_context_tokens,
+            compute_capability,
+            detailed_profile,
+            experimental_rt,
+        )?;
     let load_wall_ns = duration_ns(load_started.elapsed());
     validate_vocab(prompt_tokens, session.metadata.vocab_size)?;
     let stop_tokens = model_stop_tokens(dir, session.metadata.eos_token_id)?;
@@ -110,7 +149,12 @@ where
         .map(|token| token.0)
         .collect::<Vec<_>>();
     let prefill_started = Instant::now();
-    let started = CudaHfDecodeSequenceLoop::start(&mut session.session, &prompt, device_stop_token);
+    let started = CudaHfDecodeSequenceLoop::start_with_sampler(
+        &mut session.session,
+        &prompt,
+        device_stop_token,
+        sampler,
+    );
     let prefill_wall_ns = duration_ns(prefill_started.elapsed());
     if started.summary.status != SmokeStatus::Ok {
         return Err(NervaError::InvalidArgument {

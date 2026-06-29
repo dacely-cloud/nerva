@@ -1,16 +1,16 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::request::{
-    CudaHfDecodeSequenceRequest, CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::weight_plan::{
-    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
     CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED,
+    CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use crate::smoke::status::SmokeStatus;
 
 #[test]
 fn hf_decode_sequence_accepts_qk_norm_descriptor_blocks() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let one = 0x3c00;
     let zero = 0x0000;
@@ -57,6 +57,7 @@ fn hf_decode_sequence_accepts_qk_norm_descriptor_blocks() {
         lm_head: &lm_head,
         weight_plan: Some(plan(&blocks)),
         weight_blocks: &blocks,
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
     }
     .run();
 

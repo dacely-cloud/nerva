@@ -2,12 +2,17 @@ use std::path::Path;
 
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
+use nerva_cuda::decode::hf_sequence::request::CudaHfDecodeSamplerConfig;
+use nerva_cuda::decode::hf_sequence::session::request::CudaHfDecodeSequenceExperimentalRtConfig;
 use nerva_model::causal_lm::types::HfCausalLmStopReason;
 
 use crate::engine::hf_cuda_decode::file_backed::progress::HfCudaDeviceSessionChunkProgress;
-use crate::engine::hf_cuda_decode::file_backed::session_stream::run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_and_progress;
+use crate::engine::hf_cuda_decode::file_backed::session_stream::run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_rt_and_progress;
 use crate::engine::hf_cuda_decode::file_backed::session_stream_types::HfCudaDeviceSessionStreamOutput;
 use crate::engine::runtime::Runtime;
+
+pub type HfCudaSamplerConfig = CudaHfDecodeSamplerConfig;
+pub type HfCudaRtDecodeConfig = CudaHfDecodeSequenceExperimentalRtConfig;
 
 pub struct HfCudaDeviceGenerateOutput {
     pub max_new_tokens: usize,
@@ -71,9 +76,7 @@ where
     )
 }
 
-pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_profiling_and_progress<
-    F,
->(
+pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_profiling_and_progress<F>(
     runtime: &Runtime,
     dir: impl AsRef<Path>,
     prompt_tokens: &[TokenId],
@@ -87,23 +90,88 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_profiling_and_pro
 where
     F: FnMut(HfCudaDeviceSessionChunkProgress),
 {
+    run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_and_progress(
+        runtime,
+        dir,
+        prompt_tokens,
+        max_context_tokens,
+        max_new_tokens,
+        queue_capacity,
+        compute_capability,
+        CudaHfDecodeSamplerConfig::greedy(),
+        detailed_profile,
+        progress,
+    )
+}
+
+pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_and_progress<F>(
+    runtime: &Runtime,
+    dir: impl AsRef<Path>,
+    prompt_tokens: &[TokenId],
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    queue_capacity: usize,
+    compute_capability: Option<u32>,
+    sampler: CudaHfDecodeSamplerConfig,
+    detailed_profile: bool,
+    progress: F,
+) -> Result<HfCudaDeviceGenerateOutput>
+where
+    F: FnMut(HfCudaDeviceSessionChunkProgress),
+{
+    run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress(
+        runtime,
+        dir,
+        prompt_tokens,
+        max_context_tokens,
+        max_new_tokens,
+        queue_capacity,
+        compute_capability,
+        sampler,
+        detailed_profile,
+        HfCudaRtDecodeConfig::default(),
+        progress,
+    )
+}
+
+pub fn run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress<
+    F,
+>(
+    runtime: &Runtime,
+    dir: impl AsRef<Path>,
+    prompt_tokens: &[TokenId],
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    queue_capacity: usize,
+    compute_capability: Option<u32>,
+    sampler: CudaHfDecodeSamplerConfig,
+    detailed_profile: bool,
+    rt_decode: HfCudaRtDecodeConfig,
+    progress: F,
+) -> Result<HfCudaDeviceGenerateOutput>
+where
+    F: FnMut(HfCudaDeviceSessionChunkProgress),
+{
     if max_new_tokens == 0 {
         return Err(NervaError::InvalidArgument {
             reason: "HF CUDA generate max_new_tokens must be non-zero".to_string(),
         });
     }
-    let stream = run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_and_progress(
-        runtime,
-        dir,
-        prompt_tokens,
-        max_context_tokens,
-        1,
-        max_new_tokens,
-        queue_capacity,
-        compute_capability,
-        detailed_profile,
-        progress,
-    )?;
+    let stream =
+        run_hf_causal_lm_cuda_shard_backed_device_session_stream_with_profiling_rt_and_progress(
+            runtime,
+            dir,
+            prompt_tokens,
+            max_context_tokens,
+            1,
+            max_new_tokens,
+            queue_capacity,
+            compute_capability,
+            sampler,
+            detailed_profile,
+            rt_decode,
+            progress,
+        )?;
     Ok(HfCudaDeviceGenerateOutput {
         max_new_tokens,
         stream,

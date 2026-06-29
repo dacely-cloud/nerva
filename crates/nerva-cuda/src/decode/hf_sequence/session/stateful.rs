@@ -1,8 +1,9 @@
 use crate::decode::hf_sequence::ffi::NervaCudaHfDecodeSequenceResult;
+use crate::decode::hf_sequence::request::CudaHfDecodeSamplerConfig;
 use crate::decode::hf_sequence::session::failures::failed_run_summary;
 use crate::decode::hf_sequence::session::ffi::{
-    advance_hf_decode_sequence_session, start_hf_decode_sequence_session,
     NervaCudaHfDecodeSequenceSessionAdvanceRequest, NervaCudaHfDecodeSequenceSessionStartRequest,
+    advance_hf_decode_sequence_session, start_hf_decode_sequence_session,
 };
 use crate::decode::hf_sequence::session::helpers::{summary_from_run, validate_run};
 use crate::decode::hf_sequence::session::request::{
@@ -28,6 +29,20 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
         prompt_tokens: &[u32],
         eos_token: Option<u32>,
     ) -> CudaHfDecodeSequenceLoopStart<'a> {
+        Self::start_with_sampler(
+            session,
+            prompt_tokens,
+            eos_token,
+            CudaHfDecodeSamplerConfig::greedy(),
+        )
+    }
+
+    pub fn start_with_sampler(
+        session: &'a mut CudaHfDecodeSequenceSession,
+        prompt_tokens: &[u32],
+        eos_token: Option<u32>,
+        sampler: CudaHfDecodeSamplerConfig,
+    ) -> CudaHfDecodeSequenceLoopStart<'a> {
         let create_summary = session.create_summary().clone();
         if let Some(error) = validate_loop_start(prompt_tokens, create_summary.vocab_size) {
             return CudaHfDecodeSequenceLoopStart {
@@ -35,7 +50,13 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
                 loop_state: None,
             };
         }
-        let summary = Self::start_session(session, prompt_tokens, eos_token);
+        if let Some(error) = sampler.validate() {
+            return CudaHfDecodeSequenceLoopStart {
+                summary: failed_run_summary(&create_summary, 0, 0, error),
+                loop_state: None,
+            };
+        }
+        let summary = Self::start_session_with_sampler(session, prompt_tokens, eos_token, sampler);
         let loop_state = (summary.status == SmokeStatus::Ok).then_some(Self {
             session,
             eos_token,
@@ -52,8 +73,25 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
         prompt_tokens: &[u32],
         eos_token: Option<u32>,
     ) -> CudaHfDecodeSequenceSummary {
+        Self::start_session_with_sampler(
+            session,
+            prompt_tokens,
+            eos_token,
+            CudaHfDecodeSamplerConfig::greedy(),
+        )
+    }
+
+    pub fn start_session_with_sampler(
+        session: &mut CudaHfDecodeSequenceSession,
+        prompt_tokens: &[u32],
+        eos_token: Option<u32>,
+        sampler: CudaHfDecodeSamplerConfig,
+    ) -> CudaHfDecodeSequenceSummary {
         let create_summary = session.create_summary().clone();
         if let Some(error) = validate_loop_start(prompt_tokens, create_summary.vocab_size) {
+            return failed_run_summary(&create_summary, 0, 0, error);
+        }
+        if let Some(error) = sampler.validate() {
             return failed_run_summary(&create_summary, 0, 0, error);
         }
         let request = NervaCudaHfDecodeSequenceSessionStartRequest {
@@ -62,6 +100,7 @@ impl<'a> CudaHfDecodeSequenceLoop<'a> {
             prompt_token_count: prompt_tokens.len() as u32,
             has_eos_token: eos_token.is_some() as u32,
             eos_token: eos_token.unwrap_or(0),
+            sampler: sampler.to_ffi(),
         };
         let mut out = NervaCudaHfDecodeSequenceResult::default();
         let return_code = start_hf_decode_sequence_session(&request, &mut out);

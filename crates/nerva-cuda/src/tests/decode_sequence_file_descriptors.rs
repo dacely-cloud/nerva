@@ -5,17 +5,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::request::{
-    CudaHfDecodeSequenceRequest, CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::weight_plan::{
-    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
     CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED,
+    CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use crate::smoke::status::SmokeStatus;
 
 #[test]
 fn declared_weight_descriptors_stream_file_backed_sources() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     if crate::smoke::probe::smoke().status != SmokeStatus::Ok {
         return;
@@ -60,6 +60,7 @@ fn declared_weight_descriptors_stream_file_backed_sources() {
             descriptor_hash: hash_weight_blocks(&weight_blocks),
         }),
         weight_blocks: &weight_blocks,
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
     }
     .run();
     let _ = fs::remove_file(path);

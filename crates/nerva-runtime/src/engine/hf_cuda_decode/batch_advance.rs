@@ -152,7 +152,13 @@ fn batch_tokens_by_loop(loop_count: usize, tokens: &[u32]) -> Vec<Vec<u32>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use nerva_cuda::decode::hf_sequence::session::request::CudaHfDecodeSequenceBatchAdvanceSummary;
+    use nerva_cuda::smoke::status::SmokeStatus;
+
+    use super::{
+        CudaDecodeBatchAdvanceConfig, CudaDecodeBatchAdvanceMode, batch_tokens_by_loop,
+        safe_to_fallback_after_batch_rejection, successful_batch_advance,
+    };
 
     fn batch_summary(
         status: SmokeStatus,

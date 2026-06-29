@@ -14,6 +14,11 @@ pub(crate) struct GenerateArgs {
     pub queue_capacity: Option<usize>,
     pub compute_capability: Option<u32>,
     pub prompt_format: PromptFormat,
+    pub temperature: f32,
+    pub top_p: f32,
+    pub top_k: u32,
+    pub seed: u64,
+    pub rt: bool,
     pub profiling: bool,
     pub json: bool,
     pub debug: bool,
@@ -29,6 +34,11 @@ impl Default for GenerateArgs {
             queue_capacity: None,
             compute_capability: None,
             prompt_format: PromptFormat::Auto,
+            temperature: 0.0,
+            top_p: 1.0,
+            top_k: 0,
+            seed: 0,
+            rt: false,
             profiling: false,
             json: false,
             debug: false,
@@ -66,6 +76,16 @@ struct ClapGenerateArgs {
     debug: bool,
     #[arg(long = "profiling")]
     profiling: bool,
+    #[arg(long = "temperature", default_value_t = 0.0)]
+    temperature: f32,
+    #[arg(long = "top-p", default_value_t = 1.0)]
+    top_p: f32,
+    #[arg(long = "top-k", default_value_t = 0)]
+    top_k: u32,
+    #[arg(long = "seed", default_value_t = 0)]
+    seed: u64,
+    #[arg(long = "rt")]
+    rt: bool,
     #[arg(long = "raw", conflicts_with = "chat")]
     raw: bool,
     #[arg(long = "chat")]
@@ -76,15 +96,22 @@ struct ClapGenerateArgs {
 
 pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
     let argv = std::iter::once("nerva".to_string())
-        .chain(args.iter().cloned())
+        .chain(args.iter().map(|arg| {
+            if arg == "-rt" {
+                "--rt".to_string()
+            } else {
+                arg.clone()
+            }
+        }))
         .collect::<Vec<_>>();
     let parsed = ClapGenerateArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
     if parsed.help {
         return Err(
-            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--profiling] [--chat|--raw] [--json] [--debug]"
+            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [-rt|--rt] [--profiling] [--chat|--raw] [--json] [--debug]"
                 .to_string(),
         );
     }
+    validate_sampling(parsed.temperature, parsed.top_p)?;
     Ok(GenerateArgs {
         model: parsed.model,
         prompt: parsed.prompt,
@@ -99,10 +126,25 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
         } else {
             PromptFormat::Auto
         },
+        temperature: parsed.temperature,
+        top_p: parsed.top_p,
+        top_k: parsed.top_k,
+        seed: parsed.seed,
+        rt: parsed.rt,
         profiling: parsed.profiling,
         json: parsed.json,
         debug: parsed.debug,
     })
+}
+
+fn validate_sampling(temperature: f32, top_p: f32) -> Result<(), String> {
+    if !temperature.is_finite() || temperature < 0.0 {
+        return Err("--temperature must be finite and >= 0".to_string());
+    }
+    if !top_p.is_finite() || top_p <= 0.0 || top_p > 1.0 {
+        return Err("--top-p must be finite and in (0, 1]".to_string());
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_token_count(value: &str) -> Result<usize, String> {
@@ -137,7 +179,25 @@ mod tests {
     #[test]
     fn parses_generate_flags() {
         let args = [
-            "-m", "qwen3-8b", "-p", "hello", "-c", "32k", "-o", "16k", "--raw", "--debug",
+            "-m",
+            "qwen3-8b",
+            "-p",
+            "hello",
+            "-c",
+            "32k",
+            "-o",
+            "16k",
+            "--raw",
+            "--debug",
+            "--temperature",
+            "0.7",
+            "--top-p",
+            "0.9",
+            "--top-k",
+            "40",
+            "--seed",
+            "123",
+            "-rt",
         ]
         .into_iter()
         .map(str::to_string)
@@ -148,7 +208,21 @@ mod tests {
         assert_eq!(parsed.context_tokens, Some(32 * 1024));
         assert_eq!(parsed.output_tokens, Some(16 * 1024));
         assert_eq!(parsed.prompt_format, PromptFormat::Raw);
+        assert_eq!(parsed.temperature, 0.7);
+        assert_eq!(parsed.top_p, 0.9);
+        assert_eq!(parsed.top_k, 40);
+        assert_eq!(parsed.seed, 123);
+        assert!(parsed.rt);
         assert!(parsed.debug);
         assert!(!parsed.profiling);
+    }
+
+    #[test]
+    fn rejects_bad_sampling_flags() {
+        let args = ["-m", "qwen3-8b", "-p", "hello", "--top-p", "0"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(parse_args(&args).is_err());
     }
 }

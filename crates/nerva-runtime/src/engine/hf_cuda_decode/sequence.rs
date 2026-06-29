@@ -4,7 +4,7 @@ use nerva_core::types::id::token::TokenId;
 use nerva_cuda::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use nerva_cuda::decode::hf_sequence::request::{
     CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
-    CudaHfDecodeSequenceRequest,
+    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use nerva_cuda::decode::hf_sequence::weight_plan::{
@@ -54,6 +54,7 @@ pub(super) fn run_device_sequence(
         lm_head: model.lm_head(),
         weight_plan,
         weight_blocks,
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
     }
     .run())
 }

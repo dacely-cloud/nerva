@@ -4,6 +4,7 @@ pub(crate) struct NativeCudaSources {
     pub(crate) native_dir: PathBuf,
     pub(crate) cuda_sources: Vec<PathBuf>,
     header: PathBuf,
+    headers: Vec<PathBuf>,
 }
 
 impl NativeCudaSources {
@@ -19,6 +20,12 @@ impl NativeCudaSources {
             "nerva_cuda_hf_sampler.cu",
             "nerva_cuda_hf_decode_step.cu",
             "nerva_cuda_hf_decode_chain.cu",
+            "hf_decode_sequence/attention_kernels.cu",
+            "hf_decode_sequence/kernels.cu",
+            "hf_decode_sequence/prefill_kernels.cu",
+            "hf_decode_sequence/projection.cu",
+            "hf_decode_sequence/sampler.cu",
+            "hf_decode_sequence/weights.cu",
             "nerva_cuda_hf_decode_sequence.cu",
             "nerva_cuda_tiny_decode.cu",
             "nerva_cuda_tiered_attention.cu",
@@ -29,10 +36,19 @@ impl NativeCudaSources {
         .map(|source| native_dir.join(source))
         .collect::<Vec<_>>();
         let header = native_dir.join("nerva_cuda_api.h");
+        let headers = vec![
+            native_dir.join("hf_decode_sequence/device_ops.cuh"),
+            native_dir.join("hf_decode_sequence/kernels.cuh"),
+            native_dir.join("hf_decode_sequence/projection.cuh"),
+            native_dir.join("hf_decode_sequence/sampler.cuh"),
+            native_dir.join("hf_decode_sequence/types.cuh"),
+            native_dir.join("hf_decode_sequence/weights.cuh"),
+        ];
         Self {
             native_dir,
             cuda_sources,
             header,
+            headers,
         }
     }
 
@@ -41,6 +57,9 @@ impl NativeCudaSources {
             println!("cargo:rerun-if-changed={}", cuda_source.display());
         }
         println!("cargo:rerun-if-changed={}", self.header.display());
+        for header in &self.headers {
+            println!("cargo:rerun-if-changed={}", header.display());
+        }
     }
 }
 

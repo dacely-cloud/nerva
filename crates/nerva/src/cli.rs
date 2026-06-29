@@ -52,8 +52,8 @@ fn print_error(reason: &str, _json_requested: bool) {
 fn usage_lines() -> &'static [&'static str] {
     &[
         "usage:",
-        "  cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--json] [--debug] [--profiling]",
-        "  cargo run -p nerva -- generate -m model -p prompt [-c context] [-o output] [--debug] [--profiling]",
+        "  cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [--json] [--debug] [--profiling]",
+        "  cargo run -p nerva -- generate -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [--debug] [--profiling]",
         "",
         "aliases:",
         "  generate, chat, ask",
@@ -62,6 +62,7 @@ fn usage_lines() -> &'static [&'static str] {
         "  default output uses plain streaming logs on stderr",
         "  --debug enables the Ratatui dashboard with charts",
         "  --profiling enables detailed CUDA timing buckets",
+        "  --temperature 0 uses exact greedy decode; >0 enables sampling",
         "  NERVA_COLOR=never|ansi|truecolor|always controls log color",
     ]
 }

@@ -3,7 +3,9 @@ use std::path::Path;
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
-use nerva_cuda::decode::hf_sequence::request::CudaHfDecodeSequenceRequest;
+use nerva_cuda::decode::hf_sequence::request::{
+    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
+};
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::hf::metadata::HfModelMetadata;
 
@@ -76,6 +78,7 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_only(
         lm_head: &[],
         weight_plan: Some(weight_plan),
         weight_blocks: &resident_weights.descriptors,
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
     }
     .run();
     let mut summary = summary_from_sequence(&sequence, steps)?;

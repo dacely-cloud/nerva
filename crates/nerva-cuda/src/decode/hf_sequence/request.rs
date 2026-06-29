@@ -1,6 +1,7 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::ffi::{
-    run_hf_decode_sequence_u16, NervaCudaHfDecodeSequenceRequest, NervaCudaHfDecodeSequenceResult,
+    NervaCudaHfDecodeSamplerConfig as FfiSamplerConfig, NervaCudaHfDecodeSequenceRequest,
+    NervaCudaHfDecodeSequenceResult, run_hf_decode_sequence_u16,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::status::{sequence_failure_reason, sequence_status_from_result};
@@ -13,6 +14,52 @@ use crate::decode::hf_sequence::weight_plan::{
 use crate::smoke::status::SmokeStatus;
 pub const CUDA_HF_DECODE_SEQUENCE_DTYPE_F16: u32 = 0;
 pub const CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16: u32 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CudaHfDecodeSamplerConfig {
+    pub temperature: f32,
+    pub top_p: f32,
+    pub top_k: u32,
+    pub seed: u64,
+}
+
+impl CudaHfDecodeSamplerConfig {
+    pub const fn greedy() -> Self {
+        Self {
+            temperature: 0.0,
+            top_p: 1.0,
+            top_k: 0,
+            seed: 0,
+        }
+    }
+
+    pub fn validate(self) -> Option<String> {
+        if !self.temperature.is_finite() || self.temperature < 0.0 {
+            return Some("CUDA HF decode sampler temperature must be finite and >= 0".to_string());
+        }
+        if !self.top_p.is_finite() || self.top_p <= 0.0 || self.top_p > 1.0 {
+            return Some("CUDA HF decode sampler top_p must be finite and in (0, 1]".to_string());
+        }
+        None
+    }
+
+    pub(crate) fn to_ffi(self) -> FfiSamplerConfig {
+        FfiSamplerConfig {
+            temperature: self.temperature,
+            top_p: self.top_p,
+            top_k: self.top_k,
+            reserved: 0,
+            seed: self.seed,
+        }
+    }
+}
+
+impl Default for CudaHfDecodeSamplerConfig {
+    fn default() -> Self {
+        Self::greedy()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CudaHfDecodeSequenceRequest<'a> {
     pub dtype: u32,
@@ -34,6 +81,7 @@ pub struct CudaHfDecodeSequenceRequest<'a> {
     pub lm_head: &'a [u16],
     pub weight_plan: Option<CudaHfDecodeSequenceWeightPlan>,
     pub weight_blocks: &'a [CudaHfDecodeSequenceWeightBlock],
+    pub sampler: CudaHfDecodeSamplerConfig,
 }
 impl<'a> CudaHfDecodeSequenceRequest<'a> {
     pub fn run(&self) -> CudaHfDecodeSequenceSummary {
@@ -188,6 +236,7 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             planned_weight_descriptor_hash: plan.descriptor_hash,
             output_tokens,
             output_token_capacity: self.steps as u32,
+            sampler: self.sampler.to_ffi(),
         }
     }
 }

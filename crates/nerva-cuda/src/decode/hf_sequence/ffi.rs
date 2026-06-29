@@ -4,6 +4,28 @@ use crate::decode::hf_chain::ffi::NervaCudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightBlock;
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct NervaCudaHfDecodeSamplerConfig {
+    pub temperature: f32,
+    pub top_p: f32,
+    pub top_k: u32,
+    pub reserved: u32,
+    pub seed: u64,
+}
+
+impl Default for NervaCudaHfDecodeSamplerConfig {
+    fn default() -> Self {
+        Self {
+            temperature: 0.0,
+            top_p: 1.0,
+            top_k: 0,
+            reserved: 0,
+            seed: 0,
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub(crate) struct NervaCudaHfDecodeSequenceRequest {
     pub(crate) dtype: u32,
@@ -37,6 +59,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceRequest {
     pub(crate) planned_weight_descriptor_hash: u64,
     pub(crate) output_tokens: *mut u32,
     pub(crate) output_token_capacity: u32,
+    pub(crate) sampler: NervaCudaHfDecodeSamplerConfig,
 }
 
 #[repr(C)]

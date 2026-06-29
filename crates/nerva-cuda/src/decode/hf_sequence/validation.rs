@@ -1,5 +1,5 @@
 use crate::decode::hf_sequence::request::{
-    CudaHfDecodeSequenceRequest, CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 
@@ -18,6 +18,7 @@ pub(super) fn validate_request(request: &CudaHfDecodeSequenceRequest<'_>) -> Opt
     }
     validate_prompt(request)
         .or_else(|| validate_attention(request))
+        .or_else(|| request.sampler.validate())
         .or_else(|| validate_weight_plan(request))
         .or_else(|| validate_legacy_lengths(request))
 }

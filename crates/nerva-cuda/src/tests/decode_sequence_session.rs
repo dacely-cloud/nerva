@@ -7,8 +7,8 @@ use crate::decode::hf_sequence::session::request::{
 };
 use crate::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use crate::decode::hf_sequence::weight_plan::{
-    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
-    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
+    CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -81,7 +81,7 @@ fn hf_decode_sequence_loop_batch_advance_one_reports_no_sessions_without_cuda() 
 
 #[test]
 fn hf_decode_sequence_projection_batch_executes_all_projection_kinds_for_two_sessions() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let one = 0x3c00;
     let zero = 0x0000;
@@ -139,6 +139,7 @@ fn hf_decode_sequence_projection_batch_executes_all_projection_kinds_for_two_ses
         weight_plan: Some(weight_plan),
         weight_blocks: &weight_blocks,
         detailed_profile: true,
+        experimental_rt: Default::default(),
     };
     let created_a = config.create();
     if created_a.summary.status != SmokeStatus::Ok {
@@ -228,7 +229,7 @@ fn hf_decode_sequence_projection_batch_executes_all_projection_kinds_for_two_ses
 
 #[test]
 fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let one = 0x3c00;
     let zero = 0x0000;
@@ -286,6 +287,7 @@ fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions()
         weight_plan: Some(weight_plan),
         weight_blocks: &weight_blocks,
         detailed_profile: true,
+        experimental_rt: Default::default(),
     };
     let created_a = config.create();
     if created_a.summary.status != SmokeStatus::Ok {
@@ -342,7 +344,7 @@ fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions()
 
 #[test]
 fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_thirty_two_sessions() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let one = 0x3c00;
     let zero = 0x0000;
@@ -400,6 +402,7 @@ fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_thirty_two_sessi
         weight_plan: Some(weight_plan),
         weight_blocks: &weight_blocks,
         detailed_profile: true,
+        experimental_rt: Default::default(),
     };
     let mut sessions = Vec::new();
     for _ in 0..32 {
@@ -445,7 +448,7 @@ fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_thirty_two_sessi
 
 #[test]
 fn hf_decode_sequence_loop_batch_advance_one_executes_second_token_for_two_loops() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let one = 0x3c00;
     let zero = 0x0000;
@@ -503,6 +506,7 @@ fn hf_decode_sequence_loop_batch_advance_one_executes_second_token_for_two_loops
         weight_plan: Some(weight_plan),
         weight_blocks: &weight_blocks,
         detailed_profile: false,
+        experimental_rt: Default::default(),
     };
     let created_a = config.create();
     if created_a.summary.status != SmokeStatus::Ok {
@@ -609,7 +613,7 @@ fn assert_layer_projection_batch_exec(
 
 #[test]
 fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let one = 0x3c00;
     let zero = 0x0000;
@@ -654,6 +658,7 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
         weight_plan: None,
         weight_blocks: &[],
         detailed_profile: false,
+        experimental_rt: Default::default(),
     }
     .create();
 
@@ -723,7 +728,7 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
 
 #[test]
 fn hf_decode_sequence_session_packs_projection_replicas_for_cublas_path() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let one = 0x3c00;
     let zero = 0x0000;
@@ -772,6 +777,7 @@ fn hf_decode_sequence_session_packs_projection_replicas_for_cublas_path() {
         weight_plan: None,
         weight_blocks: &[],
         detailed_profile: false,
+        experimental_rt: Default::default(),
     }
     .create();
 

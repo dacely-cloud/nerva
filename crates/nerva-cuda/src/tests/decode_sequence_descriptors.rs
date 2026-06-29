@@ -3,20 +3,21 @@ use core::ptr;
 use crate::decode::hf_chain::ffi::NervaCudaHfDecodeChainLayer;
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::ffi::{
-    run_hf_decode_sequence_u16, NervaCudaHfDecodeSequenceRequest, NervaCudaHfDecodeSequenceResult,
+    NervaCudaHfDecodeSamplerConfig, NervaCudaHfDecodeSequenceRequest,
+    NervaCudaHfDecodeSequenceResult, run_hf_decode_sequence_u16,
 };
 use crate::decode::hf_sequence::request::{
-    CudaHfDecodeSequenceRequest, CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::weight_plan::{
-    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
     CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED,
+    CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use crate::smoke::status::SmokeStatus;
 
 #[test]
 fn declared_weight_descriptors_override_legacy_weight_pointers() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     let one = 0x3c00;
     let zero = 0x0000;
@@ -76,6 +77,7 @@ fn declared_weight_descriptors_override_legacy_weight_pointers() {
             descriptor_hash: hash_weight_blocks(&weight_blocks),
         }),
         weight_blocks: &weight_blocks,
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
     }
     .run();
 
@@ -91,7 +93,7 @@ fn declared_weight_descriptors_override_legacy_weight_pointers() {
 
 #[test]
 fn declared_weight_descriptors_accept_null_legacy_weight_pointers() {
-    let _guard = super::cuda_test_lock();
+    let _guard = super::cuda_lock::cuda_test_lock();
 
     if crate::smoke::probe::smoke().status != SmokeStatus::Ok {
         return;
@@ -156,6 +158,7 @@ fn declared_weight_descriptors_accept_null_legacy_weight_pointers() {
         planned_weight_descriptor_hash: hash_weight_blocks(&weight_blocks),
         output_tokens: output_tokens.as_mut_ptr(),
         output_token_capacity: 4,
+        sampler: NervaCudaHfDecodeSamplerConfig::default(),
     };
     let mut out = NervaCudaHfDecodeSequenceResult::default();
     let return_code = run_hf_decode_sequence_u16(&request, &mut out);

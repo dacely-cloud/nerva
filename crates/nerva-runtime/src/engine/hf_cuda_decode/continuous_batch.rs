@@ -3,12 +3,12 @@ use std::collections::BTreeSet;
 use nerva_cuda::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 
 use crate::engine::hf_cuda_decode::batch_advance::{
-    advance_decode_loops_once, advance_decode_loops_sequential_once, CudaDecodeBatchAdvanceConfig,
-    CudaDecodeBatchAdvanceMode, CudaDecodeBatchAdvanceOutput,
+    CudaDecodeBatchAdvanceConfig, CudaDecodeBatchAdvanceMode, CudaDecodeBatchAdvanceOutput,
+    advance_decode_loops_once, advance_decode_loops_sequential_once,
 };
 use crate::engine::hf_cuda_decode::projection_batch::{
-    plan_exact_projection_batch, ProjectionBatchCandidate, ProjectionBatchConfig,
-    ProjectionBatchModelKey, ProjectionBatchPlan, ProjectionBatchPlanReason,
+    ProjectionBatchCandidate, ProjectionBatchConfig, ProjectionBatchModelKey, ProjectionBatchPlan,
+    ProjectionBatchPlanReason, plan_exact_projection_batch,
 };
 
 const NOT_SELECTED_REASON: &str = "not_selected_for_projection_batch";
@@ -265,13 +265,17 @@ fn fallback_reason(reason: ProjectionBatchPlanReason) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use nerva_core::types::dtype::DType;
 
-    fn model(
-        data_hash: u64,
-    ) -> crate::engine::hf_cuda_decode::projection_batch::ProjectionBatchModelKey {
-        crate::engine::hf_cuda_decode::projection_batch::ProjectionBatchModelKey {
+    use crate::engine::hf_cuda_decode::projection_batch::{
+        ProjectionBatchCandidate, ProjectionBatchConfig, ProjectionBatchModelKey,
+        ProjectionBatchPlanReason,
+    };
+
+    use super::{NOT_SELECTED_REASON, fallback_reason, plan_continuous_projection_batch};
+
+    fn model(data_hash: u64) -> ProjectionBatchModelKey {
+        ProjectionBatchModelKey {
             data_hash,
             data_hash_available: true,
             dtype: DType::BF16,

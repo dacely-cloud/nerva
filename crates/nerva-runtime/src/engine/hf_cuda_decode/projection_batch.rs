@@ -192,7 +192,12 @@ pub fn plan_exact_projection_batch(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use nerva_core::types::dtype::DType;
+
+    use super::{
+        NATIVE_PROJECTION_BATCH_MAX_TOKENS, ProjectionBatchCandidate, ProjectionBatchConfig,
+        ProjectionBatchModelKey, ProjectionBatchPlanReason, plan_exact_projection_batch,
+    };
 
     fn model(data_hash: u64) -> ProjectionBatchModelKey {
         ProjectionBatchModelKey {
