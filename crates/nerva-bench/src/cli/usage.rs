@@ -46,6 +46,7 @@ const COMMANDS: &[&str] = &[
     "hf-cuda-decode-device-session-stream checkpoint_dir [max_context] [chunk_steps] [chunks] [queue_capacity] [token|ids:a,b,c]",
     "hf-cuda-generate checkpoint_dir [max_context] [max_new_tokens] [queue_capacity] prompt_text|@prompt.txt [compute_capability]",
     "hf-cuda-shared-fork-batch checkpoint_dir [request_count] [max_context] [max_new_tokens] [target_block_tokens] [min_block_tokens] prompt_text|@prompt.txt [compute_capability]",
+    "hf-cuda-shared-fork-batch-compare checkpoint_dir [request_count] [max_context] [max_new_tokens] [target_block_tokens] [min_block_tokens] prompt_text|@prompt.txt [compute_capability]",
     "vllm-parity vllm_tokens.json [steps]",
     "token-parity baseline_tokens.json candidate_tokens.json",
     "metadata [config.json]",

@@ -542,3 +542,33 @@ forks and projection-batched decode steps. It is deliberately a tiny functional
 probe, not a final throughput benchmark. The next benchmark needs longer
 multi-request decode budgets and a comparison against sequential same-session
 decode under the same prompt, context, and request count.
+
+There is also a comparison command:
+
+```text
+cargo run -p nerva-bench --release -- hf-cuda-shared-fork-batch-compare \
+  <checkpoint_dir> [request_count] [max_context] [max_new_tokens] \
+  [target_block_tokens] [min_block_tokens] prompt_text|@prompt.txt \
+  [compute_capability]
+```
+
+It runs the same prompt/request count twice: once with `min_block_tokens`
+forced above the request count so the continuous scheduler takes the sequential
+fallback path, then once with the requested batch settings.
+
+The current tiny Qwen3-8B comparison artifact is:
+
+```text
+docs/source/perf/qwen3_8b_shared_fork_batch_compare.json
+
+sequential fallback  130.58 tok/s
+batched projection   187.32 tok/s
+decode speedup       1.43x
+token match          true
+```
+
+This is the first real checkpoint evidence that shared-weight continuous decode
+batching can lower projection weight-stream pressure for multiple live requests
+without changing tokens. The run is intentionally short; longer prompts,
+larger request groups, and production queue integration are still required
+before claiming final serving performance.

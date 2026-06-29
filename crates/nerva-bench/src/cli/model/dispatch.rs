@@ -37,6 +37,9 @@ pub(crate) fn dispatch(
         Some("hf-cuda-shared-fork-batch") => {
             Some(causal_lm_cuda_shared_fork_batch::run_hf_causal_lm_cuda_shared_fork_batch(args))
         }
+        Some("hf-cuda-shared-fork-batch-compare") => Some(
+            causal_lm_cuda_shared_fork_batch::run_hf_causal_lm_cuda_shared_fork_batch_compare(args),
+        ),
         Some("vllm-parity") => Some(parity::run_vllm_parity(args)),
         Some("token-parity") => Some(parity::run_token_parity(args)),
         Some("attention") => Some(attention::run_attention()),

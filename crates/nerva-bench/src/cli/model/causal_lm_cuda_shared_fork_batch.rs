@@ -57,6 +57,49 @@ pub(crate) fn run_hf_causal_lm_cuda_shared_fork_batch(
     ))
 }
 
+pub(crate) fn run_hf_causal_lm_cuda_shared_fork_batch_compare(
+    args: &mut impl Iterator<Item = String>,
+) -> ExitCode {
+    let path = args.next();
+    let request_count = match parse_optional_usize(args.next(), 2, "request_count") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let max_context = match parse_optional_usize(args.next(), 8192, "max_context_tokens") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let max_new_tokens = match parse_optional_usize(args.next(), 128, "max_new_tokens") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let target_block_tokens =
+        match parse_optional_usize(args.next(), request_count, "target_block_tokens") {
+            Ok(value) => value,
+            Err(reason) => return exit::parse_error(reason),
+        };
+    let min_block_tokens = match parse_optional_usize(args.next(), 2, "min_block_tokens") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let prompt_spec = args.next();
+    let compute_capability = match parse_optional_u32(args.next(), 0, "compute_capability") {
+        Ok(0) => None,
+        Ok(value) => Some(value),
+        Err(reason) => return exit::parse_error(reason),
+    };
+    exit::print_json_result(hf_causal_lm_cuda_shared_fork_batch_compare_json(
+        path,
+        request_count,
+        max_context,
+        max_new_tokens,
+        target_block_tokens,
+        min_block_tokens,
+        prompt_spec,
+        compute_capability,
+    ))
+}
+
 pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_json(
     path: Option<String>,
     request_count: usize,
@@ -104,6 +147,68 @@ pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_json(
     )
 }
 
+pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_compare_json(
+    path: Option<String>,
+    request_count: usize,
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    target_block_tokens: usize,
+    min_block_tokens: usize,
+    prompt_spec: Option<String>,
+    compute_capability: Option<u32>,
+) -> Result<String, String> {
+    let path = path
+        .ok_or_else(|| "hf-cuda-shared-fork-batch-compare requires checkpoint_dir".to_string())?;
+    let prompt_spec = prompt_spec
+        .ok_or_else(|| "hf-cuda-shared-fork-batch-compare requires prompt_text".to_string())?;
+    let prompt = resolve_prompt_text(&prompt_spec)?;
+    let encoded = encode_text_prompt(&path, &prompt)
+        .map_err(|err| format!("HF CUDA shared fork batch compare prompt encode failed: {err}"))?;
+    let token_ids = encoded
+        .token_ids
+        .iter()
+        .copied()
+        .map(TokenId)
+        .collect::<Vec<_>>();
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let sequential_min_block = request_count.saturating_add(1).max(min_block_tokens);
+    let sequential = run_hf_causal_lm_cuda_shared_fork_batch_probe(
+        &runtime,
+        &path,
+        &token_ids,
+        request_count,
+        max_context_tokens,
+        max_new_tokens,
+        target_block_tokens,
+        sequential_min_block,
+        compute_capability,
+        false,
+    )
+    .map_err(|err| format!("HF CUDA shared fork sequential baseline failed: {err:?}"))?;
+    let batched = run_hf_causal_lm_cuda_shared_fork_batch_probe(
+        &runtime,
+        &path,
+        &token_ids,
+        request_count,
+        max_context_tokens,
+        max_new_tokens,
+        target_block_tokens,
+        min_block_tokens,
+        compute_capability,
+        false,
+    )
+    .map_err(|err| format!("HF CUDA shared fork batched run failed: {err:?}"))?;
+    shared_fork_batch_compare_json(
+        &path,
+        &prompt,
+        encoded.input_mode,
+        &encoded.token_ids,
+        &sequential,
+        &batched,
+    )
+}
+
 fn resolve_prompt_text(prompt_spec: &str) -> Result<String, String> {
     let Some(path) = prompt_spec.strip_prefix('@') else {
         return Ok(prompt_spec.to_string());
@@ -114,6 +219,63 @@ fn resolve_prompt_text(prompt_spec: &str) -> Result<String, String> {
     fs::read_to_string(path).map_err(|err| {
         format!("hf-cuda-shared-fork-batch failed to read prompt file {path}: {err}")
     })
+}
+
+fn shared_fork_batch_compare_json(
+    path: &str,
+    prompt: &str,
+    input_mode: &str,
+    prompt_ids: &[u32],
+    sequential: &HfCudaSharedForkBatchOutput,
+    batched: &HfCudaSharedForkBatchOutput,
+) -> Result<String, String> {
+    let speedup = ratio(batched.tokens_per_second(), sequential.tokens_per_second());
+    let decode_wall_speedup = ratio(
+        sequential.decode_wall_ns() as f64,
+        batched.decode_wall_ns() as f64,
+    );
+    Ok(format!(
+        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"shared_fork_batch_compare\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"prompt_tokens\":{},\"request_count\":{},\"max_new_tokens\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"token_match\":{},\"throughput_speedup\":{:.6},\"decode_wall_speedup\":{:.6},\"sequential\":{},\"batched\":{}}}",
+        json_escape(path),
+        input_mode,
+        json_escape(prompt),
+        u32s_json(prompt_ids),
+        prompt_ids.len(),
+        batched.request_count,
+        batched.max_new_tokens,
+        batched.target_block_tokens,
+        batched.min_block_tokens,
+        sequential.tokens_by_request == batched.tokens_by_request,
+        speedup,
+        decode_wall_speedup,
+        shared_fork_batch_run_json("sequential", sequential)?,
+        shared_fork_batch_run_json("batched", batched)?,
+    ))
+}
+
+fn shared_fork_batch_run_json(
+    label: &str,
+    output: &HfCudaSharedForkBatchOutput,
+) -> Result<String, String> {
+    let dtype = nerva_model::precision::bits::dtype_label(output.dtype)
+        .map_err(|err| format!("HF CUDA shared fork batch dtype failed: {err:?}"))?;
+    Ok(format!(
+        "{{\"label\":\"{}\",\"total_tokens\":{},\"tokens_per_second\":{:.6},\"decode_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"used_batched_projection\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"scheduler\":{},\"tokens_by_request\":{},\"stopped_by_request\":{}}}",
+        label,
+        output.total_tokens(),
+        output.tokens_per_second(),
+        output.decode_wall_ns(),
+        output.load_wall_ns,
+        output.prefill_wall_ns,
+        output.used_batched_projection(),
+        dtype,
+        output.metadata.num_hidden_layers,
+        output.metadata.hidden_size,
+        output.metadata.vocab_size,
+        scheduler_json(&output.scheduler),
+        tokens_by_request_json(output),
+        bools_json(&output.stopped_by_request),
+    ))
 }
 
 fn shared_fork_batch_json(
@@ -166,6 +328,14 @@ fn shared_fork_batch_json(
             .collect::<Vec<_>>()
             .join(","),
     ))
+}
+
+fn ratio(numerator: f64, denominator: f64) -> f64 {
+    if denominator <= 0.0 {
+        0.0
+    } else {
+        numerator / denominator
+    }
 }
 
 fn scheduler_json(summary: &HfCudaSharedForkBatchSchedulerSummary) -> String {
