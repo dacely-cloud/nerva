@@ -12,14 +12,14 @@
   "min_block_tokens": 2,
   "prompt_tokens": 1,
   "token_match": true,
-  "throughput_speedup": 4.760780,
-  "decode_wall_speedup": 4.760780,
+  "throughput_speedup": 4.771372,
+  "decode_wall_speedup": 4.771372,
   "sequential": {
     "total_tokens": 32,
-    "tokens_per_second": 130.145321,
-    "decode_wall_ns": 245878989,
-    "load_wall_ns": 3749249746,
-    "prefill_wall_ns": 348780726,
+    "tokens_per_second": 129.859566,
+    "decode_wall_ns": 246420045,
+    "load_wall_ns": 3801196042,
+    "prefill_wall_ns": 356085715,
     "used_batched_projection": false,
     "scheduler_steps": 3,
     "batched_steps": 0,
@@ -28,10 +28,10 @@
   },
   "batched": {
     "total_tokens": 32,
-    "tokens_per_second": 619.593190,
-    "decode_wall_ns": 51646791,
-    "load_wall_ns": 3510780454,
-    "prefill_wall_ns": 329358010,
+    "tokens_per_second": 619.608270,
+    "decode_wall_ns": 51645534,
+    "load_wall_ns": 3580637935,
+    "prefill_wall_ns": 337147993,
     "used_batched_projection": true,
     "scheduler_steps": 3,
     "batched_steps": 3,
@@ -42,7 +42,7 @@
     "batch_scatter_kernel_launches": 435,
     "batch_dependency_kernel_launches": 3504,
     "batch_sampling_kernel_launches": 24,
-    "batch_sync_calls": 24,
+    "batch_sync_calls": 3,
     "batch_hot_path_allocations": 0,
     "last_plan_reason": "ready",
     "last_batch_reason": "batched"
@@ -59,5 +59,5 @@
   ],
   "shared_weight_proof": "direct_shared_weight_fork_lineage",
   "decode_status": "tiny_real_qwen_comparison_not_full_throughput_claim",
-  "change_note": "2-8 compatible shared-fork requests reuse one projection weight stream and one fused pack/scatter launch per projection"
+  "change_note": "2-8 compatible shared-fork requests reuse one projection weight stream and one fused pack/scatter launch per projection; redundant peer stream syncs are skipped after synchronized session progress"
 }

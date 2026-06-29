@@ -568,7 +568,7 @@ fn hf_decode_sequence_loop_batch_advance_one_executes_second_token_for_two_loops
     assert_eq!(batch.tokens, vec![0, 0]);
     assert_eq!(batch.projection_kernel_launches, 5);
     assert_eq!(batch.sampling_kernel_launches, 2);
-    assert_eq!(batch.sync_calls, 2);
+    assert_eq!(batch.sync_calls, 1);
     assert_eq!(batch.hot_path_allocations, 0);
 }
 
