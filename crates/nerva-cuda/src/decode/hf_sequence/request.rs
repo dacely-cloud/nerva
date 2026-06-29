@@ -24,6 +24,10 @@ pub struct CudaHfDecodeSamplerConfig {
 }
 
 impl CudaHfDecodeSamplerConfig {
+    pub const fn accuracy_default() -> Self {
+        Self::greedy()
+    }
+
     pub const fn vllm_default() -> Self {
         Self {
             temperature: 1.0,
@@ -65,7 +69,7 @@ impl CudaHfDecodeSamplerConfig {
 
 impl Default for CudaHfDecodeSamplerConfig {
     fn default() -> Self {
-        Self::vllm_default()
+        Self::accuracy_default()
     }
 }
 

@@ -245,7 +245,7 @@ __global__ void hf_decode_final_head_sample_kernel(
 
 NervaCudaHfDecodeSamplerConfig default_hf_decode_sampler_config() {
   NervaCudaHfDecodeSamplerConfig config{};
-  config.temperature = 1.0f;
+  config.temperature = 0.0f;
   config.top_p = 1.0f;
   config.top_k = 0;
   config.reserved = 0;
@@ -256,7 +256,7 @@ NervaCudaHfDecodeSamplerConfig default_hf_decode_sampler_config() {
 NervaCudaHfDecodeSamplerConfig normalize_hf_decode_sampler_config(
     NervaCudaHfDecodeSamplerConfig config) {
   if (!sampler_isfinite(config.temperature) || config.temperature < 0.0f) {
-    config.temperature = 1.0f;
+    config.temperature = 0.0f;
   }
   if (!sampler_isfinite(config.top_p) || config.top_p <= 0.0f ||
       config.top_p > 1.0f) {

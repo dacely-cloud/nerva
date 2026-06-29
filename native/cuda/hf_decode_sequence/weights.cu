@@ -237,6 +237,7 @@ void clear_session_create_result(
     out->experimental_rt_decode_requested =
         request->experimental_rt_decode == 0 ? 0u : 1u;
     out->experimental_rt_decode_enabled = 0;
+    out->experimental_rt_mode = request->experimental_rt_mode;
     out->experimental_rt_page_tokens = request->experimental_rt_page_tokens;
     out->experimental_rt_pages = request->experimental_rt_pages;
     out->experimental_rt_local_window_tokens =

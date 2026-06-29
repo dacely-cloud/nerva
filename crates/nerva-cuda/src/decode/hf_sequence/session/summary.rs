@@ -28,6 +28,7 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
     pub planned_weight_descriptor_hash: u64,
     pub experimental_rt_decode_requested: bool,
     pub experimental_rt_decode_enabled: bool,
+    pub experimental_rt_mode: u32,
     pub experimental_rt_page_tokens: u32,
     pub experimental_rt_pages: u32,
     pub experimental_rt_local_window_tokens: u32,
@@ -47,7 +48,7 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
 impl CudaHfDecodeSequenceSessionCreateSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"failure_stage\":{},\"failure_stage_label\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"experimental_rt_decode_requested\":{},\"experimental_rt_decode_enabled\":{},\"experimental_rt_page_tokens\":{},\"experimental_rt_pages\":{},\"experimental_rt_local_window_tokens\":{},\"experimental_rt_sink_tokens\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"failure_stage\":{},\"failure_stage_label\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"experimental_rt_decode_requested\":{},\"experimental_rt_decode_enabled\":{},\"experimental_rt_mode\":{},\"experimental_rt_page_tokens\":{},\"experimental_rt_pages\":{},\"experimental_rt_local_window_tokens\":{},\"experimental_rt_sink_tokens\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
             self.failure_stage,
             create_stage_label(self.failure_stage),
@@ -73,6 +74,7 @@ impl CudaHfDecodeSequenceSessionCreateSummary {
             self.planned_weight_descriptor_hash,
             self.experimental_rt_decode_requested,
             self.experimental_rt_decode_enabled,
+            self.experimental_rt_mode,
             self.experimental_rt_page_tokens,
             self.experimental_rt_pages,
             self.experimental_rt_local_window_tokens,
@@ -128,6 +130,7 @@ pub(crate) fn create_summary_from_result(
         planned_weight_descriptor_hash: out.planned_weight_descriptor_hash,
         experimental_rt_decode_requested: out.experimental_rt_decode_requested != 0,
         experimental_rt_decode_enabled: out.experimental_rt_decode_enabled != 0,
+        experimental_rt_mode: out.experimental_rt_mode,
         experimental_rt_page_tokens: out.experimental_rt_page_tokens,
         experimental_rt_pages: out.experimental_rt_pages,
         experimental_rt_local_window_tokens: out.experimental_rt_local_window_tokens,

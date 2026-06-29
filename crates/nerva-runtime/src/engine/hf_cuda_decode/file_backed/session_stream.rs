@@ -22,7 +22,6 @@ const TOKEN_MODE_MAX_ADVANCE_STEPS: usize = 1024;
 const TOKEN_MODE_EOS_FIRST_ADVANCE_STEPS: usize = 64;
 const TOKEN_MODE_EOS_SECOND_ADVANCE_STEPS: usize = 128;
 const TOKEN_MODE_EOS_RAMP_ADVANCE_STEPS: usize = 256;
-const TOKEN_MODE_EOS_RAMP_TOKENS: usize = TOKEN_MODE_MAX_ADVANCE_STEPS;
 
 pub fn run_hf_causal_lm_cuda_shard_backed_device_session_stream(
     runtime: &Runtime,
@@ -268,7 +267,7 @@ fn current_token_mode_steps(
 }
 
 fn token_mode_advance_cap(generated_tokens: usize, stop_tokens_known: bool) -> usize {
-    if !stop_tokens_known || generated_tokens >= TOKEN_MODE_EOS_RAMP_TOKENS {
+    if !stop_tokens_known {
         return TOKEN_MODE_MAX_ADVANCE_STEPS;
     }
     if generated_tokens == 0 {
@@ -393,7 +392,11 @@ mod tests {
         );
         assert_eq!(
             current_token_mode_steps(3965, 1152, 896, 8192, 2048, true),
-            896
+            256
+        );
+        assert_eq!(
+            current_token_mode_steps(17, 1216, 832, 16000, 1024, true),
+            256
         );
         assert_eq!(current_token_mode_steps(3965, 0, 512, 8192, 2048, true), 64);
         assert_eq!(current_token_mode_steps(3965, 0, 64, 8192, 2048, true), 64);

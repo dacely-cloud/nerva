@@ -36,6 +36,7 @@ namespace {
 constexpr uint32_t kThreads = 256;
 constexpr uint32_t kMaxInitBlocks = 4096;
 constexpr uint32_t kMaxAttentionDims = 32;
+constexpr uint32_t kMaxOracleTopK = 128;
 constexpr uint32_t kDefaultLocalWindowTokens = 8192;
 
 uint64_t checked_mul_u64(uint64_t lhs, uint64_t rhs) {
@@ -240,6 +241,9 @@ struct OptixCandidateParams {
   uint32_t query_count;
   uint32_t candidates_per_query;
   uint32_t grid_width;
+  uint32_t current_page;
+  uint32_t local_pages;
+  uint32_t sink_pages;
   float cell_size;
 };
 
@@ -259,6 +263,9 @@ struct OptixCandidateSelector {
   OptixDeviceContext context = nullptr;
   OptixModule module = nullptr;
   OptixPipeline pipeline = nullptr;
+  OptixTraversableHandle traversable = 0;
+  uint32_t grid_width = 0;
+  float cell_size = 0.0f;
   OptixProgramGroup raygen_prog_group = nullptr;
   OptixProgramGroup miss_prog_group = nullptr;
   OptixProgramGroup hitgroup_prog_group = nullptr;
@@ -283,6 +290,9 @@ struct OptixCandidateParams {
   unsigned int query_count;
   unsigned int candidates_per_query;
   unsigned int grid_width;
+  unsigned int current_page;
+  unsigned int local_pages;
+  unsigned int sink_pages;
   float cell_size;
 };
 
@@ -313,6 +323,11 @@ static __forceinline__ __device__ unsigned int query_center_page(
   return seed % pages;
 }
 
+static __forceinline__ __device__ unsigned int min_u32(unsigned int a,
+                                                       unsigned int b) {
+  return a < b ? a : b;
+}
+
 extern "C" __global__ void __raygen__candidate() {
   const uint3 idx = optixGetLaunchIndex();
   const unsigned int slot = idx.x;
@@ -322,10 +337,46 @@ extern "C" __global__ void __raygen__candidate() {
     return;
   }
 
-  const unsigned int center =
-      query_center_page(query, params.pages, params.candidates_per_query);
-  const unsigned int half = params.candidates_per_query / 2u;
-  const unsigned int target = (center + params.pages + slot - half) % params.pages;
+  const unsigned int pages = params.pages;
+  const unsigned int current_page =
+      params.current_page < pages ? params.current_page : pages - 1u;
+  const unsigned int sink_pages = min_u32(params.sink_pages, pages);
+  const unsigned int raw_local_pages = min_u32(params.local_pages, pages);
+  unsigned int local_start =
+      current_page + 1u > raw_local_pages
+          ? current_page + 1u - raw_local_pages
+          : 0u;
+  if (local_start < sink_pages) {
+    local_start = sink_pages;
+  }
+  const unsigned int local_pages =
+      current_page >= local_start ? current_page - local_start + 1u : 0u;
+  const unsigned int local_limit = sink_pages + local_pages;
+
+  unsigned int target = 0u;
+  if (slot < sink_pages) {
+    target = slot;
+  } else if (slot < local_limit && local_pages != 0u) {
+    target = local_start + (slot - sink_pages);
+  } else {
+    const unsigned int far_start = sink_pages;
+    const unsigned int far_end = local_start;
+    const unsigned int far_pages =
+        far_end > far_start ? far_end - far_start : 0u;
+    if (far_pages == 0u) {
+      target = slot % pages;
+    } else {
+      const unsigned int far_slot = slot - local_limit;
+      const unsigned int far_candidates =
+          params.candidates_per_query > local_limit
+              ? params.candidates_per_query - local_limit
+              : 1u;
+      const unsigned int center =
+          query_center_page(query, far_pages, far_candidates);
+      const unsigned int half = far_candidates / 2u;
+      target = far_start + ((center + far_pages + far_slot - half) % far_pages);
+    }
+  }
   const unsigned int x_index = target % params.grid_width;
   const unsigned int y_index = target / params.grid_width;
   const float x = static_cast<float>(x_index) * params.cell_size;
@@ -355,7 +406,7 @@ extern "C" __global__ void __raygen__candidate() {
              hit);
   const unsigned long long out_index =
       static_cast<unsigned long long>(query) * params.candidates_per_query + slot;
-  params.candidate_pages[out_index] = hit % params.pages;
+  params.candidate_pages[out_index] = hit % pages;
 }
 
 extern "C" __global__ void __miss__candidate() {}
@@ -678,6 +729,9 @@ bool create_optix_candidate_selector(
   if (!optix_ok(out, "optixAccelBuild", optix)) {
     return false;
   }
+  state->traversable = gas_handle;
+  state->grid_width = grid_width;
+  state->cell_size = cell_size;
 
   std::string optix_input;
   if (!compile_optix_candidate_input(out, &optix_input, out)) {
@@ -798,13 +852,16 @@ bool create_optix_candidate_selector(
   state->sbt.hitgroupRecordCount = 1;
 
   OptixCandidateParams params{};
-  params.handle = gas_handle;
+  params.handle = state->traversable;
   params.candidate_pages = candidate_pages;
   params.pages = request->pages;
   params.query_count = request->query_count;
   params.candidates_per_query = request->candidates_per_query;
-  params.grid_width = grid_width;
-  params.cell_size = cell_size;
+  params.grid_width = state->grid_width;
+  params.current_page = request->pages - 1u;
+  params.local_pages = 0;
+  params.sink_pages = 0;
+  params.cell_size = state->cell_size;
   err = cudaMalloc(reinterpret_cast<void **>(&state->params), sizeof(params));
   if (err != cudaSuccess) {
     set_optix_fallback_reason(out, "cudaMalloc(params)",
@@ -1203,6 +1260,120 @@ __global__ void attention_mass_recall_kernel(
   }
 }
 
+__global__ void far_oracle_topk_diagnostics_kernel(
+    const float *keys, const float *queries, const uint32_t *candidate_pages,
+    uint32_t pages, uint32_t page_tokens, uint32_t dims,
+    uint32_t query_count, uint32_t candidates_per_query,
+    uint64_t local_window_tokens, uint32_t topk_tokens,
+    uint64_t *token_recall_ppm, uint32_t *scatter_pages) {
+  const uint32_t query = blockIdx.x;
+  if (query >= query_count || dims > kMaxAttentionDims) {
+    return;
+  }
+  const uint64_t total_tokens = static_cast<uint64_t>(pages) * page_tokens;
+  const uint64_t local_tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t far_tokens = total_tokens - local_tokens;
+  if (far_tokens == 0 || topk_tokens == 0) {
+    if (threadIdx.x == 0) {
+      token_recall_ppm[query] = 0;
+      scatter_pages[query] = 0;
+    }
+    return;
+  }
+
+  __shared__ float scores[kThreads];
+  __shared__ uint64_t tokens_shared[kThreads];
+  __shared__ uint64_t selected_tokens[kMaxOracleTopK];
+  __shared__ uint32_t selected_pages[kMaxOracleTopK];
+  __shared__ uint32_t selected_count_shared;
+  if (threadIdx.x == 0) {
+    selected_count_shared = 0;
+  }
+  __syncthreads();
+
+  const uint32_t capped_topk =
+      topk_tokens < kMaxOracleTopK ? topk_tokens : kMaxOracleTopK;
+  for (uint32_t rank = 0; rank < capped_topk; ++rank) {
+    float best_score = -INFINITY;
+    uint64_t best_token = UINT64_MAX;
+    for (uint64_t token = threadIdx.x; token < far_tokens;
+         token += blockDim.x) {
+      bool selected = false;
+      for (uint32_t previous = 0; previous < rank; ++previous) {
+        selected = selected || selected_tokens[previous] == token;
+      }
+      if (selected) {
+        continue;
+      }
+      const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+      const uint32_t token_offset =
+          static_cast<uint32_t>(token % page_tokens);
+      const float score =
+          kv_dot(keys, queries, page, token_offset, query, dims, page_tokens);
+      if (score > best_score ||
+          (score == best_score && token < best_token)) {
+        best_score = score;
+        best_token = token;
+      }
+    }
+    scores[threadIdx.x] = best_score;
+    tokens_shared[threadIdx.x] = best_token;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+      if (threadIdx.x < stride) {
+        const float other_score = scores[threadIdx.x + stride];
+        const uint64_t other_token = tokens_shared[threadIdx.x + stride];
+        if (other_score > scores[threadIdx.x] ||
+            (other_score == scores[threadIdx.x] &&
+             other_token < tokens_shared[threadIdx.x])) {
+          scores[threadIdx.x] = other_score;
+          tokens_shared[threadIdx.x] = other_token;
+        }
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+      selected_tokens[rank] = tokens_shared[0];
+      selected_pages[rank] =
+          static_cast<uint32_t>(tokens_shared[0] / page_tokens);
+      selected_count_shared = rank + 1;
+    }
+    __syncthreads();
+  }
+
+  if (threadIdx.x == 0) {
+    uint32_t distinct_pages = 0;
+    uint32_t captured_tokens = 0;
+    const uint64_t candidate_base =
+        static_cast<uint64_t>(query) * candidates_per_query;
+    for (uint32_t rank = 0; rank < selected_count_shared; ++rank) {
+      bool duplicate = false;
+      for (uint32_t previous = 0; previous < rank; ++previous) {
+        duplicate = duplicate || selected_pages[previous] == selected_pages[rank];
+      }
+      if (!duplicate) {
+        ++distinct_pages;
+      }
+      bool captured = false;
+      for (uint32_t candidate = 0; candidate < candidates_per_query; ++candidate) {
+        captured = captured ||
+                   (candidate_pages[candidate_base + candidate] % pages) ==
+                       selected_pages[rank];
+      }
+      if (captured) {
+        ++captured_tokens;
+      }
+    }
+    token_recall_ppm[query] =
+        selected_count_shared == 0
+            ? 0
+            : (static_cast<uint64_t>(captured_tokens) * 1000000ull) /
+                  selected_count_shared;
+    scatter_pages[query] = distinct_pages;
+  }
+}
+
 __global__ void far_sparse_attention_kernel(
     const float *keys, const float *values, const float *queries,
     const uint32_t *candidate_pages, uint32_t pages, uint32_t page_tokens,
@@ -1409,6 +1580,58 @@ __global__ void software_candidate_selector_kernel(uint32_t *candidate_pages,
   }
 }
 
+__global__ void page_level_candidate_selector_kernel(
+    const float *descriptors, const float *queries, uint32_t *candidate_pages,
+    uint32_t pages, uint32_t dims, uint32_t query_count,
+    uint32_t candidates_per_query) {
+  const uint32_t query = blockIdx.x;
+  if (query >= query_count || pages == 0) {
+    return;
+  }
+  const uint64_t base = static_cast<uint64_t>(query) * candidates_per_query;
+  for (uint32_t rank = 0; rank < candidates_per_query; ++rank) {
+    float best_score = -INFINITY;
+    uint32_t best_page = 0;
+    for (uint32_t page = threadIdx.x; page < pages; page += blockDim.x) {
+      bool selected = false;
+      for (uint32_t previous = 0; previous < rank; ++previous) {
+        selected = selected || candidate_pages[base + previous] == page;
+      }
+      if (selected) {
+        continue;
+      }
+      const float score = descriptor_dot(descriptors, queries, page, query, dims);
+      if (score > best_score ||
+          (score == best_score && page < best_page)) {
+        best_score = score;
+        best_page = page;
+      }
+    }
+    __shared__ float scores[kThreads];
+    __shared__ uint32_t pages_shared[kThreads];
+    scores[threadIdx.x] = best_score;
+    pages_shared[threadIdx.x] = best_page;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+      if (threadIdx.x < stride) {
+        const float other_score = scores[threadIdx.x + stride];
+        const uint32_t other_page = pages_shared[threadIdx.x + stride];
+        if (other_score > scores[threadIdx.x] ||
+            (other_score == scores[threadIdx.x] &&
+             other_page < pages_shared[threadIdx.x])) {
+          scores[threadIdx.x] = other_score;
+          pages_shared[threadIdx.x] = other_page;
+        }
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+      candidate_pages[base + rank] = pages_shared[0];
+    }
+    __syncthreads();
+  }
+}
+
 __global__ void compare_candidate_pages_kernel(const uint32_t *actual,
                                                const uint32_t *expected,
                                                uint64_t total,
@@ -1558,6 +1781,22 @@ cudaError_t time_software_selector(
   }
   *elapsed = elapsed_ns(start, stop);
   return cudaSuccess;
+}
+
+cudaError_t fill_page_level_candidates(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *descriptors, const float *queries,
+    uint32_t *page_level_candidate_pages, cudaStream_t stream,
+    NervaCudaExperimentalRtCandidateBenchResult *out) {
+  page_level_candidate_selector_kernel<<<request->query_count, kThreads, 0,
+                                         stream>>>(
+      descriptors, queries, page_level_candidate_pages, request->pages,
+      request->dims, request->query_count, request->candidates_per_query);
+  const cudaError_t err = cudaGetLastError();
+  if (err == cudaSuccess) {
+    out->kernel_launches += 1;
+  }
+  return err;
 }
 
 cudaError_t time_rerank(const NervaCudaExperimentalRtCandidateBenchRequest *request,
@@ -1920,7 +2159,8 @@ cudaError_t measure_attention_mass_recall(
     const NervaCudaExperimentalRtCandidateBenchRequest *request,
     const float *keys, const float *queries, const uint32_t *candidate_pages,
     uint64_t local_window_tokens, uint64_t *recall_ppm,
-    uint64_t *host_recall_ppm, cudaStream_t stream,
+    uint64_t *host_recall_ppm, uint64_t *min_ppm_out,
+    uint64_t *avg_ppm_out, cudaStream_t stream,
     NervaCudaExperimentalRtCandidateBenchResult *out) {
   attention_mass_recall_kernel<<<request->query_count, kThreads, 0, stream>>>(
       keys, queries, candidate_pages, request->pages, request->page_tokens,
@@ -1948,10 +2188,97 @@ cudaError_t measure_attention_mass_recall(
     }
     sum_ppm += value;
   }
-  out->attention_mass_recall_min_ppm =
-      min_ppm == UINT64_MAX ? 0 : min_ppm;
-  out->attention_mass_recall_avg_ppm =
-      request->query_count == 0 ? 0 : sum_ppm / request->query_count;
+  *min_ppm_out = min_ppm == UINT64_MAX ? 0 : min_ppm;
+  *avg_ppm_out = request->query_count == 0 ? 0 : sum_ppm / request->query_count;
+  out->kernel_launches += 1;
+  out->sync_calls += 1;
+  return cudaSuccess;
+}
+
+cudaError_t measure_far_oracle_topk_diagnostics(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *keys, const float *queries, const uint32_t *candidate_pages,
+    uint64_t local_window_tokens, uint64_t *token_recall_ppm,
+    uint64_t *host_token_recall_ppm, uint64_t *token_recall_min_ppm_out,
+    uint64_t *token_recall_avg_ppm_out, uint32_t *scatter_pages,
+    uint32_t *host_scatter_pages, cudaStream_t stream,
+    NervaCudaExperimentalRtCandidateBenchResult *out) {
+  const uint64_t total_tokens =
+      static_cast<uint64_t>(request->pages) * request->page_tokens;
+  const uint64_t local_tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t far_tokens = total_tokens - local_tokens;
+  uint64_t topk_tokens = request->candidates_per_query;
+  if (topk_tokens > kMaxOracleTopK) {
+    topk_tokens = kMaxOracleTopK;
+  }
+  if (topk_tokens > far_tokens) {
+    topk_tokens = far_tokens;
+  }
+  out->far_oracle_topk_tokens = topk_tokens;
+  if (topk_tokens == 0) {
+    *token_recall_min_ppm_out = 0;
+    *token_recall_avg_ppm_out = 0;
+    out->far_oracle_topk_importance_scatter_min_pages = 0;
+    out->far_oracle_topk_importance_scatter_avg_pages_x1000 = 0;
+    out->far_oracle_topk_importance_scatter_max_pages = 0;
+    return cudaSuccess;
+  }
+
+  far_oracle_topk_diagnostics_kernel<<<request->query_count, kThreads, 0,
+                                       stream>>>(
+      keys, queries, candidate_pages, request->pages, request->page_tokens,
+      request->dims, request->query_count, request->candidates_per_query,
+      local_window_tokens, static_cast<uint32_t>(topk_tokens),
+      token_recall_ppm, scatter_pages);
+  cudaError_t err = cudaGetLastError();
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(host_scatter_pages, scatter_pages,
+                          request->query_count * sizeof(uint32_t),
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(host_token_recall_ppm, token_recall_ppm,
+                          request->query_count * sizeof(uint64_t),
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(stream);
+  }
+  if (err != cudaSuccess) {
+    return err;
+  }
+
+  uint64_t min_pages = UINT64_MAX;
+  uint64_t sum_pages = 0;
+  uint64_t max_pages = 0;
+  uint64_t min_recall_ppm = UINT64_MAX;
+  uint64_t sum_recall_ppm = 0;
+  for (uint32_t query = 0; query < request->query_count; ++query) {
+    const uint64_t value = host_scatter_pages[query];
+    if (value < min_pages) {
+      min_pages = value;
+    }
+    if (value > max_pages) {
+      max_pages = value;
+    }
+    sum_pages += value;
+    const uint64_t recall = host_token_recall_ppm[query];
+    if (recall < min_recall_ppm) {
+      min_recall_ppm = recall;
+    }
+    sum_recall_ppm += recall;
+  }
+  *token_recall_min_ppm_out =
+      min_recall_ppm == UINT64_MAX ? 0 : min_recall_ppm;
+  *token_recall_avg_ppm_out =
+      request->query_count == 0 ? 0 : sum_recall_ppm / request->query_count;
+  out->far_oracle_topk_importance_scatter_min_pages =
+      min_pages == UINT64_MAX ? 0 : min_pages;
+  out->far_oracle_topk_importance_scatter_avg_pages_x1000 =
+      request->query_count == 0 ? 0
+                                : (sum_pages * 1000ull) / request->query_count;
+  out->far_oracle_topk_importance_scatter_max_pages = max_pages;
   out->kernel_launches += 1;
   out->sync_calls += 1;
   return cudaSuccess;
@@ -2002,6 +2329,7 @@ int fail(NervaCudaExperimentalRtCandidateBenchResult *out, cudaError_t err) {
 struct NervaCudaRtCandidateSelectorHandle {
   NervaCudaExperimentalRtCandidateBenchRequest request{};
   NervaCudaExperimentalRtCandidateBenchResult result{};
+  uint32_t *candidate_pages = nullptr;
 #if NERVA_HAVE_OPTIX_HEADERS
   OptixCandidateSelector selector{};
 #endif
@@ -2044,6 +2372,7 @@ extern "C" int nerva_cuda_rt_candidate_selector_create(
   handle->request.candidates_per_query = candidates_per_query;
   handle->request.iterations = 1;
   handle->request.warmup_iterations = 0;
+  handle->candidate_pages = candidate_pages;
   clear_result(&handle->request, &handle->result);
   cudaError_t err = cudaGetDeviceCount(&handle->result.device_count);
   if (err == cudaSuccess && handle->result.device_count <= 0) {
@@ -2095,7 +2424,8 @@ extern "C" int nerva_cuda_rt_candidate_selector_create(
 }
 
 extern "C" int nerva_cuda_rt_candidate_selector_launch(
-    void *selector, void *stream, int32_t *cuda_error_out) {
+    void *selector, void *stream, uint32_t active_pages, uint32_t current_page,
+    uint32_t local_pages, uint32_t sink_pages, int32_t *cuda_error_out) {
   if (cuda_error_out != nullptr) {
     *cuda_error_out = static_cast<int32_t>(cudaSuccess);
   }
@@ -2108,6 +2438,31 @@ extern "C" int nerva_cuda_rt_candidate_selector_launch(
 #if NERVA_HAVE_OPTIX_HEADERS
   auto *handle =
       reinterpret_cast<NervaCudaRtCandidateSelectorHandle *>(selector);
+  const uint32_t pages =
+      active_pages == 0 || active_pages > handle->request.pages
+          ? handle->request.pages
+          : active_pages;
+  OptixCandidateParams params{};
+  params.handle = handle->selector.traversable;
+  params.candidate_pages = handle->candidate_pages;
+  params.pages = pages;
+  params.query_count = handle->request.query_count;
+  params.candidates_per_query = handle->request.candidates_per_query;
+  params.grid_width = handle->selector.grid_width;
+  params.current_page = current_page < pages ? current_page : pages - 1u;
+  params.local_pages = local_pages;
+  params.sink_pages = sink_pages;
+  params.cell_size = handle->selector.cell_size;
+  cudaError_t err = cudaMemcpyAsync(
+      reinterpret_cast<void *>(handle->selector.params), &params,
+      sizeof(params), cudaMemcpyHostToDevice,
+      reinterpret_cast<cudaStream_t>(stream));
+  if (err != cudaSuccess) {
+    if (cuda_error_out != nullptr) {
+      *cuda_error_out = static_cast<int32_t>(err);
+    }
+    return -1;
+  }
   OptixResult optix = optixLaunch(
       handle->selector.pipeline, reinterpret_cast<CUstream>(stream),
       handle->selector.params, sizeof(OptixCandidateParams),
@@ -2119,7 +2474,7 @@ extern "C" int nerva_cuda_rt_candidate_selector_launch(
     }
     return -1;
   }
-  cudaError_t err = cudaGetLastError();
+  err = cudaGetLastError();
   if (err != cudaSuccess) {
     if (cuda_error_out != nullptr) {
       *cuda_error_out = static_cast<int32_t>(err);
@@ -2212,11 +2567,14 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   float *dense_attention_out = nullptr;
   float *kv_touch_out = nullptr;
   uint64_t *attention_recall_ppm = nullptr;
+  uint32_t *far_oracle_scatter_pages = nullptr;
   uint32_t *candidate_pages = nullptr;
+  uint32_t *page_level_candidate_pages = nullptr;
   uint32_t *dense_out = nullptr;
   uint32_t *candidate_out = nullptr;
   uint32_t *host_selected = nullptr;
   uint64_t *host_attention_recall_ppm = nullptr;
+  uint32_t *host_far_oracle_scatter_pages = nullptr;
   cudaStream_t stream = nullptr;
   cudaEvent_t start = nullptr;
   cudaEvent_t stop = nullptr;
@@ -2224,6 +2582,9 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   auto cleanup = [&]() {
     if (host_attention_recall_ppm != nullptr) {
       delete[] host_attention_recall_ppm;
+    }
+    if (host_far_oracle_scatter_pages != nullptr) {
+      delete[] host_far_oracle_scatter_pages;
     }
     if (host_selected != nullptr) {
       delete[] host_selected;
@@ -2247,6 +2608,10 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
     }
     if (attention_recall_ppm != nullptr) {
       cudaFree(attention_recall_ppm);
+      out->device_frees += 1;
+    }
+    if (far_oracle_scatter_pages != nullptr) {
+      cudaFree(far_oracle_scatter_pages);
       out->device_frees += 1;
     }
     if (dense_attention_out != nullptr) {
@@ -2279,6 +2644,10 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
     }
     if (candidate_pages != nullptr) {
       cudaFree(candidate_pages);
+      out->device_frees += 1;
+    }
+    if (page_level_candidate_pages != nullptr) {
+      cudaFree(page_level_candidate_pages);
       out->device_frees += 1;
     }
     if (queries != nullptr) {
@@ -2321,6 +2690,14 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&candidate_pages), out->candidate_id_bytes);
     if (err == cudaSuccess) out->device_allocations += 1;
+  }
+  if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&page_level_candidate_pages),
+                     out->candidate_id_bytes);
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += out->candidate_id_bytes;
+    }
   }
   if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&dense_out),
@@ -2394,6 +2771,14 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
     }
   }
   if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&far_oracle_scatter_pages),
+                     request->query_count * sizeof(uint32_t));
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += request->query_count * sizeof(uint32_t);
+    }
+  }
+  if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&kv_touch_out),
                      request->query_count * sizeof(float));
     if (err == cudaSuccess) {
@@ -2410,6 +2795,11 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   }
   host_attention_recall_ppm = new (std::nothrow) uint64_t[request->query_count];
   if (host_attention_recall_ppm == nullptr) {
+    return fail_with_cleanup(cudaErrorMemoryAllocation);
+  }
+  host_far_oracle_scatter_pages =
+      new (std::nothrow) uint32_t[request->query_count];
+  if (host_far_oracle_scatter_pages == nullptr) {
     return fail_with_cleanup(cudaErrorMemoryAllocation);
   }
 
@@ -2568,9 +2958,44 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   out->sync_calls += 1;
   out->kernel_launches += request->warmup_iterations + request->iterations;
 
+  err = measure_far_oracle_topk_diagnostics(
+      request, keys, queries, candidate_pages, out->local_window_tokens,
+      attention_recall_ppm, host_attention_recall_ppm,
+      &out->far_oracle_topk_token_recall_min_ppm,
+      &out->far_oracle_topk_token_recall_avg_ppm, far_oracle_scatter_pages,
+      host_far_oracle_scatter_pages, stream, out);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+
   err = measure_attention_mass_recall(
       request, keys, queries, candidate_pages, out->local_window_tokens,
-      attention_recall_ppm, host_attention_recall_ppm, stream, out);
+      attention_recall_ppm, host_attention_recall_ppm,
+      &out->attention_mass_recall_min_ppm,
+      &out->attention_mass_recall_avg_ppm, stream, out);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+
+  err = fill_page_level_candidates(request, descriptors, queries,
+                                   page_level_candidate_pages, stream, out);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+  err = measure_far_oracle_topk_diagnostics(
+      request, keys, queries, page_level_candidate_pages, out->local_window_tokens,
+      attention_recall_ppm, host_attention_recall_ppm,
+      &out->page_level_far_oracle_topk_token_recall_min_ppm,
+      &out->page_level_far_oracle_topk_token_recall_avg_ppm,
+      far_oracle_scatter_pages, host_far_oracle_scatter_pages, stream, out);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+  err = measure_attention_mass_recall(
+      request, keys, queries, page_level_candidate_pages, out->local_window_tokens,
+      attention_recall_ppm, host_attention_recall_ppm,
+      &out->page_level_attention_mass_recall_min_ppm,
+      &out->page_level_attention_mass_recall_avg_ppm, stream, out);
   if (err != cudaSuccess) {
     return fail_with_cleanup(err);
   }

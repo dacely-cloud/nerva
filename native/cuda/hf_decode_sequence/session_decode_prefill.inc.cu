@@ -1,0 +1,926 @@
+cudaError_t pack_session_weight_replicas(
+    NervaCudaHfDecodeSequenceSession *session) {
+  if (!use_cublas_layer_path(session)) {
+    return cudaSuccess;
+  }
+  const uint32_t attention_hidden = session->heads * session->head_dim;
+  const uint32_t kv_hidden = session->kv_heads * session->head_dim;
+  const PackedProjectionShape shape = packed_projection_shape(
+      session->hidden, attention_hidden, kv_hidden, session->intermediate);
+  hf_pack_qkv_weights_kernel<<<
+      static_cast<uint32_t>(shape.qkv_rows * session->layer_count),
+      kDecodeThreads, 0, session->stream>>>(
+      session->device_qkv_packed, session->device_arena,
+      session->device_layouts, session->layer_count, session->hidden,
+      attention_hidden, kv_hidden);
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    return err;
+  }
+  hf_pack_gate_up_weights_kernel<<<
+      static_cast<uint32_t>(shape.gate_up_rows * session->layer_count),
+      kDecodeThreads, 0, session->stream>>>(
+      session->device_gate_up_packed, session->device_arena,
+      session->device_layouts, session->layer_count, session->hidden,
+      session->intermediate);
+  return cudaGetLastError();
+}
+
+cudaError_t launch_monolithic_session_step(
+    NervaCudaHfDecodeSequenceSession *session, uint32_t max_steps,
+    uint32_t prompt_token_count, uint32_t has_eos_token, uint32_t eos_token) {
+  hf_decode_sequence_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+      session->device_arena, session->arena_layout, session->device_layouts,
+      session->layer_count, session->dtype, session->hidden, session->heads,
+      session->kv_heads, session->head_dim, session->intermediate, 0,
+      session->device_step, max_steps, session->device_prompt_tokens,
+      prompt_token_count, session->rms_eps, session->rope_theta,
+      session->device_scratch, session->device_kv_keys,
+      session->device_kv_values, session->kv_block_count,
+      session->device_kv_block_table,
+      session->device_slots);
+  cudaError_t err = cudaGetLastError();
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    err = final_head_gemv(session->cublas, session->device_arena,
+                          session->arena_layout, session->dtype,
+                          session->hidden, session->vocab_size, device_logits);
+  }
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    err = launch_hf_decode_final_head_sampler(
+        session->stream, session->device_step, max_steps, has_eos_token,
+        eos_token, device_logits, session->vocab_size, session->device_slots,
+        session->active_sampler);
+  }
+  return err;
+}
+
+cudaError_t launch_cublas_layer_session_step(
+    NervaCudaHfDecodeSequenceSession *session, uint32_t max_steps,
+    uint32_t prompt_token_count, uint32_t has_eos_token, uint32_t eos_token,
+    uint32_t attention_chunks) {
+  const uint32_t attention_hidden = session->heads * session->head_dim;
+  const uint32_t kv_hidden = session->kv_heads * session->head_dim;
+  const uint32_t decode_head_threads = decode_head_threads_for_session(session);
+  cudaError_t err = cudaSuccess;
+  uint64_t input_offset = session->arena_layout.input;
+  uint64_t output_offset = session->arena_layout.scratch;
+  LayerScratch scratch = layer_scratch_ptrs(
+      session->device_scratch, session->hidden, attention_hidden, kv_hidden,
+      session->intermediate);
+  const PackedProjectionShape packed_shape = packed_projection_shape(
+      session->hidden, attention_hidden, kv_hidden, session->intermediate);
+  if (err == cudaSuccess && session->layer_count > 0) {
+    const SequenceLayerLayout first_layout = session->host_layouts[0];
+    hf_decode_prepare_first_attn_norm_encode_kernel<<<
+        1, kDecodeNormThreads, 0, session->stream>>>(
+        session->device_arena, session->arena_layout, first_layout,
+        session->dtype, session->hidden, attention_hidden, kv_hidden,
+        session->intermediate, session->device_step, max_steps,
+        session->device_prompt_tokens, prompt_token_count, session->device_slots,
+        session->rms_eps, session->device_scratch,
+        session->device_projection_input);
+    err = cudaGetLastError();
+  } else if (err == cudaSuccess) {
+    hf_decode_prepare_input_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+        session->device_arena, session->arena_layout, session->hidden,
+        session->device_step, max_steps, session->device_prompt_tokens,
+        prompt_token_count, session->device_slots);
+    err = cudaGetLastError();
+  }
+  for (uint32_t layer_index = 0;
+       err == cudaSuccess && layer_index < session->layer_count;
+       ++layer_index) {
+    const SequenceLayerLayout layout = session->host_layouts[layer_index];
+    err = project_encoded_rows(
+        session, &session->qkv_plan,
+        session->device_qkv_packed +
+            packed_shape.qkv_elements_per_layer * layer_index,
+        session->device_projection_input,
+        static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden, 1,
+        session->dtype, 0.0f, scratch.q);
+    if (err == cudaSuccess && attention_chunks == 0) {
+      hf_layer_qkv_attention_encode_kernel<<<session->heads, decode_head_threads, 0,
+                                             session->stream>>>(
+          session->device_arena, layout, layer_index, session->dtype,
+          session->hidden, session->heads, session->kv_heads, session->head_dim,
+          session->intermediate, session->device_step, max_steps,
+          session->rms_eps, session->rope_theta, session->device_scratch,
+          session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table,
+          session->device_projection_input);
+      err = cudaGetLastError();
+    } else if (err == cudaSuccess) {
+#if NERVA_HAVE_CUDNN_FRONTEND
+      const bool use_cudnn_decode_sdpa =
+          can_use_cudnn_decode_sdpa(session, attention_chunks);
+#else
+      const bool use_cudnn_decode_sdpa = false;
+#endif
+      hf_layer_qkv_prepare_kernel<<<session->heads, decode_head_threads, 0,
+                                    session->stream>>>(
+          session->device_arena, layout, layer_index, session->dtype,
+          session->hidden, session->heads, session->kv_heads, session->head_dim,
+          session->intermediate, session->device_step, max_steps,
+          session->rms_eps, session->rope_theta, session->device_scratch,
+          session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table,
+          use_cudnn_decode_sdpa ? session->device_decode_q : nullptr,
+          use_cudnn_decode_sdpa ? session->device_decode_seq_len_q : nullptr,
+          use_cudnn_decode_sdpa ? session->device_decode_seq_len_kv : nullptr);
+      err = cudaGetLastError();
+      bool ran_cudnn_decode_sdpa = false;
+#if NERVA_HAVE_CUDNN_FRONTEND
+      if (err == cudaSuccess && use_cudnn_decode_sdpa) {
+        err = execute_cudnn_decode_sdpa(session, layer_index);
+        if (err == cudaSuccess) {
+          ran_cudnn_decode_sdpa = true;
+        }
+      }
+#endif
+      if (err == cudaSuccess && !ran_cudnn_decode_sdpa) {
+        const uint32_t query_group = session->heads / session->kv_heads;
+        const bool use_shared_warp_gqa =
+            query_group == kGroupedGqaHeads &&
+            session->heads % session->kv_heads == 0 &&
+            session->head_dim <= kSharedWarpGqaHeadDimMax;
+        const bool use_grouped_gqa =
+            query_group == kGroupedGqaHeads &&
+            session->heads % session->kv_heads == 0 &&
+            session->head_dim <= kGroupedGqaHeadDimMax;
+        const dim3 grid((use_shared_warp_gqa || use_grouped_gqa)
+                            ? session->kv_heads
+                            : session->heads,
+                        attention_chunks);
+        launch_hf_layer_attention_chunk_kernel(
+            session->stream, grid, session->dtype, use_shared_warp_gqa,
+            use_grouped_gqa, decode_head_threads, layer_index, session->hidden,
+            session->heads, session->kv_heads, session->head_dim,
+            session->intermediate, session->device_step, max_steps,
+            attention_chunks, session->device_scratch,
+            session->device_kv_keys, session->device_kv_values,
+            session->device_decode_attention_values,
+            session->device_decode_attention_m,
+            session->device_decode_attention_l, session->kv_block_count,
+            session->device_kv_block_table,
+            session->experimental_rt_sparse_attention_active == 0
+                ? nullptr
+                : session->device_experimental_rt_candidate_pages);
+
+        err = cudaGetLastError();
+      }
+      if (err == cudaSuccess && !ran_cudnn_decode_sdpa) {
+        const size_t reduce_shared_bytes =
+            static_cast<size_t>(attention_chunks) * sizeof(float);
+        hf_layer_attention_reduce_kernel<<<session->heads, decode_head_threads,
+                                           reduce_shared_bytes,
+                                           session->stream>>>(
+            session->dtype, session->hidden, session->heads, session->kv_heads,
+            session->head_dim, session->intermediate, session->device_step,
+            max_steps, attention_chunks, session->device_scratch,
+            session->device_decode_attention_values,
+            session->device_decode_attention_m,
+            session->device_decode_attention_l,
+            session->device_projection_input);
+        err = cudaGetLastError();
+      }
+    }
+    if (err == cudaSuccess)
+      err = project_encoded_rows(
+          session, &session->attention_output_plan,
+          session->device_arena + layout.w_o, session->device_projection_input,
+          session->hidden, attention_hidden, 1, session->dtype, 0.0f,
+          scratch.residual);
+    if (err == cudaSuccess) {
+      hf_layer_mlp_norm_encode_kernel<<<1, kDecodeNormThreads, 0,
+                                        session->stream>>>(
+          session->device_arena, layout, session->dtype, session->hidden,
+          attention_hidden, kv_hidden, session->intermediate,
+          session->device_step, max_steps, session->rms_eps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    }
+    if (err == cudaSuccess)
+      err = project_encoded_rows(
+          session, &session->gate_up_plan,
+          session->device_gate_up_packed +
+              packed_shape.gate_up_elements_per_layer * layer_index,
+          session->device_projection_input,
+          static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden, 1,
+          session->dtype, 0.0f, scratch.gate);
+    if (err == cudaSuccess) {
+      const uint32_t ff_blocks =
+          (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
+      hf_layer_ff_encode_kernel<<<ff_blocks, kDecodeThreads, 0,
+                                  session->stream>>>(
+          session->dtype, session->hidden, attention_hidden, kv_hidden,
+          session->intermediate, session->device_step, max_steps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    }
+    if (err == cudaSuccess)
+      err = project_encoded_rows(
+          session, &session->down_plan,
+          session->device_arena + layout.w_down, session->device_projection_input,
+          session->hidden, session->intermediate, 1, session->dtype, 0.0f,
+          scratch.down);
+    if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
+      const SequenceLayerLayout next_layout =
+          session->host_layouts[layer_index + 1];
+      hf_layer_finish_next_attn_norm_encode_kernel<<<
+          1, kDecodeNormThreads, 0, session->stream>>>(
+          session->device_arena, output_offset, next_layout, session->dtype,
+          session->hidden, attention_hidden, kv_hidden, session->intermediate,
+          session->device_step, max_steps, session->rms_eps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    } else if (err == cudaSuccess) {
+      hf_layer_finish_final_norm_encode_kernel<<<
+          1, kDecodeNormThreads, 0, session->stream>>>(
+          session->device_arena, session->arena_layout, session->dtype,
+          session->hidden, attention_hidden, kv_hidden, session->intermediate,
+          session->device_step, max_steps, session->rms_eps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    }
+    const uint64_t next_input = output_offset;
+    output_offset = input_offset;
+    input_offset = next_input;
+  }
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    err = project_encoded_rows(
+        session, &session->lm_head_plan,
+        session->device_arena + session->arena_layout.lm_head,
+        session->device_projection_input, session->vocab_size, session->hidden,
+        1, session->dtype, 0.0f, device_logits);
+  }
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    err = launch_hf_decode_final_head_sampler(
+        session->stream, session->device_step, max_steps, has_eos_token,
+        eos_token, device_logits, session->vocab_size, session->device_slots,
+        session->active_sampler);
+  }
+  return err;
+}
+
+cudaError_t profile_cublas_layer_session_step(
+    NervaCudaHfDecodeSequenceSession *session, uint32_t max_steps,
+    uint32_t prompt_token_count, uint32_t has_eos_token, uint32_t eos_token,
+    uint32_t attention_chunks, uint32_t cursor) {
+  uint64_t projection_ns = 0;
+  uint64_t qkv_projection_ns = 0;
+  uint64_t attention_output_projection_ns = 0;
+  uint64_t gate_up_projection_ns = 0;
+  uint64_t down_projection_ns = 0;
+  uint64_t lm_head_projection_ns = 0;
+  uint64_t attention_ns = 0;
+  uint64_t mlp_ns = 0;
+  uint64_t norm_ns = 0;
+  uint64_t sampling_ns = 0;
+  const uint32_t attention_hidden = session->heads * session->head_dim;
+  const uint32_t kv_hidden = session->kv_heads * session->head_dim;
+  const uint32_t decode_head_threads = decode_head_threads_for_session(session);
+  const PackedProjectionShape packed_shape = packed_projection_shape(
+      session->hidden, attention_hidden, kv_hidden, session->intermediate);
+  LayerScratch scratch = layer_scratch_ptrs(
+      session->device_scratch, session->hidden, attention_hidden, kv_hidden,
+      session->intermediate);
+
+  hf_decode_set_step_kernel<<<1, 1, 0, session->stream>>>(session->device_step,
+                                                          cursor);
+  cudaError_t err = cudaGetLastError();
+  if (err == cudaSuccess) err = profile_begin(session);
+  if (err == cudaSuccess && session->layer_count > 0) {
+    const SequenceLayerLayout first_layout = session->host_layouts[0];
+    hf_decode_prepare_first_attn_norm_encode_kernel<<<
+        1, kDecodeNormThreads, 0, session->stream>>>(
+        session->device_arena, session->arena_layout, first_layout,
+        session->dtype, session->hidden, attention_hidden, kv_hidden,
+        session->intermediate, session->device_step, max_steps,
+        session->device_prompt_tokens, prompt_token_count, session->device_slots,
+        session->rms_eps, session->device_scratch,
+        session->device_projection_input);
+    err = cudaGetLastError();
+  } else if (err == cudaSuccess) {
+    hf_decode_prepare_input_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+        session->device_arena, session->arena_layout, session->hidden,
+        session->device_step, max_steps, session->device_prompt_tokens,
+        prompt_token_count, session->device_slots);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) err = profile_end(session, &norm_ns);
+
+  uint64_t input_offset = session->arena_layout.input;
+  uint64_t output_offset = session->arena_layout.scratch;
+  for (uint32_t layer_index = 0;
+       err == cudaSuccess && layer_index < session->layer_count;
+       ++layer_index) {
+    const SequenceLayerLayout layout = session->host_layouts[layer_index];
+    if (err == cudaSuccess) err = profile_begin(session);
+    if (err == cudaSuccess)
+      err = project_encoded_rows(
+          session, &session->qkv_plan,
+          session->device_qkv_packed +
+              packed_shape.qkv_elements_per_layer * layer_index,
+          session->device_projection_input,
+          static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden, 1,
+          session->dtype, 0.0f, scratch.q);
+    if (err == cudaSuccess) err = profile_end(session, &qkv_projection_ns);
+
+    if (err == cudaSuccess) err = profile_begin(session);
+    if (err == cudaSuccess && attention_chunks == 0) {
+      hf_layer_qkv_attention_encode_kernel<<<session->heads, decode_head_threads, 0,
+                                             session->stream>>>(
+          session->device_arena, layout, layer_index, session->dtype,
+          session->hidden, session->heads, session->kv_heads, session->head_dim,
+          session->intermediate, session->device_step, max_steps,
+          session->rms_eps, session->rope_theta, session->device_scratch,
+          session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table,
+          session->device_projection_input);
+      err = cudaGetLastError();
+    } else if (err == cudaSuccess) {
+#if NERVA_HAVE_CUDNN_FRONTEND
+      const bool use_cudnn_decode_sdpa =
+          can_use_cudnn_decode_sdpa(session, attention_chunks);
+#else
+      const bool use_cudnn_decode_sdpa = false;
+#endif
+      hf_layer_qkv_prepare_kernel<<<session->heads, decode_head_threads, 0,
+                                    session->stream>>>(
+          session->device_arena, layout, layer_index, session->dtype,
+          session->hidden, session->heads, session->kv_heads, session->head_dim,
+          session->intermediate, session->device_step, max_steps,
+          session->rms_eps, session->rope_theta, session->device_scratch,
+          session->device_kv_keys, session->device_kv_values,
+          session->kv_block_count, session->device_kv_block_table,
+          use_cudnn_decode_sdpa ? session->device_decode_q : nullptr,
+          use_cudnn_decode_sdpa ? session->device_decode_seq_len_q : nullptr,
+          use_cudnn_decode_sdpa ? session->device_decode_seq_len_kv : nullptr);
+      err = cudaGetLastError();
+      bool ran_cudnn_decode_sdpa = false;
+#if NERVA_HAVE_CUDNN_FRONTEND
+      if (err == cudaSuccess && use_cudnn_decode_sdpa) {
+        err = execute_cudnn_decode_sdpa(session, layer_index);
+        if (err == cudaSuccess) {
+          ran_cudnn_decode_sdpa = true;
+        }
+      }
+#endif
+      if (err == cudaSuccess && !ran_cudnn_decode_sdpa) {
+        const uint32_t query_group = session->heads / session->kv_heads;
+        const bool use_shared_warp_gqa =
+            query_group == kGroupedGqaHeads &&
+            session->heads % session->kv_heads == 0 &&
+            session->head_dim <= kSharedWarpGqaHeadDimMax;
+        const bool use_grouped_gqa =
+            query_group == kGroupedGqaHeads &&
+            session->heads % session->kv_heads == 0 &&
+            session->head_dim <= kGroupedGqaHeadDimMax;
+        const dim3 grid((use_shared_warp_gqa || use_grouped_gqa)
+                            ? session->kv_heads
+                            : session->heads,
+                        attention_chunks);
+        launch_hf_layer_attention_chunk_kernel(
+            session->stream, grid, session->dtype, use_shared_warp_gqa,
+            use_grouped_gqa, decode_head_threads, layer_index, session->hidden,
+            session->heads, session->kv_heads, session->head_dim,
+            session->intermediate, session->device_step, max_steps,
+            attention_chunks, session->device_scratch,
+            session->device_kv_keys, session->device_kv_values,
+            session->device_decode_attention_values,
+            session->device_decode_attention_m,
+            session->device_decode_attention_l, session->kv_block_count,
+            session->device_kv_block_table,
+            session->experimental_rt_sparse_attention_active == 0
+                ? nullptr
+                : session->device_experimental_rt_candidate_pages);
+
+        err = cudaGetLastError();
+      }
+      if (err == cudaSuccess && !ran_cudnn_decode_sdpa) {
+        const size_t reduce_shared_bytes =
+            static_cast<size_t>(attention_chunks) * sizeof(float);
+        hf_layer_attention_reduce_kernel<<<session->heads, decode_head_threads,
+                                           reduce_shared_bytes,
+                                           session->stream>>>(
+            session->dtype, session->hidden, session->heads, session->kv_heads,
+            session->head_dim, session->intermediate, session->device_step,
+            max_steps, attention_chunks, session->device_scratch,
+            session->device_decode_attention_values,
+            session->device_decode_attention_m,
+            session->device_decode_attention_l,
+            session->device_projection_input);
+        err = cudaGetLastError();
+      }
+    }
+    if (err == cudaSuccess) err = profile_end(session, &attention_ns);
+
+    if (err == cudaSuccess) err = profile_begin(session);
+    if (err == cudaSuccess)
+      err = project_encoded_rows(
+          session, &session->attention_output_plan,
+          session->device_arena + layout.w_o, session->device_projection_input,
+          session->hidden, attention_hidden, 1, session->dtype, 0.0f,
+          scratch.residual);
+    if (err == cudaSuccess) {
+      err = profile_end(session, &attention_output_projection_ns);
+    }
+
+    if (err == cudaSuccess) err = profile_begin(session);
+    if (err == cudaSuccess) {
+      hf_layer_mlp_norm_encode_kernel<<<1, kDecodeNormThreads, 0,
+                                        session->stream>>>(
+          session->device_arena, layout, session->dtype, session->hidden,
+          attention_hidden, kv_hidden, session->intermediate,
+          session->device_step, max_steps, session->rms_eps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    }
+    if (err == cudaSuccess) err = profile_end(session, &norm_ns);
+
+    if (err == cudaSuccess) err = profile_begin(session);
+    if (err == cudaSuccess)
+      err = project_encoded_rows(
+          session, &session->gate_up_plan,
+          session->device_gate_up_packed +
+              packed_shape.gate_up_elements_per_layer * layer_index,
+          session->device_projection_input,
+          static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden, 1,
+          session->dtype, 0.0f, scratch.gate);
+    if (err == cudaSuccess) err = profile_end(session, &gate_up_projection_ns);
+
+    if (err == cudaSuccess) err = profile_begin(session);
+    if (err == cudaSuccess) {
+      const uint32_t ff_blocks =
+          (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
+      hf_layer_ff_encode_kernel<<<ff_blocks, kDecodeThreads, 0,
+                                  session->stream>>>(
+          session->dtype, session->hidden, attention_hidden, kv_hidden,
+          session->intermediate, session->device_step, max_steps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    }
+    if (err == cudaSuccess) err = profile_end(session, &mlp_ns);
+
+    if (err == cudaSuccess) err = profile_begin(session);
+    if (err == cudaSuccess)
+      err = project_encoded_rows(
+          session, &session->down_plan,
+          session->device_arena + layout.w_down, session->device_projection_input,
+          session->hidden, session->intermediate, 1, session->dtype, 0.0f,
+          scratch.down);
+    if (err == cudaSuccess) err = profile_end(session, &down_projection_ns);
+
+    if (err == cudaSuccess) err = profile_begin(session);
+    if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
+      const SequenceLayerLayout next_layout =
+          session->host_layouts[layer_index + 1];
+      hf_layer_finish_next_attn_norm_encode_kernel<<<
+          1, kDecodeNormThreads, 0, session->stream>>>(
+          session->device_arena, output_offset, next_layout, session->dtype,
+          session->hidden, attention_hidden, kv_hidden, session->intermediate,
+          session->device_step, max_steps, session->rms_eps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    } else if (err == cudaSuccess) {
+      hf_layer_finish_final_norm_encode_kernel<<<
+          1, kDecodeNormThreads, 0, session->stream>>>(
+          session->device_arena, session->arena_layout, session->dtype,
+          session->hidden, attention_hidden, kv_hidden, session->intermediate,
+          session->device_step, max_steps, session->rms_eps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    }
+    if (err == cudaSuccess) err = profile_end(session, &norm_ns);
+    const uint64_t next_input = output_offset;
+    output_offset = input_offset;
+    input_offset = next_input;
+  }
+
+  if (err == cudaSuccess) err = profile_begin(session);
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    err = project_encoded_rows(
+        session, &session->lm_head_plan,
+        session->device_arena + session->arena_layout.lm_head,
+        session->device_projection_input, session->vocab_size, session->hidden,
+        1, session->dtype, 0.0f, device_logits);
+  }
+  if (err == cudaSuccess) err = profile_end(session, &lm_head_projection_ns);
+
+  if (err == cudaSuccess) err = profile_begin(session);
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    err = launch_hf_decode_final_head_sampler(
+        session->stream, session->device_step, max_steps, has_eos_token,
+        eos_token, device_logits, session->vocab_size, session->device_slots,
+        session->active_sampler);
+  }
+  if (err == cudaSuccess) err = profile_end(session, &sampling_ns);
+
+  if (err == cudaSuccess) {
+    hf_decode_set_step_kernel<<<1, 1, 0, session->stream>>>(
+        session->device_step, cursor);
+    err = cudaGetLastError();
+  }
+  if (err == cudaSuccess) err = cudaStreamSynchronize(session->stream);
+  if (err == cudaSuccess) {
+    projection_ns = qkv_projection_ns + attention_output_projection_ns +
+                    gate_up_projection_ns + down_projection_ns +
+                    lm_head_projection_ns;
+    session->cached_projection_ns = projection_ns;
+    session->cached_qkv_projection_ns = qkv_projection_ns;
+    session->cached_attention_output_projection_ns =
+        attention_output_projection_ns;
+    session->cached_gate_up_projection_ns = gate_up_projection_ns;
+    session->cached_down_projection_ns = down_projection_ns;
+    session->cached_lm_head_projection_ns = lm_head_projection_ns;
+    session->cached_attention_ns = attention_ns;
+    session->cached_mlp_ns = mlp_ns;
+    session->cached_norm_ns = norm_ns;
+    session->cached_sampling_ns = sampling_ns;
+  }
+  return err;
+}
+
+cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
+                                 uint32_t max_steps,
+                                 uint32_t prompt_token_count,
+                                 uint32_t has_eos_token,
+                                 uint32_t eos_token,
+                                 uint32_t attention_chunks,
+                                 uint32_t profile_cursor,
+                                 NervaCudaHfDecodeSequenceResult *out);
+
+cudaError_t encoded_row_major_gemm_tokens_cached(
+    NervaCudaHfDecodeSequenceSession *session, const uint16_t *matrix,
+    const uint16_t *input, uint32_t rows, uint32_t cols, uint32_t tokens,
+    uint32_t dtype, float beta, float *output) {
+  if (session == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  return encoded_row_major_gemm_tokens(session->cublas, matrix, input, rows,
+                                       cols, tokens, dtype, beta, output);
+}
+
+cudaError_t launch_cublas_session_prefill(
+    NervaCudaHfDecodeSequenceSession *session, uint32_t prompt_token_count,
+    uint32_t has_eos_token, uint32_t eos_token,
+    NervaCudaHfDecodeSequenceResult *out) {
+  if (prompt_token_count == 0 || prompt_token_count > session->max_context_tokens ||
+      !use_cublas_layer_path(session)) {
+    return cudaErrorInvalidValue;
+  }
+  const uint32_t attention_hidden = session->heads * session->head_dim;
+  const uint32_t kv_hidden = session->kv_heads * session->head_dim;
+  const PackedProjectionShape packed_shape = packed_projection_shape(
+      session->hidden, attention_hidden, kv_hidden, session->intermediate);
+  const bool collect_profile = session->detailed_profile != 0;
+  uint64_t qkv_projection_ns = 0;
+  uint64_t attention_output_projection_ns = 0;
+  uint64_t gate_up_projection_ns = 0;
+  uint64_t down_projection_ns = 0;
+  uint64_t lm_head_projection_ns = 0;
+  uint64_t attention_ns = 0;
+  uint64_t mlp_ns = 0;
+  uint64_t norm_ns = 0;
+  uint64_t sampling_ns = 0;
+  auto profile_stage_begin = [&]() -> cudaError_t {
+    return collect_profile ? profile_begin(session) : cudaSuccess;
+  };
+  auto profile_stage_end = [&](uint64_t *bucket) -> cudaError_t {
+    return collect_profile ? profile_end(session, bucket) : cudaSuccess;
+  };
+  cudaError_t err = cudaEventRecord(session->device_start, session->stream);
+  if (err == cudaSuccess) {
+    hf_prefill_embed_kernel<<<prompt_token_count, kDecodeThreads, 0,
+                              session->stream>>>(
+        session->device_arena, session->arena_layout, session->hidden,
+        session->device_prompt_tokens, prompt_token_count,
+        session->device_prefill_hidden_a);
+    err = cudaGetLastError();
+    out->kernel_launches += 1;
+  }
+  uint16_t *hidden_in = session->device_prefill_hidden_a;
+  uint16_t *hidden_out = session->device_prefill_hidden_b;
+  for (uint32_t layer_index = 0;
+       err == cudaSuccess && layer_index < session->layer_count;
+       ++layer_index) {
+    const SequenceLayerLayout layout = session->host_layouts[layer_index];
+    for (uint32_t chunk_start = 0;
+         err == cudaSuccess && chunk_start < prompt_token_count;
+         chunk_start += session->prefill_chunk_tokens) {
+      const uint32_t chunk_tokens =
+          std::min(session->prefill_chunk_tokens, prompt_token_count - chunk_start);
+      if (err == cudaSuccess) err = profile_stage_begin();
+      if (err == cudaSuccess) {
+        hf_prefill_attn_norm_kernel<<<chunk_tokens, kDecodeThreads, 0,
+                                      session->stream>>>(
+            session->device_arena, layout, session->dtype, session->hidden,
+            chunk_start, chunk_tokens, session->rms_eps, hidden_in,
+            session->device_prefill_norm);
+        err = cudaGetLastError();
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&norm_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
+      if (err == cudaSuccess) {
+        err = project_encoded_rows(
+            session, &session->qkv_plan,
+            session->device_qkv_packed +
+                packed_shape.qkv_elements_per_layer * layer_index,
+            session->device_prefill_norm,
+            static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
+            chunk_tokens, session->dtype, 0.0f, session->device_prefill_qkv);
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&qkv_projection_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
+      const uint32_t query_group =
+          session->kv_heads == 0 ? 0 : session->heads / session->kv_heads;
+      const bool use_grouped_gqa =
+          query_group == kGroupedGqaHeads &&
+          session->heads % session->kv_heads == 0 &&
+          session->head_dim <= kSharedWarpGqaHeadDimMax;
+#if NERVA_HAVE_CUDNN_FRONTEND
+      const bool use_cudnn_sdpa =
+          session->cudnn_prefill_sdpa_disabled == 0 &&
+          session->cudnn != nullptr &&
+          session->device_prefill_qkv_encoded != nullptr &&
+          session->dtype == kDTypeBF16 && use_grouped_gqa &&
+          chunk_start == 0 && chunk_tokens == prompt_token_count &&
+          session->head_dim <= 128;
+#endif
+      if (err == cudaSuccess) {
+        const dim3 grid(chunk_tokens, std::max(session->heads, session->kv_heads));
+        hf_prefill_qkv_publish_kernel<<<grid, session->head_threads, 0,
+                                      session->stream>>>(
+            session->device_arena, layout, layer_index, session->dtype,
+            session->heads, session->kv_heads, session->head_dim,
+            session->max_context_tokens, chunk_start, chunk_tokens,
+            session->rms_eps, session->rope_theta, session->device_prefill_qkv,
+            session->device_kv_keys, session->device_kv_values,
+#if NERVA_HAVE_CUDNN_FRONTEND
+            use_cudnn_sdpa ? session->device_prefill_qkv_encoded : nullptr,
+#else
+            nullptr,
+#endif
+            session->kv_block_count, session->device_kv_block_table);
+        err = cudaGetLastError();
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&norm_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
+      if (err == cudaSuccess) {
+#if NERVA_HAVE_CUDNN_FRONTEND
+        bool ran_cudnn_sdpa = false;
+        if (use_cudnn_sdpa) {
+          err = execute_cudnn_prefill_sdpa(session, chunk_tokens);
+          if (err == cudaSuccess) {
+            out->kernel_launches += 1;
+            ran_cudnn_sdpa = true;
+          } else if (err == cudaErrorNotSupported ||
+                     err == cudaErrorMemoryAllocation) {
+            session->cudnn_prefill_sdpa_disabled = 1;
+            err = cudaSuccess;
+          }
+        }
+        if (!ran_cudnn_sdpa) {
+#endif
+        if (use_grouped_gqa) {
+          const dim3 grid(chunk_tokens, session->kv_heads);
+          launch_hf_prefill_grouped_gqa_attention_direct_kernel(
+              session->stream, grid, session->dtype, layer_index,
+              session->heads, session->kv_heads, session->head_dim,
+              session->max_context_tokens, chunk_start, chunk_tokens,
+              session->device_prefill_qkv, session->device_kv_keys,
+              session->device_kv_values, session->kv_block_count,
+              session->device_kv_block_table, session->device_prefill_attn);
+        } else {
+          const dim3 grid(chunk_tokens, session->heads);
+          hf_prefill_attention_kernel<<<grid, session->head_threads,
+                                        session->head_dim * sizeof(float),
+                                        session->stream>>>(
+              layer_index, session->dtype, session->heads, session->kv_heads,
+              session->head_dim, session->max_context_tokens, chunk_start,
+              chunk_tokens, session->device_prefill_qkv, session->device_kv_keys,
+              session->device_kv_values, session->kv_block_count,
+              session->device_kv_block_table, session->device_prefill_attn);
+        }
+          err = cudaGetLastError();
+          out->kernel_launches += 1;
+#if NERVA_HAVE_CUDNN_FRONTEND
+        }
+#endif
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&attention_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
+      if (err == cudaSuccess) {
+        err = project_encoded_rows(
+            session, &session->attention_output_plan,
+            session->device_arena + layout.w_o,
+            session->device_prefill_attn, session->hidden, attention_hidden,
+            chunk_tokens, session->dtype, 0.0f, session->device_prefill_o);
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) {
+        err = profile_stage_end(&attention_output_projection_ns);
+      }
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
+      if (err == cudaSuccess) {
+        hf_prefill_mlp_norm_kernel<<<chunk_tokens, kDecodeThreads, 0,
+                                     session->stream>>>(
+            session->device_arena, layout, session->dtype, session->hidden,
+            chunk_start, chunk_tokens, session->rms_eps, hidden_in,
+            session->device_prefill_o, session->device_prefill_norm);
+        err = cudaGetLastError();
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&norm_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
+      if (err == cudaSuccess) {
+        err = project_encoded_rows(
+            session, &session->gate_up_plan,
+            session->device_gate_up_packed +
+                packed_shape.gate_up_elements_per_layer * layer_index,
+            session->device_prefill_norm,
+            static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
+            chunk_tokens, session->dtype, 0.0f, session->device_prefill_gate_up);
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&gate_up_projection_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
+      if (err == cudaSuccess) {
+        const uint32_t blocks =
+            static_cast<uint32_t>(
+                (static_cast<uint64_t>(chunk_tokens) * session->intermediate +
+                 kDecodeThreads - 1) /
+                kDecodeThreads);
+        hf_prefill_ff_kernel<<<blocks, kDecodeThreads, 0, session->stream>>>(
+            session->dtype, session->intermediate, chunk_tokens,
+            session->device_prefill_gate_up, session->device_prefill_ff);
+        err = cudaGetLastError();
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&mlp_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
+      if (err == cudaSuccess) {
+        err = project_encoded_rows(
+            session, &session->down_plan,
+            session->device_arena + layout.w_down,
+            session->device_prefill_ff, session->hidden, session->intermediate,
+            chunk_tokens, session->dtype, 0.0f, session->device_prefill_down);
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&down_projection_ns);
+      if (err == cudaSuccess) {
+        err = profile_stage_begin();
+      }
+      if (err == cudaSuccess) {
+        const uint32_t blocks =
+            static_cast<uint32_t>(
+                (static_cast<uint64_t>(chunk_tokens) * session->hidden +
+                 kDecodeThreads - 1) /
+                kDecodeThreads);
+        hf_prefill_finish_kernel<<<blocks, kDecodeThreads, 0, session->stream>>>(
+            session->dtype, session->hidden, chunk_start, chunk_tokens,
+            session->device_prefill_o, session->device_prefill_down, hidden_out);
+        err = cudaGetLastError();
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess) err = profile_stage_end(&mlp_ns);
+    }
+    std::swap(hidden_in, hidden_out);
+  }
+  if (err == cudaSuccess) {
+    err = profile_stage_begin();
+  }
+  if (err == cudaSuccess) {
+    hf_prefill_final_norm_last_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
+        session->device_arena, session->arena_layout, session->dtype,
+        session->hidden, prompt_token_count, session->rms_eps, hidden_in,
+        session->device_projection_input);
+    err = cudaGetLastError();
+    out->kernel_launches += 1;
+  }
+  if (err == cudaSuccess) err = profile_stage_end(&norm_ns);
+  if (err == cudaSuccess) {
+    hf_decode_set_step_kernel<<<1, 1, 0, session->stream>>>(
+        session->device_step, prompt_token_count - 1u);
+    err = cudaGetLastError();
+    out->kernel_launches += 1;
+  }
+  if (err == cudaSuccess) {
+    err = profile_stage_begin();
+  }
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    err = project_encoded_rows(
+        session, &session->lm_head_plan,
+        session->device_arena + session->arena_layout.lm_head,
+        session->device_projection_input, session->vocab_size, session->hidden,
+        1, session->dtype, 0.0f, device_logits);
+    out->kernel_launches += 1;
+  }
+  if (err == cudaSuccess) err = profile_stage_end(&lm_head_projection_ns);
+  if (err == cudaSuccess) {
+    err = profile_stage_begin();
+  }
+  if (err == cudaSuccess) {
+    float *device_logits = session->device_scratch + session->hidden * 2;
+    err = launch_hf_decode_final_head_sampler(
+        session->stream, session->device_step, session->max_context_tokens,
+        has_eos_token, eos_token, device_logits, session->vocab_size,
+        session->device_slots, session->active_sampler);
+    out->kernel_launches += 1;
+  }
+  if (err == cudaSuccess) err = profile_stage_end(&sampling_ns);
+  if (err == cudaSuccess) {
+    err = cudaEventRecord(session->device_stop, session->stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(session->stream);
+    out->sync_calls += 1;
+  }
+  if (err == cudaSuccess) {
+    float device_ms = 0.0f;
+    err = cudaEventElapsedTime(&device_ms, session->device_start,
+                               session->device_stop);
+    if (err == cudaSuccess && device_ms > 0.0f) {
+      out->device_elapsed_ns = static_cast<uint64_t>(device_ms * 1000000.0f);
+      if (out->device_elapsed_ns == 0) out->device_elapsed_ns = 1;
+    }
+  }
+  if (err == cudaSuccess && collect_profile) {
+    out->qkv_projection_ns = qkv_projection_ns;
+    out->attention_output_projection_ns = attention_output_projection_ns;
+    out->gate_up_projection_ns = gate_up_projection_ns;
+    out->down_projection_ns = down_projection_ns;
+    out->lm_head_projection_ns = lm_head_projection_ns;
+    out->projection_ns = qkv_projection_ns + attention_output_projection_ns +
+                         gate_up_projection_ns + down_projection_ns +
+                         lm_head_projection_ns;
+    out->attention_ns = attention_ns;
+    out->mlp_ns = mlp_ns;
+    out->norm_ns = norm_ns;
+    out->sampling_ns = sampling_ns;
+  }
+  return err;
+}
+
+cudaError_t launch_serial_session_prefill(
+    NervaCudaHfDecodeSequenceSession *session, uint32_t prompt_token_count,
+    uint32_t has_eos_token, uint32_t eos_token,
+    NervaCudaHfDecodeSequenceResult *out) {
+  cudaError_t err =
+      ensure_session_graph(session, session->max_context_tokens, prompt_token_count,
+                           has_eos_token, eos_token, 0, 0, out);
+  if (err == cudaSuccess) {
+    err = cudaEventRecord(session->device_start, session->stream);
+  }
+  for (uint32_t step = 0; err == cudaSuccess && step < prompt_token_count; ++step) {
+    err = cudaGraphLaunch(session->cached_graph_exec, session->stream);
+    if (err == cudaSuccess) {
+      out->graph_replays += 1;
+      out->graph_launches += 1;
+      out->kernel_launches += out->graph_nodes == 0 ? 1 : out->graph_nodes;
+    }
+  }
+  if (err == cudaSuccess) {
+    err = cudaEventRecord(session->device_stop, session->stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(session->stream);
+    out->sync_calls += 1;
+  }
+  if (err == cudaSuccess) {
+    float device_ms = 0.0f;
+    err = cudaEventElapsedTime(&device_ms, session->device_start,
+                               session->device_stop);
+    if (err == cudaSuccess && device_ms > 0.0f) {
+      out->device_elapsed_ns = static_cast<uint64_t>(device_ms * 1000000.0f);
+      if (out->device_elapsed_ns == 0) out->device_elapsed_ns = 1;
+    }
+  }
+  return err;
+}

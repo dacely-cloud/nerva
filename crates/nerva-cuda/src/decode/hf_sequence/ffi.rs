@@ -16,7 +16,7 @@ pub struct NervaCudaHfDecodeSamplerConfig {
 impl Default for NervaCudaHfDecodeSamplerConfig {
     fn default() -> Self {
         Self {
-            temperature: 1.0,
+            temperature: 0.0,
             top_p: 1.0,
             top_k: 0,
             reserved: 0,

@@ -4,7 +4,7 @@ use nerva_model::hf::tokenizer::PromptFormat;
 pub(crate) const AUTO_CONTEXT_MARGIN: usize = 16;
 pub(crate) const DEFAULT_OUTPUT_TOKENS: usize = 256;
 pub(crate) const DEFAULT_QUEUE_CAPACITY: usize = 1024;
-pub(crate) const DEFAULT_TEMPERATURE: f32 = 1.0;
+pub(crate) const DEFAULT_TEMPERATURE: f32 = 0.0;
 pub(crate) const DEFAULT_TOP_P: f32 = 1.0;
 pub(crate) const DEFAULT_TOP_K: u32 = 0;
 pub(crate) const DEFAULT_SEED: u64 = 0;
@@ -249,13 +249,13 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_vllm_sampling_params() {
+    fn defaults_use_accuracy_first_greedy_sampling() {
         let args = ["-m", "qwen3-8b", "-p", "hello"]
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
         let parsed = parse_args(&args).unwrap();
-        assert_eq!(parsed.temperature, 1.0);
+        assert_eq!(parsed.temperature, 0.0);
         assert_eq!(parsed.top_p, 1.0);
         assert_eq!(parsed.top_k, 0);
         assert_eq!(parsed.seed, 0);

@@ -20,6 +20,12 @@ pub(crate) fn summary_passed(summary: &CudaExperimentalRtCandidateBenchSummary) 
         && summary.dense_full_attention_avg_ns > 0
         && summary.attention_mass_recall_min_ppm > 0
         && summary.attention_mass_recall_avg_ppm > 0
+        && summary.page_level_attention_mass_recall_min_ppm > 0
+        && summary.page_level_attention_mass_recall_avg_ppm > 0
+        && summary.far_oracle_topk_tokens > 0
+        && summary.far_oracle_topk_importance_scatter_min_pages > 0
+        && summary.far_oracle_topk_importance_scatter_avg_pages_x1000 > 0
+        && summary.far_oracle_topk_importance_scatter_max_pages > 0
         && summary.dense_selector_attention_stage_avg_ns > 0
         && summary.rt_selector_attention_stage_avg_ns > 0
         && summary.rt_selector_overlapped_attention_stage_avg_ns > 0

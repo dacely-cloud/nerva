@@ -11,7 +11,7 @@ __global__ void hf_layer_attention_chunk_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
-    const uint32_t *kv_block_table) {
+    const uint32_t *kv_block_table, const uint32_t *selected_chunks) {
   __shared__ uint32_t current_position_shared;
   if (threadIdx.x == 0) {
     current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
@@ -23,13 +23,20 @@ __global__ void hf_layer_attention_chunk_kernel(
     return;
   }
   const uint32_t head = blockIdx.x;
-  const uint32_t chunk = blockIdx.y;
-  if (head >= heads || chunk >= attention_chunks) {
+  const uint32_t selected_slot = blockIdx.y;
+  if (head >= heads || selected_slot >= attention_chunks || kv_heads == 0) {
     return;
   }
+  const uint32_t group = heads / kv_heads;
+  const uint32_t kv_head = head / group;
+  const uint32_t chunk =
+      selected_chunks == nullptr
+          ? selected_slot
+          : selected_chunks[static_cast<uint64_t>(kv_head) * attention_chunks +
+                            selected_slot];
   const uint32_t chunk_start = chunk * kDecodeAttentionChunkTokens;
   const uint64_t slot =
-      (static_cast<uint64_t>(head) * attention_chunks + chunk);
+      (static_cast<uint64_t>(head) * attention_chunks + selected_slot);
   if (chunk_start > current_position) {
     if (threadIdx.x == 0) {
       partial_m[slot] = -INFINITY;
@@ -43,8 +50,6 @@ __global__ void hf_layer_attention_chunk_kernel(
       chunk_limit < position_limit ? chunk_limit : position_limit;
   const uint32_t attention_hidden = heads * head_dim;
   const uint32_t kv_hidden = kv_heads * head_dim;
-  const uint32_t group = heads / kv_heads;
-  const uint32_t kv_head = head / group;
   const uint32_t head_start = head * head_dim;
   const uint32_t kv_start = kv_head * head_dim;
   LayerScratch s =
@@ -117,7 +122,7 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
-    const uint32_t *kv_block_table) {
+    const uint32_t *kv_block_table, const uint32_t *selected_chunks) {
   __shared__ uint32_t current_position_shared;
   __shared__ float shared_k[kGroupedGqaHeadDimMax];
   __shared__ float shared_v[kGroupedGqaHeadDimMax];
@@ -135,16 +140,21 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
     return;
   }
   const uint32_t kv_head = blockIdx.x;
-  const uint32_t chunk = blockIdx.y;
-  if (kv_head >= kv_heads || chunk >= attention_chunks) {
+  const uint32_t selected_slot = blockIdx.y;
+  if (kv_head >= kv_heads || selected_slot >= attention_chunks) {
     return;
   }
+  const uint32_t chunk =
+      selected_chunks == nullptr
+          ? selected_slot
+          : selected_chunks[static_cast<uint64_t>(kv_head) * attention_chunks +
+                            selected_slot];
   const uint32_t chunk_start = chunk * kDecodeAttentionChunkTokens;
   if (chunk_start > current_position) {
     if (threadIdx.x < kGroupedGqaHeads) {
       const uint32_t head = kv_head * kGroupedGqaHeads + threadIdx.x;
       const uint64_t slot =
-          (static_cast<uint64_t>(head) * attention_chunks + chunk);
+          (static_cast<uint64_t>(head) * attention_chunks + selected_slot);
       partial_m[slot] = -INFINITY;
       partial_l[slot] = 0.0f;
     }
@@ -164,7 +174,7 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
   const uint32_t head = kv_head * kGroupedGqaHeads + q_in_group;
   const uint32_t head_start = head * head_dim;
   const uint64_t slot =
-      (static_cast<uint64_t>(head) * attention_chunks + chunk);
+      (static_cast<uint64_t>(head) * attention_chunks + selected_slot);
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   const float scale = rsqrtf(static_cast<float>(head_dim));
@@ -256,7 +266,7 @@ __global__ void hf_layer_shared_warp_gqa_attention_chunk_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
-    const uint32_t *kv_block_table) {
+    const uint32_t *kv_block_table, const uint32_t *selected_chunks) {
   __shared__ uint32_t current_position_shared;
   __shared__ float shared_k[kSharedWarpGqaTileElements];
   __shared__ float shared_v[kSharedWarpGqaTileElements];
@@ -273,15 +283,20 @@ __global__ void hf_layer_shared_warp_gqa_attention_chunk_kernel(
     return;
   }
   const uint32_t kv_head = blockIdx.x;
-  const uint32_t chunk = blockIdx.y;
-  if (kv_head >= kv_heads || chunk >= attention_chunks) {
+  const uint32_t selected_slot = blockIdx.y;
+  if (kv_head >= kv_heads || selected_slot >= attention_chunks) {
     return;
   }
+  const uint32_t chunk =
+      selected_chunks == nullptr
+          ? selected_slot
+          : selected_chunks[static_cast<uint64_t>(kv_head) * attention_chunks +
+                            selected_slot];
   const uint32_t q_in_group = threadIdx.x / kSharedWarpGqaThreadsPerHead;
   const uint32_t lane = threadIdx.x - q_in_group * kSharedWarpGqaThreadsPerHead;
   const uint32_t head = kv_head * kGroupedGqaHeads + q_in_group;
   const uint64_t slot =
-      (static_cast<uint64_t>(head) * attention_chunks + chunk);
+      (static_cast<uint64_t>(head) * attention_chunks + selected_slot);
   const uint32_t chunk_start = chunk * kDecodeAttentionChunkTokens;
   if (chunk_start > current_position) {
     if (lane == 0) {
@@ -597,49 +612,49 @@ void launch_hf_layer_attention_chunk_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
-    const uint32_t *kv_block_table) {
+    const uint32_t *kv_block_table, const uint32_t *selected_chunks) {
   if (dtype == kDTypeBF16 && use_shared_warp_gqa) {
     hf_layer_shared_warp_gqa_attention_chunk_kernel<kDTypeBF16>
         <<<grid, kSharedWarpGqaThreads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table);
+            kv_block_table, selected_chunks);
   } else if (dtype == kDTypeBF16 && use_grouped_gqa) {
     hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeBF16>
         <<<grid, kGroupedGqaThreads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table);
+            kv_block_table, selected_chunks);
   } else if (dtype == kDTypeBF16) {
     hf_layer_attention_chunk_kernel<kDTypeBF16>
         <<<grid, dense_threads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table);
+            kv_block_table, selected_chunks);
   } else if (use_shared_warp_gqa) {
     hf_layer_shared_warp_gqa_attention_chunk_kernel<kDTypeF16>
         <<<grid, kSharedWarpGqaThreads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table);
+            kv_block_table, selected_chunks);
   } else if (use_grouped_gqa) {
     hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeF16>
         <<<grid, kGroupedGqaThreads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table);
+            kv_block_table, selected_chunks);
   } else {
     hf_layer_attention_chunk_kernel<kDTypeF16>
         <<<grid, dense_threads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table);
+            kv_block_table, selected_chunks);
   }
 }
 

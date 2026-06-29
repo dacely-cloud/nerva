@@ -1,5 +1,6 @@
 mod acceptance;
 mod artifact;
+mod experimental_rt;
 mod hf_cuda_decode;
 mod hf_cuda_generate;
 mod hf_cuda_session;

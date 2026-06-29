@@ -33,6 +33,7 @@ pub(super) fn failed_create_summary(
         planned_weight_descriptor_hash: 0,
         experimental_rt_decode_requested: request.experimental_rt.enabled,
         experimental_rt_decode_enabled: false,
+        experimental_rt_mode: request.experimental_rt.mode,
         experimental_rt_page_tokens: request.experimental_rt.page_tokens,
         experimental_rt_pages: request.experimental_rt.pages,
         experimental_rt_local_window_tokens: request.experimental_rt.local_window_tokens,

@@ -90,6 +90,21 @@ pub fn experimental_rt_candidate_bench(
             dense_full_attention_avg_ns: out.dense_full_attention_avg_ns,
             attention_mass_recall_min_ppm: out.attention_mass_recall_min_ppm,
             attention_mass_recall_avg_ppm: out.attention_mass_recall_avg_ppm,
+            page_level_attention_mass_recall_min_ppm: out.page_level_attention_mass_recall_min_ppm,
+            page_level_attention_mass_recall_avg_ppm: out.page_level_attention_mass_recall_avg_ppm,
+            far_oracle_topk_tokens: out.far_oracle_topk_tokens,
+            far_oracle_topk_token_recall_min_ppm: out.far_oracle_topk_token_recall_min_ppm,
+            far_oracle_topk_token_recall_avg_ppm: out.far_oracle_topk_token_recall_avg_ppm,
+            page_level_far_oracle_topk_token_recall_min_ppm: out
+                .page_level_far_oracle_topk_token_recall_min_ppm,
+            page_level_far_oracle_topk_token_recall_avg_ppm: out
+                .page_level_far_oracle_topk_token_recall_avg_ppm,
+            far_oracle_topk_importance_scatter_min_pages: out
+                .far_oracle_topk_importance_scatter_min_pages,
+            far_oracle_topk_importance_scatter_avg_pages_x1000: out
+                .far_oracle_topk_importance_scatter_avg_pages_x1000,
+            far_oracle_topk_importance_scatter_max_pages: out
+                .far_oracle_topk_importance_scatter_max_pages,
             dense_selector_attention_stage_avg_ns: out.dense_selector_attention_stage_avg_ns,
             rt_selector_attention_stage_avg_ns: out.rt_selector_attention_stage_avg_ns,
             rt_selector_overlapped_attention_stage_avg_ns: out

@@ -1,5 +1,6 @@
 use std::process::ExitCode;
 
+use crate::cli::cuda_rt;
 use crate::parse::{parse_optional_u32, parse_optional_usize};
 
 pub(crate) fn dispatch(
@@ -15,7 +16,9 @@ pub(crate) fn dispatch(
         Some("cuda-attention") => Some(run_attention()),
         Some("cuda-sampler") => Some(run_sampler()),
         Some("cuda-tiny-decode") => Some(run_tiny_decode(args)),
-        Some("experimental-rt") => Some(run_experimental_rt(args)),
+        Some("experimental-rt") => Some(cuda_rt::run_experimental_rt(args)),
+        Some("experimental-rt-sweep") => Some(cuda_rt::run_experimental_rt_sweep(args)),
+        Some("experimental-rt-matrix") => Some(cuda_rt::run_experimental_rt_matrix(args)),
         _ => None,
     }
 }
@@ -115,66 +118,6 @@ fn run_tiny_decode(args: &mut impl Iterator<Item = String>) -> ExitCode {
     };
     let summary = nerva_cuda::decode::probe::tiny_decode_smoke(steps, ring_capacity, seed_token);
     print_status_json(summary.to_json(), format!("{:?}", summary.status) == "Ok")
-}
-
-fn run_experimental_rt(args: &mut impl Iterator<Item = String>) -> ExitCode {
-    let context_tokens = match parse_optional_usize(args.next(), 128 * 1024, "context_tokens") {
-        Ok(context_tokens) => context_tokens,
-        Err(reason) => {
-            eprintln!("{reason}");
-            return ExitCode::from(2);
-        }
-    };
-    let query_count = match parse_optional_u32(args.next(), 1, "query_count") {
-        Ok(query_count) => query_count,
-        Err(reason) => {
-            eprintln!("{reason}");
-            return ExitCode::from(2);
-        }
-    };
-    let candidates_per_query = match parse_optional_u32(args.next(), 128, "candidates_per_query") {
-        Ok(candidates_per_query) => candidates_per_query,
-        Err(reason) => {
-            eprintln!("{reason}");
-            return ExitCode::from(2);
-        }
-    };
-    let iterations = match parse_optional_u32(args.next(), 128, "iterations") {
-        Ok(iterations) => iterations,
-        Err(reason) => {
-            eprintln!("{reason}");
-            return ExitCode::from(2);
-        }
-    };
-    let page_tokens = match parse_optional_u32(args.next(), 64, "page_tokens") {
-        Ok(page_tokens) => page_tokens.max(1),
-        Err(reason) => {
-            eprintln!("{reason}");
-            return ExitCode::from(2);
-        }
-    };
-    let dims = 16u32;
-    let pages = context_tokens
-        .saturating_add(page_tokens as usize - 1)
-        .saturating_div(page_tokens as usize)
-        .max(1)
-        .min(u32::MAX as usize) as u32;
-    let summary = nerva_cuda::experimental_rt::probe::experimental_rt_candidate_bench(
-        pages,
-        page_tokens,
-        dims,
-        query_count,
-        candidates_per_query.min(pages).max(1),
-        iterations,
-        8,
-    );
-    let json = format!(
-        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"mode\":\"experimental_rt_candidate\",\"scope\":\"attention_stage_synthetic\",\"context_tokens\":{},\"summary\":{}}}",
-        if summary.passed() { "ok" } else { "failed" },
-        context_tokens,
-        summary.to_json(),
-    );
-    print_status_json(json, summary.passed())
 }
 
 fn print_status_json(json: String, passed: bool) -> ExitCode {

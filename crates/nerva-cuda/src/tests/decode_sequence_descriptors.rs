@@ -103,13 +103,19 @@ fn declared_weight_descriptors_accept_null_legacy_weight_pointers() {
 fn declared_weight_descriptors_support_temperature_sampling() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
-    let Some((out, output_tokens)) =
-        run_null_legacy_descriptor_decode(NervaCudaHfDecodeSamplerConfig::default())
-    else {
+    let sampler = NervaCudaHfDecodeSamplerConfig {
+        temperature: 1.0,
+        top_p: 1.0,
+        top_k: 0,
+        reserved: 0,
+        seed: 0,
+    };
+    let Some((out, output_tokens)) = run_null_legacy_descriptor_decode(sampler) else {
         return;
     };
     assert_eq!(out.status, 0);
     assert_eq!(out.descriptor_gpu_resident_h2d_bytes, 52);
     assert_eq!(out.descriptor_gpu_staged_h2d_bytes, 48);
+    assert_eq!(out.observed_tokens, 4);
     assert_eq!(output_tokens, [0, 0, 1, 1]);
 }

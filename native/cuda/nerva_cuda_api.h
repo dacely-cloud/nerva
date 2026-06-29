@@ -949,6 +949,16 @@ typedef struct NervaCudaExperimentalRtCandidateBenchResult {
   uint64_t dense_full_attention_avg_ns;
   uint64_t attention_mass_recall_min_ppm;
   uint64_t attention_mass_recall_avg_ppm;
+  uint64_t page_level_attention_mass_recall_min_ppm;
+  uint64_t page_level_attention_mass_recall_avg_ppm;
+  uint64_t far_oracle_topk_tokens;
+  uint64_t far_oracle_topk_token_recall_min_ppm;
+  uint64_t far_oracle_topk_token_recall_avg_ppm;
+  uint64_t page_level_far_oracle_topk_token_recall_min_ppm;
+  uint64_t page_level_far_oracle_topk_token_recall_avg_ppm;
+  uint64_t far_oracle_topk_importance_scatter_min_pages;
+  uint64_t far_oracle_topk_importance_scatter_avg_pages_x1000;
+  uint64_t far_oracle_topk_importance_scatter_max_pages;
   uint64_t dense_selector_attention_stage_avg_ns;
   uint64_t rt_selector_attention_stage_avg_ns;
   uint64_t rt_selector_overlapped_attention_stage_avg_ns;
