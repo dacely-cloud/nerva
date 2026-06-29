@@ -331,8 +331,8 @@ fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions()
     assert_eq!(batch.observed_tokens, 2);
     assert_eq!(batch.tokens, vec![0, 0]);
     assert_eq!(batch.projection_kernel_launches, 5);
-    assert_eq!(batch.pack_kernel_launches, 10);
-    assert_eq!(batch.scatter_kernel_launches, 10);
+    assert_eq!(batch.pack_kernel_launches, 5);
+    assert_eq!(batch.scatter_kernel_launches, 5);
     assert_eq!(batch.dependency_kernel_launches, 12);
     assert_eq!(batch.sampling_kernel_launches, 2);
     assert!(batch.projection_elapsed_ns > 0);
@@ -456,9 +456,9 @@ fn assert_projection_batch_exec(
     assert_eq!(summary.cols, cols);
     assert_eq!(summary.input_bytes, u64::from(cols) * 2 * 2);
     assert_eq!(summary.output_bytes, u64::from(rows) * 2 * 4);
-    assert_eq!(summary.pack_kernel_launches, 2);
+    assert_eq!(summary.pack_kernel_launches, 1);
     assert_eq!(summary.projection_kernel_launches, 1);
-    assert_eq!(summary.scatter_kernel_launches, 2);
+    assert_eq!(summary.scatter_kernel_launches, 1);
     assert!(summary.elapsed_ns > 0);
     assert_eq!(summary.hot_path_allocations, 0);
 }
@@ -492,9 +492,9 @@ fn assert_layer_projection_batch_exec(
         summary.output_bytes,
         u64::from(qkv_rows + attention_output_rows + gate_up_rows + down_rows) * 2 * 4
     );
-    assert_eq!(summary.pack_kernel_launches, 8);
+    assert_eq!(summary.pack_kernel_launches, 4);
     assert_eq!(summary.projection_kernel_launches, 4);
-    assert_eq!(summary.scatter_kernel_launches, 8);
+    assert_eq!(summary.scatter_kernel_launches, 4);
     assert_eq!(summary.dependency_kernel_launches, 12);
     assert!(summary.elapsed_ns > 0);
     assert!(summary.qkv_elapsed_ns > 0);

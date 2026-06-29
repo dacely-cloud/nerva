@@ -530,10 +530,11 @@ docs/source/perf/qwen3_8b_shared_fork_batch_probe.json
 requests             2
 max context          1024
 max new tokens       4/request
-aggregate decode     208.36 tok/s
+aggregate decode     215.25 tok/s
 batched steps        3/3
 fallback steps       0
 batch sync calls     6
+pack/scatter launches 435 / 435
 hot-path allocations 0
 tokens/request       [11, 358, 2776, 4460]
 ```
@@ -562,9 +563,9 @@ The current tiny Qwen3-8B comparison artifact is:
 ```text
 docs/source/perf/qwen3_8b_shared_fork_batch_compare.json
 
-sequential fallback  130.38 tok/s
-batched projection   208.72 tok/s
-decode speedup       1.60x
+sequential fallback  130.68 tok/s
+batched projection   215.68 tok/s
+decode speedup       1.65x
 token match          true
 ```
 
@@ -580,3 +581,7 @@ syncs until the final token-copy sync. This reduced the tiny Qwen comparison's
 batched sync count from 1089 to 6. Per-stage projection elapsed buckets are
 therefore zero in default artifacts; run with profiling enabled when detailed
 CUDA stage timing is needed.
+
+For two-request batches, pack and scatter are fused across the two selected
+sessions. That cuts the tiny Qwen comparison's pack/scatter launches from
+`870 / 870` to `435 / 435`, while keeping the same token outputs.
