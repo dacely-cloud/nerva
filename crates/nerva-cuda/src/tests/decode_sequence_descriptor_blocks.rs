@@ -1,6 +1,7 @@
 use core::ptr;
 
 use crate::decode::hf_chain::ffi::NervaCudaHfDecodeChainLayer;
+use crate::decode::hf_chain::layer::{CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN};
 use crate::decode::hf_sequence::ffi::{
     NervaCudaHfDecodeSamplerConfig, NervaCudaHfDecodeSequenceRequest,
     NervaCudaHfDecodeSequenceResult, run_hf_decode_sequence_u16,
@@ -88,11 +89,62 @@ pub(super) fn run_null_legacy_descriptor_decode(
     Some((out, output_tokens))
 }
 
+#[test]
+fn raw_descriptor_decode_rejects_linear_attention_kind() {
+    let weights = tiny_descriptor_weights();
+    let weight_blocks = weights.blocks();
+    let mut layer = null_layer();
+    layer.attention_kind = CUDA_HF_ATTENTION_LINEAR_GDN;
+    let layers = [layer];
+    let prompt_tokens = [0u32];
+    let mut output_tokens = [0u32; 1];
+    let request = NervaCudaHfDecodeSequenceRequest {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 2,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 2,
+        vocab_size: 4,
+        layer_count: 1,
+        steps: 1,
+        seed_token: 0,
+        prompt_tokens: prompt_tokens.as_ptr(),
+        prompt_token_count: 1,
+        has_eos_token: 0,
+        eos_token: 0,
+        rms_eps: 1e-5,
+        rope_theta: 0.0,
+        embeddings: ptr::null(),
+        layers: layers.as_ptr(),
+        final_norm_weight: ptr::null(),
+        lm_head: ptr::null(),
+        planned_weight_blocks: 12,
+        planned_gpu_resident_blocks: 6,
+        planned_gpu_staged_blocks: 6,
+        planned_weight_bytes: 100,
+        planned_gpu_resident_weight_bytes: 52,
+        planned_gpu_staged_weight_bytes: 48,
+        planned_weight_descriptors: weight_blocks.as_ptr(),
+        planned_weight_descriptor_count: 12,
+        planned_weight_descriptor_hash: hash_weight_blocks(&weight_blocks),
+        output_tokens: output_tokens.as_mut_ptr(),
+        output_token_capacity: 1,
+        sampler: NervaCudaHfDecodeSamplerConfig::default(),
+    };
+    let mut out = NervaCudaHfDecodeSequenceResult::default();
+
+    assert_eq!(run_hf_decode_sequence_u16(&request, &mut out), -1);
+    assert_eq!(out.device_count, 0);
+    assert_eq!(out.observed_tokens, 0);
+}
+
 fn null_layer() -> NervaCudaHfDecodeChainLayer {
     NervaCudaHfDecodeChainLayer {
         rms_attn_weight: ptr::null(),
         rms_mlp_weight: ptr::null(),
         w_q: ptr::null(),
+        w_q_gate: ptr::null(),
         w_k: ptr::null(),
         q_norm_weight: ptr::null(),
         k_norm_weight: ptr::null(),
@@ -105,6 +157,34 @@ fn null_layer() -> NervaCudaHfDecodeChainLayer {
         w_gate: ptr::null(),
         w_up: ptr::null(),
         w_down: ptr::null(),
+        w_router: ptr::null(),
+        w_expert_gate_up: ptr::null(),
+        w_expert_down: ptr::null(),
+        w_shared_expert_gate: ptr::null(),
+        w_shared_expert_up: ptr::null(),
+        w_shared_expert_down: ptr::null(),
+        w_shared_expert_router: ptr::null(),
+        linear_key_heads: 0,
+        linear_value_heads: 0,
+        linear_key_head_dim: 0,
+        linear_value_head_dim: 0,
+        linear_conv_kernel: 0,
+        w_linear_conv: ptr::null(),
+        w_linear_qkv: ptr::null(),
+        w_linear_z: ptr::null(),
+        w_linear_b: ptr::null(),
+        w_linear_a: ptr::null(),
+        w_linear_dt_bias: ptr::null(),
+        w_linear_a_log: ptr::null(),
+        w_linear_norm: ptr::null(),
+        w_linear_out: ptr::null(),
+        mlp_kind: 0,
+        moe_intermediate: 0,
+        shared_expert_intermediate: 0,
+        num_experts: 0,
+        experts_per_token: 0,
+        norm_topk_prob: 0,
+        attention_kind: CUDA_HF_ATTENTION_FULL,
     }
 }
 

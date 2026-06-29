@@ -4,12 +4,6 @@ use crate::common::json::parse::{
     find_top_level_json_value, parse_json_string_at, parse_json_string_value, skip_json_ws,
 };
 
-pub(crate) fn required_usize(config_json: &str, key: &'static str) -> Result<usize> {
-    optional_usize(config_json, key)?.ok_or_else(|| NervaError::InvalidArgument {
-        reason: format!("HF config is missing required field {key}"),
-    })
-}
-
 pub(crate) fn optional_usize(config_json: &str, key: &'static str) -> Result<Option<usize>> {
     let Some(value) = find_top_level_json_value(config_json, key)? else {
         return Ok(None);
@@ -77,7 +71,10 @@ pub(crate) fn optional_object_string(
     optional_string(object_json, key)
 }
 
-fn optional_object_json<'a>(config_json: &'a str, key: &'static str) -> Result<Option<&'a str>> {
+pub(crate) fn optional_object_json<'a>(
+    config_json: &'a str,
+    key: &'static str,
+) -> Result<Option<&'a str>> {
     let Some(value) = find_top_level_json_value(config_json, key)? else {
         return Ok(None);
     };

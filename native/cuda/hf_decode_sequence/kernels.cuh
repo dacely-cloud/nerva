@@ -5,6 +5,10 @@
 #include <cuda_runtime.h>
 #include <stdint.h>
 
+__global__ void hf_deinterleave_q_gate_projection_kernel(
+    const uint16_t *packed, uint16_t *q, uint16_t *q_gate,
+    uint32_t heads, uint32_t head_dim, uint32_t hidden);
+
 void launch_hf_layer_attention_chunk_kernel(
     cudaStream_t stream, dim3 grid, uint32_t dtype,
     bool use_shared_warp_gqa, bool use_grouped_gqa, uint32_t dense_threads,
@@ -33,7 +37,8 @@ __global__ void hf_decode_sequence_kernel(
     uint32_t *step_cursor, uint32_t max_steps, const uint32_t *prompt_tokens,
     uint32_t prompt_token_count, float rms_eps, float rope_theta, float *scratch,
     uint16_t *kv_keys, uint16_t *kv_values, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, const NervaCudaSyntheticTokenSlot *slots);
+    const uint32_t *kv_block_table, const NervaCudaSyntheticTokenSlot *slots,
+    float *linear_gdn_conv_state, float *linear_gdn_recurrent_state);
 __global__ void hf_decode_prepare_input_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t hidden,
     uint32_t *step_cursor, uint32_t max_steps, const uint32_t *prompt_tokens,
@@ -80,6 +85,10 @@ __global__ void hf_layer_attention_reduce_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const float *partial_values, const float *partial_m, const float *partial_l,
     uint16_t *projection_input);
+__global__ void hf_layer_query_gate_attention_encode_kernel(
+    uint32_t dtype, uint32_t hidden, uint32_t attention_hidden,
+    uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, float *scratch, uint16_t *projection_input);
 __global__ void hf_layer_mlp_norm_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
@@ -89,6 +98,11 @@ __global__ void hf_layer_ff_encode_kernel(
     uint32_t dtype, uint32_t hidden, uint32_t attention_hidden,
     uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
     uint32_t max_steps, float *scratch, uint16_t *projection_input);
+__global__ void hf_layer_sparse_moe_encode_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float *scratch, uint16_t *projection_input);
 __global__ void hf_layer_finish_kernel(
     uint16_t *arena, uint64_t output_offset, uint32_t dtype, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
@@ -143,6 +157,13 @@ __global__ void hf_prefill_ff_kernel(uint32_t dtype, uint32_t intermediate,
                                      uint32_t chunk_tokens,
                                      const float *gate_up,
                                      uint16_t *ff_out);
+__global__ void hf_prefill_query_gate_attention_kernel(
+    uint32_t dtype, uint32_t attention_hidden, uint32_t chunk_tokens,
+    const float *q_gate, uint16_t *attn_out);
+__global__ void hf_prefill_sparse_moe_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
+    const uint16_t *norm_in, float *gate_up_tmp, float *down_out);
 __global__ void hf_prefill_finish_kernel(uint32_t dtype, uint32_t hidden,
                                          uint32_t chunk_start,
                                          uint32_t chunk_tokens,

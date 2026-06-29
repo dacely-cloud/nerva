@@ -50,6 +50,7 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   }
   cudaFree(session->device_prefill_down);
   cudaFree(session->device_prefill_ff);
+  cudaFree(session->device_prefill_q_gate);
   cudaFree(session->device_prefill_gate_up);
   cudaFree(session->device_prefill_o);
   cudaFree(session->device_prefill_attn);
@@ -64,6 +65,8 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_decode_seq_len_kv);
   cudaFree(session->device_decode_seq_len_q);
   cudaFree(session->device_decode_q);
+  cudaFree(session->device_linear_gdn_recurrent_state);
+  cudaFree(session->device_linear_gdn_conv_state);
   cudaFree(session->device_projection_batch_output);
   cudaFree(session->device_projection_batch_input);
   cudaFree(session->device_projection_input);
@@ -118,10 +121,12 @@ uint64_t session_device_footprint(
          session->prefill_norm_bytes + session->prefill_qkv_bytes +
          session->prefill_qkv_encoded_bytes +
          session->prefill_attn_bytes + session->prefill_o_bytes +
-         session->prefill_gate_up_bytes + session->prefill_ff_bytes +
+         session->prefill_q_gate_bytes + session->prefill_gate_up_bytes +
+         session->prefill_ff_bytes +
          session->prefill_down_bytes + session->decode_attention_values_bytes +
          session->decode_attention_stats_bytes * 2 + session->decode_q_bytes +
-         session->decode_seq_len_bytes +
+         session->decode_seq_len_bytes + session->linear_gdn_conv_state_bytes +
+         session->linear_gdn_recurrent_state_bytes +
          session->packed_qkv_bytes + session->packed_gate_up_bytes + session->kv_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
@@ -136,7 +141,8 @@ uint64_t session_fixed_footprint_without_prefill_chunk(
          session->projection_batch_output_bytes + session->prefill_hidden_bytes * 2 +
          session->decode_attention_values_bytes +
          session->decode_attention_stats_bytes * 2 + session->decode_q_bytes +
-         session->decode_seq_len_bytes +
+         session->decode_seq_len_bytes + session->linear_gdn_conv_state_bytes +
+         session->linear_gdn_recurrent_state_bytes +
          session->packed_qkv_bytes + session->packed_gate_up_bytes + session->kv_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
@@ -152,6 +158,67 @@ uint64_t sat_add_u64(uint64_t lhs, uint64_t rhs) {
 uint64_t sat_mul_u64(uint64_t lhs, uint64_t rhs) {
   if (lhs != 0 && rhs > UINT64_MAX / lhs) return UINT64_MAX;
   return lhs * rhs;
+}
+
+uint64_t full_attention_scratch_elements(uint64_t hidden,
+                                         uint64_t attention_hidden,
+                                         uint64_t kv_hidden,
+                                         uint64_t intermediate) {
+  uint64_t total = 0;
+  total = sat_add_u64(total, sat_mul_u64(hidden, 5));
+  total = sat_add_u64(total, sat_mul_u64(attention_hidden, 3));
+  total = sat_add_u64(total, sat_mul_u64(kv_hidden, 2));
+  total = sat_add_u64(total, sat_mul_u64(intermediate, 3));
+  return total;
+}
+
+uint64_t layout_linear_gdn_value_dim(const SequenceLayerLayout &layout) {
+  return static_cast<uint64_t>(layout.linear_value_heads) *
+         layout.linear_value_head_dim;
+}
+
+uint64_t layout_linear_gdn_key_dim(const SequenceLayerLayout &layout) {
+  return static_cast<uint64_t>(layout.linear_key_heads) *
+         layout.linear_key_head_dim;
+}
+
+uint64_t layout_linear_gdn_conv_dim(const SequenceLayerLayout &layout) {
+  return sat_add_u64(sat_mul_u64(layout_linear_gdn_key_dim(layout), 2),
+                     layout_linear_gdn_value_dim(layout));
+}
+
+uint64_t layer_scratch_elements(const SequenceLayerLayout &layout,
+                                uint64_t hidden,
+                                uint64_t attention_hidden,
+                                uint64_t kv_hidden,
+                                uint64_t intermediate) {
+  if (layout.attention_kind != kAttentionKindLinearGdn) {
+    return full_attention_scratch_elements(hidden, attention_hidden, kv_hidden,
+                                           intermediate);
+  }
+  const uint64_t conv_dim = layout_linear_gdn_conv_dim(layout);
+  const uint64_t value_dim = layout_linear_gdn_value_dim(layout);
+  uint64_t total = 0;
+  total = sat_add_u64(total, sat_mul_u64(hidden, 5));
+  total = sat_add_u64(total, sat_mul_u64(conv_dim, 2));
+  total = sat_add_u64(total, sat_mul_u64(value_dim, 3));
+  total = sat_add_u64(
+      total, sat_mul_u64(static_cast<uint64_t>(layout.linear_value_heads), 2));
+  total = sat_add_u64(total, sat_mul_u64(intermediate, 3));
+  return total;
+}
+
+uint64_t max_layer_scratch_elements(
+    const std::vector<SequenceLayerLayout> &layouts, uint64_t hidden,
+    uint64_t attention_hidden, uint64_t kv_hidden, uint64_t intermediate) {
+  uint64_t max_scratch = full_attention_scratch_elements(
+      hidden, attention_hidden, kv_hidden, intermediate);
+  for (const SequenceLayerLayout &layout : layouts) {
+    max_scratch = std::max(
+        max_scratch, layer_scratch_elements(layout, hidden, attention_hidden,
+                                            kv_hidden, intermediate));
+  }
+  return max_scratch;
 }
 
 uint32_t ceil_div_u32(uint32_t value, uint32_t divisor);
@@ -317,6 +384,7 @@ uint64_t prefill_chunk_scratch_bytes(uint64_t chunk_tokens,
                                      uint64_t prefill_qkv_rows,
                                      uint64_t attention_hidden,
                                      uint64_t hidden,
+                                     uint64_t prefill_q_gate_rows,
                                      uint64_t prefill_gate_up_rows,
                                      uint64_t intermediate) {
   uint64_t total = 0;
@@ -330,6 +398,8 @@ uint64_t prefill_chunk_scratch_bytes(uint64_t chunk_tokens,
       sat_mul_u64(attention_hidden, chunk_tokens), sizeof(uint16_t)));
   total = sat_add_u64(total, sat_mul_u64(
       sat_mul_u64(hidden, chunk_tokens), sizeof(float)));
+  total = sat_add_u64(total, sat_mul_u64(
+      sat_mul_u64(prefill_q_gate_rows, chunk_tokens), sizeof(float)));
   total = sat_add_u64(total, sat_mul_u64(
       sat_mul_u64(prefill_gate_up_rows, chunk_tokens), sizeof(float)));
   total = sat_add_u64(total, sat_mul_u64(
@@ -345,6 +415,7 @@ uint32_t tune_prefill_chunk_tokens(uint64_t max_context_tokens,
                                    uint64_t prefill_qkv_rows,
                                    uint64_t attention_hidden,
                                    uint64_t hidden,
+                                   uint64_t prefill_q_gate_rows,
                                    uint64_t prefill_gate_up_rows,
                                    uint64_t intermediate,
                                    uint64_t free_device_bytes) {
@@ -366,6 +437,7 @@ uint32_t tune_prefill_chunk_tokens(uint64_t max_context_tokens,
         fixed_device_bytes,
         prefill_chunk_scratch_bytes(candidate, projection_input_elements,
                                     prefill_qkv_rows, attention_hidden, hidden,
+                                    prefill_q_gate_rows,
                                     prefill_gate_up_rows, intermediate));
     return footprint <= budget;
   };
@@ -389,6 +461,63 @@ uint32_t ceil_div_u64_to_u32(uint64_t value, uint32_t divisor) {
   if (divisor == 0) return 0;
   const uint64_t blocks = (value + divisor - 1u) / divisor;
   return blocks > 0xffffffffu ? 0xffffffffu : static_cast<uint32_t>(blocks);
+}
+
+cudaError_t deinterleave_descriptor_query_gate_weights(
+    uint16_t *device_arena, const std::vector<SequenceLayerLayout> &layouts,
+    uint32_t hidden, uint32_t heads, uint32_t head_dim, cudaStream_t stream,
+    uint64_t *setup_sync_calls) {
+  if (device_arena == nullptr || hidden == 0 || heads == 0 || head_dim == 0) {
+    return cudaErrorInvalidValue;
+  }
+  bool has_query_gate = false;
+  for (const SequenceLayerLayout &layout : layouts) {
+    if (layout.w_q_gate != kMissingOffset) {
+      has_query_gate = true;
+      break;
+    }
+  }
+  if (!has_query_gate) {
+    return cudaSuccess;
+  }
+
+  const uint64_t attention_hidden = static_cast<uint64_t>(heads) * head_dim;
+  const uint64_t q_elements = attention_hidden * static_cast<uint64_t>(hidden);
+  const uint64_t packed_bytes = q_elements * 2u * sizeof(uint16_t);
+  uint16_t *temporary = nullptr;
+  cudaError_t err =
+      cudaMalloc(reinterpret_cast<void **>(&temporary), packed_bytes);
+  if (err != cudaSuccess) {
+    return err;
+  }
+
+  const uint32_t blocks = ceil_div_u64_to_u32(q_elements, kDecodeThreads);
+  for (const SequenceLayerLayout &layout : layouts) {
+    if (layout.w_q_gate == kMissingOffset) {
+      continue;
+    }
+    err = cudaMemcpyAsync(temporary, device_arena + layout.w_q, packed_bytes,
+                          cudaMemcpyDeviceToDevice, stream);
+    if (err != cudaSuccess) {
+      break;
+    }
+    hf_deinterleave_q_gate_projection_kernel<<<blocks, kDecodeThreads, 0,
+                                               stream>>>(
+        temporary, device_arena + layout.w_q, device_arena + layout.w_q_gate,
+        heads, head_dim, hidden);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+      break;
+    }
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(stream);
+    if (err == cudaSuccess && setup_sync_calls != nullptr) {
+      *setup_sync_calls += 1;
+    }
+  }
+  cudaFree(temporary);
+  return err;
 }
 
 uint32_t next_pow2_at_least(uint32_t value, uint32_t minimum,
@@ -459,14 +588,76 @@ bool session_graph_matches(const NervaCudaHfDecodeSequenceSession *session,
          hf_decode_sampler_config_matches(session->cached_sampler, sampler);
 }
 
+bool session_has_sparse_moe_layers(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr ||
+      session->host_layouts.size() != session->layer_count) {
+    return false;
+  }
+  for (const SequenceLayerLayout &layout : session->host_layouts) {
+    if (layout.mlp_kind == kMlpKindSparseMoe) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool session_has_dense_mlp_layers(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr ||
+      session->host_layouts.size() != session->layer_count) {
+    return false;
+  }
+  for (const SequenceLayerLayout &layout : session->host_layouts) {
+    if (layout.mlp_kind == kMlpKindDense) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool session_has_query_gate_layers(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr ||
+      session->host_layouts.size() != session->layer_count) {
+    return false;
+  }
+  for (const SequenceLayerLayout &layout : session->host_layouts) {
+    if (layout.w_q_gate != kMissingOffset) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool session_has_linear_gdn_layers(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr ||
+      session->host_layouts.size() != session->layer_count) {
+    return false;
+  }
+  for (const SequenceLayerLayout &layout : session->host_layouts) {
+    if (layout.attention_kind == kAttentionKindLinearGdn) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool use_cublas_layer_path(const NervaCudaHfDecodeSequenceSession *session) {
   const uint32_t attention_hidden = session->heads * session->head_dim;
   return session->hidden >= 128 && attention_hidden == session->hidden &&
          session->host_layouts.size() == session->layer_count &&
+         !session_has_linear_gdn_layers(session) &&
          session->device_projection_input != nullptr &&
          session->device_qkv_packed != nullptr &&
-         session->device_gate_up_packed != nullptr &&
+         (!session_has_dense_mlp_layers(session) ||
+          session->device_gate_up_packed != nullptr) &&
          session->cublas != nullptr && session->cublas_lt != nullptr;
+}
+
+bool use_cublas_prefill_path(const NervaCudaHfDecodeSequenceSession *session) {
+  return use_cublas_layer_path(session);
 }
 
 bool projection_batch_session_ready(
@@ -474,6 +665,9 @@ bool projection_batch_session_ready(
   const uint32_t attention_hidden = session->heads * session->head_dim;
   return session->hidden >= 128 && attention_hidden == session->hidden &&
          session->host_layouts.size() == session->layer_count &&
+         !session_has_linear_gdn_layers(session) &&
+         !session_has_sparse_moe_layers(session) &&
+         !session_has_query_gate_layers(session) &&
          session->device_projection_input != nullptr &&
          session->device_qkv_packed != nullptr &&
          session->device_gate_up_packed != nullptr;
@@ -490,6 +684,15 @@ cudaError_t autotune_session_lt_gemv_plans(
   const PackedProjectionShape packed_shape = packed_projection_shape(
       session->hidden, attention_hidden, kv_hidden, session->intermediate);
   const SequenceLayerLayout layout = session->host_layouts[0];
+  const bool has_dense_mlp = session_has_dense_mlp_layers(session);
+  int32_t first_dense_layer = -1;
+  for (uint32_t layer_index = 0; layer_index < session->layer_count;
+       ++layer_index) {
+    if (session->host_layouts[layer_index].mlp_kind == kMlpKindDense) {
+      first_dense_layer = static_cast<int32_t>(layer_index);
+      break;
+    }
+  }
   LayerScratch scratch = layer_scratch_ptrs(
       session->device_scratch, session->hidden, attention_hidden, kv_hidden,
       session->intermediate);
@@ -505,13 +708,17 @@ cudaError_t autotune_session_lt_gemv_plans(
                               session->hidden, attention_hidden,
                               session->dtype);
   if (err == cudaSuccess)
-    err = create_lt_gemv_plan(
-        &session->gate_up_plan,
-        static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
-        session->dtype);
+    err = has_dense_mlp
+              ? create_lt_gemv_plan(
+                    &session->gate_up_plan,
+                    static_cast<uint32_t>(packed_shape.gate_up_rows),
+                    session->hidden, session->dtype)
+              : cudaSuccess;
   if (err == cudaSuccess)
-    err = create_lt_gemv_plan(&session->down_plan, session->hidden,
-                              session->intermediate, session->dtype);
+    err = has_dense_mlp
+              ? create_lt_gemv_plan(&session->down_plan, session->hidden,
+                                    session->intermediate, session->dtype)
+              : cudaSuccess;
   if (err == cudaSuccess)
     err = create_lt_gemv_plan(&session->lm_head_plan, session->vocab_size,
                               session->hidden, session->dtype);
@@ -529,18 +736,28 @@ cudaError_t autotune_session_lt_gemv_plans(
         session->device_arena + layout.w_o, session->device_projection_input,
         scratch.residual);
   if (err == cudaSuccess)
-    err = autotune_lt_gemv_plan(
-        session->cublas, session->cublas_lt, session->stream,
-        session->cublas_workspace, kCublasWorkspaceBytes,
-        &session->gate_up_plan,
-        session->device_gate_up_packed, session->device_projection_input,
-        scratch.gate);
+    err = has_dense_mlp
+              ? autotune_lt_gemv_plan(
+                    session->cublas, session->cublas_lt, session->stream,
+                    session->cublas_workspace, kCublasWorkspaceBytes,
+                    &session->gate_up_plan,
+                    session->device_gate_up_packed +
+                        packed_shape.gate_up_elements_per_layer *
+                            static_cast<uint32_t>(first_dense_layer),
+                    session->device_projection_input, scratch.gate)
+              : cudaSuccess;
   if (err == cudaSuccess)
-    err = autotune_lt_gemv_plan(
-        session->cublas, session->cublas_lt, session->stream,
-        session->cublas_workspace, kCublasWorkspaceBytes, &session->down_plan,
-        session->device_arena + layout.w_down, session->device_projection_input,
-        scratch.down);
+    err = has_dense_mlp
+              ? autotune_lt_gemv_plan(
+                    session->cublas, session->cublas_lt, session->stream,
+                    session->cublas_workspace, kCublasWorkspaceBytes,
+                    &session->down_plan,
+                    session->device_arena +
+                        session->host_layouts[static_cast<uint32_t>(
+                            first_dense_layer)]
+                            .w_down,
+                    session->device_projection_input, scratch.down)
+              : cudaSuccess;
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
     err = autotune_lt_gemv_plan(
@@ -576,11 +793,12 @@ cudaError_t ensure_session_cublas_resources(
   if (err == cudaSuccess && !use_cublas_layer_path(session)) {
     err = cudaErrorInvalidValue;
   }
+  const bool dense_mlp_ready =
+      !session_has_dense_mlp_layers(session) ||
+      (session->gate_up_plan.ready && session->down_plan.ready);
   if (err == cudaSuccess && (!session->qkv_plan.ready ||
                              !session->attention_output_plan.ready ||
-                             !session->gate_up_plan.ready ||
-                             !session->down_plan.ready ||
-                             !session->lm_head_plan.ready)) {
+                             !dense_mlp_ready || !session->lm_head_plan.ready)) {
     err = autotune_session_lt_gemv_plans(session);
   }
   return err;
@@ -632,4 +850,3 @@ cudaError_t project_encoded_rows(NervaCudaHfDecodeSequenceSession *session,
   return encoded_row_major_gemm_tokens_cached(session, matrix, input, rows, cols,
                                              tokens, dtype, beta, output);
 }
-

@@ -966,6 +966,29 @@ __device__ float synthetic_score_scale(uint32_t pages) {
   return 0.5f * scaled * scaled;
 }
 
+__device__ float token_position(uint32_t token_offset, uint32_t page_tokens) {
+  if (page_tokens <= 1u) {
+    return 0.0f;
+  }
+  return 2.0f * static_cast<float>(token_offset) /
+             static_cast<float>(page_tokens - 1u) -
+         1.0f;
+}
+
+__device__ uint32_t query_target_token_offset(uint32_t query,
+                                              uint32_t page_tokens) {
+  if (page_tokens <= 2u) {
+    return 0u;
+  }
+  const uint32_t interior_tokens = page_tokens - 2u;
+  return 1u + (hash32(query * 747796405u + 2891336453u) % interior_tokens);
+}
+
+__device__ float synthetic_token_score_scale(uint32_t page_tokens) {
+  (void)page_tokens;
+  return 1.0f;
+}
+
 __global__ void init_page_descriptors_kernel(float *descriptors, uint32_t pages,
                                              uint32_t dims) {
   const uint64_t total = static_cast<uint64_t>(pages) * dims;
@@ -988,7 +1011,8 @@ __global__ void init_page_descriptors_kernel(float *descriptors, uint32_t pages,
 
 __global__ void init_query_descriptors_kernel(float *queries, uint32_t query_count,
                                               uint32_t pages, uint32_t dims,
-                                              uint32_t candidates_per_query) {
+                                              uint32_t candidates_per_query,
+                                              uint32_t page_tokens) {
   const uint64_t total = static_cast<uint64_t>(query_count) * dims;
   uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
@@ -1000,10 +1024,20 @@ __global__ void init_query_descriptors_kernel(float *queries, uint32_t query_cou
     const float center_position = page_position(center, pages);
     const float scale = synthetic_score_scale(pages) *
                         sqrtf(static_cast<float>(dims));
+    const uint32_t target_token =
+        query_target_token_offset(query, page_tokens);
+    const float target_token_position =
+        token_position(target_token, page_tokens);
+    const float token_scale = synthetic_token_score_scale(page_tokens) *
+                              sqrtf(static_cast<float>(dims));
     if (dim == 0u) {
       queries[index] = 2.0f * center_position * scale;
     } else if (dim == 1u) {
       queries[index] = -scale;
+    } else if (dim == 2u) {
+      queries[index] = 2.0f * target_token_position * token_scale;
+    } else if (dim == 3u) {
+      queries[index] = -token_scale;
     } else {
       queries[index] = 0.0f;
     }
@@ -1021,11 +1055,17 @@ __global__ void init_kv_cache_kernel(float *keys, float *values, uint32_t pages,
     const uint32_t dim = static_cast<uint32_t>(index % dims);
     const uint64_t token = index / dims;
     const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+    const uint32_t token_offset = static_cast<uint32_t>(token % page_tokens);
     const float position = page_position(page, pages);
+    const float position_in_page = token_position(token_offset, page_tokens);
     if (dim == 0u) {
       keys[index] = position;
     } else if (dim == 1u) {
       keys[index] = position * position;
+    } else if (dim == 2u) {
+      keys[index] = position_in_page;
+    } else if (dim == 3u) {
+      keys[index] = position_in_page * position_in_page;
     } else {
       keys[index] = 0.0f;
     }
@@ -1057,6 +1097,58 @@ __device__ float kv_dot(const float *keys, const float *queries, uint32_t page,
     sum += keys[key_base + dim] * queries[query_base + dim];
   }
   return sum * rsqrtf(static_cast<float>(dims));
+}
+
+__device__ float projected_kv_dot(const float *keys, const float *queries,
+                                  uint32_t page, uint32_t token_offset,
+                                  uint32_t query, uint32_t dims,
+                                  uint32_t page_tokens,
+                                  uint32_t projection_dims) {
+  float sum = 0.0f;
+  const uint32_t capped_projection_dims =
+      dims < projection_dims ? dims : projection_dims;
+  const uint64_t key_base =
+      (static_cast<uint64_t>(page) * page_tokens + token_offset) * dims;
+  const uint64_t query_base = static_cast<uint64_t>(query) * dims;
+  for (uint32_t dim = 0; dim < capped_projection_dims; ++dim) {
+    sum += keys[key_base + dim] * queries[query_base + dim];
+  }
+  return sum * rsqrtf(static_cast<float>(dims));
+}
+
+__device__ uint32_t norm_stress_page(uint32_t query, uint32_t pages,
+                                     uint32_t page_tokens,
+                                     uint64_t local_window_tokens) {
+  if (pages == 0u || page_tokens == 0u) {
+    return 0u;
+  }
+  const uint64_t total_tokens = static_cast<uint64_t>(pages) * page_tokens;
+  const uint64_t local_tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t local_start = total_tokens - local_tokens;
+  const uint32_t far_pages =
+      static_cast<uint32_t>(local_start / page_tokens);
+  if (far_pages == 0u) {
+    return 0u;
+  }
+  const uint32_t center = query_center_page(query, pages, 1u) % far_pages;
+  const uint32_t offset = (far_pages / 3u) + 1u;
+  return (center + offset) % far_pages;
+}
+
+__device__ float norm_stress_score(const float *keys, const float *queries,
+                                   uint32_t page, uint32_t token_offset,
+                                   uint32_t query, uint32_t dims,
+                                   uint32_t page_tokens,
+                                   uint32_t stress_page) {
+  const float base =
+      kv_dot(keys, queries, page, token_offset, query, dims, page_tokens);
+  if (page != stress_page) {
+    return base;
+  }
+  const float token_tiebreak =
+      static_cast<float>(page_tokens - 1u - token_offset) * 0.0001f;
+  return base + 1000000.0f + token_tiebreak;
 }
 
 __device__ void reduce_attention_block(float *shared_scores,
@@ -1371,6 +1463,279 @@ __global__ void far_oracle_topk_diagnostics_kernel(
             : (static_cast<uint64_t>(captured_tokens) * 1000000ull) /
                   selected_count_shared;
     scatter_pages[query] = distinct_pages;
+  }
+}
+
+__global__ void fine_token_projected_topk_diagnostics_kernel(
+    const float *keys, const float *queries, uint32_t pages,
+    uint32_t page_tokens, uint32_t dims, uint32_t query_count,
+    uint64_t local_window_tokens, uint32_t topk_tokens,
+    uint32_t candidate_tokens, uint32_t projection_dims,
+    uint64_t *token_recall_ppm) {
+  const uint32_t query = blockIdx.x;
+  if (query >= query_count || dims > kMaxAttentionDims) {
+    return;
+  }
+  const uint64_t total_tokens = static_cast<uint64_t>(pages) * page_tokens;
+  const uint64_t local_tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t far_tokens = total_tokens - local_tokens;
+  if (far_tokens == 0 || topk_tokens == 0 || candidate_tokens == 0) {
+    if (threadIdx.x == 0) {
+      token_recall_ppm[query] = 0;
+    }
+    return;
+  }
+
+  __shared__ float scores[kThreads];
+  __shared__ uint64_t tokens_shared[kThreads];
+  __shared__ uint64_t oracle_tokens[kMaxOracleTopK];
+  __shared__ uint64_t projected_tokens[kMaxOracleTopK];
+  __shared__ uint32_t oracle_count_shared;
+  __shared__ uint32_t projected_count_shared;
+  if (threadIdx.x == 0) {
+    oracle_count_shared = 0;
+    projected_count_shared = 0;
+  }
+  __syncthreads();
+
+  const uint32_t capped_topk =
+      topk_tokens < kMaxOracleTopK ? topk_tokens : kMaxOracleTopK;
+  for (uint32_t rank = 0; rank < capped_topk; ++rank) {
+    float best_score = -INFINITY;
+    uint64_t best_token = UINT64_MAX;
+    for (uint64_t token = threadIdx.x; token < far_tokens;
+         token += blockDim.x) {
+      bool selected = false;
+      for (uint32_t previous = 0; previous < rank; ++previous) {
+        selected = selected || oracle_tokens[previous] == token;
+      }
+      if (selected) {
+        continue;
+      }
+      const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+      const uint32_t token_offset =
+          static_cast<uint32_t>(token % page_tokens);
+      const float score =
+          kv_dot(keys, queries, page, token_offset, query, dims, page_tokens);
+      if (score > best_score ||
+          (score == best_score && token < best_token)) {
+        best_score = score;
+        best_token = token;
+      }
+    }
+    scores[threadIdx.x] = best_score;
+    tokens_shared[threadIdx.x] = best_token;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+      if (threadIdx.x < stride) {
+        const float other_score = scores[threadIdx.x + stride];
+        const uint64_t other_token = tokens_shared[threadIdx.x + stride];
+        if (other_score > scores[threadIdx.x] ||
+            (other_score == scores[threadIdx.x] &&
+             other_token < tokens_shared[threadIdx.x])) {
+          scores[threadIdx.x] = other_score;
+          tokens_shared[threadIdx.x] = other_token;
+        }
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+      oracle_tokens[rank] = tokens_shared[0];
+      oracle_count_shared = rank + 1;
+    }
+    __syncthreads();
+  }
+
+  const uint32_t capped_candidates =
+      candidate_tokens < kMaxOracleTopK ? candidate_tokens : kMaxOracleTopK;
+  for (uint32_t rank = 0; rank < capped_candidates; ++rank) {
+    float best_score = -INFINITY;
+    uint64_t best_token = UINT64_MAX;
+    for (uint64_t token = threadIdx.x; token < far_tokens;
+         token += blockDim.x) {
+      bool selected = false;
+      for (uint32_t previous = 0; previous < rank; ++previous) {
+        selected = selected || projected_tokens[previous] == token;
+      }
+      if (selected) {
+        continue;
+      }
+      const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+      const uint32_t token_offset =
+          static_cast<uint32_t>(token % page_tokens);
+      const float score =
+          projected_kv_dot(keys, queries, page, token_offset, query, dims,
+                           page_tokens, projection_dims);
+      if (score > best_score ||
+          (score == best_score && token < best_token)) {
+        best_score = score;
+        best_token = token;
+      }
+    }
+    scores[threadIdx.x] = best_score;
+    tokens_shared[threadIdx.x] = best_token;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+      if (threadIdx.x < stride) {
+        const float other_score = scores[threadIdx.x + stride];
+        const uint64_t other_token = tokens_shared[threadIdx.x + stride];
+        if (other_score > scores[threadIdx.x] ||
+            (other_score == scores[threadIdx.x] &&
+             other_token < tokens_shared[threadIdx.x])) {
+          scores[threadIdx.x] = other_score;
+          tokens_shared[threadIdx.x] = other_token;
+        }
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+      projected_tokens[rank] = tokens_shared[0];
+      projected_count_shared = rank + 1;
+    }
+    __syncthreads();
+  }
+
+  if (threadIdx.x == 0) {
+    uint32_t captured_tokens = 0;
+    for (uint32_t rank = 0; rank < oracle_count_shared; ++rank) {
+      bool captured = false;
+      for (uint32_t candidate = 0; candidate < projected_count_shared;
+           ++candidate) {
+        captured = captured || projected_tokens[candidate] == oracle_tokens[rank];
+      }
+      if (captured) {
+        ++captured_tokens;
+      }
+    }
+    token_recall_ppm[query] =
+        oracle_count_shared == 0
+            ? 0
+            : (static_cast<uint64_t>(captured_tokens) * 1000000ull) /
+                  oracle_count_shared;
+  }
+}
+
+__global__ void norm_stress_topk_diagnostics_kernel(
+    const float *keys, const float *queries, const uint32_t *candidate_pages,
+    uint32_t pages, uint32_t page_tokens, uint32_t dims,
+    uint32_t query_count, uint32_t candidates_per_query,
+    uint64_t local_window_tokens, uint32_t topk_tokens,
+    uint64_t *no_augmentation_recall_ppm,
+    uint64_t *synthetic_norm_augmented_recall_ppm) {
+  const uint32_t query = blockIdx.x;
+  if (query >= query_count || dims > kMaxAttentionDims) {
+    return;
+  }
+  const uint64_t total_tokens = static_cast<uint64_t>(pages) * page_tokens;
+  const uint64_t local_tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t far_tokens = total_tokens - local_tokens;
+  if (far_tokens == 0 || topk_tokens == 0) {
+    if (threadIdx.x == 0) {
+      no_augmentation_recall_ppm[query] = 0;
+      synthetic_norm_augmented_recall_ppm[query] = 0;
+    }
+    return;
+  }
+
+  __shared__ float scores[kThreads];
+  __shared__ uint64_t tokens_shared[kThreads];
+  __shared__ uint64_t selected_tokens[kMaxOracleTopK];
+  __shared__ uint32_t selected_pages[kMaxOracleTopK];
+  __shared__ uint32_t selected_count_shared;
+  if (threadIdx.x == 0) {
+    selected_count_shared = 0;
+  }
+  __syncthreads();
+
+  const uint32_t stress_page =
+      norm_stress_page(query, pages, page_tokens, local_window_tokens);
+  const uint32_t capped_topk =
+      topk_tokens < kMaxOracleTopK ? topk_tokens : kMaxOracleTopK;
+  for (uint32_t rank = 0; rank < capped_topk; ++rank) {
+    float best_score = -INFINITY;
+    uint64_t best_token = UINT64_MAX;
+    for (uint64_t token = threadIdx.x; token < far_tokens;
+         token += blockDim.x) {
+      bool selected = false;
+      for (uint32_t previous = 0; previous < rank; ++previous) {
+        selected = selected || selected_tokens[previous] == token;
+      }
+      if (selected) {
+        continue;
+      }
+      const uint32_t page = static_cast<uint32_t>(token / page_tokens);
+      const uint32_t token_offset =
+          static_cast<uint32_t>(token % page_tokens);
+      const float score = norm_stress_score(keys, queries, page, token_offset,
+                                            query, dims, page_tokens,
+                                            stress_page);
+      if (score > best_score ||
+          (score == best_score && token < best_token)) {
+        best_score = score;
+        best_token = token;
+      }
+    }
+    scores[threadIdx.x] = best_score;
+    tokens_shared[threadIdx.x] = best_token;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+      if (threadIdx.x < stride) {
+        const float other_score = scores[threadIdx.x + stride];
+        const uint64_t other_token = tokens_shared[threadIdx.x + stride];
+        if (other_score > scores[threadIdx.x] ||
+            (other_score == scores[threadIdx.x] &&
+             other_token < tokens_shared[threadIdx.x])) {
+          scores[threadIdx.x] = other_score;
+          tokens_shared[threadIdx.x] = other_token;
+        }
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+      selected_tokens[rank] = tokens_shared[0];
+      selected_pages[rank] =
+          static_cast<uint32_t>(tokens_shared[0] / page_tokens);
+      selected_count_shared = rank + 1;
+    }
+    __syncthreads();
+  }
+
+  if (threadIdx.x == 0) {
+    uint32_t no_augmented_captured = 0;
+    uint32_t norm_augmented_captured = 0;
+    const uint64_t candidate_base =
+        static_cast<uint64_t>(query) * candidates_per_query;
+    for (uint32_t rank = 0; rank < selected_count_shared; ++rank) {
+      bool no_augmented_page = false;
+      bool norm_augmented_page = selected_pages[rank] == stress_page;
+      for (uint32_t candidate = 0; candidate < candidates_per_query; ++candidate) {
+        const uint32_t page =
+            candidate_pages[candidate_base + candidate] % pages;
+        no_augmented_page = no_augmented_page || page == selected_pages[rank];
+        if (candidate + 1u < candidates_per_query) {
+          norm_augmented_page =
+              norm_augmented_page || page == selected_pages[rank];
+        }
+      }
+      if (no_augmented_page) {
+        ++no_augmented_captured;
+      }
+      if (norm_augmented_page) {
+        ++norm_augmented_captured;
+      }
+    }
+    no_augmentation_recall_ppm[query] =
+        selected_count_shared == 0
+            ? 0
+            : (static_cast<uint64_t>(no_augmented_captured) * 1000000ull) /
+                  selected_count_shared;
+    synthetic_norm_augmented_recall_ppm[query] =
+        selected_count_shared == 0
+            ? 0
+            : (static_cast<uint64_t>(norm_augmented_captured) * 1000000ull) /
+                  selected_count_shared;
   }
 }
 
@@ -2284,6 +2649,163 @@ cudaError_t measure_far_oracle_topk_diagnostics(
   return cudaSuccess;
 }
 
+cudaError_t measure_fine_token_projected_topk_diagnostics(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *keys, const float *queries, uint64_t local_window_tokens,
+    uint64_t *token_recall_ppm, uint64_t *host_token_recall_ppm,
+    uint32_t projection_dims, cudaStream_t stream,
+    uint64_t *out_topk_tokens, uint64_t *out_candidate_tokens,
+    uint64_t *out_token_recall_min_ppm,
+    uint64_t *out_token_recall_avg_ppm,
+    NervaCudaExperimentalRtCandidateBenchResult *out) {
+  const uint64_t total_tokens =
+      static_cast<uint64_t>(request->pages) * request->page_tokens;
+  const uint64_t local_tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t far_tokens = total_tokens - local_tokens;
+  uint64_t topk_tokens = request->candidates_per_query;
+  if (topk_tokens > kMaxOracleTopK) {
+    topk_tokens = kMaxOracleTopK;
+  }
+  if (topk_tokens > far_tokens) {
+    topk_tokens = far_tokens;
+  }
+  uint64_t candidate_tokens = request->candidates_per_query;
+  if (candidate_tokens > kMaxOracleTopK) {
+    candidate_tokens = kMaxOracleTopK;
+  }
+  if (candidate_tokens > far_tokens) {
+    candidate_tokens = far_tokens;
+  }
+  *out_topk_tokens = topk_tokens;
+  *out_candidate_tokens = candidate_tokens;
+  if (topk_tokens == 0 || candidate_tokens == 0) {
+    *out_token_recall_min_ppm = 0;
+    *out_token_recall_avg_ppm = 0;
+    return cudaSuccess;
+  }
+
+  fine_token_projected_topk_diagnostics_kernel<<<request->query_count,
+                                                  kThreads, 0, stream>>>(
+      keys, queries, request->pages, request->page_tokens, request->dims,
+      request->query_count, local_window_tokens,
+      static_cast<uint32_t>(topk_tokens),
+      static_cast<uint32_t>(candidate_tokens), projection_dims,
+      token_recall_ppm);
+  cudaError_t err = cudaGetLastError();
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(host_token_recall_ppm, token_recall_ppm,
+                          request->query_count * sizeof(uint64_t),
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(stream);
+  }
+  if (err != cudaSuccess) {
+    return err;
+  }
+
+  uint64_t min_recall_ppm = UINT64_MAX;
+  uint64_t sum_recall_ppm = 0;
+  for (uint32_t query = 0; query < request->query_count; ++query) {
+    const uint64_t recall = host_token_recall_ppm[query];
+    if (recall < min_recall_ppm) {
+      min_recall_ppm = recall;
+    }
+    sum_recall_ppm += recall;
+  }
+  *out_token_recall_min_ppm = min_recall_ppm == UINT64_MAX ? 0 : min_recall_ppm;
+  *out_token_recall_avg_ppm =
+      request->query_count == 0 ? 0 : sum_recall_ppm / request->query_count;
+  out->kernel_launches += 1;
+  out->sync_calls += 1;
+  return cudaSuccess;
+}
+
+cudaError_t measure_norm_stress_topk_diagnostics(
+    const NervaCudaExperimentalRtCandidateBenchRequest *request,
+    const float *keys, const float *queries, const uint32_t *candidate_pages,
+    uint64_t local_window_tokens, uint64_t *no_augmentation_recall_ppm,
+    uint64_t *host_no_augmentation_recall_ppm,
+    uint64_t *synthetic_norm_augmented_recall_ppm,
+    uint64_t *host_synthetic_norm_augmented_recall_ppm, cudaStream_t stream,
+    NervaCudaExperimentalRtCandidateBenchResult *out) {
+  const uint64_t total_tokens =
+      static_cast<uint64_t>(request->pages) * request->page_tokens;
+  const uint64_t local_tokens =
+      total_tokens < local_window_tokens ? total_tokens : local_window_tokens;
+  const uint64_t far_tokens = total_tokens - local_tokens;
+  uint64_t topk_tokens = request->candidates_per_query;
+  if (topk_tokens > kMaxOracleTopK) {
+    topk_tokens = kMaxOracleTopK;
+  }
+  if (topk_tokens > far_tokens) {
+    topk_tokens = far_tokens;
+  }
+  out->norm_stress_topk_tokens = topk_tokens;
+  if (topk_tokens == 0) {
+    out->norm_stress_no_augmentation_token_recall_min_ppm = 0;
+    out->norm_stress_no_augmentation_token_recall_avg_ppm = 0;
+    out->norm_stress_synthetic_norm_augmented_token_recall_min_ppm = 0;
+    out->norm_stress_synthetic_norm_augmented_token_recall_avg_ppm = 0;
+    return cudaSuccess;
+  }
+
+  norm_stress_topk_diagnostics_kernel<<<request->query_count, kThreads, 0,
+                                        stream>>>(
+      keys, queries, candidate_pages, request->pages, request->page_tokens,
+      request->dims, request->query_count, request->candidates_per_query,
+      local_window_tokens, static_cast<uint32_t>(topk_tokens),
+      no_augmentation_recall_ppm, synthetic_norm_augmented_recall_ppm);
+  cudaError_t err = cudaGetLastError();
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(host_no_augmentation_recall_ppm,
+                          no_augmentation_recall_ppm,
+                          request->query_count * sizeof(uint64_t),
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaMemcpyAsync(host_synthetic_norm_augmented_recall_ppm,
+                          synthetic_norm_augmented_recall_ppm,
+                          request->query_count * sizeof(uint64_t),
+                          cudaMemcpyDeviceToHost, stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(stream);
+  }
+  if (err != cudaSuccess) {
+    return err;
+  }
+
+  uint64_t no_aug_min = UINT64_MAX;
+  uint64_t no_aug_sum = 0;
+  uint64_t norm_aug_min = UINT64_MAX;
+  uint64_t norm_aug_sum = 0;
+  for (uint32_t query = 0; query < request->query_count; ++query) {
+    const uint64_t no_aug = host_no_augmentation_recall_ppm[query];
+    const uint64_t norm_aug = host_synthetic_norm_augmented_recall_ppm[query];
+    if (no_aug < no_aug_min) {
+      no_aug_min = no_aug;
+    }
+    if (norm_aug < norm_aug_min) {
+      norm_aug_min = norm_aug;
+    }
+    no_aug_sum += no_aug;
+    norm_aug_sum += norm_aug;
+  }
+  out->norm_stress_no_augmentation_token_recall_min_ppm =
+      no_aug_min == UINT64_MAX ? 0 : no_aug_min;
+  out->norm_stress_no_augmentation_token_recall_avg_ppm =
+      request->query_count == 0 ? 0 : no_aug_sum / request->query_count;
+  out->norm_stress_synthetic_norm_augmented_token_recall_min_ppm =
+      norm_aug_min == UINT64_MAX ? 0 : norm_aug_min;
+  out->norm_stress_synthetic_norm_augmented_token_recall_avg_ppm =
+      request->query_count == 0 ? 0 : norm_aug_sum / request->query_count;
+  out->kernel_launches += 1;
+  out->sync_calls += 1;
+  return cudaSuccess;
+}
+
 void clear_result(const NervaCudaExperimentalRtCandidateBenchRequest *request,
                   NervaCudaExperimentalRtCandidateBenchResult *out) {
   memset(out, 0, sizeof(*out));
@@ -2567,6 +3089,7 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   float *dense_attention_out = nullptr;
   float *kv_touch_out = nullptr;
   uint64_t *attention_recall_ppm = nullptr;
+  uint64_t *norm_augmented_recall_ppm = nullptr;
   uint32_t *far_oracle_scatter_pages = nullptr;
   uint32_t *candidate_pages = nullptr;
   uint32_t *page_level_candidate_pages = nullptr;
@@ -2574,6 +3097,7 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   uint32_t *candidate_out = nullptr;
   uint32_t *host_selected = nullptr;
   uint64_t *host_attention_recall_ppm = nullptr;
+  uint64_t *host_norm_augmented_recall_ppm = nullptr;
   uint32_t *host_far_oracle_scatter_pages = nullptr;
   cudaStream_t stream = nullptr;
   cudaEvent_t start = nullptr;
@@ -2582,6 +3106,9 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   auto cleanup = [&]() {
     if (host_attention_recall_ppm != nullptr) {
       delete[] host_attention_recall_ppm;
+    }
+    if (host_norm_augmented_recall_ppm != nullptr) {
+      delete[] host_norm_augmented_recall_ppm;
     }
     if (host_far_oracle_scatter_pages != nullptr) {
       delete[] host_far_oracle_scatter_pages;
@@ -2608,6 +3135,10 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
     }
     if (attention_recall_ppm != nullptr) {
       cudaFree(attention_recall_ppm);
+      out->device_frees += 1;
+    }
+    if (norm_augmented_recall_ppm != nullptr) {
+      cudaFree(norm_augmented_recall_ppm);
       out->device_frees += 1;
     }
     if (far_oracle_scatter_pages != nullptr) {
@@ -2771,6 +3302,14 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
     }
   }
   if (err == cudaSuccess) {
+    err = cudaMalloc(reinterpret_cast<void **>(&norm_augmented_recall_ppm),
+                     request->query_count * sizeof(uint64_t));
+    if (err == cudaSuccess) {
+      out->device_allocations += 1;
+      out->device_arena_bytes += request->query_count * sizeof(uint64_t);
+    }
+  }
+  if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&far_oracle_scatter_pages),
                      request->query_count * sizeof(uint32_t));
     if (err == cudaSuccess) {
@@ -2795,6 +3334,11 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   }
   host_attention_recall_ppm = new (std::nothrow) uint64_t[request->query_count];
   if (host_attention_recall_ppm == nullptr) {
+    return fail_with_cleanup(cudaErrorMemoryAllocation);
+  }
+  host_norm_augmented_recall_ppm =
+      new (std::nothrow) uint64_t[request->query_count];
+  if (host_norm_augmented_recall_ppm == nullptr) {
     return fail_with_cleanup(cudaErrorMemoryAllocation);
   }
   host_far_oracle_scatter_pages =
@@ -2828,7 +3372,8 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
                                   kThreads, 0, stream>>>(queries, request->query_count,
                                                          request->pages,
                                                          request->dims,
-                                                         request->candidates_per_query);
+                                                         request->candidates_per_query,
+                                                         request->page_tokens);
   const uint64_t kv_elements = static_cast<uint64_t>(request->pages) *
                                request->page_tokens * request->dims;
   const uint32_t kv_blocks = static_cast<uint32_t>(
@@ -2964,6 +3509,36 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
       &out->far_oracle_topk_token_recall_min_ppm,
       &out->far_oracle_topk_token_recall_avg_ppm, far_oracle_scatter_pages,
       host_far_oracle_scatter_pages, stream, out);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+
+  err = measure_fine_token_projected_topk_diagnostics(
+      request, keys, queries, out->local_window_tokens, attention_recall_ppm,
+      host_attention_recall_ppm, 3u, stream,
+      &out->fine_token_projected_topk_tokens,
+      &out->fine_token_projected_candidate_tokens,
+      &out->fine_token_projected_token_recall_min_ppm,
+      &out->fine_token_projected_token_recall_avg_ppm, out);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+
+  err = measure_fine_token_projected_topk_diagnostics(
+      request, keys, queries, out->local_window_tokens, attention_recall_ppm,
+      host_attention_recall_ppm, 4u, stream,
+      &out->fine_token_learned_projected_topk_tokens,
+      &out->fine_token_learned_projected_candidate_tokens,
+      &out->fine_token_learned_projected_token_recall_min_ppm,
+      &out->fine_token_learned_projected_token_recall_avg_ppm, out);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+
+  err = measure_norm_stress_topk_diagnostics(
+      request, keys, queries, candidate_pages, out->local_window_tokens,
+      attention_recall_ppm, host_attention_recall_ppm,
+      norm_augmented_recall_ppm, host_norm_augmented_recall_ppm, stream, out);
   if (err != cudaSuccess) {
     return fail_with_cleanup(err);
   }

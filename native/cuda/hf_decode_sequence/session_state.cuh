@@ -42,6 +42,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint64_t prefill_qkv_encoded_bytes = 0;
   uint64_t prefill_attn_bytes = 0;
   uint64_t prefill_o_bytes = 0;
+  uint64_t prefill_q_gate_bytes = 0;
   uint64_t prefill_gate_up_bytes = 0;
   uint64_t prefill_ff_bytes = 0;
   uint64_t prefill_down_bytes = 0;
@@ -50,6 +51,8 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t decode_attention_max_chunks = 0;
   uint64_t decode_q_bytes = 0;
   uint64_t decode_seq_len_bytes = 0;
+  uint64_t linear_gdn_conv_state_bytes = 0;
+  uint64_t linear_gdn_recurrent_state_bytes = 0;
   uint64_t packed_qkv_bytes = 0;
   uint64_t packed_gate_up_bytes = 0;
   uint64_t kv_bytes = 0;
@@ -83,6 +86,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint16_t *device_prefill_qkv_encoded = nullptr;
   uint16_t *device_prefill_attn = nullptr;
   float *device_prefill_o = nullptr;
+  float *device_prefill_q_gate = nullptr;
   float *device_prefill_gate_up = nullptr;
   uint16_t *device_prefill_ff = nullptr;
   float *device_prefill_down = nullptr;
@@ -92,6 +96,8 @@ struct NervaCudaHfDecodeSequenceSession {
   uint16_t *device_decode_q = nullptr;
   int32_t *device_decode_seq_len_q = nullptr;
   int32_t *device_decode_seq_len_kv = nullptr;
+  float *device_linear_gdn_conv_state = nullptr;
+  float *device_linear_gdn_recurrent_state = nullptr;
   uint16_t *device_qkv_packed = nullptr;
   uint16_t *device_gate_up_packed = nullptr;
   uint16_t *device_kv_keys = nullptr;

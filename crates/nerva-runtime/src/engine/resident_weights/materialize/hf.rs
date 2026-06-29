@@ -66,6 +66,7 @@ impl Runtime {
             entries.push(ResidentWeightBlockRef {
                 name: entry.name.clone(),
                 block_id,
+                role: entry.role,
                 bytes: entry.bytes,
                 dtype: entry.dtype,
                 tier: entry.tier,

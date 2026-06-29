@@ -179,6 +179,9 @@ cudaError_t execute_cudnn_prefill_sdpa(
 
 bool can_use_cudnn_decode_sdpa(const NervaCudaHfDecodeSequenceSession *session,
                                uint32_t attention_chunks) {
+  if (session != nullptr && session->experimental_rt_sparse_attention_active != 0) {
+    return false;
+  }
   const bool usable =
       session != nullptr && attention_chunks != 0 &&
       cudnn_decode_runtime_enabled() &&

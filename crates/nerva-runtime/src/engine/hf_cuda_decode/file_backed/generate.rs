@@ -15,6 +15,7 @@ pub type HfCudaSamplerConfig = CudaHfDecodeSamplerConfig;
 pub type HfCudaRtDecodeConfig = CudaHfDecodeSequenceExperimentalRtConfig;
 
 pub struct HfCudaDeviceGenerateOutput {
+    pub backend: &'static str,
     pub max_new_tokens: usize,
     pub stream: HfCudaDeviceSessionStreamOutput,
 }
@@ -173,6 +174,7 @@ where
             progress,
         )?;
     Ok(HfCudaDeviceGenerateOutput {
+        backend: "cuda",
         max_new_tokens,
         stream,
     })

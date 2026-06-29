@@ -144,15 +144,31 @@ pub(crate) fn create_summary_from_result(
         h2d_bytes: out.h2d_bytes,
         sync_calls: out.sync_calls,
         hot_path_allocations: out.hot_path_allocations,
-        error: (return_code != 0 || out.status != 0).then(|| {
-            format!(
-                "CUDA HF decode sequence session failed: cuda_error={} failure_stage={} ({})",
-                out.cuda_error,
-                out.failure_stage,
-                create_stage_label(out.failure_stage),
-            )
-        }),
+        error: (return_code != 0 || out.status != 0)
+            .then(|| create_error(out, device_free_memory_bytes)),
     }
+}
+
+fn create_error(
+    out: &NervaCudaHfDecodeSequenceSessionCreateResult,
+    device_free_memory_bytes: Option<usize>,
+) -> String {
+    let mut error = format!(
+        "CUDA HF decode sequence session failed: cuda_error={} failure_stage={} ({})",
+        out.cuda_error,
+        out.failure_stage,
+        create_stage_label(out.failure_stage),
+    );
+    if out.device_arena_bytes != 0 {
+        error.push_str(&format!(
+            " requested_device_bytes={}",
+            out.device_arena_bytes
+        ));
+    }
+    if let Some(free) = device_free_memory_bytes {
+        error.push_str(&format!(" free_device_bytes={free}"));
+    }
+    error
 }
 
 pub(crate) fn create_stage_label(stage: i32) -> &'static str {

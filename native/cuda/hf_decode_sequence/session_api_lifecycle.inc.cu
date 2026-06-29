@@ -25,10 +25,24 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     out->failure_stage = kCreateStageInvalidRequest;
     return -1;
   }
+  bool has_dense_mlp_layers = false;
+  bool has_query_gate_layers = false;
   for (uint32_t index = 0; index < request->layer_count; ++index) {
     if (!valid_layer(request->layers[index], !descriptor_mode)) {
       out->failure_stage = kCreateStageInvalidRequest;
       return -1;
+    }
+    const auto &layer = request->layers[index];
+    if (layer.w_q_gate != nullptr) {
+      has_query_gate_layers = true;
+    }
+    if (layer.mlp_kind == kMlpKindSparseMoe) {
+      if (layer.moe_intermediate > request->intermediate) {
+        out->failure_stage = kCreateStageInvalidRequest;
+        return -1;
+      }
+    } else if (layer.mlp_kind == kMlpKindDense) {
+      has_dense_mlp_layers = true;
     }
   }
   if (descriptor_mode &&
@@ -88,6 +102,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     pack_layer(layouts[index], elements, request->layers[index], hidden,
                attention_hidden, kv_hidden, request->head_dim, intermediate);
   }
+  uint64_t linear_gdn_conv_state_elements = 0;
+  uint64_t linear_gdn_recurrent_state_elements = 0;
+  assign_linear_gdn_state_offsets(layouts, &linear_gdn_conv_state_elements,
+                                  &linear_gdn_recurrent_state_elements);
   session->arena_layout.final_norm = push(elements, hidden);
   session->arena_layout.lm_head = push(elements, vocab_size * hidden);
   session->arena_bytes = elements * sizeof(uint16_t);
@@ -104,8 +122,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     return -1;
   }
 
-  const uint64_t block_scratch =
-      hidden * 5 + attention_hidden * 2 + kv_hidden * 2 + intermediate * 3;
+  const uint64_t block_scratch = max_layer_scratch_elements(
+      layouts, hidden, attention_hidden, kv_hidden, intermediate);
   const uint64_t final_scratch = hidden * 2 + vocab_size;
   const uint64_t scratch_elements =
       block_scratch > final_scratch ? block_scratch : final_scratch;
@@ -117,6 +135,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   const uint64_t prefill_gate_up_rows = intermediate * 2;
   const bool pack_cublas =
       should_pack_cublas_weights(request->hidden, attention_hidden);
+  const uint64_t prefill_q_gate_rows =
+      (has_query_gate_layers && pack_cublas) ? attention_hidden : 0;
   const PackedProjectionShape packed_shape = packed_projection_shape(
       hidden, attention_hidden, kv_hidden, intermediate);
   const uint64_t projection_batch_output_rows =
@@ -175,13 +195,19 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->decode_q_bytes =
       static_cast<uint64_t>(attention_hidden) * sizeof(uint16_t);
   session->decode_seq_len_bytes = sizeof(int32_t) * 2u;
+  session->linear_gdn_conv_state_bytes =
+      linear_gdn_conv_state_elements * sizeof(float);
+  session->linear_gdn_recurrent_state_bytes =
+      linear_gdn_recurrent_state_elements * sizeof(float);
   if (pack_cublas) {
     session->packed_qkv_bytes =
         packed_shape.qkv_elements_per_layer * request->layer_count *
         sizeof(uint16_t);
-    session->packed_gate_up_bytes =
-        packed_shape.gate_up_elements_per_layer * request->layer_count *
-        sizeof(uint16_t);
+    if (has_dense_mlp_layers) {
+      session->packed_gate_up_bytes =
+          packed_shape.gate_up_elements_per_layer * request->layer_count *
+          sizeof(uint16_t);
+    }
   }
   session->kv_bytes =
       request->layer_count * static_cast<uint64_t>(session->kv_token_capacity) *
@@ -197,8 +223,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       session_fixed_footprint_without_prefill_chunk(session);
   const uint32_t prefill_chunk = tune_prefill_chunk_tokens(
       request->max_context_tokens, fixed_device_bytes, projection_input_elements,
-      prefill_qkv_rows, attention_hidden, hidden, prefill_gate_up_rows,
-      intermediate, static_cast<uint64_t>(device_free_before_alloc));
+      prefill_qkv_rows, attention_hidden, hidden, prefill_q_gate_rows,
+      prefill_gate_up_rows, intermediate,
+      static_cast<uint64_t>(device_free_before_alloc));
   session->prefill_chunk_tokens = prefill_chunk;
   session->prefill_norm_bytes =
       projection_input_elements * static_cast<uint64_t>(prefill_chunk) *
@@ -212,6 +239,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       attention_hidden * static_cast<uint64_t>(prefill_chunk) * sizeof(uint16_t);
   session->prefill_o_bytes =
       hidden * static_cast<uint64_t>(prefill_chunk) * sizeof(float);
+  session->prefill_q_gate_bytes =
+      prefill_q_gate_rows * static_cast<uint64_t>(prefill_chunk) *
+      sizeof(float);
   session->prefill_gate_up_bytes =
       prefill_gate_up_rows * static_cast<uint64_t>(prefill_chunk) * sizeof(float);
   session->prefill_ff_bytes =
@@ -236,6 +266,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       descriptor_mode
           ? pinned_weight_staging_bytes(request, session->resident_weight_bytes)
           : session->arena_bytes;
+  out->prefill_chunk_tokens = session->prefill_chunk_tokens;
+  out->head_threads = session->head_threads;
+  out->resident_weight_bytes = session->resident_weight_bytes;
+  out->resident_kv_bytes = session->kv_bytes;
+  out->device_arena_bytes = session_device_footprint(session);
+  out->pinned_host_bytes = session->slots_bytes + host_weight_bytes;
   uint64_t setup_sync_calls = 0;
   int32_t failure_stage = kCreateStageHostWeightAlloc;
   err = cudaHostAlloc(reinterpret_cast<void **>(&host_arena), host_weight_bytes,
@@ -306,6 +342,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_o),
                      session->prefill_o_bytes);
   }
+  if (err == cudaSuccess && session->prefill_q_gate_bytes != 0) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_q_gate),
+                     session->prefill_q_gate_bytes);
+  }
   if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_gate_up),
                      session->prefill_gate_up_bytes);
@@ -346,6 +386,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     err = cudaMalloc(
         reinterpret_cast<void **>(&session->device_decode_seq_len_kv),
         sizeof(int32_t));
+  }
+  if (err == cudaSuccess && session->linear_gdn_conv_state_bytes != 0) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_linear_gdn_conv_state),
+        session->linear_gdn_conv_state_bytes);
+  }
+  if (err == cudaSuccess && session->linear_gdn_recurrent_state_bytes != 0) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_linear_gdn_recurrent_state),
+        session->linear_gdn_recurrent_state_bytes);
   }
   if (err == cudaSuccess && session->packed_qkv_bytes != 0) {
     failure_stage = kCreateStagePackedQkvAlloc;
@@ -468,6 +518,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
         session->device_arena, host_arena, host_weight_bytes, request,
         session->arena_bytes, embedding_bytes, scratch_gap_bytes,
         session->stream, out, &setup_sync_calls);
+    if (err == cudaSuccess) {
+      err = deinterleave_descriptor_query_gate_weights(
+          session->device_arena, session->host_layouts, session->hidden,
+          session->heads, session->head_dim, session->stream,
+          &setup_sync_calls);
+    }
   } else if (err == cudaSuccess) {
     failure_stage = kCreateStageDescriptorCopy;
     err = cudaMemcpyAsync(session->device_arena, host_arena, session->arena_bytes,
@@ -480,6 +536,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
                           session->layout_bytes, cudaMemcpyHostToDevice,
                           session->stream);
     out->h2d_bytes += session->layout_bytes;
+  }
+  if (err == cudaSuccess && session->linear_gdn_conv_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_linear_gdn_conv_state, 0,
+                          session->linear_gdn_conv_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->linear_gdn_recurrent_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_linear_gdn_recurrent_state, 0,
+                          session->linear_gdn_recurrent_state_bytes,
+                          session->stream);
   }
   if (err == cudaSuccess) {
     const uint32_t blocks =
@@ -596,6 +662,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
   if (err == cudaSuccess)
     err = cudaMemsetAsync(session->device_step, 0, sizeof(uint32_t),
                           session->stream);
+  if (err == cudaSuccess && session->linear_gdn_conv_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_linear_gdn_conv_state, 0,
+                          session->linear_gdn_conv_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->linear_gdn_recurrent_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_linear_gdn_recurrent_state, 0,
+                          session->linear_gdn_recurrent_state_bytes,
+                          session->stream);
+  }
   const uint64_t prompt_bytes =
       static_cast<uint64_t>(request->prompt_token_count) * sizeof(uint32_t);
   if (err == cudaSuccess) {
@@ -631,7 +707,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
           session->device_scratch, session->device_kv_keys,
           session->device_kv_values, session->kv_block_count,
           session->device_kv_block_table,
-          session->device_slots);
+          session->device_slots, session->device_linear_gdn_conv_state,
+          session->device_linear_gdn_recurrent_state);
       err = cudaGetLastError();
     }
     if (err == cudaSuccess) {
@@ -794,6 +871,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
   if (err == cudaSuccess)
     err = cudaMemsetAsync(session->device_step, 0, sizeof(uint32_t),
                           session->stream);
+  if (err == cudaSuccess && session->linear_gdn_conv_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_linear_gdn_conv_state, 0,
+                          session->linear_gdn_conv_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->linear_gdn_recurrent_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_linear_gdn_recurrent_state, 0,
+                          session->linear_gdn_recurrent_state_bytes,
+                          session->stream);
+  }
   const uint64_t prompt_bytes =
       static_cast<uint64_t>(request->prompt_token_count) * sizeof(uint32_t);
   if (err == cudaSuccess) {
@@ -802,7 +889,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
     out->h2d_bytes = prompt_bytes;
   }
   if (err == cudaSuccess) {
-    err = use_cublas_layer_path(session)
+    err = use_cublas_prefill_path(session)
               ? launch_cublas_session_prefill(
                     session, request->prompt_token_count,
                     request->has_eos_token, request->eos_token, out)
@@ -878,6 +965,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
         experimental_rt_sparse_available(session, dense_attention_chunks) ? 1u : 0u;
     const uint32_t attention_chunks =
         experimental_rt_attention_chunks_for(session, dense_attention_chunks);
+    out->experimental_rt_sparse_attention_active =
+        session->experimental_rt_sparse_attention_active;
+    out->experimental_rt_dense_attention_chunks = dense_attention_chunks;
+    out->experimental_rt_attention_chunks = attention_chunks;
     if (err == cudaSuccess) {
       err = ensure_session_graph(session, session->max_context_tokens, prompt_count,
                                  session->active_has_eos_token,
@@ -897,6 +988,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
                                           dense_attention_chunks);
     if (err == cudaSuccess && rt_launch) {
       out->kernel_launches += 1;
+      out->experimental_rt_selector_launches += 1;
     }
     if (err != cudaSuccess) {
       break;

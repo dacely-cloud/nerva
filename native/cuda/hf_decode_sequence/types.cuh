@@ -8,6 +8,12 @@
 
 constexpr uint32_t kDTypeF16 = 0;
 constexpr uint32_t kDTypeBF16 = 1;
+constexpr uint32_t kMlpKindDense = 0;
+constexpr uint32_t kMlpKindSparseMoe = 1;
+constexpr uint32_t kAttentionKindFull = 0;
+constexpr uint32_t kAttentionKindLinearGdn = 1;
+constexpr uint32_t kSparseMoeExpertsMax = 256;
+constexpr uint32_t kSparseMoeTopKMax = 16;
 constexpr uint32_t kRequestId = 1;
 constexpr uint32_t kSequenceId = 1;
 constexpr uint32_t kCompletionDeviceComplete = 1;
@@ -56,6 +62,7 @@ struct SequenceLayerLayout {
   uint64_t rms_attn;
   uint64_t rms_mlp;
   uint64_t w_q;
+  uint64_t w_q_gate;
   uint64_t w_k;
   uint64_t q_norm;
   uint64_t k_norm;
@@ -68,6 +75,36 @@ struct SequenceLayerLayout {
   uint64_t w_gate;
   uint64_t w_up;
   uint64_t w_down;
+  uint64_t w_router;
+  uint64_t w_expert_gate_up;
+  uint64_t w_expert_down;
+  uint64_t w_shared_expert_gate;
+  uint64_t w_shared_expert_up;
+  uint64_t w_shared_expert_down;
+  uint64_t w_shared_expert_router;
+  uint64_t w_linear_conv;
+  uint64_t w_linear_qkv;
+  uint64_t w_linear_z;
+  uint64_t w_linear_b;
+  uint64_t w_linear_a;
+  uint64_t w_linear_dt_bias;
+  uint64_t w_linear_a_log;
+  uint64_t w_linear_norm;
+  uint64_t w_linear_out;
+  uint64_t linear_conv_state;
+  uint64_t linear_recurrent_state;
+  uint32_t linear_key_heads;
+  uint32_t linear_value_heads;
+  uint32_t linear_key_head_dim;
+  uint32_t linear_value_head_dim;
+  uint32_t linear_conv_kernel;
+  uint32_t mlp_kind;
+  uint32_t moe_intermediate;
+  uint32_t shared_expert_intermediate;
+  uint32_t num_experts;
+  uint32_t experts_per_token;
+  uint32_t norm_topk_prob;
+  uint32_t attention_kind;
 };
 
 struct PackedProjectionShape {
@@ -86,6 +123,7 @@ struct LayerScratch {
   float *attn;
   float *residual;
   float *mlp_norm;
+  float *q_gate;
   float *gate;
   float *up;
   float *ff;
@@ -104,7 +142,8 @@ __host__ __device__ inline LayerScratch layer_scratch_ptrs(
   out.attn = out.v + kv_hidden;
   out.residual = out.attn + attention_hidden;
   out.mlp_norm = out.residual + hidden;
-  out.gate = out.mlp_norm + hidden;
+  out.q_gate = out.mlp_norm + hidden;
+  out.gate = out.q_gate + attention_hidden;
   out.up = out.gate + intermediate;
   out.ff = out.up + intermediate;
   out.down = out.ff + intermediate;

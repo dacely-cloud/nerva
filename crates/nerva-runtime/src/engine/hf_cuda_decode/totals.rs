@@ -27,6 +27,10 @@ pub(super) struct CudaDecodeCounters {
     graph_captures: u64,
     graph_cache_hits: u64,
     kernel_launches: u64,
+    experimental_rt_selector_launches: u64,
+    experimental_rt_sparse_attention_chunks: u32,
+    experimental_rt_dense_attention_chunks: u32,
+    experimental_rt_attention_chunks: u32,
     projection_ns: u64,
     qkv_projection_ns: u64,
     attention_output_projection_ns: u64,
@@ -59,6 +63,18 @@ impl CudaDecodeCounters {
         self.graph_captures += cuda.graph_captures;
         self.graph_cache_hits += cuda.graph_cache_hits;
         self.kernel_launches += cuda.kernel_launches;
+        self.experimental_rt_selector_launches += cuda.experimental_rt_selector_launches;
+        if cuda.experimental_rt_sparse_attention_active {
+            self.experimental_rt_sparse_attention_chunks = self
+                .experimental_rt_sparse_attention_chunks
+                .saturating_add(1);
+        }
+        self.experimental_rt_dense_attention_chunks = self
+            .experimental_rt_dense_attention_chunks
+            .max(cuda.experimental_rt_dense_attention_chunks);
+        self.experimental_rt_attention_chunks = self
+            .experimental_rt_attention_chunks
+            .max(cuda.experimental_rt_attention_chunks);
         self.projection_ns += cuda.projection_ns;
         self.qkv_projection_ns += cuda.qkv_projection_ns;
         self.attention_output_projection_ns += cuda.attention_output_projection_ns;
@@ -148,6 +164,10 @@ pub(super) fn build_summary(
         graph_cache_hits: counters.graph_cache_hits,
         graph_replay_events: event_count(&parts.ledgers, LedgerEventKind::GraphReplay),
         kernel_launches: counters.kernel_launches,
+        experimental_rt_selector_launches: counters.experimental_rt_selector_launches,
+        experimental_rt_sparse_attention_chunks: counters.experimental_rt_sparse_attention_chunks,
+        experimental_rt_dense_attention_chunks: counters.experimental_rt_dense_attention_chunks,
+        experimental_rt_attention_chunks: counters.experimental_rt_attention_chunks,
         projection_ns: counters.projection_ns,
         qkv_projection_ns: counters.qkv_projection_ns,
         attention_output_projection_ns: counters.attention_output_projection_ns,

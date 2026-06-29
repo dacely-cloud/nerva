@@ -3,7 +3,11 @@ use std::process::ExitCode;
 use nerva_cuda::experimental_rt::probe::experimental_rt_candidate_bench;
 use nerva_cuda::experimental_rt::summary::CudaExperimentalRtCandidateBenchSummary;
 
-use crate::cli::cuda_rt_equal_bytes::page_level_equal_bytes_baseline_json;
+use crate::cli::cuda_rt_equal_bytes::{
+    fine_token_learned_projected_page_byte_bracket_json,
+    fine_token_projected_page_byte_bracket_json, page_level_equal_bytes_baseline_json,
+    recall_curve_json,
+};
 use crate::parse::{parse_optional_u32, parse_optional_usize};
 
 const DIMS: u32 = 16;
@@ -219,10 +223,12 @@ pub(crate) fn sweep_json(
         .iter()
         .map(|summary| {
             format!(
-                "{{\"candidates_per_query\":{},\"summary\":{},\"page_level_equal_bytes_baseline\":{},\"decode_latency_estimate\":{}}}",
+                "{{\"candidates_per_query\":{},\"summary\":{},\"page_level_equal_bytes_baseline\":{},\"fine_token_projected_page_byte_bracket\":{},\"fine_token_learned_projected_page_byte_bracket\":{},\"decode_latency_estimate\":{}}}",
                 summary.candidates_per_query,
                 summary.to_json(),
                 page_level_equal_bytes_baseline_json(summary),
+                fine_token_projected_page_byte_bracket_json(summary, summaries),
+                fine_token_learned_projected_page_byte_bracket_json(summary, summaries),
                 decode_latency_estimate_json(summary, config.layer_count),
             )
         })
@@ -232,7 +238,7 @@ pub(crate) fn sweep_json(
         .iter()
         .all(CudaExperimentalRtCandidateBenchSummary::passed);
     format!(
-        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"mode\":\"experimental_rt_candidate_sweep\",\"scope\":\"recall_candidate_size_synthetic\",\"context_tokens\":{},\"page_tokens\":{},\"dims\":{},\"query_count\":{},\"iterations\":{},\"warmup_iterations\":{},\"layer_count\":{},\"points\":[{}]}}",
+        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"mode\":\"experimental_rt_candidate_sweep\",\"scope\":\"recall_candidate_size_synthetic\",\"context_tokens\":{},\"page_tokens\":{},\"dims\":{},\"query_count\":{},\"iterations\":{},\"warmup_iterations\":{},\"layer_count\":{},\"recall_curve\":{},\"points\":[{}]}}",
         if passed { "ok" } else { "failed" },
         config.context_tokens,
         config.page_tokens,
@@ -241,6 +247,7 @@ pub(crate) fn sweep_json(
         config.iterations,
         WARMUP_ITERATIONS,
         config.layer_count,
+        recall_curve_json(summaries),
         points,
     )
 }
@@ -263,7 +270,7 @@ pub(crate) fn matrix_json(config: &RtMatrixConfig, points: &[RtMatrixPoint]) -> 
         .join(",");
     let passed = points.iter().all(|point| point.summary.passed());
     format!(
-        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"mode\":\"experimental_rt_matrix\",\"scope\":\"attention_decode_latency_synthetic_matrix\",\"context_tokens\":[{}],\"query_counts\":[{}],\"candidate_pages\":[{}],\"page_tokens\":{},\"dims\":{},\"iterations\":{},\"warmup_iterations\":{},\"layer_count\":{},\"points\":[{}]}}",
+        "{{\"status\":\"{}\",\"backend\":\"cuda\",\"mode\":\"experimental_rt_matrix\",\"scope\":\"recall_context_candidate_synthetic_matrix\",\"context_tokens\":[{}],\"query_counts\":[{}],\"candidate_pages\":[{}],\"page_tokens\":{},\"dims\":{},\"iterations\":{},\"warmup_iterations\":{},\"layer_count\":{},\"recall_curves\":[{}],\"points\":[{}]}}",
         if passed { "ok" } else { "failed" },
         join_usize(MATRIX_CONTEXT_TOKENS),
         join_u32(MATRIX_QUERY_COUNTS),
@@ -273,8 +280,36 @@ pub(crate) fn matrix_json(config: &RtMatrixConfig, points: &[RtMatrixPoint]) -> 
         config.iterations,
         WARMUP_ITERATIONS,
         config.layer_count,
+        matrix_recall_curves_json(points),
         point_json,
     )
+}
+
+fn matrix_recall_curves_json(points: &[RtMatrixPoint]) -> String {
+    let mut groups = Vec::new();
+    let mut seen = Vec::new();
+    for point in points {
+        let key = (point.context_tokens, point.query_count);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        let summaries = points
+            .iter()
+            .filter(|candidate| {
+                candidate.context_tokens == point.context_tokens
+                    && candidate.query_count == point.query_count
+            })
+            .map(|candidate| candidate.summary.clone())
+            .collect::<Vec<_>>();
+        groups.push(format!(
+            "{{\"context_tokens\":{},\"query_count\":{},\"recall_curve\":{}}}",
+            point.context_tokens,
+            point.query_count,
+            recall_curve_json(&summaries),
+        ));
+    }
+    groups.join(",")
 }
 
 pub(crate) fn decode_latency_estimate_json(

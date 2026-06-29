@@ -15,6 +15,7 @@ pub(crate) fn hash_weight_layout(plan: &HfWeightLayoutPlan) -> u64 {
             block.layer.map(u64::from).unwrap_or(u64::MAX),
             block.rows as u64,
             block.cols as u64,
+            block.depth.unwrap_or(0) as u64,
             block.elements as u64,
             block.bytes as u64,
         ] {
@@ -49,8 +50,10 @@ pub(crate) fn hash_tensor_manifest(manifest: &HfTensorManifest) -> u64 {
         }
         for value in [
             entry.layer.map(u64::from).unwrap_or(u64::MAX),
+            entry.expert.map(u64::from).unwrap_or(u64::MAX),
             entry.rows as u64,
             entry.cols as u64,
+            entry.depth.unwrap_or(0) as u64,
             u64::from(entry.rank),
             entry.elements as u64,
             entry.bytes as u64,
@@ -102,6 +105,7 @@ pub(crate) fn hash_safetensors_shard_plan(plan: &SafetensorsShardPlan) -> u64 {
         }
         for value in [
             entry.layer.map(u64::from).unwrap_or(u64::MAX),
+            entry.expert.map(u64::from).unwrap_or(u64::MAX),
             entry.tier as u64,
             entry.bytes as u64,
             entry.data_offset_begin as u64,

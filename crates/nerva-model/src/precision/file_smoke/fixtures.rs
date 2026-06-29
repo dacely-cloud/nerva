@@ -1,3 +1,4 @@
+use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::shape::TransformerBlockShape;
@@ -28,12 +29,48 @@ pub(crate) fn tensor_payload_for_manifest(
 ) -> Result<Vec<u8>> {
     let mut payload = Vec::new();
     for entry in &manifest.entries {
-        let values = tensor_values_for_entry(entry)?;
-        for value in values {
-            payload.extend_from_slice(&value.to_le_bytes());
-        }
+        payload.extend_from_slice(&tensor_bytes_for_entry(entry)?);
     }
     Ok(payload)
+}
+
+fn tensor_bytes_for_entry(
+    entry: &crate::weights::manifest::HfTensorManifestEntry,
+) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(entry.bytes);
+    match entry.dtype {
+        DType::F32 => {
+            let value = match entry.role {
+                WeightBlockRole::AttentionNorm
+                | WeightBlockRole::QueryNorm
+                | WeightBlockRole::KeyNorm
+                | WeightBlockRole::LinearNorm
+                | WeightBlockRole::MlpNorm
+                | WeightBlockRole::FinalNorm => 1.0f32,
+                _ => 0.0f32,
+            };
+            for _ in 0..entry.elements {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        DType::F16 | DType::BF16 => {
+            for value in tensor_values_for_entry(entry)? {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        _ => {
+            return Err(NervaError::InvalidArgument {
+                reason: format!("synthetic tensor {} has unsupported dtype", entry.name),
+            });
+        }
+    }
+    if bytes.len() == entry.bytes {
+        Ok(bytes)
+    } else {
+        Err(NervaError::InvalidArgument {
+            reason: format!("synthetic tensor {} has wrong byte count", entry.name),
+        })
+    }
 }
 
 fn tensor_values_for_entry(
@@ -44,12 +81,16 @@ fn tensor_values_for_entry(
         WeightBlockRole::AttentionNorm
         | WeightBlockRole::QueryNorm
         | WeightBlockRole::KeyNorm
+        | WeightBlockRole::LinearNorm
         | WeightBlockRole::MlpNorm
         | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
         WeightBlockRole::QueryProjection
         | WeightBlockRole::KeyProjection
         | WeightBlockRole::ValueProjection
         | WeightBlockRole::OutputProjection
+        | WeightBlockRole::LinearQkvProjection
+        | WeightBlockRole::LinearZProjection
+        | WeightBlockRole::LinearOutputProjection
         | WeightBlockRole::UpProjection
         | WeightBlockRole::DownProjection => encoded_identity(entry.rows, entry.cols, 1.0),
         WeightBlockRole::GateProjection => encoded_identity(entry.rows, entry.cols, 0.5),
@@ -57,8 +98,22 @@ fn tensor_values_for_entry(
         | WeightBlockRole::KeyBias
         | WeightBlockRole::ValueBias
         | WeightBlockRole::OutputBias
+        | WeightBlockRole::LinearConvProjection
+        | WeightBlockRole::LinearBProjection
+        | WeightBlockRole::LinearAProjection
+        | WeightBlockRole::LinearDtBias
+        | WeightBlockRole::LinearALog
         | WeightBlockRole::TokenEmbedding
-        | WeightBlockRole::LmHead => vec![0; elements],
+        | WeightBlockRole::LmHead
+        | WeightBlockRole::RouterProjection
+        | WeightBlockRole::ExpertGateProjection
+        | WeightBlockRole::ExpertUpProjection
+        | WeightBlockRole::ExpertGateUpProjection
+        | WeightBlockRole::ExpertDownProjection
+        | WeightBlockRole::SharedExpertGateProjection
+        | WeightBlockRole::SharedExpertUpProjection
+        | WeightBlockRole::SharedExpertDownProjection
+        | WeightBlockRole::SharedExpertRouterProjection => vec![0; elements],
     };
     if values.len() == elements {
         Ok(values)

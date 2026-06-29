@@ -189,6 +189,11 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             graph_captures: out.graph_captures,
             graph_cache_hits: out.graph_cache_hits,
             kernel_launches: out.kernel_launches,
+            experimental_rt_selector_launches: out.experimental_rt_selector_launches,
+            experimental_rt_sparse_attention_active: out.experimental_rt_sparse_attention_active
+                != 0,
+            experimental_rt_dense_attention_chunks: out.experimental_rt_dense_attention_chunks,
+            experimental_rt_attention_chunks: out.experimental_rt_attention_chunks,
             device_elapsed_ns: out.device_elapsed_ns,
             projection_ns: out.projection_ns,
             qkv_projection_ns: out.qkv_projection_ns,

@@ -3,6 +3,7 @@ use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::dtype::dtype_to_str;
 use crate::common::json::fields::optional_string;
+use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::manifest::HfTensorManifestEntry;
 use crate::weights::safetensors::parse::required_usize_array;
 
@@ -87,14 +88,29 @@ pub(crate) fn safetensors_dtype(dtype: DType) -> Result<&'static str> {
 }
 
 fn expected_safetensors_shape(entry: &HfTensorManifestEntry) -> Vec<usize> {
+    if entry.role == WeightBlockRole::LinearConvProjection {
+        return vec![entry.rows, 1, entry.cols];
+    }
     match entry.rank {
         1 => vec![entry.rows],
         2 => vec![entry.rows, entry.cols],
+        3 => entry
+            .depth
+            .map(|depth| vec![depth, entry.rows, entry.cols])
+            .unwrap_or_default(),
         _ => Vec::new(),
     }
 }
 
 pub(crate) fn push_safetensors_shape_json(entry: &HfTensorManifestEntry, out: &mut String) {
+    if entry.role == WeightBlockRole::LinearConvProjection {
+        out.push('[');
+        out.push_str(&entry.rows.to_string());
+        out.push_str(",1,");
+        out.push_str(&entry.cols.to_string());
+        out.push(']');
+        return;
+    }
     match entry.rank {
         1 => {
             out.push('[');
@@ -103,6 +119,15 @@ pub(crate) fn push_safetensors_shape_json(entry: &HfTensorManifestEntry, out: &m
         }
         2 => {
             out.push('[');
+            out.push_str(&entry.rows.to_string());
+            out.push(',');
+            out.push_str(&entry.cols.to_string());
+            out.push(']');
+        }
+        3 => {
+            out.push('[');
+            out.push_str(&entry.depth.unwrap_or(0).to_string());
+            out.push(',');
             out.push_str(&entry.rows.to_string());
             out.push(',');
             out.push_str(&entry.cols.to_string());

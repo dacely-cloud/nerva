@@ -395,6 +395,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
       clone_active_state ? 0 : parent->prefill_attn_bytes;
   session->prefill_o_bytes =
       clone_active_state ? 0 : parent->prefill_o_bytes;
+  session->prefill_q_gate_bytes =
+      clone_active_state ? 0 : parent->prefill_q_gate_bytes;
   session->prefill_gate_up_bytes =
       clone_active_state ? 0 : parent->prefill_gate_up_bytes;
   session->prefill_ff_bytes =
@@ -486,6 +488,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
   if (err == cudaSuccess && session->prefill_o_bytes != 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_o),
                      session->prefill_o_bytes);
+  }
+  if (err == cudaSuccess && session->prefill_q_gate_bytes != 0) {
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_q_gate),
+                     session->prefill_q_gate_bytes);
   }
   if (err == cudaSuccess && session->prefill_gate_up_bytes != 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_prefill_gate_up),

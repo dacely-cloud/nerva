@@ -51,6 +51,11 @@ impl PrecisionTransformerBlock {
         }
 
         single_token_attention(shape, &scratch.q, &scratch.k, &scratch.v, &mut scratch.attn);
+        self.apply_query_gate_to_attention(
+            &scratch.attn_norm,
+            &mut scratch.attn,
+            &mut scratch.gate,
+        )?;
         mat_vec_encoded_row_major(self.dtype, &self.w_o, &scratch.attn, &mut scratch.residual)?;
         if let Some(bias) = self.o_bias.as_deref() {
             add_encoded_bias_into(self.dtype, bias, &mut scratch.residual)?;

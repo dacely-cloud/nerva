@@ -4,6 +4,7 @@
 
 #include <cuda_runtime.h>
 #include <stdint.h>
+#include <vector>
 
 uint64_t push(uint64_t &cursor, uint64_t len);
 uint64_t push_optional(uint64_t &cursor, uint64_t len, const uint16_t *ptr);
@@ -55,6 +56,9 @@ void copy_layer(uint16_t *arena, const SequenceLayerLayout &layout,
                 const NervaCudaHfDecodeChainLayer &layer, uint64_t hidden,
                 uint64_t attention_hidden, uint64_t kv_hidden,
                 uint64_t head_dim, uint64_t intermediate);
+void assign_linear_gdn_state_offsets(std::vector<SequenceLayerLayout> &layouts,
+                                     uint64_t *conv_state_elements,
+                                     uint64_t *recurrent_state_elements);
 
 cudaError_t copy_weight_descriptors_to_device(
     uint16_t *device_arena, uint16_t *staging, uint64_t staging_bytes,

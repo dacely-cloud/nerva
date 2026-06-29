@@ -17,13 +17,17 @@ cudaError_t pack_session_weight_replicas(
   if (err != cudaSuccess) {
     return err;
   }
-  hf_pack_gate_up_weights_kernel<<<
-      static_cast<uint32_t>(shape.gate_up_rows * session->layer_count),
-      kDecodeThreads, 0, session->stream>>>(
-      session->device_gate_up_packed, session->device_arena,
-      session->device_layouts, session->layer_count, session->hidden,
-      session->intermediate);
-  return cudaGetLastError();
+  if (session->packed_gate_up_bytes != 0 &&
+      session->device_gate_up_packed != nullptr) {
+    hf_pack_gate_up_weights_kernel<<<
+        static_cast<uint32_t>(shape.gate_up_rows * session->layer_count),
+        kDecodeThreads, 0, session->stream>>>(
+        session->device_gate_up_packed, session->device_arena,
+        session->device_layouts, session->layer_count, session->hidden,
+        session->intermediate);
+    return cudaGetLastError();
+  }
+  return cudaSuccess;
 }
 
 cudaError_t launch_monolithic_session_step(
@@ -38,7 +42,8 @@ cudaError_t launch_monolithic_session_step(
       session->device_scratch, session->device_kv_keys,
       session->device_kv_values, session->kv_block_count,
       session->device_kv_block_table,
-      session->device_slots);
+      session->device_slots, session->device_linear_gdn_conv_state,
+      session->device_linear_gdn_recurrent_state);
   cudaError_t err = cudaGetLastError();
   if (err == cudaSuccess) {
     float *device_logits = session->device_scratch + session->hidden * 2;
@@ -100,6 +105,12 @@ cudaError_t launch_cublas_layer_session_step(
         session->device_projection_input,
         static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden, 1,
         session->dtype, 0.0f, scratch.q);
+    if (err == cudaSuccess && layout.w_q_gate != kMissingOffset) {
+      err = project_encoded_rows(
+          session, nullptr, session->device_arena + layout.w_q_gate,
+          session->device_projection_input, attention_hidden, session->hidden,
+          1, session->dtype, 0.0f, scratch.q_gate);
+    }
     if (err == cudaSuccess && attention_chunks == 0) {
       hf_layer_qkv_attention_encode_kernel<<<session->heads, decode_head_threads, 0,
                                              session->stream>>>(
@@ -186,6 +197,16 @@ cudaError_t launch_cublas_layer_session_step(
         err = cudaGetLastError();
       }
     }
+    if (err == cudaSuccess && layout.w_q_gate != kMissingOffset) {
+      const uint32_t blocks =
+          (attention_hidden + kDecodeThreads - 1) / kDecodeThreads;
+      hf_layer_query_gate_attention_encode_kernel<<<blocks, kDecodeThreads, 0,
+                                                    session->stream>>>(
+          session->dtype, session->hidden, attention_hidden, kv_hidden,
+          session->intermediate, session->device_step, max_steps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    }
     if (err == cudaSuccess)
       err = project_encoded_rows(
           session, &session->attention_output_plan,
@@ -201,7 +222,15 @@ cudaError_t launch_cublas_layer_session_step(
           session->device_scratch, session->device_projection_input);
       err = cudaGetLastError();
     }
-    if (err == cudaSuccess)
+    if (err == cudaSuccess && layout.mlp_kind == kMlpKindSparseMoe) {
+      hf_layer_sparse_moe_encode_kernel<<<1, kDecodeThreads, 0,
+                                          session->stream>>>(
+          session->device_arena, layout, session->dtype, session->hidden,
+          attention_hidden, kv_hidden, session->intermediate,
+          session->device_step, max_steps, session->device_scratch,
+          session->device_projection_input);
+      err = cudaGetLastError();
+    } else if (err == cudaSuccess) {
       err = project_encoded_rows(
           session, &session->gate_up_plan,
           session->device_gate_up_packed +
@@ -209,22 +238,23 @@ cudaError_t launch_cublas_layer_session_step(
           session->device_projection_input,
           static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden, 1,
           session->dtype, 0.0f, scratch.gate);
-    if (err == cudaSuccess) {
-      const uint32_t ff_blocks =
-          (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
-      hf_layer_ff_encode_kernel<<<ff_blocks, kDecodeThreads, 0,
-                                  session->stream>>>(
-          session->dtype, session->hidden, attention_hidden, kv_hidden,
-          session->intermediate, session->device_step, max_steps,
-          session->device_scratch, session->device_projection_input);
-      err = cudaGetLastError();
+      if (err == cudaSuccess) {
+        const uint32_t ff_blocks =
+            (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
+        hf_layer_ff_encode_kernel<<<ff_blocks, kDecodeThreads, 0,
+                                    session->stream>>>(
+            session->dtype, session->hidden, attention_hidden, kv_hidden,
+            session->intermediate, session->device_step, max_steps,
+            session->device_scratch, session->device_projection_input);
+        err = cudaGetLastError();
+      }
+      if (err == cudaSuccess)
+        err = project_encoded_rows(
+            session, &session->down_plan,
+            session->device_arena + layout.w_down, session->device_projection_input,
+            session->hidden, session->intermediate, 1, session->dtype, 0.0f,
+            scratch.down);
     }
-    if (err == cudaSuccess)
-      err = project_encoded_rows(
-          session, &session->down_plan,
-          session->device_arena + layout.w_down, session->device_projection_input,
-          session->hidden, session->intermediate, 1, session->dtype, 0.0f,
-          scratch.down);
     if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
       const SequenceLayerLayout next_layout =
           session->host_layouts[layer_index + 1];
@@ -328,6 +358,12 @@ cudaError_t profile_cublas_layer_session_step(
           session->device_projection_input,
           static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden, 1,
           session->dtype, 0.0f, scratch.q);
+    if (err == cudaSuccess && layout.w_q_gate != kMissingOffset) {
+      err = project_encoded_rows(
+          session, nullptr, session->device_arena + layout.w_q_gate,
+          session->device_projection_input, attention_hidden, session->hidden,
+          1, session->dtype, 0.0f, scratch.q_gate);
+    }
     if (err == cudaSuccess) err = profile_end(session, &qkv_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
@@ -417,6 +453,16 @@ cudaError_t profile_cublas_layer_session_step(
         err = cudaGetLastError();
       }
     }
+    if (err == cudaSuccess && layout.w_q_gate != kMissingOffset) {
+      const uint32_t blocks =
+          (attention_hidden + kDecodeThreads - 1) / kDecodeThreads;
+      hf_layer_query_gate_attention_encode_kernel<<<blocks, kDecodeThreads, 0,
+                                                    session->stream>>>(
+          session->dtype, session->hidden, attention_hidden, kv_hidden,
+          session->intermediate, session->device_step, max_steps,
+          session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    }
     if (err == cudaSuccess) err = profile_end(session, &attention_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
@@ -442,38 +488,52 @@ cudaError_t profile_cublas_layer_session_step(
     }
     if (err == cudaSuccess) err = profile_end(session, &norm_ns);
 
-    if (err == cudaSuccess) err = profile_begin(session);
-    if (err == cudaSuccess)
-      err = project_encoded_rows(
-          session, &session->gate_up_plan,
-          session->device_gate_up_packed +
-              packed_shape.gate_up_elements_per_layer * layer_index,
-          session->device_projection_input,
-          static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden, 1,
-          session->dtype, 0.0f, scratch.gate);
-    if (err == cudaSuccess) err = profile_end(session, &gate_up_projection_ns);
+    if (layout.mlp_kind == kMlpKindSparseMoe) {
+      if (err == cudaSuccess) err = profile_begin(session);
+      if (err == cudaSuccess) {
+        hf_layer_sparse_moe_encode_kernel<<<1, kDecodeThreads, 0,
+                                            session->stream>>>(
+            session->device_arena, layout, session->dtype, session->hidden,
+            attention_hidden, kv_hidden, session->intermediate,
+            session->device_step, max_steps, session->device_scratch,
+            session->device_projection_input);
+        err = cudaGetLastError();
+      }
+      if (err == cudaSuccess) err = profile_end(session, &mlp_ns);
+    } else {
+      if (err == cudaSuccess) err = profile_begin(session);
+      if (err == cudaSuccess)
+        err = project_encoded_rows(
+            session, &session->gate_up_plan,
+            session->device_gate_up_packed +
+                packed_shape.gate_up_elements_per_layer * layer_index,
+            session->device_projection_input,
+            static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden, 1,
+            session->dtype, 0.0f, scratch.gate);
+      if (err == cudaSuccess) err = profile_end(session, &gate_up_projection_ns);
 
-    if (err == cudaSuccess) err = profile_begin(session);
-    if (err == cudaSuccess) {
-      const uint32_t ff_blocks =
-          (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
-      hf_layer_ff_encode_kernel<<<ff_blocks, kDecodeThreads, 0,
-                                  session->stream>>>(
-          session->dtype, session->hidden, attention_hidden, kv_hidden,
-          session->intermediate, session->device_step, max_steps,
-          session->device_scratch, session->device_projection_input);
-      err = cudaGetLastError();
+      if (err == cudaSuccess) err = profile_begin(session);
+      if (err == cudaSuccess) {
+        const uint32_t ff_blocks =
+            (session->intermediate + kDecodeThreads - 1) / kDecodeThreads;
+        hf_layer_ff_encode_kernel<<<ff_blocks, kDecodeThreads, 0,
+                                    session->stream>>>(
+            session->dtype, session->hidden, attention_hidden, kv_hidden,
+            session->intermediate, session->device_step, max_steps,
+            session->device_scratch, session->device_projection_input);
+        err = cudaGetLastError();
+      }
+      if (err == cudaSuccess) err = profile_end(session, &mlp_ns);
+
+      if (err == cudaSuccess) err = profile_begin(session);
+      if (err == cudaSuccess)
+        err = project_encoded_rows(
+            session, &session->down_plan,
+            session->device_arena + layout.w_down, session->device_projection_input,
+            session->hidden, session->intermediate, 1, session->dtype, 0.0f,
+            scratch.down);
+      if (err == cudaSuccess) err = profile_end(session, &down_projection_ns);
     }
-    if (err == cudaSuccess) err = profile_end(session, &mlp_ns);
-
-    if (err == cudaSuccess) err = profile_begin(session);
-    if (err == cudaSuccess)
-      err = project_encoded_rows(
-          session, &session->down_plan,
-          session->device_arena + layout.w_down, session->device_projection_input,
-          session->hidden, session->intermediate, 1, session->dtype, 0.0f,
-          scratch.down);
-    if (err == cudaSuccess) err = profile_end(session, &down_projection_ns);
 
     if (err == cudaSuccess) err = profile_begin(session);
     if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
@@ -572,7 +632,7 @@ cudaError_t launch_cublas_session_prefill(
     uint32_t has_eos_token, uint32_t eos_token,
     NervaCudaHfDecodeSequenceResult *out) {
   if (prompt_token_count == 0 || prompt_token_count > session->max_context_tokens ||
-      !use_cublas_layer_path(session)) {
+      !use_cublas_prefill_path(session)) {
     return cudaErrorInvalidValue;
   }
   const uint32_t attention_hidden = session->heads * session->head_dim;
@@ -638,6 +698,13 @@ cudaError_t launch_cublas_session_prefill(
             session->device_prefill_norm,
             static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden,
             chunk_tokens, session->dtype, 0.0f, session->device_prefill_qkv);
+        out->kernel_launches += 1;
+      }
+      if (err == cudaSuccess && layout.w_q_gate != kMissingOffset) {
+        err = project_encoded_rows(
+            session, nullptr, session->device_arena + layout.w_q_gate,
+            session->device_prefill_norm, attention_hidden, session->hidden,
+            chunk_tokens, session->dtype, 0.0f, session->device_prefill_q_gate);
         out->kernel_launches += 1;
       }
       if (err == cudaSuccess) err = profile_stage_end(&qkv_projection_ns);
@@ -723,6 +790,19 @@ cudaError_t launch_cublas_session_prefill(
         }
 #endif
       }
+      if (err == cudaSuccess && layout.w_q_gate != kMissingOffset) {
+        const uint32_t blocks =
+            static_cast<uint32_t>(
+                (static_cast<uint64_t>(chunk_tokens) * attention_hidden +
+                 kDecodeThreads - 1) /
+                kDecodeThreads);
+        hf_prefill_query_gate_attention_kernel<<<blocks, kDecodeThreads, 0,
+                                                 session->stream>>>(
+            session->dtype, attention_hidden, chunk_tokens,
+            session->device_prefill_q_gate, session->device_prefill_attn);
+        err = cudaGetLastError();
+        out->kernel_launches += 1;
+      }
       if (err == cudaSuccess) err = profile_stage_end(&attention_ns);
       if (err == cudaSuccess) {
         err = profile_stage_begin();
@@ -754,45 +834,59 @@ cudaError_t launch_cublas_session_prefill(
       if (err == cudaSuccess) {
         err = profile_stage_begin();
       }
-      if (err == cudaSuccess) {
-        err = project_encoded_rows(
-            session, &session->gate_up_plan,
-            session->device_gate_up_packed +
-                packed_shape.gate_up_elements_per_layer * layer_index,
-            session->device_prefill_norm,
-            static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
-            chunk_tokens, session->dtype, 0.0f, session->device_prefill_gate_up);
-        out->kernel_launches += 1;
+      if (layout.mlp_kind == kMlpKindSparseMoe) {
+        if (err == cudaSuccess) {
+          hf_prefill_sparse_moe_kernel<<<chunk_tokens, kDecodeThreads, 0,
+                                         session->stream>>>(
+              session->device_arena, layout, session->dtype, session->hidden,
+              session->intermediate, chunk_tokens, session->device_prefill_norm,
+              session->device_prefill_gate_up, session->device_prefill_down);
+          err = cudaGetLastError();
+          out->kernel_launches += 1;
+        }
+        if (err == cudaSuccess) err = profile_stage_end(&mlp_ns);
+      } else {
+        if (err == cudaSuccess) {
+          err = project_encoded_rows(
+              session, &session->gate_up_plan,
+              session->device_gate_up_packed +
+                  packed_shape.gate_up_elements_per_layer * layer_index,
+              session->device_prefill_norm,
+              static_cast<uint32_t>(packed_shape.gate_up_rows), session->hidden,
+              chunk_tokens, session->dtype, 0.0f,
+              session->device_prefill_gate_up);
+          out->kernel_launches += 1;
+        }
+        if (err == cudaSuccess) err = profile_stage_end(&gate_up_projection_ns);
+        if (err == cudaSuccess) {
+          err = profile_stage_begin();
+        }
+        if (err == cudaSuccess) {
+          const uint32_t blocks =
+              static_cast<uint32_t>(
+                  (static_cast<uint64_t>(chunk_tokens) * session->intermediate +
+                   kDecodeThreads - 1) /
+                  kDecodeThreads);
+          hf_prefill_ff_kernel<<<blocks, kDecodeThreads, 0, session->stream>>>(
+              session->dtype, session->intermediate, chunk_tokens,
+              session->device_prefill_gate_up, session->device_prefill_ff);
+          err = cudaGetLastError();
+          out->kernel_launches += 1;
+        }
+        if (err == cudaSuccess) err = profile_stage_end(&mlp_ns);
+        if (err == cudaSuccess) {
+          err = profile_stage_begin();
+        }
+        if (err == cudaSuccess) {
+          err = project_encoded_rows(
+              session, &session->down_plan,
+              session->device_arena + layout.w_down,
+              session->device_prefill_ff, session->hidden, session->intermediate,
+              chunk_tokens, session->dtype, 0.0f, session->device_prefill_down);
+          out->kernel_launches += 1;
+        }
+        if (err == cudaSuccess) err = profile_stage_end(&down_projection_ns);
       }
-      if (err == cudaSuccess) err = profile_stage_end(&gate_up_projection_ns);
-      if (err == cudaSuccess) {
-        err = profile_stage_begin();
-      }
-      if (err == cudaSuccess) {
-        const uint32_t blocks =
-            static_cast<uint32_t>(
-                (static_cast<uint64_t>(chunk_tokens) * session->intermediate +
-                 kDecodeThreads - 1) /
-                kDecodeThreads);
-        hf_prefill_ff_kernel<<<blocks, kDecodeThreads, 0, session->stream>>>(
-            session->dtype, session->intermediate, chunk_tokens,
-            session->device_prefill_gate_up, session->device_prefill_ff);
-        err = cudaGetLastError();
-        out->kernel_launches += 1;
-      }
-      if (err == cudaSuccess) err = profile_stage_end(&mlp_ns);
-      if (err == cudaSuccess) {
-        err = profile_stage_begin();
-      }
-      if (err == cudaSuccess) {
-        err = project_encoded_rows(
-            session, &session->down_plan,
-            session->device_arena + layout.w_down,
-            session->device_prefill_ff, session->hidden, session->intermediate,
-            chunk_tokens, session->dtype, 0.0f, session->device_prefill_down);
-        out->kernel_launches += 1;
-      }
-      if (err == cudaSuccess) err = profile_stage_end(&down_projection_ns);
       if (err == cudaSuccess) {
         err = profile_stage_begin();
       }

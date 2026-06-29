@@ -106,7 +106,25 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
         | WeightBlockRole::OutputProjection => encoded_identity(entry.rows, entry.cols, 1.0),
         WeightBlockRole::GateProjection
         | WeightBlockRole::UpProjection
-        | WeightBlockRole::DownProjection => vec![0; elements],
+        | WeightBlockRole::DownProjection
+        | WeightBlockRole::LinearConvProjection
+        | WeightBlockRole::LinearQkvProjection
+        | WeightBlockRole::LinearZProjection
+        | WeightBlockRole::LinearBProjection
+        | WeightBlockRole::LinearAProjection
+        | WeightBlockRole::LinearDtBias
+        | WeightBlockRole::LinearALog
+        | WeightBlockRole::LinearNorm
+        | WeightBlockRole::LinearOutputProjection
+        | WeightBlockRole::RouterProjection
+        | WeightBlockRole::ExpertGateProjection
+        | WeightBlockRole::ExpertUpProjection
+        | WeightBlockRole::ExpertGateUpProjection
+        | WeightBlockRole::ExpertDownProjection
+        | WeightBlockRole::SharedExpertGateProjection
+        | WeightBlockRole::SharedExpertUpProjection
+        | WeightBlockRole::SharedExpertDownProjection
+        | WeightBlockRole::SharedExpertRouterProjection => vec![0; elements],
         WeightBlockRole::QueryBias
         | WeightBlockRole::KeyBias
         | WeightBlockRole::ValueBias

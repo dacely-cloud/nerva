@@ -44,6 +44,10 @@ pub struct CudaHfDecodeSequenceSummary {
     pub graph_captures: u64,
     pub graph_cache_hits: u64,
     pub kernel_launches: u64,
+    pub experimental_rt_selector_launches: u64,
+    pub experimental_rt_sparse_attention_active: bool,
+    pub experimental_rt_dense_attention_chunks: u32,
+    pub experimental_rt_attention_chunks: u32,
     pub device_elapsed_ns: u64,
     pub projection_ns: u64,
     pub qkv_projection_ns: u64,
@@ -64,7 +68,7 @@ pub struct CudaHfDecodeSequenceSummary {
 impl CudaHfDecodeSequenceSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"planned_footprint\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"planned_gpu_resident_weight_bytes\":{},\"planned_gpu_staged_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_captures\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"device_elapsed_ns\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"planned_footprint\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"planned_gpu_resident_weight_bytes\":{},\"planned_gpu_staged_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_captures\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"experimental_rt_selector_launches\":{},\"experimental_rt_sparse_attention_active\":{},\"experimental_rt_dense_attention_chunks\":{},\"experimental_rt_attention_chunks\":{},\"device_elapsed_ns\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
             self.dtype,
             self.hidden,
@@ -106,6 +110,10 @@ impl CudaHfDecodeSequenceSummary {
             self.graph_captures,
             self.graph_cache_hits,
             self.kernel_launches,
+            self.experimental_rt_selector_launches,
+            self.experimental_rt_sparse_attention_active,
+            self.experimental_rt_dense_attention_chunks,
+            self.experimental_rt_attention_chunks,
             self.device_elapsed_ns,
             self.projection_ns,
             self.qkv_projection_ns,

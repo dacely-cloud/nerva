@@ -275,6 +275,213 @@ __global__ void hf_prefill_ff_kernel(uint32_t dtype, uint32_t intermediate,
   }
 }
 
+__global__ void hf_prefill_query_gate_attention_kernel(
+    uint32_t dtype, uint32_t attention_hidden, uint32_t chunk_tokens,
+    const float *q_gate, uint16_t *attn_out) {
+  const uint64_t total =
+      static_cast<uint64_t>(chunk_tokens) * attention_hidden;
+  const uint64_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint64_t stride = static_cast<uint64_t>(blockDim.x) * gridDim.x;
+  for (uint64_t cursor = index; cursor < total; cursor += stride) {
+    const float value =
+        encoded_to_f32(attn_out[cursor], dtype) * sigmoid(q_gate[cursor]);
+    attn_out[cursor] = f32_to_encoded(value, dtype);
+  }
+}
+
+__global__ void hf_prefill_sparse_moe_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
+    const uint16_t *norm_in, float *gate_up_tmp, float *down_out) {
+  const uint32_t local_token = blockIdx.x;
+  if (local_token >= chunk_tokens) {
+    return;
+  }
+
+  __shared__ float router_logits[kSparseMoeExpertsMax];
+  __shared__ uint32_t selected_experts[kSparseMoeTopKMax];
+  __shared__ float selected_weights[kSparseMoeTopKMax];
+  __shared__ float shared_gate_weight;
+
+  const uint32_t num_experts = layout.num_experts;
+  const uint32_t top_k = layout.experts_per_token;
+  const uint32_t moe_intermediate = layout.moe_intermediate;
+  const uint16_t *token_norm =
+      norm_in + static_cast<uint64_t>(local_token) * hidden;
+  float *token_gate =
+      gate_up_tmp + static_cast<uint64_t>(local_token) * intermediate * 2u;
+  float *token_up = token_gate + intermediate;
+  float *token_down = down_out + static_cast<uint64_t>(local_token) * hidden;
+
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    token_down[index] = 0.0f;
+  }
+  __syncthreads();
+
+  if (num_experts == 0 || num_experts > kSparseMoeExpertsMax ||
+      top_k == 0 || top_k > kSparseMoeTopKMax || top_k > num_experts ||
+      moe_intermediate == 0 || moe_intermediate > intermediate) {
+    return;
+  }
+
+  for (uint32_t expert = threadIdx.x; expert < num_experts;
+       expert += blockDim.x) {
+    const uint16_t *router_row =
+        arena + layout.w_router + static_cast<uint64_t>(expert) * hidden;
+    float sum = 0.0f;
+    for (uint32_t col = 0; col < hidden; ++col) {
+      sum += encoded_to_f32(router_row[col], dtype) *
+             encoded_to_f32(token_norm[col], dtype);
+    }
+    router_logits[expert] = sum;
+  }
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    float max_logit = -INFINITY;
+    for (uint32_t expert = 0; expert < num_experts; ++expert) {
+      max_logit = fmaxf(max_logit, router_logits[expert]);
+    }
+    float total = 0.0f;
+    for (uint32_t expert = 0; expert < num_experts; ++expert) {
+      total += expf(router_logits[expert] - max_logit);
+    }
+    for (uint32_t rank = 0; rank < top_k; ++rank) {
+      uint32_t best_expert = UINT32_MAX;
+      float best_weight = -INFINITY;
+      for (uint32_t expert = 0; expert < num_experts; ++expert) {
+        bool already_selected = false;
+        for (uint32_t previous = 0; previous < rank; ++previous) {
+          already_selected |= selected_experts[previous] == expert;
+        }
+        if (already_selected) {
+          continue;
+        }
+        float weight = expf(router_logits[expert] - max_logit);
+        if (total > 0.0f && isfinite(total)) {
+          weight /= total;
+        }
+        if (weight > best_weight ||
+            (weight == best_weight && expert < best_expert)) {
+          best_weight = weight;
+          best_expert = expert;
+        }
+      }
+      selected_experts[rank] = best_expert;
+      selected_weights[rank] = best_weight;
+    }
+    if (layout.norm_topk_prob != 0) {
+      float selected_sum = 0.0f;
+      for (uint32_t rank = 0; rank < top_k; ++rank) {
+        selected_sum += selected_weights[rank];
+      }
+      if (selected_sum > 0.0f) {
+        for (uint32_t rank = 0; rank < top_k; ++rank) {
+          selected_weights[rank] /= selected_sum;
+        }
+      }
+    }
+  }
+  __syncthreads();
+
+  const uint64_t expert_gate_up_stride =
+      static_cast<uint64_t>(moe_intermediate) * 2u * hidden;
+  const uint64_t expert_down_stride =
+      static_cast<uint64_t>(hidden) * moe_intermediate;
+  for (uint32_t rank = 0; rank < top_k; ++rank) {
+    const uint32_t expert = selected_experts[rank];
+    const float expert_weight = selected_weights[rank];
+    const uint64_t gate_up_base =
+        layout.w_expert_gate_up +
+        static_cast<uint64_t>(expert) * expert_gate_up_stride;
+    const uint16_t *expert_gate = arena + gate_up_base;
+    const uint16_t *expert_up =
+        arena + gate_up_base +
+        static_cast<uint64_t>(moe_intermediate) * hidden;
+    const uint16_t *expert_down =
+        arena + layout.w_expert_down +
+        static_cast<uint64_t>(expert) * expert_down_stride;
+
+    for (uint32_t row = threadIdx.x; row < moe_intermediate;
+         row += blockDim.x) {
+      const uint16_t *gate_row =
+          expert_gate + static_cast<uint64_t>(row) * hidden;
+      const uint16_t *up_row =
+          expert_up + static_cast<uint64_t>(row) * hidden;
+      float gate_sum = 0.0f;
+      float up_sum = 0.0f;
+      for (uint32_t col = 0; col < hidden; ++col) {
+        const float value = encoded_to_f32(token_norm[col], dtype);
+        gate_sum += encoded_to_f32(gate_row[col], dtype) * value;
+        up_sum += encoded_to_f32(up_row[col], dtype) * value;
+      }
+      token_gate[row] = gate_sum;
+      token_up[row] = up_sum;
+    }
+    __syncthreads();
+
+    for (uint32_t row = threadIdx.x; row < hidden; row += blockDim.x) {
+      const uint16_t *down_row =
+          expert_down + static_cast<uint64_t>(row) * moe_intermediate;
+      float sum = 0.0f;
+      for (uint32_t col = 0; col < moe_intermediate; ++col) {
+        const float ff = silu(token_gate[col]) * token_up[col];
+        sum += encoded_to_f32(down_row[col], dtype) * ff;
+      }
+      token_down[row] += expert_weight * sum;
+    }
+    __syncthreads();
+  }
+
+  const uint32_t shared_intermediate = layout.shared_expert_intermediate;
+  if (shared_intermediate != 0) {
+    float gate_sum = 0.0f;
+    for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+      gate_sum +=
+          encoded_to_f32(arena[layout.w_shared_expert_router + col], dtype) *
+          encoded_to_f32(token_norm[col], dtype);
+    }
+    gate_sum = block_sum(gate_sum);
+    if (threadIdx.x == 0) {
+      shared_gate_weight = sigmoid(gate_sum);
+    }
+    __syncthreads();
+
+    for (uint32_t row = threadIdx.x; row < shared_intermediate;
+         row += blockDim.x) {
+      const uint16_t *gate_row =
+          arena + layout.w_shared_expert_gate +
+          static_cast<uint64_t>(row) * hidden;
+      const uint16_t *up_row =
+          arena + layout.w_shared_expert_up +
+          static_cast<uint64_t>(row) * hidden;
+      float shared_gate = 0.0f;
+      float shared_up = 0.0f;
+      for (uint32_t col = 0; col < hidden; ++col) {
+        const float value = encoded_to_f32(token_norm[col], dtype);
+        shared_gate += encoded_to_f32(gate_row[col], dtype) * value;
+        shared_up += encoded_to_f32(up_row[col], dtype) * value;
+      }
+      token_gate[row] = shared_gate;
+      token_up[row] = shared_up;
+    }
+    __syncthreads();
+
+    for (uint32_t row = threadIdx.x; row < hidden; row += blockDim.x) {
+      const uint16_t *down_row =
+          arena + layout.w_shared_expert_down +
+          static_cast<uint64_t>(row) * shared_intermediate;
+      float sum = 0.0f;
+      for (uint32_t col = 0; col < shared_intermediate; ++col) {
+        const float ff = silu(token_gate[col]) * token_up[col];
+        sum += encoded_to_f32(down_row[col], dtype) * ff;
+      }
+      token_down[row] += shared_gate_weight * sum;
+    }
+    __syncthreads();
+  }
+}
+
 __global__ void hf_prefill_finish_kernel(uint32_t dtype, uint32_t hidden,
                                          uint32_t chunk_start,
                                          uint32_t chunk_tokens,

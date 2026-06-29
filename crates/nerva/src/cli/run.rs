@@ -62,17 +62,37 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
     let compute_capability = parsed
         .compute_capability
         .or_else(detect_cuda_compute_capability);
+    if compute_capability.is_none() {
+        return Err(format!(
+            "CUDA compute capability is unavailable; run with a CUDA-visible GPU. CUDA probe: {}",
+            nerva_runtime::capabilities::discovery::cuda_smoke().to_json()
+        ));
+    }
     let sampler = HfCudaSamplerConfig {
         temperature: parsed.temperature,
         top_p: parsed.top_p,
         top_k: parsed.top_k,
         seed: parsed.seed,
     };
-    let rt_decode = HfCudaRtDecodeConfig {
+    let mut rt_decode = HfCudaRtDecodeConfig {
         enabled: parsed.rt,
         mode: rt_mode_code(&parsed.rt_mode)?,
         ..HfCudaRtDecodeConfig::default()
     };
+    if let Some(page_tokens) = optional_u32_count("--rt-page-tokens", parsed.rt_page_tokens)? {
+        rt_decode.page_tokens = page_tokens;
+    }
+    if let Some(pages) = optional_u32_count("--rt-pages", parsed.rt_pages)? {
+        rt_decode.pages = pages;
+    }
+    if let Some(local_window_tokens) =
+        optional_u32_count("--rt-local-window", parsed.rt_local_window_tokens)?
+    {
+        rt_decode.local_window_tokens = local_window_tokens;
+    }
+    if let Some(sink_tokens) = optional_u32_count("--rt-sink-tokens", parsed.rt_sink_tokens)? {
+        rt_decode.sink_tokens = sink_tokens;
+    }
     let queue_capacity = parsed.queue_capacity.unwrap_or(DEFAULT_QUEUE_CAPACITY);
     let stop_token_ids = stop_token_ids(&model_path_string)?;
     let mut logger = NervaCliLogger::new(parsed.json, parsed.debug);
@@ -196,7 +216,7 @@ fn generate_json_output(
                 .map(|path| path.device_timeline_active_ns)
                 .sum::<u64>();
             format!(
-                "{{\"chunk_index\":{},\"requested_tokens\":{},\"observed_tokens\":{},\"wall_ns\":{},\"device_ns\":{},\"tokens_per_second\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"graph_nodes\":{},\"graph_replays\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"h2d_bytes\":{},\"d2h_bytes\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{}}}",
+                "{{\"chunk_index\":{},\"requested_tokens\":{},\"observed_tokens\":{},\"wall_ns\":{},\"device_ns\":{},\"tokens_per_second\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"graph_nodes\":{},\"graph_replays\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"experimental_rt_selector_launches\":{},\"experimental_rt_sparse_attention_chunks\":{},\"experimental_rt_dense_attention_chunks\":{},\"experimental_rt_attention_chunks\":{},\"h2d_bytes\":{},\"d2h_bytes\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{}}}",
                 index,
                 chunk.steps_requested,
                 chunk.tokens.len(),
@@ -217,6 +237,10 @@ fn generate_json_output(
                 chunk.graph_replays,
                 chunk.graph_cache_hits,
                 chunk.kernel_launches,
+                chunk.experimental_rt_selector_launches,
+                chunk.experimental_rt_sparse_attention_chunks,
+                chunk.experimental_rt_dense_attention_chunks,
+                chunk.experimental_rt_attention_chunks,
                 chunk.h2d_bytes,
                 chunk.d2h_bytes,
                 chunk.sync_calls,
@@ -227,7 +251,8 @@ fn generate_json_output(
         .collect::<Vec<_>>()
         .join(",");
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"page_tokens\":{},\"pages\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
+        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"page_tokens\":{},\"pages\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
+        json_escape(output.backend),
         env!("CARGO_PKG_VERSION"),
         json_escape(path),
         input_mode,
@@ -296,6 +321,12 @@ fn rt_mode_code(mode: &str) -> Result<u32, String> {
         "sparse" => Ok(3),
         _ => Err(format!("invalid --rt-mode: {mode}")),
     }
+}
+
+fn optional_u32_count(name: &str, value: Option<usize>) -> Result<Option<u32>, String> {
+    value
+        .map(|count| u32::try_from(count).map_err(|_| format!("{name} is too large: {count}")))
+        .transpose()
 }
 
 fn rt_mode_name(mode: u32) -> &'static str {

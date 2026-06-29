@@ -25,6 +25,7 @@ pub struct SafetensorsShardPlanEntry {
     pub shard_file: String,
     pub role: WeightBlockRole,
     pub layer: Option<u32>,
+    pub expert: Option<u32>,
     pub dtype: DType,
     pub tier: MemoryTier,
     pub bytes: usize,

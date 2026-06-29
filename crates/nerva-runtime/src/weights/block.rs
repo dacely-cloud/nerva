@@ -3,11 +3,13 @@ use nerva_core::types::id::block::ResidentBlockId;
 use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::token::ledger::TokenLedger;
 use nerva_memory::registry::table::registry::BlockRegistry;
+use nerva_model::weights::layout::entry::WeightBlockRole;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResidentWeightBlockRef {
     pub name: String,
     pub block_id: ResidentBlockId,
+    pub role: WeightBlockRole,
     pub bytes: usize,
     pub dtype: DType,
     pub tier: MemoryTier,

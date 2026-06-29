@@ -3,8 +3,8 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::memory::tier::MemoryTier;
 
 use crate::common::dtype::dtype_to_str;
-use crate::hf::contract::validate_exact_runtime_contract;
-use crate::hf::metadata::HfModelMetadata;
+use crate::hf::contract::validate_weight_layout_contract;
+use crate::hf::metadata::{HfMlpLayerKind, HfModelMetadata};
 use crate::hf::validate::validate_hf_metadata;
 use crate::weights::layout::entry::{WeightBlockRole, WeightBlockSpec};
 use crate::weights::layout::plan::layer_blocks::{push_layer_weight_blocks, sum_weight_bytes};
@@ -23,12 +23,19 @@ pub struct HfWeightLayoutPlan {
 
 impl HfWeightLayoutPlan {
     pub fn to_json(&self) -> String {
+        let moe_layers = self
+            .metadata
+            .mlp_layer_types
+            .iter()
+            .filter(|kind| **kind == HfMlpLayerKind::SparseMoe)
+            .count();
         format!(
-            "{{\"architecture\":\"{}\",\"dtype\":\"{}\",\"blocks\":{},\"layers\":{},\"total_weight_bytes\":{},\"per_layer_weight_bytes\":{},\"static_weight_bytes\":{},\"hidden_size\":{},\"attention_hidden_size\":{},\"head_dim\":{},\"kv_hidden_size\":{},\"tie_word_embeddings\":{}}}",
+            "{{\"architecture\":\"{}\",\"dtype\":\"{}\",\"blocks\":{},\"layers\":{},\"moe_layers\":{},\"total_weight_bytes\":{},\"per_layer_weight_bytes\":{},\"static_weight_bytes\":{},\"hidden_size\":{},\"attention_hidden_size\":{},\"head_dim\":{},\"kv_hidden_size\":{},\"tie_word_embeddings\":{}}}",
             self.metadata.architecture.as_str(),
             dtype_to_str(self.dtype),
             self.blocks.len(),
             self.metadata.num_hidden_layers,
+            moe_layers,
             self.total_weight_bytes,
             self.per_layer_weight_bytes,
             self.static_weight_bytes,
@@ -42,7 +49,7 @@ impl HfWeightLayoutPlan {
 }
 
 pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayoutPlan> {
-    validate_exact_runtime_contract(metadata)?;
+    validate_weight_layout_contract(metadata)?;
     metadata.block_shape().validate()?;
     validate_hf_metadata(
         metadata.hidden_size,

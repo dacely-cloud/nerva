@@ -26,6 +26,11 @@ pub(crate) fn summary_passed(summary: &CudaExperimentalRtCandidateBenchSummary) 
         && summary.far_oracle_topk_importance_scatter_min_pages > 0
         && summary.far_oracle_topk_importance_scatter_avg_pages_x1000 > 0
         && summary.far_oracle_topk_importance_scatter_max_pages > 0
+        && summary.fine_token_projected_topk_tokens > 0
+        && summary.fine_token_projected_candidate_tokens > 0
+        && summary.fine_token_learned_projected_topk_tokens > 0
+        && summary.fine_token_learned_projected_candidate_tokens > 0
+        && summary.norm_stress_topk_tokens > 0
         && summary.dense_selector_attention_stage_avg_ns > 0
         && summary.rt_selector_attention_stage_avg_ns > 0
         && summary.rt_selector_overlapped_attention_stage_avg_ns > 0

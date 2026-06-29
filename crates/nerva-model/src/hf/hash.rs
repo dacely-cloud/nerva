@@ -17,7 +17,20 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         metadata.kv_groups() as u64,
         u64::from(metadata.tie_word_embeddings),
         u64::from(metadata.attention_bias),
+        u64::from(metadata.attention_qkv_bias),
+        u64::from(metadata.attention_output_bias),
         u64::from(metadata.mlp_bias),
+        metadata.linear_conv_kernel_dim.unwrap_or_default() as u64,
+        metadata.linear_key_head_dim.unwrap_or_default() as u64,
+        metadata.linear_value_head_dim.unwrap_or_default() as u64,
+        metadata.linear_num_key_heads.unwrap_or_default() as u64,
+        metadata.linear_num_value_heads.unwrap_or_default() as u64,
+        metadata.moe_intermediate_size.unwrap_or_default() as u64,
+        metadata.shared_expert_intermediate_size.unwrap_or_default() as u64,
+        metadata.num_experts.unwrap_or_default() as u64,
+        metadata.num_experts_per_tok.unwrap_or_default() as u64,
+        metadata.decoder_sparse_step.unwrap_or_default() as u64,
+        u64::from(metadata.norm_topk_prob),
     ] {
         for byte in value.to_le_bytes() {
             hash ^= u64::from(byte);
@@ -36,6 +49,18 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
     }
     if let Some(dtype) = metadata.torch_dtype {
         for byte in dtype_to_str(dtype).as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    for kind in &metadata.attention_layer_types {
+        for byte in kind.as_str().as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    for kind in &metadata.mlp_layer_types {
+        for byte in kind.as_str().as_bytes() {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }

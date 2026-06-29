@@ -196,5 +196,10 @@ fn forward_with_visible_kv(
         &mut scratch.token.attn,
         ledger,
     )?;
+    block.apply_query_gate_to_attention(
+        &scratch.token.attn_norm,
+        &mut scratch.token.attn,
+        &mut scratch.token.gate,
+    )?;
     finish_attention_and_mlp(block, scratch, output)
 }

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::id::token::TokenId;
 use nerva_ledger::types::event::LedgerEventKind;
@@ -113,11 +114,46 @@ fn write_fixture(dir: &Path) -> Result<HfTensorManifest> {
 fn payload_for_manifest(manifest: &HfTensorManifest) -> Result<Vec<u8>> {
     let mut payload = Vec::new();
     for entry in &manifest.entries {
-        for value in values_for_entry(entry)? {
-            payload.extend_from_slice(&value.to_le_bytes());
-        }
+        payload.extend_from_slice(&bytes_for_entry(entry)?);
     }
     Ok(payload)
+}
+
+fn bytes_for_entry(entry: &HfTensorManifestEntry) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(entry.bytes);
+    match entry.dtype {
+        DType::F32 => {
+            let value = match entry.role {
+                WeightBlockRole::AttentionNorm
+                | WeightBlockRole::QueryNorm
+                | WeightBlockRole::KeyNorm
+                | WeightBlockRole::LinearNorm
+                | WeightBlockRole::MlpNorm
+                | WeightBlockRole::FinalNorm => 1.0f32,
+                _ => 0.0f32,
+            };
+            for _ in 0..entry.elements {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        DType::F16 | DType::BF16 => {
+            for value in values_for_entry(entry)? {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        _ => {
+            return Err(NervaError::InvalidArgument {
+                reason: format!("fixture tensor {} has unsupported dtype", entry.name),
+            });
+        }
+    }
+    if bytes.len() == entry.bytes {
+        Ok(bytes)
+    } else {
+        Err(NervaError::InvalidArgument {
+            reason: format!("fixture tensor {} has wrong byte count", entry.name),
+        })
+    }
 }
 
 fn values_for_entry(entry: &HfTensorManifestEntry) -> Result<Vec<u16>> {
@@ -128,6 +164,7 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Result<Vec<u16>> {
         WeightBlockRole::AttentionNorm
         | WeightBlockRole::QueryNorm
         | WeightBlockRole::KeyNorm
+        | WeightBlockRole::LinearNorm
         | WeightBlockRole::MlpNorm
         | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
         WeightBlockRole::QueryBias
@@ -138,9 +175,26 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Result<Vec<u16>> {
         | WeightBlockRole::KeyProjection
         | WeightBlockRole::ValueProjection
         | WeightBlockRole::OutputProjection
+        | WeightBlockRole::LinearConvProjection
+        | WeightBlockRole::LinearQkvProjection
+        | WeightBlockRole::LinearZProjection
+        | WeightBlockRole::LinearBProjection
+        | WeightBlockRole::LinearAProjection
+        | WeightBlockRole::LinearDtBias
+        | WeightBlockRole::LinearALog
+        | WeightBlockRole::LinearOutputProjection
         | WeightBlockRole::GateProjection
         | WeightBlockRole::UpProjection
-        | WeightBlockRole::DownProjection => vec![0; elements],
+        | WeightBlockRole::DownProjection
+        | WeightBlockRole::RouterProjection
+        | WeightBlockRole::ExpertGateProjection
+        | WeightBlockRole::ExpertUpProjection
+        | WeightBlockRole::ExpertGateUpProjection
+        | WeightBlockRole::ExpertDownProjection
+        | WeightBlockRole::SharedExpertGateProjection
+        | WeightBlockRole::SharedExpertUpProjection
+        | WeightBlockRole::SharedExpertDownProjection
+        | WeightBlockRole::SharedExpertRouterProjection => vec![0; elements],
     };
     if values.len() == elements {
         Ok(values)

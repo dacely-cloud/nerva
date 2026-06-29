@@ -2,11 +2,15 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 
 use nerva_core::types::error::{NervaError, Result};
-use nerva_cuda::decode::hf_chain::layer::CudaHfDecodeChainLayer;
+use nerva_cuda::decode::hf_chain::layer::{
+    CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_MLP_DENSE,
+    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfLinearGdnLayer,
+};
 use nerva_cuda::decode::hf_sequence::weight_plan::{
     CudaHfDecodeSequenceWeightBlock, hash_weight_blocks,
 };
-use nerva_model::hf::metadata::HfModelMetadata;
+use nerva_model::hf::architecture::HfArchitectureKind;
+use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 
 use crate::engine::hf_cuda_decode::descriptors::cuda_weight_strategy;
 use crate::engine::hf_cuda_decode::file_backed::load::ShardBackedWeights;
@@ -31,26 +35,114 @@ pub(super) fn descriptor_marker_layers(
     metadata: &HfModelMetadata,
 ) -> Vec<CudaHfDecodeChainLayer<'static>> {
     let qk_norm = metadata.qk_norm.then_some(&MARKER[..]);
-    let attn_bias = metadata.attention_bias.then_some(&MARKER[..]);
+    let qkv_bias = metadata.attention_qkv_bias.then_some(&MARKER[..]);
+    let output_bias = metadata.attention_output_bias.then_some(&MARKER[..]);
     (0..metadata.num_hidden_layers)
-        .map(|_| CudaHfDecodeChainLayer {
-            rms_attn_weight: &EMPTY,
-            rms_mlp_weight: &EMPTY,
-            w_q: &EMPTY,
-            w_k: &EMPTY,
-            q_norm_weight: qk_norm,
-            k_norm_weight: qk_norm,
-            w_v: &EMPTY,
-            w_o: &EMPTY,
-            q_bias: attn_bias,
-            k_bias: attn_bias,
-            v_bias: attn_bias,
-            o_bias: attn_bias,
-            w_gate: &EMPTY,
-            w_up: &EMPTY,
-            w_down: &EMPTY,
+        .map(|layer| {
+            let sparse_moe = metadata
+                .mlp_layer_types
+                .get(layer)
+                .is_some_and(|kind| *kind == HfMlpLayerKind::SparseMoe);
+            let q_gate = matches!(
+                metadata.architecture,
+                HfArchitectureKind::Qwen35 | HfArchitectureKind::Qwen35Moe
+            ) && metadata
+                .attention_layer_types
+                .get(layer)
+                .is_some_and(|kind| *kind == HfAttentionLayerKind::Full);
+            let attention_kind = if metadata
+                .attention_layer_types
+                .get(layer)
+                .is_some_and(|kind| *kind == HfAttentionLayerKind::Linear)
+            {
+                CUDA_HF_ATTENTION_LINEAR_GDN
+            } else {
+                CUDA_HF_ATTENTION_FULL
+            };
+            CudaHfDecodeChainLayer {
+                rms_attn_weight: &EMPTY,
+                rms_mlp_weight: &EMPTY,
+                w_q: &EMPTY,
+                w_q_gate: q_gate.then_some(&MARKER[..]),
+                w_k: &EMPTY,
+                q_norm_weight: qk_norm,
+                k_norm_weight: qk_norm,
+                w_v: &EMPTY,
+                w_o: &EMPTY,
+                q_bias: qkv_bias,
+                k_bias: qkv_bias,
+                v_bias: qkv_bias,
+                o_bias: output_bias,
+                w_gate: &EMPTY,
+                w_up: &EMPTY,
+                w_down: &EMPTY,
+                w_router: None,
+                w_expert_gate_up: None,
+                w_expert_down: None,
+                w_shared_expert_gate: None,
+                w_shared_expert_up: None,
+                w_shared_expert_down: None,
+                w_shared_expert_router: None,
+                linear_gdn: linear_gdn_marker(metadata, layer),
+                mlp_kind: if sparse_moe {
+                    CUDA_HF_MLP_SPARSE_MOE
+                } else {
+                    CUDA_HF_MLP_DENSE
+                },
+                moe_intermediate: if sparse_moe {
+                    metadata.moe_intermediate_size.unwrap_or(0)
+                } else {
+                    0
+                },
+                shared_expert_intermediate: if sparse_moe {
+                    metadata.shared_expert_intermediate_size.unwrap_or(0)
+                } else {
+                    0
+                },
+                num_experts: if sparse_moe {
+                    metadata.num_experts.unwrap_or(0)
+                } else {
+                    0
+                },
+                experts_per_token: if sparse_moe {
+                    metadata.num_experts_per_tok.unwrap_or(0)
+                } else {
+                    0
+                },
+                norm_topk_prob: sparse_moe && metadata.norm_topk_prob,
+                attention_kind,
+            }
         })
         .collect()
+}
+
+fn linear_gdn_marker(
+    metadata: &HfModelMetadata,
+    layer: usize,
+) -> Option<CudaHfLinearGdnLayer<'static>> {
+    if !metadata
+        .attention_layer_types
+        .get(layer)
+        .is_some_and(|kind| *kind == HfAttentionLayerKind::Linear)
+    {
+        return None;
+    }
+    Some(CudaHfLinearGdnLayer {
+        key_heads: metadata.linear_num_key_heads.unwrap_or(0),
+        value_heads: metadata.linear_num_value_heads.unwrap_or(0),
+        key_head_dim: metadata.linear_key_head_dim.unwrap_or(0),
+        value_head_dim: metadata.linear_value_head_dim.unwrap_or(0),
+        conv_kernel: metadata.linear_conv_kernel_dim.unwrap_or(0),
+        w_conv: &MARKER,
+        w_qkv: &MARKER,
+        w_z: &MARKER,
+        w_b: &MARKER,
+        w_a: &MARKER,
+        dt_bias: &MARKER,
+        a_log: &[],
+        norm_weight: &MARKER,
+        w_out: &MARKER,
+    })
 }
 
 pub(super) fn shard_backed_resident_weights(
@@ -172,4 +264,125 @@ fn cuda_weight_descriptors(
         descriptors,
         source_paths,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use nerva_core::types::dtype::DType;
+    use nerva_cuda::decode::hf_chain::layer::{
+        CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_MLP_DENSE,
+        CUDA_HF_MLP_SPARSE_MOE,
+    };
+    use nerva_model::hf::architecture::HfArchitectureKind;
+    use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
+
+    use super::descriptor_marker_layers;
+
+    #[test]
+    fn descriptor_marker_layers_preserve_sparse_moe_metadata() {
+        let metadata = HfModelMetadata {
+            architecture: HfArchitectureKind::Qwen3Moe,
+            hidden_size: 4,
+            num_hidden_layers: 2,
+            num_attention_heads: 1,
+            num_key_value_heads: 1,
+            head_dim: 4,
+            intermediate_size: 8,
+            vocab_size: 16,
+            max_position_embeddings: None,
+            rope_theta: None,
+            rms_norm_eps: Some(1e-5),
+            bos_token_id: None,
+            eos_token_id: None,
+            tie_word_embeddings: false,
+            hidden_act: Some("silu".to_string()),
+            attention_bias: false,
+            attention_qkv_bias: false,
+            attention_output_bias: false,
+            qk_norm: true,
+            mlp_bias: false,
+            linear_conv_kernel_dim: None,
+            linear_key_head_dim: None,
+            linear_value_head_dim: None,
+            linear_num_key_heads: None,
+            linear_num_value_heads: None,
+            attention_layer_types: vec![HfAttentionLayerKind::Full; 2],
+            mlp_layer_types: vec![HfMlpLayerKind::SparseMoe, HfMlpLayerKind::Dense],
+            moe_intermediate_size: Some(3),
+            shared_expert_intermediate_size: None,
+            num_experts: Some(4),
+            num_experts_per_tok: Some(2),
+            decoder_sparse_step: Some(1),
+            norm_topk_prob: true,
+            torch_dtype: Some(DType::F16),
+        };
+
+        let layers = descriptor_marker_layers(&metadata);
+
+        assert_eq!(layers[0].mlp_kind, CUDA_HF_MLP_SPARSE_MOE);
+        assert_eq!(layers[0].moe_intermediate, 3);
+        assert_eq!(layers[0].num_experts, 4);
+        assert_eq!(layers[0].experts_per_token, 2);
+        assert!(layers[0].norm_topk_prob);
+        assert_eq!(layers[1].mlp_kind, CUDA_HF_MLP_DENSE);
+        assert_eq!(layers[1].moe_intermediate, 0);
+        assert_eq!(layers[1].num_experts, 0);
+        assert!(layers[0].w_q_gate.is_none());
+        assert!(layers[1].w_q_gate.is_none());
+        assert_eq!(layers[0].attention_kind, CUDA_HF_ATTENTION_FULL);
+        assert_eq!(layers[1].attention_kind, CUDA_HF_ATTENTION_FULL);
+    }
+
+    #[test]
+    fn descriptor_marker_layers_reserve_qwen35_full_attention_q_gate() {
+        let metadata = HfModelMetadata {
+            architecture: HfArchitectureKind::Qwen35Moe,
+            hidden_size: 4,
+            num_hidden_layers: 3,
+            num_attention_heads: 1,
+            num_key_value_heads: 1,
+            head_dim: 4,
+            intermediate_size: 8,
+            vocab_size: 16,
+            max_position_embeddings: None,
+            rope_theta: None,
+            rms_norm_eps: Some(1e-5),
+            bos_token_id: None,
+            eos_token_id: None,
+            tie_word_embeddings: false,
+            hidden_act: Some("silu".to_string()),
+            attention_bias: false,
+            attention_qkv_bias: false,
+            attention_output_bias: false,
+            qk_norm: true,
+            mlp_bias: false,
+            linear_conv_kernel_dim: Some(4),
+            linear_key_head_dim: Some(128),
+            linear_value_head_dim: Some(128),
+            linear_num_key_heads: Some(16),
+            linear_num_value_heads: Some(32),
+            attention_layer_types: vec![
+                HfAttentionLayerKind::Linear,
+                HfAttentionLayerKind::Full,
+                HfAttentionLayerKind::Full,
+            ],
+            mlp_layer_types: vec![HfMlpLayerKind::SparseMoe; 3],
+            moe_intermediate_size: Some(3),
+            shared_expert_intermediate_size: None,
+            num_experts: Some(4),
+            num_experts_per_tok: Some(2),
+            decoder_sparse_step: Some(1),
+            norm_topk_prob: true,
+            torch_dtype: Some(DType::F16),
+        };
+
+        let layers = descriptor_marker_layers(&metadata);
+
+        assert!(layers[0].w_q_gate.is_none());
+        assert!(layers[1].w_q_gate.is_some());
+        assert!(layers[2].w_q_gate.is_some());
+        assert_eq!(layers[0].attention_kind, CUDA_HF_ATTENTION_LINEAR_GDN);
+        assert_eq!(layers[1].attention_kind, CUDA_HF_ATTENTION_FULL);
+        assert_eq!(layers[2].attention_kind, CUDA_HF_ATTENTION_FULL);
+    }
 }

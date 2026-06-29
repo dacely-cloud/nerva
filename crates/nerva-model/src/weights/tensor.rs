@@ -33,6 +33,14 @@ impl LoadedSafetensorsTensorU16 {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadedSafetensorsTensorF32 {
+    pub name: String,
+    pub values: Vec<f32>,
+    pub bytes_read: usize,
+    pub data_hash: u64,
+}
+
 pub fn read_safetensors_tensor_u16(
     shard_path: impl AsRef<Path>,
     entry: &SafetensorsShardPlanEntry,
@@ -64,6 +72,58 @@ pub fn read_safetensors_tensor_u16_with_hash(
             ),
         });
     }
+    let bytes = read_safetensors_tensor_bytes(shard_path, entry)?;
+    let values = bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    Ok(LoadedSafetensorsTensorU16 {
+        name: entry.tensor_name.clone(),
+        dtype: entry.dtype,
+        values,
+        bytes_read: entry.bytes,
+        data_hash: if compute_hash { hash_bytes(&bytes) } else { 0 },
+    })
+}
+
+pub fn read_safetensors_tensor_f32_with_hash(
+    shard_path: impl AsRef<Path>,
+    entry: &SafetensorsShardPlanEntry,
+    compute_hash: bool,
+) -> Result<LoadedSafetensorsTensorF32> {
+    if entry.dtype != DType::F32 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors tensor {} has dtype {:?}; f32 tensor loading supports only F32",
+                entry.tensor_name, entry.dtype
+            ),
+        });
+    }
+    if entry.bytes % 4 != 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors tensor {} byte count {} is not divisible by 4",
+                entry.tensor_name, entry.bytes
+            ),
+        });
+    }
+    let bytes = read_safetensors_tensor_bytes(shard_path, entry)?;
+    let values = bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect::<Vec<_>>();
+    Ok(LoadedSafetensorsTensorF32 {
+        name: entry.tensor_name.clone(),
+        values,
+        bytes_read: entry.bytes,
+        data_hash: if compute_hash { hash_bytes(&bytes) } else { 0 },
+    })
+}
+
+fn read_safetensors_tensor_bytes(
+    shard_path: impl AsRef<Path>,
+    entry: &SafetensorsShardPlanEntry,
+) -> Result<Vec<u8>> {
     if entry.file_offset_end < entry.file_offset_begin
         || entry.file_offset_end - entry.file_offset_begin != entry.bytes
     {
@@ -105,17 +165,7 @@ pub fn read_safetensors_tensor_u16_with_hash(
                 shard_path.display()
             ),
         })?;
-    let values = bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    Ok(LoadedSafetensorsTensorU16 {
-        name: entry.tensor_name.clone(),
-        dtype: entry.dtype,
-        values,
-        bytes_read: entry.bytes,
-        data_hash: if compute_hash { hash_bytes(&bytes) } else { 0 },
-    })
+    Ok(bytes)
 }
 
 fn dtype_json_label(dtype: DType) -> &'static str {

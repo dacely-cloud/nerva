@@ -39,6 +39,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     pack_layer(layouts[index], elements, request->layers[index], hidden,
                attention_hidden, kv_hidden, request->head_dim, intermediate);
   }
+  uint64_t linear_gdn_conv_state_elements = 0;
+  uint64_t linear_gdn_recurrent_state_elements = 0;
+  assign_linear_gdn_state_offsets(layouts, &linear_gdn_conv_state_elements,
+                                  &linear_gdn_recurrent_state_elements);
   arena_layout.final_norm = push(elements, hidden);
   arena_layout.lm_head = push(elements, vocab_size * hidden);
   const uint64_t arena_bytes = elements * sizeof(uint16_t);
@@ -53,8 +57,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     return -1;
   }
   const uint64_t layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);
-  const uint64_t block_scratch =
-      hidden * 5 + attention_hidden * 2 + kv_hidden * 2 + intermediate * 3;
+  const uint64_t block_scratch = max_layer_scratch_elements(
+      layouts, hidden, attention_hidden, kv_hidden, intermediate);
   const uint64_t final_scratch = hidden * 2 + vocab_size;
   const uint64_t scratch_elements =
       block_scratch > final_scratch ? block_scratch : final_scratch;
@@ -67,6 +71,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
       sizeof(uint16_t) * 2;
   const uint64_t kv_block_table_bytes =
       static_cast<uint64_t>(kv_block_count) * sizeof(uint32_t);
+  const uint64_t linear_gdn_conv_state_bytes =
+      linear_gdn_conv_state_elements * sizeof(float);
+  const uint64_t linear_gdn_recurrent_state_bytes =
+      linear_gdn_recurrent_state_elements * sizeof(float);
   const uint64_t slots_bytes =
       static_cast<uint64_t>(context_steps) * sizeof(NervaCudaSyntheticTokenSlot);
   const uint64_t prompt_bytes =
@@ -84,6 +92,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   uint16_t *device_kv_keys = nullptr;
   uint16_t *device_kv_values = nullptr;
   uint32_t *device_kv_block_table = nullptr;
+  float *device_linear_gdn_conv_state = nullptr;
+  float *device_linear_gdn_recurrent_state = nullptr;
   uint32_t *device_prompt_tokens = nullptr;
   NervaCudaSyntheticTokenSlot *host_slots = nullptr;
   NervaCudaSyntheticTokenSlot *device_slots = nullptr;
@@ -107,6 +117,15 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_kv_keys), kv_bytes / 2);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_kv_values), kv_bytes / 2);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_kv_block_table), kv_block_table_bytes);
+  if (err == cudaSuccess && linear_gdn_conv_state_bytes != 0) {
+    err = cudaMalloc(reinterpret_cast<void **>(&device_linear_gdn_conv_state),
+                     linear_gdn_conv_state_bytes);
+  }
+  if (err == cudaSuccess && linear_gdn_recurrent_state_bytes != 0) {
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&device_linear_gdn_recurrent_state),
+        linear_gdn_recurrent_state_bytes);
+  }
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_prompt_tokens), prompt_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_slots), slots_bytes);
   if (err == cudaSuccess) err = cudaMalloc(reinterpret_cast<void **>(&device_step), sizeof(uint32_t));
@@ -129,6 +148,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     cudaFree(device_step);
     cudaFree(device_slots);
     cudaFree(device_prompt_tokens);
+    cudaFree(device_linear_gdn_recurrent_state);
+    cudaFree(device_linear_gdn_conv_state);
     cudaFree(device_kv_block_table);
     cudaFree(device_kv_values);
     cudaFree(device_kv_keys);
@@ -161,6 +182,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     err = copy_weight_descriptors_to_device(
         device_arena, host_arena, host_weight_bytes, request, arena_bytes,
         embedding_bytes, scratch_gap_bytes, stream, out, &setup_sync_calls);
+    if (err == cudaSuccess) {
+      err = deinterleave_descriptor_query_gate_weights(
+          device_arena, layouts, request->hidden, request->heads,
+          request->head_dim, stream, &setup_sync_calls);
+    }
   } else if (err == cudaSuccess) {
     err = cudaMemcpyAsync(device_arena, host_arena, arena_bytes,
                           cudaMemcpyHostToDevice, stream);
@@ -184,6 +210,14 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   }
   if (err == cudaSuccess) {
     err = cudaMemsetAsync(device_kv_values, 0, kv_bytes / 2, stream);
+  }
+  if (err == cudaSuccess && linear_gdn_conv_state_bytes != 0) {
+    err = cudaMemsetAsync(device_linear_gdn_conv_state, 0,
+                          linear_gdn_conv_state_bytes, stream);
+  }
+  if (err == cudaSuccess && linear_gdn_recurrent_state_bytes != 0) {
+    err = cudaMemsetAsync(device_linear_gdn_recurrent_state, 0,
+                          linear_gdn_recurrent_state_bytes, stream);
   }
   if (err == cudaSuccess) {
     const uint32_t blocks = (kv_block_count + kDecodeThreads - 1u) / kDecodeThreads;
@@ -210,7 +244,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
         request->intermediate, 0, device_step, context_steps, device_prompt_tokens,
         request->prompt_token_count, request->rms_eps, request->rope_theta,
         device_scratch, device_kv_keys, device_kv_values, kv_block_count,
-        device_kv_block_table, device_slots);
+        device_kv_block_table, device_slots, device_linear_gdn_conv_state,
+        device_linear_gdn_recurrent_state);
     err = cudaGetLastError();
   }
   if (err == cudaSuccess) {
@@ -292,7 +327,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     out->kv_tokens = output_start + out->observed_tokens;
     out->device_arena_bytes =
         arena_bytes + layout_bytes + scratch_bytes + kv_bytes +
-        kv_block_table_bytes + prompt_bytes + slots_bytes + sizeof(uint32_t) +
+        kv_block_table_bytes + linear_gdn_conv_state_bytes +
+        linear_gdn_recurrent_state_bytes + prompt_bytes + slots_bytes + sizeof(uint32_t) +
         kCublasWorkspaceBytes;
     out->pinned_host_bytes = host_weight_bytes + slots_bytes;
     out->host_causality_edges = 0;
@@ -329,6 +365,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   cudaFree(device_step);
   cudaFree(device_slots);
   cudaFree(device_prompt_tokens);
+  cudaFree(device_linear_gdn_recurrent_state);
+  cudaFree(device_linear_gdn_conv_state);
   cudaFree(device_kv_block_table);
   cudaFree(device_kv_values);
   cudaFree(device_kv_keys);

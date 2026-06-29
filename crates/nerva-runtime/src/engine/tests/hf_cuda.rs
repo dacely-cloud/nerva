@@ -11,6 +11,8 @@ use crate::engine::hf_cuda_decode::run::{
 use crate::engine::runtime::{Runtime, RuntimeConfig};
 use crate::engine::tests::hf_fixture::{
     remove_hf_checkpoint_dir, write_cycle_hf_checkpoint_dir, write_kv_hf_checkpoint_dir,
+    write_mixtral_moe_hf_checkpoint_dir, write_qwen2_moe_hf_checkpoint_dir,
+    write_qwen3_moe_hf_checkpoint_dir,
 };
 
 #[test]
@@ -103,6 +105,83 @@ fn cuda_loaded_hf_seed_decode_uses_chain_for_multi_layer_model() {
     assert_eq!(summary.hot_path_allocations, 0);
     assert_eq!(summary.output_hash, summary.expected_hash);
     assert_eq!(summary.critical_paths.len(), 4);
+}
+
+#[test]
+fn cuda_loaded_qwen3_moe_seed_decode_matches_cpu_exact_decode() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let dir = write_qwen3_moe_hf_checkpoint_dir("nerva-hf-cuda-qwen3-moe");
+    let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
+    let summary = run_hf_causal_lm_cuda_seed_decode(&loaded.model, TokenId(0), 4).unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert!(loaded.model.metadata().has_moe_layers());
+    assert!(summary.passed());
+    assert_eq!(summary.tokens, summary.expected_tokens);
+    assert_eq!(summary.graph_replays, 4);
+    assert_eq!(summary.graph_replay_events, 4);
+    assert_eq!(summary.host_causality_edges, 0);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert_eq!(summary.output_hash, summary.expected_hash);
+}
+
+#[test]
+fn cuda_loaded_qwen2_moe_seed_decode_matches_cpu_exact_decode() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let dir = write_qwen2_moe_hf_checkpoint_dir("nerva-hf-cuda-qwen2-moe");
+    let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
+    let summary = run_hf_causal_lm_cuda_seed_decode(&loaded.model, TokenId(0), 4).unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(loaded.model.metadata().architecture.as_str(), "qwen2_moe");
+    assert!(loaded.model.metadata().has_moe_layers());
+    assert_eq!(
+        loaded.model.metadata().shared_expert_intermediate_size,
+        Some(3)
+    );
+    assert!(summary.passed());
+    assert_eq!(summary.tokens, summary.expected_tokens);
+    assert_eq!(summary.graph_replays, 4);
+    assert_eq!(summary.graph_replay_events, 4);
+    assert_eq!(summary.host_causality_edges, 0);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert_eq!(summary.output_hash, summary.expected_hash);
+}
+
+#[test]
+fn cuda_loaded_mixtral_moe_seed_decode_matches_cpu_exact_decode() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let dir = write_mixtral_moe_hf_checkpoint_dir("nerva-hf-cuda-mixtral-moe");
+    let loaded = HfCausalLmModel::load_from_hf_dir(&dir).unwrap();
+    let summary = run_hf_causal_lm_cuda_seed_decode(&loaded.model, TokenId(0), 4).unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(loaded.model.metadata().architecture.as_str(), "mixtral_moe");
+    assert!(loaded.model.metadata().has_moe_layers());
+    assert_eq!(loaded.model.metadata().num_experts, Some(4));
+    assert_eq!(loaded.model.metadata().moe_intermediate_size, Some(3));
+    assert!(summary.passed());
+    assert_eq!(summary.tokens, summary.expected_tokens);
+    assert_eq!(summary.graph_replays, 4);
+    assert_eq!(summary.graph_replay_events, 4);
+    assert_eq!(summary.host_causality_edges, 0);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert_eq!(summary.output_hash, summary.expected_hash);
 }
 
 #[test]

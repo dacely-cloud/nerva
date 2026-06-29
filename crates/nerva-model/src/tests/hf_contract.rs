@@ -52,7 +52,7 @@ fn exact_runtime_contract_rejects_unsupported_activation() {
 
 #[test]
 fn exact_runtime_contract_supports_attention_bias_and_rejects_mlp_bias() {
-    let attention_bias = parse_hf_config_metadata(
+    let qkv_bias = parse_hf_config_metadata(
         r#"{
                 "model_type": "qwen2",
                 "hidden_size": 4,
@@ -62,6 +62,20 @@ fn exact_runtime_contract_supports_attention_bias_and_rejects_mlp_bias() {
                 "num_key_value_heads": 1,
                 "vocab_size": 16,
                 "qkv_bias": true,
+                "torch_dtype": "float16"
+            }"#,
+    )
+    .unwrap();
+    let attention_bias = parse_hf_config_metadata(
+        r#"{
+                "model_type": "qwen2",
+                "hidden_size": 4,
+                "intermediate_size": 8,
+                "num_hidden_layers": 1,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "vocab_size": 16,
+                "attention_bias": true,
                 "torch_dtype": "float16"
             }"#,
     )
@@ -80,6 +94,37 @@ fn exact_runtime_contract_supports_attention_bias_and_rejects_mlp_bias() {
             }"#,
     )
     .unwrap();
+
+    assert!(qkv_bias.attention_bias);
+    assert!(qkv_bias.attention_qkv_bias);
+    assert!(!qkv_bias.attention_output_bias);
+    let plan = plan_hf_weight_layout(&qkv_bias).unwrap();
+    assert_eq!(
+        plan.blocks
+            .iter()
+            .filter(|block| matches!(
+                block.role,
+                WeightBlockRole::QueryBias
+                    | WeightBlockRole::KeyBias
+                    | WeightBlockRole::ValueBias
+                    | WeightBlockRole::OutputBias
+            ))
+            .count(),
+        3
+    );
+    let manifest = build_hf_tensor_manifest(&plan).unwrap();
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .any(|entry| entry.name == "model.layers.0.self_attn.q_proj.bias")
+    );
+    assert!(
+        !manifest
+            .entries
+            .iter()
+            .any(|entry| entry.name == "model.layers.0.self_attn.o_proj.bias")
+    );
 
     assert!(attention_bias.attention_bias);
     let plan = plan_hf_weight_layout(&attention_bias).unwrap();

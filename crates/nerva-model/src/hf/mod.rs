@@ -1,6 +1,7 @@
 pub mod architecture;
-pub(crate) mod contract;
+pub mod contract;
 pub mod hash;
+pub mod linear_attention;
 pub mod metadata;
 pub mod parser;
 pub mod probe;

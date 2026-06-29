@@ -7,8 +7,13 @@ pub(crate) fn ensure_supported_hf_tensor_names(architecture: HfArchitectureKind)
     match architecture {
         HfArchitectureKind::Llama
         | HfArchitectureKind::Mistral
+        | HfArchitectureKind::MixtralMoe
         | HfArchitectureKind::Qwen2
-        | HfArchitectureKind::Qwen3 => Ok(()),
+        | HfArchitectureKind::Qwen2Moe
+        | HfArchitectureKind::Qwen3
+        | HfArchitectureKind::Qwen3Moe
+        | HfArchitectureKind::Qwen35
+        | HfArchitectureKind::Qwen35Moe => Ok(()),
         HfArchitectureKind::Gemma | HfArchitectureKind::Unknown => {
             Err(NervaError::InvalidArgument {
                 reason: format!(
@@ -27,31 +32,159 @@ pub(crate) fn hf_tensor_name(
 ) -> Result<String> {
     ensure_supported_hf_tensor_names(architecture)?;
     match role {
-        WeightBlockRole::TokenEmbedding => {
-            require_static_tensor(role, layer).map(|()| "model.embed_tokens.weight".to_string())
-        }
+        WeightBlockRole::TokenEmbedding => require_static_tensor(role, layer)
+            .map(|()| static_tensor_name(architecture, "embed_tokens.weight")),
         WeightBlockRole::LmHead => {
             require_static_tensor(role, layer).map(|()| "lm_head.weight".to_string())
         }
-        WeightBlockRole::FinalNorm => {
-            require_static_tensor(role, layer).map(|()| "model.norm.weight".to_string())
+        WeightBlockRole::FinalNorm => require_static_tensor(role, layer)
+            .map(|()| static_tensor_name(architecture, "norm.weight")),
+        WeightBlockRole::AttentionNorm => {
+            layer_name(architecture, role, layer, "input_layernorm.weight")
         }
-        WeightBlockRole::AttentionNorm => layer_name(role, layer, "input_layernorm.weight"),
-        WeightBlockRole::MlpNorm => layer_name(role, layer, "post_attention_layernorm.weight"),
-        WeightBlockRole::QueryProjection => layer_name(role, layer, "self_attn.q_proj.weight"),
-        WeightBlockRole::QueryNorm => layer_name(role, layer, "self_attn.q_norm.weight"),
-        WeightBlockRole::QueryBias => layer_name(role, layer, "self_attn.q_proj.bias"),
-        WeightBlockRole::KeyProjection => layer_name(role, layer, "self_attn.k_proj.weight"),
-        WeightBlockRole::KeyNorm => layer_name(role, layer, "self_attn.k_norm.weight"),
-        WeightBlockRole::KeyBias => layer_name(role, layer, "self_attn.k_proj.bias"),
-        WeightBlockRole::ValueProjection => layer_name(role, layer, "self_attn.v_proj.weight"),
-        WeightBlockRole::ValueBias => layer_name(role, layer, "self_attn.v_proj.bias"),
-        WeightBlockRole::OutputProjection => layer_name(role, layer, "self_attn.o_proj.weight"),
-        WeightBlockRole::OutputBias => layer_name(role, layer, "self_attn.o_proj.bias"),
-        WeightBlockRole::GateProjection => layer_name(role, layer, "mlp.gate_proj.weight"),
-        WeightBlockRole::UpProjection => layer_name(role, layer, "mlp.up_proj.weight"),
-        WeightBlockRole::DownProjection => layer_name(role, layer, "mlp.down_proj.weight"),
+        WeightBlockRole::MlpNorm => {
+            layer_name(architecture, role, layer, "post_attention_layernorm.weight")
+        }
+        WeightBlockRole::QueryProjection => {
+            layer_name(architecture, role, layer, "self_attn.q_proj.weight")
+        }
+        WeightBlockRole::QueryNorm => {
+            layer_name(architecture, role, layer, "self_attn.q_norm.weight")
+        }
+        WeightBlockRole::QueryBias => {
+            layer_name(architecture, role, layer, "self_attn.q_proj.bias")
+        }
+        WeightBlockRole::KeyProjection => {
+            layer_name(architecture, role, layer, "self_attn.k_proj.weight")
+        }
+        WeightBlockRole::KeyNorm => {
+            layer_name(architecture, role, layer, "self_attn.k_norm.weight")
+        }
+        WeightBlockRole::KeyBias => layer_name(architecture, role, layer, "self_attn.k_proj.bias"),
+        WeightBlockRole::ValueProjection => {
+            layer_name(architecture, role, layer, "self_attn.v_proj.weight")
+        }
+        WeightBlockRole::ValueBias => {
+            layer_name(architecture, role, layer, "self_attn.v_proj.bias")
+        }
+        WeightBlockRole::OutputProjection => {
+            layer_name(architecture, role, layer, "self_attn.o_proj.weight")
+        }
+        WeightBlockRole::OutputBias => {
+            layer_name(architecture, role, layer, "self_attn.o_proj.bias")
+        }
+        WeightBlockRole::LinearConvProjection => {
+            layer_name(architecture, role, layer, "linear_attn.conv1d.weight")
+        }
+        WeightBlockRole::LinearQkvProjection => {
+            layer_name(architecture, role, layer, "linear_attn.in_proj_qkv.weight")
+        }
+        WeightBlockRole::LinearZProjection => {
+            layer_name(architecture, role, layer, "linear_attn.in_proj_z.weight")
+        }
+        WeightBlockRole::LinearBProjection => {
+            layer_name(architecture, role, layer, "linear_attn.in_proj_b.weight")
+        }
+        WeightBlockRole::LinearAProjection => {
+            layer_name(architecture, role, layer, "linear_attn.in_proj_a.weight")
+        }
+        WeightBlockRole::LinearDtBias => {
+            layer_name(architecture, role, layer, "linear_attn.dt_bias")
+        }
+        WeightBlockRole::LinearALog => layer_name(architecture, role, layer, "linear_attn.A_log"),
+        WeightBlockRole::LinearNorm => {
+            layer_name(architecture, role, layer, "linear_attn.norm.weight")
+        }
+        WeightBlockRole::LinearOutputProjection => {
+            layer_name(architecture, role, layer, "linear_attn.out_proj.weight")
+        }
+        WeightBlockRole::GateProjection => {
+            layer_name(architecture, role, layer, "mlp.gate_proj.weight")
+        }
+        WeightBlockRole::UpProjection => {
+            layer_name(architecture, role, layer, "mlp.up_proj.weight")
+        }
+        WeightBlockRole::DownProjection => {
+            layer_name(architecture, role, layer, "mlp.down_proj.weight")
+        }
+        WeightBlockRole::RouterProjection => {
+            if architecture == HfArchitectureKind::MixtralMoe {
+                layer_name(architecture, role, layer, "block_sparse_moe.gate.weight")
+            } else {
+                layer_name(architecture, role, layer, "mlp.gate.weight")
+            }
+        }
+        WeightBlockRole::SharedExpertGateProjection => layer_name(
+            architecture,
+            role,
+            layer,
+            "mlp.shared_expert.gate_proj.weight",
+        ),
+        WeightBlockRole::SharedExpertUpProjection => layer_name(
+            architecture,
+            role,
+            layer,
+            "mlp.shared_expert.up_proj.weight",
+        ),
+        WeightBlockRole::SharedExpertDownProjection => layer_name(
+            architecture,
+            role,
+            layer,
+            "mlp.shared_expert.down_proj.weight",
+        ),
+        WeightBlockRole::SharedExpertRouterProjection => {
+            layer_name(architecture, role, layer, "mlp.shared_expert_gate.weight")
+        }
+        WeightBlockRole::ExpertGateUpProjection
+            if architecture == HfArchitectureKind::Qwen35Moe =>
+        {
+            layer_name(architecture, role, layer, "mlp.experts.gate_up_proj")
+        }
+        WeightBlockRole::ExpertDownProjection if architecture == HfArchitectureKind::Qwen35Moe => {
+            layer_name(architecture, role, layer, "mlp.experts.down_proj")
+        }
+        WeightBlockRole::ExpertGateProjection
+        | WeightBlockRole::ExpertUpProjection
+        | WeightBlockRole::ExpertGateUpProjection
+        | WeightBlockRole::ExpertDownProjection => Err(NervaError::InvalidArgument {
+            reason: format!("weight block {} requires an expert index", role.as_str()),
+        }),
     }
+}
+
+pub(crate) fn hf_expert_tensor_name(
+    architecture: HfArchitectureKind,
+    role: WeightBlockRole,
+    layer: Option<u32>,
+    expert: u32,
+) -> Result<String> {
+    ensure_supported_hf_tensor_names(architecture)?;
+    let suffix = match role {
+        WeightBlockRole::ExpertGateProjection => match architecture {
+            HfArchitectureKind::MixtralMoe => {
+                format!("block_sparse_moe.experts.{expert}.w1.weight")
+            }
+            _ => format!("mlp.experts.{expert}.gate_proj.weight"),
+        },
+        WeightBlockRole::ExpertUpProjection => match architecture {
+            HfArchitectureKind::MixtralMoe => {
+                format!("block_sparse_moe.experts.{expert}.w3.weight")
+            }
+            _ => format!("mlp.experts.{expert}.up_proj.weight"),
+        },
+        WeightBlockRole::ExpertDownProjection => match architecture {
+            HfArchitectureKind::MixtralMoe => {
+                format!("block_sparse_moe.experts.{expert}.w2.weight")
+            }
+            _ => format!("mlp.experts.{expert}.down_proj.weight"),
+        },
+        _ => {
+            return Err(NervaError::InvalidArgument {
+                reason: format!("weight block {} is not an expert tensor", role.as_str()),
+            });
+        }
+    };
+    layer_name_owned(architecture, role, layer, suffix)
 }
 
 fn require_static_tensor(role: WeightBlockRole, layer: Option<u32>) -> Result<()> {
@@ -64,11 +197,45 @@ fn require_static_tensor(role: WeightBlockRole, layer: Option<u32>) -> Result<()
     }
 }
 
-fn layer_name(role: WeightBlockRole, layer: Option<u32>, suffix: &'static str) -> Result<String> {
+fn static_tensor_name(architecture: HfArchitectureKind, suffix: &'static str) -> String {
+    if uses_language_model_prefix(architecture) {
+        format!("model.language_model.{suffix}")
+    } else {
+        format!("model.{suffix}")
+    }
+}
+
+fn layer_name(
+    architecture: HfArchitectureKind,
+    role: WeightBlockRole,
+    layer: Option<u32>,
+    suffix: &'static str,
+) -> Result<String> {
+    layer_name_owned(architecture, role, layer, suffix.to_string())
+}
+
+fn layer_name_owned(
+    architecture: HfArchitectureKind,
+    role: WeightBlockRole,
+    layer: Option<u32>,
+    suffix: String,
+) -> Result<String> {
     let layer = layer.ok_or_else(|| NervaError::InvalidArgument {
         reason: format!("weight block {} must have a layer", role.as_str()),
     })?;
-    Ok(format!("model.layers.{layer}.{suffix}"))
+    let prefix = if uses_language_model_prefix(architecture) {
+        "model.language_model.layers"
+    } else {
+        "model.layers"
+    };
+    Ok(format!("{prefix}.{layer}.{suffix}"))
+}
+
+fn uses_language_model_prefix(architecture: HfArchitectureKind) -> bool {
+    matches!(
+        architecture,
+        HfArchitectureKind::Qwen35 | HfArchitectureKind::Qwen35Moe
+    )
 }
 
 pub(crate) fn weight_block_rank(role: WeightBlockRole) -> u8 {
@@ -80,6 +247,9 @@ pub(crate) fn weight_block_rank(role: WeightBlockRole) -> u8 {
         | WeightBlockRole::KeyBias
         | WeightBlockRole::ValueBias
         | WeightBlockRole::OutputBias
+        | WeightBlockRole::LinearDtBias
+        | WeightBlockRole::LinearALog
+        | WeightBlockRole::LinearNorm
         | WeightBlockRole::MlpNorm
         | WeightBlockRole::FinalNorm => 1,
         WeightBlockRole::TokenEmbedding
@@ -87,9 +257,23 @@ pub(crate) fn weight_block_rank(role: WeightBlockRole) -> u8 {
         | WeightBlockRole::KeyProjection
         | WeightBlockRole::ValueProjection
         | WeightBlockRole::OutputProjection
+        | WeightBlockRole::LinearConvProjection
+        | WeightBlockRole::LinearQkvProjection
+        | WeightBlockRole::LinearZProjection
+        | WeightBlockRole::LinearBProjection
+        | WeightBlockRole::LinearAProjection
+        | WeightBlockRole::LinearOutputProjection
         | WeightBlockRole::GateProjection
         | WeightBlockRole::UpProjection
         | WeightBlockRole::DownProjection
+        | WeightBlockRole::RouterProjection
+        | WeightBlockRole::ExpertGateProjection
+        | WeightBlockRole::ExpertUpProjection
+        | WeightBlockRole::SharedExpertGateProjection
+        | WeightBlockRole::SharedExpertUpProjection
+        | WeightBlockRole::SharedExpertDownProjection
+        | WeightBlockRole::SharedExpertRouterProjection
         | WeightBlockRole::LmHead => 2,
+        WeightBlockRole::ExpertGateUpProjection | WeightBlockRole::ExpertDownProjection => 3,
     }
 }

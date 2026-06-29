@@ -136,6 +136,7 @@ pub fn plan_safetensors_shards_for_manifest(
             shard_file: shard_file.clone(),
             role: entry.role,
             layer: entry.layer,
+            expert: entry.expert,
             dtype: entry.dtype,
             tier: entry.tier,
             bytes: entry.bytes,

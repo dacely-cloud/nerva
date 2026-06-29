@@ -2,7 +2,7 @@ use crate::decode::ffi::CUDA_ERROR_NO_DEVICE;
 use crate::decode::hf_chain::ffi::{
     NervaCudaHfDecodeChainRequest, NervaCudaHfDecodeChainResult, run_hf_decode_chain_u16,
 };
-use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
+use crate::decode::hf_chain::layer::{CUDA_HF_ATTENTION_FULL, CudaHfDecodeChainLayer};
 use crate::decode::hf_chain::summary::{CudaHfDecodeChainSummary, empty_summary};
 use crate::smoke::status::SmokeStatus;
 
@@ -112,6 +112,11 @@ impl<'a> CudaHfDecodeChainRequest<'a> {
         let attention_hidden = self.heads * self.head_dim;
         let kv_hidden = self.kv_heads * self.head_dim;
         self.layers.iter().enumerate().find_map(|(index, layer)| {
+            if layer.attention_kind != CUDA_HF_ATTENTION_FULL {
+                return Some(format!(
+                    "layer {index}: CUDA HF decode chain supports only full-attention layers; use the sequence/session runtime for linear attention"
+                ));
+            }
             layer
                 .validate(
                     self.hidden,

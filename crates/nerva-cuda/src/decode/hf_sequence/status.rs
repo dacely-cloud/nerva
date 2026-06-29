@@ -20,7 +20,12 @@ pub(super) fn sequence_failure_reason(
     out: &NervaCudaHfDecodeSequenceResult,
 ) -> String {
     format!(
-        "CUDA HF decode sequence failed: return_code={return_code} status={} cuda_error={}",
-        out.status, out.cuda_error,
+        "CUDA HF decode sequence failed: return_code={return_code} status={} cuda_error={} observed_tokens={} graph_replays={} h2d_bytes={} d2h_bytes={}",
+        out.status,
+        out.cuda_error,
+        out.observed_tokens,
+        out.graph_replays,
+        out.h2d_bytes,
+        out.d2h_bytes,
     )
 }

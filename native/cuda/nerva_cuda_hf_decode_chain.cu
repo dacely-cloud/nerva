@@ -12,6 +12,11 @@ namespace {
 
 constexpr uint32_t kDTypeF16 = 0;
 constexpr uint32_t kDTypeBF16 = 1;
+constexpr uint32_t kAttentionKindFull = 0;
+constexpr uint32_t kMlpKindDense = 0;
+constexpr uint32_t kMlpKindSparseMoe = 1;
+constexpr uint32_t kSparseMoeExpertsMax = 256;
+constexpr uint32_t kSparseMoeTopKMax = 16;
 constexpr uint32_t kRequestId = 1;
 constexpr uint32_t kSequenceId = 1;
 constexpr uint32_t kCompletionDeviceComplete = 1;
@@ -30,6 +35,7 @@ struct ChainLayerLayout {
   uint64_t rms_attn;
   uint64_t rms_mlp;
   uint64_t w_q;
+  uint64_t w_q_gate;
   uint64_t w_k;
   uint64_t q_norm;
   uint64_t k_norm;
@@ -42,6 +48,19 @@ struct ChainLayerLayout {
   uint64_t w_gate;
   uint64_t w_up;
   uint64_t w_down;
+  uint64_t w_router;
+  uint64_t w_expert_gate_up;
+  uint64_t w_expert_down;
+  uint64_t w_shared_expert_gate;
+  uint64_t w_shared_expert_up;
+  uint64_t w_shared_expert_down;
+  uint64_t w_shared_expert_router;
+  uint32_t mlp_kind;
+  uint32_t moe_intermediate;
+  uint32_t shared_expert_intermediate;
+  uint32_t num_experts;
+  uint32_t experts_per_token;
+  uint32_t norm_topk_prob;
 };
 
 __device__ float encoded_to_f32(uint16_t value, uint32_t dtype) {
@@ -62,6 +81,10 @@ __device__ uint16_t f32_to_encoded(float value, uint32_t dtype) {
 
 __device__ float silu(float value) {
   return value / (1.0f + expf(-value));
+}
+
+__device__ float sigmoid(float value) {
+  return 1.0f / (1.0f + expf(-value));
 }
 
 __device__ void mat_vec(const uint16_t *matrix, const float *input, uint32_t rows,
@@ -142,6 +165,163 @@ __device__ void apply_rope(float *values, uint32_t heads, uint32_t head_dim,
   }
 }
 
+__device__ void run_sparse_moe_mlp(uint16_t *arena, ChainLayerLayout layout,
+                                   const float *mlp_norm, uint32_t dtype,
+                                   uint32_t hidden, uint32_t intermediate,
+                                   float *router_logits,
+                                   uint32_t *selected_experts,
+                                   float *selected_weights, float *gate,
+                                   float *up, float *down) {
+  const uint32_t num_experts = layout.num_experts;
+  const uint32_t top_k = layout.experts_per_token;
+  const uint32_t moe_intermediate = layout.moe_intermediate;
+  for (uint32_t index = 0; index < hidden; ++index) {
+    down[index] = 0.0f;
+  }
+  if (num_experts == 0 || num_experts > kSparseMoeExpertsMax ||
+      top_k == 0 || top_k > kSparseMoeTopKMax || top_k > num_experts ||
+      moe_intermediate == 0 || moe_intermediate > intermediate) {
+    return;
+  }
+
+  for (uint32_t expert = 0; expert < num_experts; ++expert) {
+    const uint16_t *router_row =
+        arena + layout.w_router + static_cast<uint64_t>(expert) * hidden;
+    float sum = 0.0f;
+    for (uint32_t col = 0; col < hidden; ++col) {
+      sum += encoded_to_f32(router_row[col], dtype) * mlp_norm[col];
+    }
+    router_logits[expert] = sum;
+  }
+
+  float max_logit = -INFINITY;
+  for (uint32_t expert = 0; expert < num_experts; ++expert) {
+    max_logit = fmaxf(max_logit, router_logits[expert]);
+  }
+  float total = 0.0f;
+  for (uint32_t expert = 0; expert < num_experts; ++expert) {
+    total += expf(router_logits[expert] - max_logit);
+  }
+  for (uint32_t rank = 0; rank < top_k; ++rank) {
+    uint32_t best_expert = UINT32_MAX;
+    float best_weight = -INFINITY;
+    for (uint32_t expert = 0; expert < num_experts; ++expert) {
+      bool already_selected = false;
+      for (uint32_t previous = 0; previous < rank; ++previous) {
+        already_selected |= selected_experts[previous] == expert;
+      }
+      if (already_selected) {
+        continue;
+      }
+      float weight = expf(router_logits[expert] - max_logit);
+      if (total > 0.0f && isfinite(total)) {
+        weight /= total;
+      }
+      if (weight > best_weight ||
+          (weight == best_weight && expert < best_expert)) {
+        best_weight = weight;
+        best_expert = expert;
+      }
+    }
+    selected_experts[rank] = best_expert;
+    selected_weights[rank] = best_weight;
+  }
+  if (layout.norm_topk_prob != 0) {
+    float selected_sum = 0.0f;
+    for (uint32_t rank = 0; rank < top_k; ++rank) {
+      selected_sum += selected_weights[rank];
+    }
+    if (selected_sum > 0.0f) {
+      for (uint32_t rank = 0; rank < top_k; ++rank) {
+        selected_weights[rank] /= selected_sum;
+      }
+    }
+  }
+
+  const uint64_t expert_gate_up_stride =
+      static_cast<uint64_t>(moe_intermediate) * 2u * hidden;
+  const uint64_t expert_down_stride =
+      static_cast<uint64_t>(hidden) * moe_intermediate;
+  for (uint32_t rank = 0; rank < top_k; ++rank) {
+    const uint32_t expert = selected_experts[rank];
+    const float expert_weight = selected_weights[rank];
+    const uint64_t gate_up_base =
+        layout.w_expert_gate_up +
+        static_cast<uint64_t>(expert) * expert_gate_up_stride;
+    const uint16_t *expert_gate = arena + gate_up_base;
+    const uint16_t *expert_up =
+        arena + gate_up_base +
+        static_cast<uint64_t>(moe_intermediate) * hidden;
+    const uint16_t *expert_down =
+        arena + layout.w_expert_down +
+        static_cast<uint64_t>(expert) * expert_down_stride;
+
+    for (uint32_t row = 0; row < moe_intermediate; ++row) {
+      const uint16_t *gate_row =
+          expert_gate + static_cast<uint64_t>(row) * hidden;
+      const uint16_t *up_row =
+          expert_up + static_cast<uint64_t>(row) * hidden;
+      float gate_sum = 0.0f;
+      float up_sum = 0.0f;
+      for (uint32_t col = 0; col < hidden; ++col) {
+        gate_sum += encoded_to_f32(gate_row[col], dtype) * mlp_norm[col];
+        up_sum += encoded_to_f32(up_row[col], dtype) * mlp_norm[col];
+      }
+      gate[row] = gate_sum;
+      up[row] = up_sum;
+    }
+
+    for (uint32_t row = 0; row < hidden; ++row) {
+      const uint16_t *down_row =
+          expert_down + static_cast<uint64_t>(row) * moe_intermediate;
+      float sum = 0.0f;
+      for (uint32_t col = 0; col < moe_intermediate; ++col) {
+        sum += encoded_to_f32(down_row[col], dtype) *
+               (silu(gate[col]) * up[col]);
+      }
+      down[row] += expert_weight * sum;
+    }
+  }
+
+  const uint32_t shared_intermediate = layout.shared_expert_intermediate;
+  if (shared_intermediate != 0) {
+    float shared_gate_sum = 0.0f;
+    for (uint32_t col = 0; col < hidden; ++col) {
+      shared_gate_sum +=
+          encoded_to_f32(arena[layout.w_shared_expert_router + col], dtype) *
+          mlp_norm[col];
+    }
+    const float shared_gate_weight = sigmoid(shared_gate_sum);
+    for (uint32_t row = 0; row < shared_intermediate; ++row) {
+      const uint16_t *gate_row =
+          arena + layout.w_shared_expert_gate +
+          static_cast<uint64_t>(row) * hidden;
+      const uint16_t *up_row =
+          arena + layout.w_shared_expert_up +
+          static_cast<uint64_t>(row) * hidden;
+      float shared_gate = 0.0f;
+      float shared_up = 0.0f;
+      for (uint32_t col = 0; col < hidden; ++col) {
+        shared_gate += encoded_to_f32(gate_row[col], dtype) * mlp_norm[col];
+        shared_up += encoded_to_f32(up_row[col], dtype) * mlp_norm[col];
+      }
+      gate[row] = shared_gate;
+      up[row] = shared_up;
+    }
+    for (uint32_t row = 0; row < hidden; ++row) {
+      const uint16_t *down_row =
+          arena + layout.w_shared_expert_down +
+          static_cast<uint64_t>(row) * shared_intermediate;
+      float sum = 0.0f;
+      for (uint32_t col = 0; col < shared_intermediate; ++col) {
+        sum += encoded_to_f32(down_row[col], dtype) *
+               (silu(gate[col]) * up[col]);
+      }
+      down[row] += shared_gate_weight * sum;
+    }
+  }
+}
+
 __device__ void run_layer(uint16_t *arena, ChainLayerLayout layout, uint64_t input_offset,
                           uint64_t output_offset, uint32_t dtype, uint32_t hidden,
                           uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
@@ -157,16 +337,26 @@ __device__ void run_layer(uint16_t *arena, ChainLayerLayout layout, uint64_t inp
   float *attn = v + kv_hidden;
   float *residual = attn + attention_hidden;
   float *mlp_norm = residual + hidden;
-  float *gate = mlp_norm + hidden;
+  float *q_gate = mlp_norm + hidden;
+  float *router_logits = q_gate + attention_hidden;
+  float *gate = router_logits + kSparseMoeExpertsMax;
   float *up = gate + intermediate;
   float *ff = up + intermediate;
   float *down = ff + intermediate;
+  uint32_t *selected_experts =
+      reinterpret_cast<uint32_t *>(down + hidden);
+  float *selected_weights =
+      reinterpret_cast<float *>(selected_experts + kSparseMoeTopKMax);
 
   for (uint32_t index = 0; index < hidden; ++index) {
     input[index] = encoded_to_f32(arena[input_offset + index], dtype);
   }
   rms_norm(input, arena + layout.rms_attn, hidden, dtype, rms_eps, attn_norm);
   mat_vec(arena + layout.w_q, attn_norm, attention_hidden, hidden, dtype, q);
+  if (layout.w_q_gate != kMissingOffset) {
+    mat_vec(arena + layout.w_q_gate, attn_norm, attention_hidden, hidden, dtype,
+            q_gate);
+  }
   mat_vec(arena + layout.w_k, attn_norm, kv_hidden, hidden, dtype, k);
   mat_vec(arena + layout.w_v, attn_norm, kv_hidden, hidden, dtype, v);
   add_bias(arena, layout.q_bias, attention_hidden, dtype, q);
@@ -183,6 +373,11 @@ __device__ void run_layer(uint16_t *arena, ChainLayerLayout layout, uint64_t inp
       attn[head * head_dim + offset] = v[kv_head * head_dim + offset];
     }
   }
+  if (layout.w_q_gate != kMissingOffset) {
+    for (uint32_t index = 0; index < attention_hidden; ++index) {
+      attn[index] *= 1.0f / (1.0f + expf(-q_gate[index]));
+    }
+  }
   mat_vec(arena + layout.w_o, attn, hidden, attention_hidden, dtype, residual);
   add_bias(arena, layout.o_bias, hidden, dtype, residual);
   for (uint32_t index = 0; index < hidden; ++index) {
@@ -190,12 +385,18 @@ __device__ void run_layer(uint16_t *arena, ChainLayerLayout layout, uint64_t inp
   }
 
   rms_norm(residual, arena + layout.rms_mlp, hidden, dtype, rms_eps, mlp_norm);
-  mat_vec(arena + layout.w_gate, mlp_norm, intermediate, hidden, dtype, gate);
-  mat_vec(arena + layout.w_up, mlp_norm, intermediate, hidden, dtype, up);
-  for (uint32_t index = 0; index < intermediate; ++index) {
-    ff[index] = silu(gate[index]) * up[index];
+  if (layout.mlp_kind == kMlpKindSparseMoe) {
+    run_sparse_moe_mlp(arena, layout, mlp_norm, dtype, hidden, intermediate,
+                       router_logits, selected_experts, selected_weights, gate,
+                       up, down);
+  } else {
+    mat_vec(arena + layout.w_gate, mlp_norm, intermediate, hidden, dtype, gate);
+    mat_vec(arena + layout.w_up, mlp_norm, intermediate, hidden, dtype, up);
+    for (uint32_t index = 0; index < intermediate; ++index) {
+      ff[index] = silu(gate[index]) * up[index];
+    }
+    mat_vec(arena + layout.w_down, ff, hidden, intermediate, dtype, down);
   }
-  mat_vec(arena + layout.w_down, ff, hidden, intermediate, dtype, down);
   for (uint32_t index = 0; index < hidden; ++index) {
     arena[output_offset + index] = f32_to_encoded(residual[index] + down[index], dtype);
   }
@@ -270,11 +471,40 @@ uint64_t push_optional(uint64_t &cursor, uint64_t len, const uint16_t *ptr) {
   return push(cursor, len);
 }
 
-bool valid_layer(const NervaCudaHfDecodeChainLayer &layer) {
-  return layer.rms_attn_weight != nullptr && layer.rms_mlp_weight != nullptr &&
-         layer.w_q != nullptr && layer.w_k != nullptr && layer.w_v != nullptr &&
-         layer.w_o != nullptr && layer.w_gate != nullptr && layer.w_up != nullptr &&
-         layer.w_down != nullptr;
+bool valid_layer(const NervaCudaHfDecodeChainLayer &layer,
+                 uint32_t intermediate) {
+  if (layer.attention_kind != kAttentionKindFull ||
+      layer.rms_attn_weight == nullptr || layer.rms_mlp_weight == nullptr ||
+      layer.w_q == nullptr || layer.w_k == nullptr || layer.w_v == nullptr ||
+      layer.w_o == nullptr) {
+    return false;
+  }
+  if (layer.mlp_kind == kMlpKindDense) {
+    return layer.w_gate != nullptr && layer.w_up != nullptr &&
+           layer.w_down != nullptr;
+  }
+  if (layer.mlp_kind != kMlpKindSparseMoe) {
+    return false;
+  }
+  if (layer.moe_intermediate == 0 ||
+      layer.moe_intermediate > intermediate ||
+      layer.shared_expert_intermediate > intermediate ||
+      layer.num_experts == 0 || layer.num_experts > kSparseMoeExpertsMax ||
+      layer.experts_per_token == 0 ||
+      layer.experts_per_token > kSparseMoeTopKMax ||
+      layer.experts_per_token > layer.num_experts ||
+      layer.w_router == nullptr || layer.w_expert_gate_up == nullptr ||
+      layer.w_expert_down == nullptr) {
+    return false;
+  }
+  if (layer.shared_expert_intermediate != 0 &&
+      (layer.w_shared_expert_gate == nullptr ||
+       layer.w_shared_expert_up == nullptr ||
+       layer.w_shared_expert_down == nullptr ||
+       layer.w_shared_expert_router == nullptr)) {
+    return false;
+  }
+  return true;
 }
 
 bool valid_request(const NervaCudaHfDecodeChainRequest *request) {
@@ -289,7 +519,7 @@ bool valid_request(const NervaCudaHfDecodeChainRequest *request) {
     return false;
   }
   for (uint32_t index = 0; index < request->layer_count; ++index) {
-    if (!valid_layer(request->layers[index])) {
+    if (!valid_layer(request->layers[index], request->intermediate)) {
       return false;
     }
   }
@@ -325,6 +555,8 @@ void pack_layer(ChainLayerLayout &layout, uint64_t &cursor,
   layout.rms_attn = push(cursor, hidden);
   layout.rms_mlp = push(cursor, hidden);
   layout.w_q = push(cursor, attention_hidden * hidden);
+  layout.w_q_gate =
+      push_optional(cursor, attention_hidden * hidden, layer.w_q_gate);
   layout.q_norm = push_optional(cursor, head_dim, layer.q_norm_weight);
   layout.w_k = push(cursor, kv_hidden * hidden);
   layout.k_norm = push_optional(cursor, head_dim, layer.k_norm_weight);
@@ -334,9 +566,42 @@ void pack_layer(ChainLayerLayout &layout, uint64_t &cursor,
   layout.k_bias = push_optional(cursor, kv_hidden, layer.k_bias);
   layout.v_bias = push_optional(cursor, kv_hidden, layer.v_bias);
   layout.o_bias = push_optional(cursor, hidden, layer.o_bias);
-  layout.w_gate = push(cursor, intermediate * hidden);
-  layout.w_up = push(cursor, intermediate * hidden);
-  layout.w_down = push(cursor, hidden * intermediate);
+  layout.mlp_kind = layer.mlp_kind;
+  layout.moe_intermediate = layer.moe_intermediate;
+  layout.shared_expert_intermediate = layer.shared_expert_intermediate;
+  layout.num_experts = layer.num_experts;
+  layout.experts_per_token = layer.experts_per_token;
+  layout.norm_topk_prob = layer.norm_topk_prob;
+  layout.w_gate = kMissingOffset;
+  layout.w_up = kMissingOffset;
+  layout.w_down = kMissingOffset;
+  layout.w_router = kMissingOffset;
+  layout.w_expert_gate_up = kMissingOffset;
+  layout.w_expert_down = kMissingOffset;
+  layout.w_shared_expert_gate = kMissingOffset;
+  layout.w_shared_expert_up = kMissingOffset;
+  layout.w_shared_expert_down = kMissingOffset;
+  layout.w_shared_expert_router = kMissingOffset;
+  if (layer.mlp_kind == kMlpKindSparseMoe) {
+    const uint64_t moe_intermediate = layer.moe_intermediate;
+    const uint64_t num_experts = layer.num_experts;
+    layout.w_router = push(cursor, num_experts * hidden);
+    layout.w_expert_gate_up =
+        push(cursor, num_experts * moe_intermediate * 2u * hidden);
+    layout.w_expert_down =
+        push(cursor, num_experts * hidden * moe_intermediate);
+    if (layer.shared_expert_intermediate != 0) {
+      const uint64_t shared = layer.shared_expert_intermediate;
+      layout.w_shared_expert_gate = push(cursor, shared * hidden);
+      layout.w_shared_expert_up = push(cursor, shared * hidden);
+      layout.w_shared_expert_down = push(cursor, hidden * shared);
+      layout.w_shared_expert_router = push(cursor, hidden);
+    }
+  } else {
+    layout.w_gate = push(cursor, intermediate * hidden);
+    layout.w_up = push(cursor, intermediate * hidden);
+    layout.w_down = push(cursor, hidden * intermediate);
+  }
 }
 
 void copy_optional(uint16_t *arena, uint64_t offset, const uint16_t *src, uint64_t elements) {
@@ -352,6 +617,8 @@ void copy_layer(uint16_t *arena, const ChainLayerLayout &layout,
   memcpy(arena + layout.rms_attn, layer.rms_attn_weight, hidden * sizeof(uint16_t));
   memcpy(arena + layout.rms_mlp, layer.rms_mlp_weight, hidden * sizeof(uint16_t));
   memcpy(arena + layout.w_q, layer.w_q, attention_hidden * hidden * sizeof(uint16_t));
+  copy_optional(arena, layout.w_q_gate, layer.w_q_gate,
+                attention_hidden * hidden);
   copy_optional(arena, layout.q_norm, layer.q_norm_weight, head_dim);
   memcpy(arena + layout.w_k, layer.w_k, kv_hidden * hidden * sizeof(uint16_t));
   copy_optional(arena, layout.k_norm, layer.k_norm_weight, head_dim);
@@ -361,9 +628,34 @@ void copy_layer(uint16_t *arena, const ChainLayerLayout &layout,
   copy_optional(arena, layout.k_bias, layer.k_bias, kv_hidden);
   copy_optional(arena, layout.v_bias, layer.v_bias, kv_hidden);
   copy_optional(arena, layout.o_bias, layer.o_bias, hidden);
-  memcpy(arena + layout.w_gate, layer.w_gate, intermediate * hidden * sizeof(uint16_t));
-  memcpy(arena + layout.w_up, layer.w_up, intermediate * hidden * sizeof(uint16_t));
-  memcpy(arena + layout.w_down, layer.w_down, hidden * intermediate * sizeof(uint16_t));
+  if (layout.mlp_kind == kMlpKindSparseMoe) {
+    const uint64_t moe_intermediate = layout.moe_intermediate;
+    const uint64_t num_experts = layout.num_experts;
+    memcpy(arena + layout.w_router, layer.w_router,
+           num_experts * hidden * sizeof(uint16_t));
+    memcpy(arena + layout.w_expert_gate_up, layer.w_expert_gate_up,
+           num_experts * moe_intermediate * 2u * hidden * sizeof(uint16_t));
+    memcpy(arena + layout.w_expert_down, layer.w_expert_down,
+           num_experts * hidden * moe_intermediate * sizeof(uint16_t));
+    if (layout.shared_expert_intermediate != 0) {
+      const uint64_t shared = layout.shared_expert_intermediate;
+      memcpy(arena + layout.w_shared_expert_gate, layer.w_shared_expert_gate,
+             shared * hidden * sizeof(uint16_t));
+      memcpy(arena + layout.w_shared_expert_up, layer.w_shared_expert_up,
+             shared * hidden * sizeof(uint16_t));
+      memcpy(arena + layout.w_shared_expert_down, layer.w_shared_expert_down,
+             hidden * shared * sizeof(uint16_t));
+      memcpy(arena + layout.w_shared_expert_router,
+             layer.w_shared_expert_router, hidden * sizeof(uint16_t));
+    }
+  } else {
+    memcpy(arena + layout.w_gate, layer.w_gate,
+           intermediate * hidden * sizeof(uint16_t));
+    memcpy(arena + layout.w_up, layer.w_up,
+           intermediate * hidden * sizeof(uint16_t));
+    memcpy(arena + layout.w_down, layer.w_down,
+           hidden * intermediate * sizeof(uint16_t));
+  }
 }
 
 }  // namespace
@@ -410,7 +702,8 @@ extern "C" int nerva_cuda_hf_decode_chain_u16(
   const uint64_t arena_bytes = elements * sizeof(uint16_t);
   const uint64_t layout_bytes = layouts.size() * sizeof(ChainLayerLayout);
   const uint64_t block_scratch =
-      hidden * 4 + attention_hidden * 2 + kv_hidden * 2 + intermediate * 4;
+      hidden * 5 + attention_hidden * 3 + kv_hidden * 2 + intermediate * 3 +
+      kSparseMoeExpertsMax + kSparseMoeTopKMax * 2u;
   const uint64_t scratch_bytes = (block_scratch + hidden + vocab_size) * sizeof(float);
 
   uint16_t *host_arena = nullptr;

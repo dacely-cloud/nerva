@@ -6,6 +6,27 @@
 
 
 
+__global__ void hf_deinterleave_q_gate_projection_kernel(
+    const uint16_t *packed, uint16_t *q, uint16_t *q_gate,
+    uint32_t heads, uint32_t head_dim, uint32_t hidden) {
+  const uint64_t head_elements =
+      static_cast<uint64_t>(head_dim) * static_cast<uint64_t>(hidden);
+  const uint64_t total = static_cast<uint64_t>(heads) * head_elements;
+  const uint64_t start = static_cast<uint64_t>(blockIdx.x) * blockDim.x +
+                         static_cast<uint64_t>(threadIdx.x);
+  const uint64_t stride =
+      static_cast<uint64_t>(blockDim.x) * static_cast<uint64_t>(gridDim.x);
+  for (uint64_t index = start; index < total; index += stride) {
+    const uint64_t head = index / head_elements;
+    const uint64_t within = index - head * head_elements;
+    const uint64_t packed_base = head * head_elements * 2u;
+    q[index] = packed[packed_base + within];
+    q_gate[index] = packed[packed_base + head_elements + within];
+  }
+}
+
+
+
 
 
 
@@ -41,7 +62,8 @@ __global__ void hf_decode_sequence_kernel(
     uint32_t prompt_token_count, float rms_eps, float rope_theta, float *scratch,
     uint16_t *kv_keys, uint16_t *kv_values,
     uint32_t kv_block_count, const uint32_t *kv_block_table,
-    const NervaCudaSyntheticTokenSlot *slots) {
+    const NervaCudaSyntheticTokenSlot *slots,
+    float *linear_gdn_conv_state, float *linear_gdn_recurrent_state) {
   if (blockIdx.x != 0) {
     return;
   }
@@ -70,7 +92,8 @@ __global__ void hf_decode_sequence_kernel(
     run_layer(arena, layers[layer_index], layer_index, input_offset, output_offset,
               dtype, hidden, heads, kv_heads, head_dim, intermediate,
               current_position, max_steps, rms_eps, rope_theta, scratch, kv_keys,
-              kv_values, kv_block_count, kv_block_table);
+              kv_values, kv_block_count, kv_block_table,
+              linear_gdn_conv_state, linear_gdn_recurrent_state);
     const uint64_t next_input = output_offset;
     output_offset = input_offset;
     input_offset = next_input;
@@ -492,6 +515,26 @@ __global__ void hf_layer_attention_reduce_kernel(
   }
 }
 
+__global__ void hf_layer_query_gate_attention_encode_kernel(
+    uint32_t dtype, uint32_t hidden, uint32_t attention_hidden,
+    uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, float *scratch, uint16_t *projection_input) {
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return;
+  }
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const uint32_t start = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint32_t stride = blockDim.x * gridDim.x;
+  for (uint32_t index = start; index < attention_hidden; index += stride) {
+    const float value =
+        encoded_to_f32(projection_input[index], dtype) *
+        sigmoid(s.q_gate[index]);
+    s.attn[index] = value;
+    projection_input[index] = f32_to_encoded(value, dtype);
+  }
+}
+
 __global__ void hf_layer_mlp_norm_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
@@ -525,6 +568,21 @@ __global__ void hf_layer_ff_encode_kernel(
     s.ff[index] = value;
     projection_input[index] = f32_to_encoded(value, dtype);
   }
+}
+
+__global__ void hf_layer_sparse_moe_encode_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float *scratch, uint16_t *projection_input) {
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return;
+  }
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  encoded_slice_to_f32(projection_input, hidden, dtype, s.mlp_norm);
+  run_sparse_moe_mlp(arena, layout, dtype, hidden, intermediate, s.mlp_norm,
+                     s.gate, s.up, s.ff, s.down, s.input);
 }
 
 __global__ void hf_layer_finish_kernel(
@@ -661,6 +719,13 @@ __global__ void hf_pack_gate_up_weights_kernel(
       static_cast<uint32_t>(global_row / rows_per_layer);
   const uint32_t row = static_cast<uint32_t>(global_row % rows_per_layer);
   const SequenceLayerLayout layout = layouts[layer_index];
+  if (layout.mlp_kind == kMlpKindSparseMoe) {
+    uint16_t *dst = packed + global_row * hidden;
+    for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+      dst[col] = 0;
+    }
+    return;
+  }
   const uint16_t *src = nullptr;
   if (row < intermediate) {
     src = arena + layout.w_gate + static_cast<uint64_t>(row) * hidden;

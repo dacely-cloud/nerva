@@ -103,11 +103,7 @@ impl HfCausalLmModel {
         self.metadata.eos_token_id == Some(token.0)
     }
 
-    pub(crate) fn stop_reason_for_tokens(
-        &self,
-        tokens: &[TokenId],
-        steps: usize,
-    ) -> HfCausalLmStopReason {
+    pub fn stop_reason_for_tokens(&self, tokens: &[TokenId], steps: usize) -> HfCausalLmStopReason {
         match tokens.last().copied() {
             Some(token) if self.is_eos_token(token) => HfCausalLmStopReason::EosToken,
             _ if tokens.len() >= steps => HfCausalLmStopReason::MaxSteps,

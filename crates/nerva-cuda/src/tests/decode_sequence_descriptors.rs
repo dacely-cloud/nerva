@@ -1,14 +1,90 @@
-use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
-use crate::decode::hf_sequence::ffi::NervaCudaHfDecodeSamplerConfig;
+use crate::decode::hf_chain::layer::{
+    CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer,
+    CudaHfLinearGdnLayer,
+};
+use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::request::{
     CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
+use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{CudaHfDecodeSequenceWeightPlan, hash_weight_blocks};
 use crate::smoke::status::SmokeStatus;
 
 use super::decode_sequence_descriptor_blocks::{
     run_null_legacy_descriptor_decode, tiny_descriptor_weights,
 };
+
+#[test]
+fn linear_gdn_layer_validation_preserves_layout_metadata() {
+    let hidden = 4;
+    let rms = vec![0x3c00; hidden];
+    let router = vec![0x3c00; 4 * hidden];
+    let expert_gate_up = vec![0x3c00; 4 * 2 * 3 * hidden];
+    let expert_down = vec![0x3c00; 4 * hidden * 3];
+    let linear_conv = vec![0x3c00; 28];
+    let linear_qkv = vec![0x3c00; 28];
+    let linear_z = vec![0x3c00; 12];
+    let linear_b = vec![0x3c00; 4];
+    let linear_a = vec![0x3c00; 4];
+    let linear_dt_bias = vec![0x3c00; 1];
+    let linear_a_log = vec![0.0f32];
+    let linear_norm = vec![0x0000, 0x3f80, 0x0000, 0x3f80, 0x0000, 0x3f80];
+    let linear_out = vec![0x3c00; 12];
+    let layer = CudaHfDecodeChainLayer {
+        rms_attn_weight: &rms,
+        rms_mlp_weight: &rms,
+        w_q: &[],
+        w_q_gate: None,
+        w_k: &[],
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &[],
+        w_o: &[],
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &[],
+        w_up: &[],
+        w_down: &[],
+        w_router: Some(&router),
+        w_expert_gate_up: Some(&expert_gate_up),
+        w_expert_down: Some(&expert_down),
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: Some(CudaHfLinearGdnLayer {
+            key_heads: 1,
+            value_heads: 1,
+            key_head_dim: 2,
+            value_head_dim: 3,
+            conv_kernel: 4,
+            w_conv: &linear_conv,
+            w_qkv: &linear_qkv,
+            w_z: &linear_z,
+            w_b: &linear_b,
+            w_a: &linear_a,
+            dt_bias: &linear_dt_bias,
+            a_log: &linear_a_log,
+            norm_weight: &linear_norm,
+            w_out: &linear_out,
+        }),
+        mlp_kind: CUDA_HF_MLP_SPARSE_MOE,
+        moe_intermediate: 3,
+        shared_expert_intermediate: 0,
+        num_experts: 4,
+        experts_per_token: 2,
+        norm_topk_prob: true,
+        attention_kind: CUDA_HF_ATTENTION_LINEAR_GDN,
+    };
+
+    assert_eq!(layer.validate(hidden, 4, 4, 2, 8), None);
+    let ffi = layer.to_ffi();
+    assert_eq!(ffi.linear_key_heads, 1);
+    assert_eq!(ffi.linear_value_head_dim, 3);
+    assert!(!ffi.w_linear_a_log.is_null());
+}
 
 #[test]
 fn declared_weight_descriptors_override_legacy_weight_pointers() {
@@ -25,6 +101,7 @@ fn declared_weight_descriptors_override_legacy_weight_pointers() {
         rms_attn_weight: &poisoned_rms,
         rms_mlp_weight: &poisoned_rms,
         w_q: &poisoned_matrix,
+        w_q_gate: None,
         w_k: &poisoned_matrix,
         q_norm_weight: None,
         k_norm_weight: None,
@@ -37,6 +114,21 @@ fn declared_weight_descriptors_override_legacy_weight_pointers() {
         w_gate: &poisoned_matrix,
         w_up: &poisoned_matrix,
         w_down: &poisoned_matrix,
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: None,
+        mlp_kind: 0,
+        moe_intermediate: 0,
+        shared_expert_intermediate: 0,
+        num_experts: 0,
+        experts_per_token: 0,
+        norm_topk_prob: false,
+        attention_kind: crate::decode::hf_chain::layer::CUDA_HF_ATTENTION_FULL,
     };
     let poisoned_layers = [poisoned_layer];
     let weight_blocks = weights.blocks();
@@ -86,36 +178,352 @@ fn declared_weight_descriptors_override_legacy_weight_pointers() {
 fn declared_weight_descriptors_accept_null_legacy_weight_pointers() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
-    let sampler = NervaCudaHfDecodeSamplerConfig {
-        temperature: 0.0,
-        ..NervaCudaHfDecodeSamplerConfig::default()
-    };
-    let Some((out, output_tokens)) = run_null_legacy_descriptor_decode(sampler) else {
-        return;
-    };
-    assert_eq!(out.status, 0);
-    assert_eq!(out.descriptor_gpu_resident_h2d_bytes, 52);
-    assert_eq!(out.descriptor_gpu_staged_h2d_bytes, 48);
-    assert_eq!(output_tokens, [1, 2, 3, 0]);
+    assert_raw_descriptor_decode_matches_request(CudaHfDecodeSamplerConfig::greedy());
 }
 
 #[test]
 fn declared_weight_descriptors_support_temperature_sampling() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
-    let sampler = NervaCudaHfDecodeSamplerConfig {
-        temperature: 1.0,
-        top_p: 1.0,
-        top_k: 0,
-        reserved: 0,
-        seed: 0,
+    assert_raw_descriptor_decode_matches_request(CudaHfDecodeSamplerConfig::vllm_default());
+}
+
+#[test]
+fn declared_sparse_moe_descriptor_footprint_uses_router_and_experts() {
+    let sparse_layer = CudaHfDecodeChainLayer {
+        rms_attn_weight: &[],
+        rms_mlp_weight: &[],
+        w_q: &[],
+        w_q_gate: None,
+        w_k: &[],
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &[],
+        w_o: &[],
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &[],
+        w_up: &[],
+        w_down: &[],
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: None,
+        mlp_kind: CUDA_HF_MLP_SPARSE_MOE,
+        moe_intermediate: 2,
+        shared_expert_intermediate: 0,
+        num_experts: 3,
+        experts_per_token: 2,
+        norm_topk_prob: true,
+        attention_kind: crate::decode::hf_chain::layer::CUDA_HF_ATTENTION_FULL,
     };
-    let Some((out, output_tokens)) = run_null_legacy_descriptor_decode(sampler) else {
+    let layers = [sparse_layer];
+    let request = CudaHfDecodeSequenceRequest {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: 4,
+        intermediate: 8,
+        vocab_size: 8,
+        steps: 4,
+        seed_token: 0,
+        prompt_tokens: &[0],
+        eos_token: None,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: 448,
+            gpu_resident_weight_bytes: 448,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: 1,
+        }),
+        weight_blocks: &[],
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
+    };
+
+    let footprint = estimate_sequence_footprint(&request).unwrap();
+
+    assert_eq!(footprint.resident_weight_bytes, 448);
+    assert_eq!(footprint.layout_bytes, 320);
+}
+
+#[test]
+fn query_gate_footprint_counts_optional_projection() {
+    let zero = 0x0000;
+    let embeddings = vec![zero; 8 * 4];
+    let rms = vec![zero; 4];
+    let attn = vec![zero; 4 * 4];
+    let q_gate = vec![zero; 4 * 4];
+    let gate = vec![zero; 8 * 4];
+    let down = vec![zero; 4 * 8];
+    let lm_head = vec![zero; 8 * 4];
+    let layer = CudaHfDecodeChainLayer {
+        rms_attn_weight: &rms,
+        rms_mlp_weight: &rms,
+        w_q: &attn,
+        w_q_gate: Some(&q_gate),
+        w_k: &attn,
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &attn,
+        w_o: &attn,
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &gate,
+        w_up: &gate,
+        w_down: &down,
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: None,
+        mlp_kind: 0,
+        moe_intermediate: 0,
+        shared_expert_intermediate: 0,
+        num_experts: 0,
+        experts_per_token: 0,
+        norm_topk_prob: false,
+        attention_kind: crate::decode::hf_chain::layer::CUDA_HF_ATTENTION_FULL,
+    };
+    let layers = [layer];
+    let request = CudaHfDecodeSequenceRequest {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: 4,
+        intermediate: 8,
+        vocab_size: 8,
+        steps: 4,
+        seed_token: 0,
+        prompt_tokens: &[0],
+        eos_token: None,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &embeddings,
+        layers: &layers,
+        final_norm_weight: &rms,
+        lm_head: &lm_head,
+        weight_plan: None,
+        weight_blocks: &[],
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
+    };
+
+    let footprint = estimate_sequence_footprint(&request).unwrap();
+
+    assert_eq!(footprint.resident_weight_bytes, 504);
+    assert_eq!(footprint.layout_bytes, 320);
+}
+
+#[test]
+fn linear_gdn_moe_footprint_counts_state_and_scratch() {
+    let layer = CudaHfDecodeChainLayer {
+        rms_attn_weight: &[],
+        rms_mlp_weight: &[],
+        w_q: &[],
+        w_q_gate: None,
+        w_k: &[],
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &[],
+        w_o: &[],
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &[],
+        w_up: &[],
+        w_down: &[],
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: Some(CudaHfLinearGdnLayer {
+            key_heads: 1,
+            value_heads: 1,
+            key_head_dim: 2,
+            value_head_dim: 3,
+            conv_kernel: 4,
+            w_conv: &[],
+            w_qkv: &[],
+            w_z: &[],
+            w_b: &[],
+            w_a: &[],
+            dt_bias: &[],
+            a_log: &[],
+            norm_weight: &[],
+            w_out: &[],
+        }),
+        mlp_kind: CUDA_HF_MLP_SPARSE_MOE,
+        moe_intermediate: 3,
+        shared_expert_intermediate: 0,
+        num_experts: 2,
+        experts_per_token: 1,
+        norm_topk_prob: true,
+        attention_kind: CUDA_HF_ATTENTION_LINEAR_GDN,
+    };
+    let layers = [layer];
+    let request = CudaHfDecodeSequenceRequest {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 8,
+        vocab_size: 4,
+        steps: 2,
+        seed_token: 0,
+        prompt_tokens: &[0],
+        eos_token: None,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: 436,
+            gpu_resident_weight_bytes: 436,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: 1,
+        }),
+        weight_blocks: &[],
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
+    };
+
+    let footprint = estimate_sequence_footprint(&request).unwrap();
+
+    assert_eq!(footprint.resident_weight_bytes, 436);
+    assert_eq!(footprint.layout_bytes, 320);
+    assert_eq!(footprint.scratch_bytes, 276);
+    assert_eq!(footprint.resident_kv_bytes, 128);
+    assert_eq!(footprint.device_arena_bytes, 1376);
+}
+
+fn assert_raw_descriptor_decode_matches_request(sampler: CudaHfDecodeSamplerConfig) {
+    let expected = run_declared_descriptor_decode(sampler);
+    if expected.status != SmokeStatus::Ok {
+        assert_eq!(expected.status, SmokeStatus::Unavailable);
         return;
+    }
+
+    let Some((out, output_tokens)) = run_null_legacy_descriptor_decode(sampler.to_ffi()) else {
+        panic!("raw FFI descriptor decode skipped after request decode succeeded");
     };
     assert_eq!(out.status, 0);
-    assert_eq!(out.descriptor_gpu_resident_h2d_bytes, 52);
-    assert_eq!(out.descriptor_gpu_staged_h2d_bytes, 48);
-    assert_eq!(out.observed_tokens, 4);
-    assert_eq!(output_tokens, [0, 0, 1, 1]);
+    assert_eq!(
+        out.descriptor_gpu_resident_h2d_bytes,
+        expected.descriptor_gpu_resident_h2d_bytes
+    );
+    assert_eq!(
+        out.descriptor_gpu_staged_h2d_bytes,
+        expected.descriptor_gpu_staged_h2d_bytes
+    );
+    assert_eq!(out.observed_tokens as usize, expected.tokens.len());
+    assert_eq!(out.observed_token_hash, expected.observed_token_hash);
+    assert_eq!(
+        &output_tokens[..expected.tokens.len()],
+        expected.tokens.as_slice()
+    );
+}
+
+fn run_declared_descriptor_decode(
+    sampler: CudaHfDecodeSamplerConfig,
+) -> CudaHfDecodeSequenceSummary {
+    let weights = tiny_descriptor_weights();
+    let weight_blocks = weights.blocks();
+    let marker_layer = descriptor_marker_layer();
+    let layers = [marker_layer];
+    CudaHfDecodeSequenceRequest {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 2,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 2,
+        vocab_size: 4,
+        steps: 4,
+        seed_token: 0,
+        prompt_tokens: &[0],
+        eos_token: None,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 12,
+            gpu_resident_blocks: 6,
+            gpu_staged_blocks: 6,
+            weight_bytes: 100,
+            gpu_resident_weight_bytes: 52,
+            gpu_staged_weight_bytes: 48,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        sampler,
+    }
+    .run()
+}
+
+fn descriptor_marker_layer() -> CudaHfDecodeChainLayer<'static> {
+    CudaHfDecodeChainLayer {
+        rms_attn_weight: &[],
+        rms_mlp_weight: &[],
+        w_q: &[],
+        w_q_gate: None,
+        w_k: &[],
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &[],
+        w_o: &[],
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &[],
+        w_up: &[],
+        w_down: &[],
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: None,
+        mlp_kind: 0,
+        moe_intermediate: 0,
+        shared_expert_intermediate: 0,
+        num_experts: 0,
+        experts_per_token: 0,
+        norm_topk_prob: false,
+        attention_kind: crate::decode::hf_chain::layer::CUDA_HF_ATTENTION_FULL,
+    }
 }

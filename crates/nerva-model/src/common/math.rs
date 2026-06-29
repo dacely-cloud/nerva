@@ -76,3 +76,7 @@ pub(crate) fn single_token_attention(
 pub(crate) fn silu(value: f32) -> f32 {
     value / (1.0 + (-value).exp())
 }
+
+pub(crate) fn sigmoid(value: f32) -> f32 {
+    1.0 / (1.0 + (-value).exp())
+}

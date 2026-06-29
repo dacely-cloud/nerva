@@ -2,41 +2,62 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::json::fields::{
-    optional_bool, optional_f32, optional_first_string, optional_object_f32,
-    optional_object_string, optional_string, optional_u32_or_first, optional_usize, required_usize,
+    optional_bool, optional_f32, optional_first_string, optional_object_f32, optional_object_json,
+    optional_object_string, optional_string, optional_u32_or_first, optional_usize,
 };
 use crate::hf::architecture::{HfArchitectureKind, architecture_kind_from_str};
-use crate::hf::metadata::HfModelMetadata;
+use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 use crate::hf::validate::validate_hf_metadata;
 
 pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
     let architecture = architecture_from_config(config_json)?;
     validate_supported_rope_config(config_json)?;
-    let hidden_size = required_usize(config_json, "hidden_size")?;
-    let num_hidden_layers = required_usize(config_json, "num_hidden_layers")?;
-    let num_attention_heads = required_usize(config_json, "num_attention_heads")?;
+    let decoder_config_json = decoder_config_json(config_json, architecture)?;
+    let hidden_size = required_model_usize(config_json, decoder_config_json, "hidden_size")?;
+    let num_hidden_layers =
+        required_model_usize(config_json, decoder_config_json, "num_hidden_layers")?;
+    let num_attention_heads =
+        required_model_usize(config_json, decoder_config_json, "num_attention_heads")?;
     let num_key_value_heads =
-        optional_usize(config_json, "num_key_value_heads")?.unwrap_or(num_attention_heads);
-    let head_dim = parse_head_dim(config_json, hidden_size, num_attention_heads)?;
-    let intermediate_size = required_usize(config_json, "intermediate_size")?;
-    let vocab_size = required_usize(config_json, "vocab_size")?;
-    let max_position_embeddings = optional_usize(config_json, "max_position_embeddings")?;
-    let rope_theta = parse_rope_theta(config_json)?;
-    let rms_norm_eps = match optional_f32(config_json, "rms_norm_eps")? {
-        Some(value) => Some(value),
-        None => optional_f32(config_json, "layer_norm_eps")?,
-    };
-    let bos_token_id = optional_u32_or_first(config_json, "bos_token_id")?;
-    let eos_token_id = optional_u32_or_first(config_json, "eos_token_id")?;
-    let tie_word_embeddings = optional_bool(config_json, "tie_word_embeddings")?.unwrap_or(false);
-    let hidden_act = parse_hidden_act(config_json)?;
-    let attention_bias = parse_attention_bias(config_json)?;
-    let qk_norm = parse_qk_norm(config_json, architecture)?;
-    let mlp_bias = optional_bool(config_json, "mlp_bias")?.unwrap_or(false);
-    let torch_dtype = optional_string(config_json, "torch_dtype")?
-        .as_deref()
-        .map(dtype_from_hf_string)
-        .transpose()?;
+        optional_model_usize(config_json, decoder_config_json, "num_key_value_heads")?
+            .unwrap_or(num_attention_heads);
+    let head_dim = parse_head_dim(decoder_config_json, hidden_size, num_attention_heads)?;
+    let explicit_intermediate_size =
+        optional_model_usize(config_json, decoder_config_json, "intermediate_size")?;
+    let vocab_size = required_model_usize(config_json, decoder_config_json, "vocab_size")?;
+    let max_position_embeddings =
+        optional_model_usize(config_json, decoder_config_json, "max_position_embeddings")?;
+    let rope_theta = parse_rope_theta(config_json, decoder_config_json)?;
+    let rms_norm_eps = parse_rms_norm_eps(config_json, decoder_config_json)?;
+    let bos_token_id =
+        optional_model_u32_or_first(config_json, decoder_config_json, "bos_token_id")?;
+    let eos_token_id =
+        optional_model_u32_or_first(config_json, decoder_config_json, "eos_token_id")?;
+    let tie_word_embeddings =
+        optional_model_bool(config_json, decoder_config_json, "tie_word_embeddings")?
+            .unwrap_or(false);
+    let hidden_act = parse_hidden_act(config_json, decoder_config_json)?;
+    let attention_bias = parse_attention_bias(config_json, decoder_config_json, architecture)?;
+    let qk_norm = parse_qk_norm(config_json, decoder_config_json, architecture)?;
+    let mlp_bias =
+        optional_model_bool(config_json, decoder_config_json, "mlp_bias")?.unwrap_or(false);
+    let linear_attention =
+        parse_linear_attention_config(config_json, decoder_config_json, architecture)?;
+    let attention_layer_types = parse_attention_layer_types(
+        config_json,
+        decoder_config_json,
+        architecture,
+        num_hidden_layers,
+    )?;
+    let moe_config = parse_moe_config(
+        config_json,
+        decoder_config_json,
+        architecture,
+        explicit_intermediate_size,
+        num_hidden_layers,
+    )?;
+    let intermediate_size = resolve_intermediate_size(explicit_intermediate_size, &moe_config)?;
+    let torch_dtype = parse_torch_dtype(config_json, decoder_config_json)?;
 
     validate_hf_metadata(
         hidden_size,
@@ -64,11 +85,137 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         eos_token_id,
         tie_word_embeddings,
         hidden_act,
-        attention_bias,
+        attention_bias: attention_bias.any(),
+        attention_qkv_bias: attention_bias.qkv,
+        attention_output_bias: attention_bias.output,
         qk_norm,
         mlp_bias,
+        linear_conv_kernel_dim: linear_attention.linear_conv_kernel_dim,
+        linear_key_head_dim: linear_attention.linear_key_head_dim,
+        linear_value_head_dim: linear_attention.linear_value_head_dim,
+        linear_num_key_heads: linear_attention.linear_num_key_heads,
+        linear_num_value_heads: linear_attention.linear_num_value_heads,
+        attention_layer_types,
+        mlp_layer_types: moe_config.mlp_layer_types,
+        moe_intermediate_size: moe_config.moe_intermediate_size,
+        shared_expert_intermediate_size: moe_config.shared_expert_intermediate_size,
+        num_experts: moe_config.num_experts,
+        num_experts_per_tok: moe_config.num_experts_per_tok,
+        decoder_sparse_step: moe_config.decoder_sparse_step,
+        norm_topk_prob: moe_config.norm_topk_prob,
         torch_dtype,
     })
+}
+
+struct ParsedMoeConfig {
+    mlp_layer_types: Vec<HfMlpLayerKind>,
+    moe_intermediate_size: Option<usize>,
+    shared_expert_intermediate_size: Option<usize>,
+    num_experts: Option<usize>,
+    num_experts_per_tok: Option<usize>,
+    decoder_sparse_step: Option<usize>,
+    norm_topk_prob: bool,
+}
+
+struct ParsedLinearAttentionConfig {
+    linear_conv_kernel_dim: Option<usize>,
+    linear_key_head_dim: Option<usize>,
+    linear_value_head_dim: Option<usize>,
+    linear_num_key_heads: Option<usize>,
+    linear_num_value_heads: Option<usize>,
+}
+
+struct ParsedAttentionBiasConfig {
+    qkv: bool,
+    output: bool,
+}
+
+impl ParsedAttentionBiasConfig {
+    const fn any(&self) -> bool {
+        self.qkv || self.output
+    }
+}
+
+fn decoder_config_json<'a>(
+    config_json: &'a str,
+    architecture: HfArchitectureKind,
+) -> Result<&'a str> {
+    match architecture {
+        HfArchitectureKind::Qwen35 | HfArchitectureKind::Qwen35Moe => {
+            Ok(optional_object_json(config_json, "text_config")?.unwrap_or(config_json))
+        }
+        _ => Ok(config_json),
+    }
+}
+
+fn required_model_usize(root_json: &str, decoder_json: &str, key: &'static str) -> Result<usize> {
+    optional_model_usize(root_json, decoder_json, key)?.ok_or_else(|| NervaError::InvalidArgument {
+        reason: format!("HF config is missing required field {key}"),
+    })
+}
+
+fn optional_model_usize(
+    root_json: &str,
+    decoder_json: &str,
+    key: &'static str,
+) -> Result<Option<usize>> {
+    match optional_usize(decoder_json, key)? {
+        Some(value) => Ok(Some(value)),
+        None if !std::ptr::eq(root_json, decoder_json) => optional_usize(root_json, key),
+        None => Ok(None),
+    }
+}
+
+fn optional_model_u32_or_first(
+    root_json: &str,
+    decoder_json: &str,
+    key: &'static str,
+) -> Result<Option<u32>> {
+    match optional_u32_or_first(decoder_json, key)? {
+        Some(value) => Ok(Some(value)),
+        None if !std::ptr::eq(root_json, decoder_json) => optional_u32_or_first(root_json, key),
+        None => Ok(None),
+    }
+}
+
+fn optional_model_bool(
+    root_json: &str,
+    decoder_json: &str,
+    key: &'static str,
+) -> Result<Option<bool>> {
+    match optional_bool(decoder_json, key)? {
+        Some(value) => Ok(Some(value)),
+        None if !std::ptr::eq(root_json, decoder_json) => optional_bool(root_json, key),
+        None => Ok(None),
+    }
+}
+
+fn optional_model_string(
+    root_json: &str,
+    decoder_json: &str,
+    key: &'static str,
+) -> Result<Option<String>> {
+    match optional_string(decoder_json, key)? {
+        Some(value) => Ok(Some(value)),
+        None if !std::ptr::eq(root_json, decoder_json) => optional_string(root_json, key),
+        None => Ok(None),
+    }
+}
+
+fn parse_rms_norm_eps(root_json: &str, decoder_json: &str) -> Result<Option<f32>> {
+    match optional_f32(decoder_json, "rms_norm_eps")? {
+        Some(value) => Ok(Some(value)),
+        None => match optional_f32(decoder_json, "layer_norm_eps")? {
+            Some(value) => Ok(Some(value)),
+            None if !std::ptr::eq(root_json, decoder_json) => {
+                match optional_f32(root_json, "rms_norm_eps")? {
+                    Some(value) => Ok(Some(value)),
+                    None => optional_f32(root_json, "layer_norm_eps"),
+                }
+            }
+            None => Ok(None),
+        },
+    }
 }
 
 fn parse_head_dim(
@@ -87,14 +234,26 @@ fn parse_head_dim(
     Ok(hidden_size / num_attention_heads)
 }
 
-fn parse_rope_theta(config_json: &str) -> Result<Option<f32>> {
-    if let Some(theta) = optional_f32(config_json, "rope_theta")? {
+fn parse_rope_theta(root_json: &str, decoder_json: &str) -> Result<Option<f32>> {
+    if let Some(theta) = optional_f32(decoder_json, "rope_theta")? {
         return Ok(Some(theta));
     }
-    if let Some(theta) = optional_object_f32(config_json, "rope_parameters", "rope_theta")? {
+    if let Some(theta) = optional_object_f32(decoder_json, "rope_parameters", "rope_theta")? {
         return Ok(Some(theta));
     }
-    optional_object_f32(config_json, "rope_scaling", "rope_theta")
+    if let Some(theta) = optional_object_f32(decoder_json, "rope_scaling", "rope_theta")? {
+        return Ok(Some(theta));
+    }
+    if !std::ptr::eq(root_json, decoder_json) {
+        if let Some(theta) = optional_f32(root_json, "rope_theta")? {
+            return Ok(Some(theta));
+        }
+        if let Some(theta) = optional_object_f32(root_json, "rope_parameters", "rope_theta")? {
+            return Ok(Some(theta));
+        }
+        return optional_object_f32(root_json, "rope_scaling", "rope_theta");
+    }
+    Ok(None)
 }
 
 fn validate_supported_rope_config(config_json: &str) -> Result<()> {
@@ -113,27 +272,363 @@ fn validate_default_rope_object(config_json: &str, key: &'static str) -> Result<
     }
 }
 
-fn parse_hidden_act(config_json: &str) -> Result<Option<String>> {
-    if let Some(value) = optional_string(config_json, "hidden_act")? {
+fn parse_hidden_act(root_json: &str, decoder_json: &str) -> Result<Option<String>> {
+    if let Some(value) = optional_model_string(root_json, decoder_json, "hidden_act")? {
         return Ok(Some(value));
     }
-    if let Some(value) = optional_string(config_json, "hidden_activation")? {
+    if let Some(value) = optional_model_string(root_json, decoder_json, "hidden_activation")? {
         return Ok(Some(value));
     }
-    optional_string(config_json, "activation_function")
+    optional_model_string(root_json, decoder_json, "activation_function")
 }
 
-fn parse_attention_bias(config_json: &str) -> Result<bool> {
-    let attention_bias = optional_bool(config_json, "attention_bias")?.unwrap_or(false);
-    let qkv_bias = optional_bool(config_json, "qkv_bias")?.unwrap_or(false);
-    Ok(attention_bias || qkv_bias)
+fn parse_attention_bias(
+    root_json: &str,
+    decoder_json: &str,
+    architecture: HfArchitectureKind,
+) -> Result<ParsedAttentionBiasConfig> {
+    let attention_bias = optional_model_bool(root_json, decoder_json, "attention_bias")?;
+    let qkv_bias = optional_model_bool(root_json, decoder_json, "qkv_bias")?;
+    let default_qkv_bias = matches!(architecture, HfArchitectureKind::Qwen2Moe)
+        && attention_bias.is_none()
+        && qkv_bias.is_none();
+    let attention_bias = attention_bias.unwrap_or(false);
+    Ok(ParsedAttentionBiasConfig {
+        qkv: attention_bias || qkv_bias.unwrap_or(default_qkv_bias),
+        output: attention_bias,
+    })
 }
 
-fn parse_qk_norm(config_json: &str, architecture: HfArchitectureKind) -> Result<bool> {
-    match optional_bool(config_json, "qk_norm")? {
+fn parse_qk_norm(
+    root_json: &str,
+    decoder_json: &str,
+    architecture: HfArchitectureKind,
+) -> Result<bool> {
+    match optional_model_bool(root_json, decoder_json, "qk_norm")? {
         Some(value) => Ok(value),
-        None => Ok(architecture == HfArchitectureKind::Qwen3),
+        None => match optional_model_bool(root_json, decoder_json, "use_qk_norm")? {
+            Some(value) => Ok(value),
+            None => Ok(matches!(
+                architecture,
+                HfArchitectureKind::Qwen3
+                    | HfArchitectureKind::Qwen3Moe
+                    | HfArchitectureKind::Qwen35
+                    | HfArchitectureKind::Qwen35Moe
+            )),
+        },
     }
+}
+
+fn parse_moe_config(
+    root_json: &str,
+    decoder_json: &str,
+    architecture: HfArchitectureKind,
+    intermediate_size: Option<usize>,
+    num_hidden_layers: usize,
+) -> Result<ParsedMoeConfig> {
+    let num_experts = match optional_model_usize(root_json, decoder_json, "num_experts")? {
+        Some(value) => Some(value),
+        None => optional_model_usize(root_json, decoder_json, "num_local_experts")?,
+    };
+    let num_experts_per_tok = optional_model_usize(root_json, decoder_json, "num_experts_per_tok")?;
+    let moe_intermediate_size =
+        match optional_model_usize(root_json, decoder_json, "moe_intermediate_size")? {
+            Some(value) => Some(value),
+            None if architecture == HfArchitectureKind::MixtralMoe => intermediate_size,
+            None => None,
+        };
+    let shared_expert_intermediate_size =
+        optional_model_usize(root_json, decoder_json, "shared_expert_intermediate_size")?
+            .unwrap_or(0);
+    let decoder_sparse_step = optional_model_usize(root_json, decoder_json, "decoder_sparse_step")?;
+    let norm_topk_prob =
+        optional_model_bool(root_json, decoder_json, "norm_topk_prob")?.unwrap_or(false);
+    let mlp_only_layers =
+        optional_model_usize_array(root_json, decoder_json, "mlp_only_layers")?.unwrap_or_default();
+
+    let is_moe_architecture = matches!(
+        architecture,
+        HfArchitectureKind::MixtralMoe
+            | HfArchitectureKind::Qwen2Moe
+            | HfArchitectureKind::Qwen3Moe
+            | HfArchitectureKind::Qwen35Moe
+    );
+    let has_moe_fields = num_experts.unwrap_or(0) > 0
+        || num_experts_per_tok.is_some()
+        || moe_intermediate_size.is_some();
+    if !is_moe_architecture && !has_moe_fields {
+        return Ok(ParsedMoeConfig {
+            mlp_layer_types: vec![HfMlpLayerKind::Dense; num_hidden_layers],
+            moe_intermediate_size: None,
+            shared_expert_intermediate_size: None,
+            num_experts: None,
+            num_experts_per_tok: None,
+            decoder_sparse_step: None,
+            norm_topk_prob,
+        });
+    }
+
+    let num_experts = required_moe_usize(num_experts, "num_experts")?;
+    let num_experts_per_tok = required_moe_usize(num_experts_per_tok, "num_experts_per_tok")?;
+    let moe_intermediate_size = required_moe_usize(moe_intermediate_size, "moe_intermediate_size")?;
+    let decoder_sparse_step = decoder_sparse_step.unwrap_or(1);
+    if decoder_sparse_step == 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF MoE decoder_sparse_step must be non-zero".to_string(),
+        });
+    }
+    if num_experts_per_tok > num_experts {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF MoE num_experts_per_tok cannot exceed num_experts".to_string(),
+        });
+    }
+    for layer in &mlp_only_layers {
+        if *layer >= num_hidden_layers {
+            return Err(NervaError::InvalidArgument {
+                reason: format!(
+                    "HF MoE mlp_only_layers entry {layer} exceeds num_hidden_layers {num_hidden_layers}"
+                ),
+            });
+        }
+    }
+
+    let mlp_layer_types = (0..num_hidden_layers)
+        .map(|layer| {
+            if mlp_only_layers.contains(&layer) || (layer + 1) % decoder_sparse_step != 0 {
+                HfMlpLayerKind::Dense
+            } else {
+                HfMlpLayerKind::SparseMoe
+            }
+        })
+        .collect();
+    Ok(ParsedMoeConfig {
+        mlp_layer_types,
+        moe_intermediate_size: Some(moe_intermediate_size),
+        shared_expert_intermediate_size: (shared_expert_intermediate_size > 0)
+            .then_some(shared_expert_intermediate_size),
+        num_experts: Some(num_experts),
+        num_experts_per_tok: Some(num_experts_per_tok),
+        decoder_sparse_step: Some(decoder_sparse_step),
+        norm_topk_prob,
+    })
+}
+
+fn resolve_intermediate_size(
+    explicit_intermediate_size: Option<usize>,
+    moe_config: &ParsedMoeConfig,
+) -> Result<usize> {
+    if let Some(intermediate_size) = explicit_intermediate_size {
+        return Ok(intermediate_size);
+    }
+    if moe_config
+        .mlp_layer_types
+        .iter()
+        .any(|kind| *kind == HfMlpLayerKind::Dense)
+    {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF config is missing required field intermediate_size".to_string(),
+        });
+    }
+    let derived = moe_config
+        .moe_intermediate_size
+        .unwrap_or(0)
+        .max(moe_config.shared_expert_intermediate_size.unwrap_or(0));
+    if derived == 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF config is missing required field intermediate_size".to_string(),
+        });
+    }
+    Ok(derived)
+}
+
+fn parse_linear_attention_config(
+    root_json: &str,
+    decoder_json: &str,
+    architecture: HfArchitectureKind,
+) -> Result<ParsedLinearAttentionConfig> {
+    let qwen35_defaults = matches!(
+        architecture,
+        HfArchitectureKind::Qwen35 | HfArchitectureKind::Qwen35Moe
+    );
+    Ok(ParsedLinearAttentionConfig {
+        linear_conv_kernel_dim: optional_model_usize(
+            root_json,
+            decoder_json,
+            "linear_conv_kernel_dim",
+        )?
+        .or(qwen35_defaults.then_some(4)),
+        linear_key_head_dim: optional_model_usize(root_json, decoder_json, "linear_key_head_dim")?
+            .or(qwen35_defaults.then_some(128)),
+        linear_value_head_dim: optional_model_usize(
+            root_json,
+            decoder_json,
+            "linear_value_head_dim",
+        )?
+        .or(qwen35_defaults.then_some(128)),
+        linear_num_key_heads: optional_model_usize(
+            root_json,
+            decoder_json,
+            "linear_num_key_heads",
+        )?
+        .or(qwen35_defaults.then_some(16)),
+        linear_num_value_heads: optional_model_usize(
+            root_json,
+            decoder_json,
+            "linear_num_value_heads",
+        )?
+        .or(qwen35_defaults.then_some(32)),
+    })
+}
+
+fn required_moe_usize(value: Option<usize>, key: &'static str) -> Result<usize> {
+    value.ok_or_else(|| NervaError::InvalidArgument {
+        reason: format!("HF MoE config is missing required field {key}"),
+    })
+}
+
+fn optional_model_usize_array(
+    root_json: &str,
+    decoder_json: &str,
+    key: &'static str,
+) -> Result<Option<Vec<usize>>> {
+    match optional_usize_array(decoder_json, key)? {
+        Some(value) => Ok(Some(value)),
+        None if !std::ptr::eq(root_json, decoder_json) => optional_usize_array(root_json, key),
+        None => Ok(None),
+    }
+}
+
+fn optional_usize_array(config_json: &str, key: &'static str) -> Result<Option<Vec<usize>>> {
+    let value: serde_json::Value =
+        serde_json::from_str(config_json).map_err(|err| NervaError::InvalidArgument {
+            reason: format!("HF config JSON is malformed: {err}"),
+        })?;
+    let Some(array) = value.get(key) else {
+        return Ok(None);
+    };
+    if array.is_null() {
+        return Ok(None);
+    }
+    let Some(array) = array.as_array() else {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be an unsigned integer array"),
+        });
+    };
+    let mut out = Vec::with_capacity(array.len());
+    for item in array {
+        let Some(value) = item.as_u64() else {
+            return Err(NervaError::InvalidArgument {
+                reason: format!("HF config field {key} must contain unsigned integers"),
+            });
+        };
+        out.push(
+            usize::try_from(value).map_err(|_| NervaError::InvalidArgument {
+                reason: format!("HF config field {key} entry does not fit usize"),
+            })?,
+        );
+    }
+    Ok(Some(out))
+}
+
+fn parse_attention_layer_types(
+    root_json: &str,
+    decoder_json: &str,
+    architecture: HfArchitectureKind,
+    num_hidden_layers: usize,
+) -> Result<Vec<HfAttentionLayerKind>> {
+    if let Some(kinds) = optional_attention_layer_types(decoder_json)? {
+        return validate_attention_layer_count(kinds, num_hidden_layers);
+    }
+    if !std::ptr::eq(root_json, decoder_json) {
+        if let Some(kinds) = optional_attention_layer_types(root_json)? {
+            return validate_attention_layer_count(kinds, num_hidden_layers);
+        }
+    }
+    if matches!(
+        architecture,
+        HfArchitectureKind::Qwen35 | HfArchitectureKind::Qwen35Moe
+    ) {
+        if let Some(interval) =
+            optional_model_usize(root_json, decoder_json, "full_attention_interval")?
+        {
+            if interval == 0 {
+                return Err(NervaError::InvalidArgument {
+                    reason: "HF Qwen3.5 full_attention_interval must be non-zero".to_string(),
+                });
+            }
+            return Ok((0..num_hidden_layers)
+                .map(|layer| {
+                    if (layer + 1).is_multiple_of(interval) {
+                        HfAttentionLayerKind::Full
+                    } else {
+                        HfAttentionLayerKind::Linear
+                    }
+                })
+                .collect());
+        }
+    }
+    Ok(vec![HfAttentionLayerKind::Full; num_hidden_layers])
+}
+
+fn optional_attention_layer_types(config_json: &str) -> Result<Option<Vec<HfAttentionLayerKind>>> {
+    let value: serde_json::Value =
+        serde_json::from_str(config_json).map_err(|err| NervaError::InvalidArgument {
+            reason: format!("HF config JSON is malformed: {err}"),
+        })?;
+    let Some(layer_types) = value.get("layer_types") else {
+        return Ok(None);
+    };
+    let Some(layer_types) = layer_types.as_array() else {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF config field layer_types must be a string array".to_string(),
+        });
+    };
+    let mut kinds = Vec::with_capacity(layer_types.len());
+    for layer_type in layer_types {
+        let Some(layer_type) = layer_type.as_str() else {
+            return Err(NervaError::InvalidArgument {
+                reason: "HF config field layer_types must contain strings".to_string(),
+            });
+        };
+        kinds.push(parse_attention_layer_kind(layer_type)?);
+    }
+    Ok(Some(kinds))
+}
+
+fn parse_attention_layer_kind(value: &str) -> Result<HfAttentionLayerKind> {
+    match value {
+        "full_attention" | "self_attention" | "attention" => Ok(HfAttentionLayerKind::Full),
+        "linear_attention" => Ok(HfAttentionLayerKind::Linear),
+        other => Err(NervaError::InvalidArgument {
+            reason: format!("unsupported HF attention layer type {other}"),
+        }),
+    }
+}
+
+fn validate_attention_layer_count(
+    kinds: Vec<HfAttentionLayerKind>,
+    num_hidden_layers: usize,
+) -> Result<Vec<HfAttentionLayerKind>> {
+    if kinds.len() != num_hidden_layers {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "HF layer_types length {} does not match num_hidden_layers {}",
+                kinds.len(),
+                num_hidden_layers
+            ),
+        });
+    }
+    Ok(kinds)
+}
+
+fn parse_torch_dtype(root_json: &str, decoder_json: &str) -> Result<Option<DType>> {
+    if let Some(value) = optional_model_string(root_json, decoder_json, "torch_dtype")? {
+        return dtype_from_hf_string(&value).map(Some);
+    }
+    optional_model_string(root_json, decoder_json, "dtype")?
+        .as_deref()
+        .map(dtype_from_hf_string)
+        .transpose()
 }
 
 pub(crate) fn architecture_from_config(config_json: &str) -> Result<HfArchitectureKind> {

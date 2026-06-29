@@ -213,6 +213,7 @@ fn compile_cuda_sources(
 }
 
 fn archive_cuda_objects(archive: &PathBuf, cuda_objects: &[PathBuf]) {
+    let _ = std::fs::remove_file(archive);
     let ar = env::var("AR").unwrap_or_else(|_| "ar".to_string());
     let mut ar_command = Command::new(&ar);
     ar_command.arg("crs").arg(archive);

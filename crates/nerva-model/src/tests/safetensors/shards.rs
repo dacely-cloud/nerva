@@ -45,6 +45,51 @@ fn plans_safetensors_shards_from_index_and_headers() {
 }
 
 #[test]
+fn safetensors_shard_plan_ignores_extra_non_manifest_tensors() {
+    let manifest = tiny_llama_manifest(false);
+    let base_index = synthetic_sharded_index_json(&manifest, 10);
+    let index = base_index
+        .replace(
+            &format!("\"total_size\":{}", manifest.total_weight_bytes),
+            &format!("\"total_size\":{}", manifest.total_weight_bytes + 2),
+        )
+        .replace(
+            "}}",
+            &format!(",\"model.visual.blocks.0.attn.qkv.weight\":\"{SHARD_ONE}\"}}"),
+        );
+    let mut header_one =
+        synthetic_header_for_entries(manifest.architecture, &manifest.entries[..10]);
+    header_one.insert_str(
+        header_one.len() - 1,
+        ",\"model.visual.blocks.0.attn.qkv.weight\":{\"dtype\":\"F16\",\"shape\":[1,1],\"data_offsets\":[0,2]}",
+    );
+    let header_two = synthetic_header_for_entries(manifest.architecture, &manifest.entries[10..]);
+
+    let required = required_safetensors_shards_for_manifest(&index, &manifest).unwrap();
+    let plan = plan_safetensors_shards_for_manifest(
+        &index,
+        &[
+            SafetensorsShardHeader::new(SHARD_ONE, &header_one),
+            SafetensorsShardHeader::new(SHARD_TWO, &header_two),
+        ],
+        &manifest,
+    )
+    .unwrap();
+
+    assert_eq!(required, vec![SHARD_ONE.to_string(), SHARD_TWO.to_string()]);
+    assert_eq!(plan.entries.len(), manifest.entries.len());
+    assert_eq!(plan.total_weight_bytes, manifest.total_weight_bytes);
+    assert_eq!(plan.index_total_size, Some(manifest.total_weight_bytes + 2));
+    assert_eq!(plan.shards[0].tensor_count, 10);
+    assert!(
+        !plan
+            .entries
+            .iter()
+            .any(|entry| entry.tensor_name.starts_with("model.visual."))
+    );
+}
+
+#[test]
 fn safetensors_shard_plan_supports_tied_embedding_manifest() {
     let manifest = tiny_llama_manifest(true);
     let index = synthetic_sharded_index_json(&manifest, 10);

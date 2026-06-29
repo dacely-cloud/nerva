@@ -5,7 +5,9 @@ use nerva_ledger::types::token::ledger::TokenLedger;
 
 use crate::common::shape::TransformerBlockShape;
 use crate::hf::metadata::HfModelMetadata;
+use crate::precision::block::gdn::PrecisionGatedDeltaNetMoeBlock;
 use crate::precision::block::model::PrecisionTransformerBlock;
+use crate::precision::block::moe::PrecisionMoeTransformerBlock;
 use crate::precision::scratch::{
     PrecisionTransformerBlockKvScratch, PrecisionTransformerBlockScratch,
 };
@@ -16,7 +18,7 @@ use crate::weights::safetensors::shard::SafetensorsShardPlan;
 pub struct HfCausalLmModel {
     pub(crate) metadata: HfModelMetadata,
     pub(crate) dtype: DType,
-    pub(crate) layers: Vec<PrecisionTransformerBlock>,
+    pub(crate) layers: Vec<HfCausalLmLayer>,
     pub(crate) embeddings: Vec<u16>,
     pub(crate) final_norm: Vec<u16>,
     pub(crate) lm_head: Vec<u16>,
@@ -41,6 +43,10 @@ impl HfCausalLmModel {
     }
 
     pub fn layer(&self, index: usize) -> Option<&PrecisionTransformerBlock> {
+        self.layers.get(index).and_then(HfCausalLmLayer::as_dense)
+    }
+
+    pub fn causal_layer(&self, index: usize) -> Option<&HfCausalLmLayer> {
         self.layers.get(index)
     }
 
@@ -62,6 +68,84 @@ impl HfCausalLmModel {
             .ok_or_else(|| NervaError::InvalidArgument {
                 reason: "HF causal LM embedding token is outside vocabulary".to_string(),
             })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum HfCausalLmLayer {
+    Dense(PrecisionTransformerBlock),
+    SparseMoe(PrecisionMoeTransformerBlock),
+    GatedDeltaNetMoe(PrecisionGatedDeltaNetMoeBlock),
+}
+
+impl HfCausalLmLayer {
+    pub fn as_dense(&self) -> Option<&PrecisionTransformerBlock> {
+        match self {
+            Self::Dense(layer) => Some(layer),
+            Self::SparseMoe(_) => None,
+            Self::GatedDeltaNetMoe(_) => None,
+        }
+    }
+
+    pub fn rope_theta(&self) -> Option<f32> {
+        match self {
+            Self::Dense(layer) => layer.rope_theta(),
+            Self::SparseMoe(layer) => layer.rope_theta(),
+            Self::GatedDeltaNetMoe(_) => None,
+        }
+    }
+
+    pub(crate) fn forward_into(
+        &self,
+        input: &[u16],
+        scratch: &mut PrecisionTransformerBlockScratch,
+        output: &mut [u16],
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
+        match self {
+            Self::Dense(layer) => layer.forward_into(input, scratch, output, ledger),
+            Self::SparseMoe(layer) => layer.forward_into(input, scratch, output, ledger),
+            Self::GatedDeltaNetMoe(layer) => layer.forward_into(input, scratch, output, ledger),
+        }
+    }
+
+    pub(crate) fn forward_prefill_sequence_into(
+        &self,
+        input: &[u16],
+        token_count: usize,
+        scratch: &mut PrecisionTransformerBlockKvScratch,
+        output: &mut [u16],
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
+        match self {
+            Self::Dense(layer) => {
+                layer.forward_prefill_sequence_into(input, token_count, scratch, output, ledger)
+            }
+            Self::SparseMoe(layer) => {
+                layer.forward_prefill_sequence_into(input, token_count, scratch, output, ledger)
+            }
+            Self::GatedDeltaNetMoe(layer) => {
+                layer.forward_prefill_sequence_into(input, token_count, scratch, output, ledger)
+            }
+        }
+    }
+
+    pub(crate) fn forward_decode_with_kv_into(
+        &self,
+        input: &[u16],
+        scratch: &mut PrecisionTransformerBlockKvScratch,
+        output: &mut [u16],
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
+        match self {
+            Self::Dense(layer) => layer.forward_decode_with_kv_into(input, scratch, output, ledger),
+            Self::SparseMoe(layer) => {
+                layer.forward_decode_with_kv_into(input, scratch, output, ledger)
+            }
+            Self::GatedDeltaNetMoe(layer) => {
+                layer.forward_decode_with_kv_into(input, scratch, output, ledger)
+            }
+        }
     }
 }
 

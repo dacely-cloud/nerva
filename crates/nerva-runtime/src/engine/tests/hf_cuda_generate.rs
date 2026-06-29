@@ -4,7 +4,12 @@ use nerva_model::causal_lm::types::HfCausalLmStopReason;
 
 use crate::engine::hf_cuda_decode::file_backed::generate::run_hf_causal_lm_cuda_shard_backed_device_generate;
 use crate::engine::runtime::{Runtime, RuntimeConfig};
-use crate::engine::tests::hf_fixture::{remove_hf_checkpoint_dir, write_kv_hf_checkpoint_dir};
+use crate::engine::tests::hf_fixture::{
+    remove_hf_checkpoint_dir, write_kv_hf_checkpoint_dir, write_mixtral_moe_hf_checkpoint_dir,
+    write_qwen2_moe_hf_checkpoint_dir, write_qwen3_moe_hf_checkpoint_dir,
+    write_qwen35_moe_full_attention_hf_checkpoint_dir,
+    write_qwen35_moe_linear_attention_hf_checkpoint_dir,
+};
 
 #[test]
 fn file_backed_hf_cuda_generate_uses_stateful_stream_path() {
@@ -53,6 +58,193 @@ fn file_backed_hf_cuda_generate_uses_stateful_stream_path() {
             .sum::<u64>()
             >= 1
     );
+    assert!(
+        output
+            .stream
+            .records
+            .iter()
+            .all(|record| record.device_authoritative && !record.host_causality_edge)
+    );
+}
+
+#[test]
+fn file_backed_hf_generate_runs_qwen35_moe_linear_attention_on_cuda_stream() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    if crate::capabilities::discovery::cuda_smoke().status != SmokeStatus::Ok {
+        return;
+    }
+    let dir =
+        write_qwen35_moe_linear_attention_hf_checkpoint_dir("nerva-hf-generate-qwen35-moe-linear");
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let output = run_hf_causal_lm_cuda_shard_backed_device_generate(
+        &runtime,
+        &dir,
+        &[TokenId(0)],
+        3,
+        2,
+        2,
+        None,
+    )
+    .unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    assert_eq!(output.backend, "cuda");
+    assert_eq!(output.max_new_tokens, 2);
+    assert_eq!(output.stop_reason(), HfCausalLmStopReason::MaxSteps);
+    assert_eq!(output.tokens().len(), 2);
+    assert_eq!(output.stream.create.experimental_rt_decode_enabled, false);
+    assert!(!output.stream.chunks.is_empty());
+    assert_eq!(output.stream.queue.host_causality_edges, 0);
+    assert!(
+        output
+            .stream
+            .records
+            .iter()
+            .all(|record| record.device_authoritative && !record.host_causality_edge)
+    );
+}
+
+#[test]
+fn file_backed_hf_generate_runs_qwen3_moe_on_cuda_stream() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    if crate::capabilities::discovery::cuda_smoke().status != SmokeStatus::Ok {
+        return;
+    }
+    let dir = write_qwen3_moe_hf_checkpoint_dir("nerva-hf-generate-qwen3-moe");
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let output = run_hf_causal_lm_cuda_shard_backed_device_generate(
+        &runtime,
+        &dir,
+        &[TokenId(0)],
+        3,
+        2,
+        2,
+        None,
+    )
+    .unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    assert_eq!(output.backend, "cuda");
+    assert_eq!(output.max_new_tokens, 2);
+    assert_eq!(output.stop_reason(), HfCausalLmStopReason::MaxSteps);
+    assert_eq!(output.tokens().len(), 2);
+    assert_eq!(output.stream.create.experimental_rt_decode_enabled, false);
+    assert!(!output.stream.chunks.is_empty());
+    assert_eq!(output.stream.queue.host_causality_edges, 0);
+    assert!(
+        output
+            .stream
+            .records
+            .iter()
+            .all(|record| record.device_authoritative && !record.host_causality_edge)
+    );
+}
+
+#[test]
+fn file_backed_hf_generate_runs_qwen35_moe_full_attention_on_cuda_stream() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    if crate::capabilities::discovery::cuda_smoke().status != SmokeStatus::Ok {
+        return;
+    }
+    let dir =
+        write_qwen35_moe_full_attention_hf_checkpoint_dir("nerva-hf-generate-qwen35-moe-full");
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let output = run_hf_causal_lm_cuda_shard_backed_device_generate(
+        &runtime,
+        &dir,
+        &[TokenId(0)],
+        3,
+        2,
+        2,
+        None,
+    )
+    .unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    assert_eq!(output.backend, "cuda");
+    assert_eq!(output.max_new_tokens, 2);
+    assert_eq!(output.stop_reason(), HfCausalLmStopReason::MaxSteps);
+    assert_eq!(output.tokens().len(), 2);
+    assert_eq!(output.stream.create.experimental_rt_decode_enabled, false);
+    assert!(!output.stream.chunks.is_empty());
+    assert_eq!(output.stream.queue.host_causality_edges, 0);
+    assert!(
+        output
+            .stream
+            .records
+            .iter()
+            .all(|record| record.device_authoritative && !record.host_causality_edge)
+    );
+}
+
+#[test]
+fn file_backed_hf_generate_runs_qwen2_moe_on_cuda_stream() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    if crate::capabilities::discovery::cuda_smoke().status != SmokeStatus::Ok {
+        return;
+    }
+    let dir = write_qwen2_moe_hf_checkpoint_dir("nerva-hf-generate-qwen2-moe");
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let output = run_hf_causal_lm_cuda_shard_backed_device_generate(
+        &runtime,
+        &dir,
+        &[TokenId(0)],
+        3,
+        2,
+        2,
+        None,
+    )
+    .unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    assert_eq!(output.backend, "cuda");
+    assert_eq!(output.max_new_tokens, 2);
+    assert_eq!(output.stop_reason(), HfCausalLmStopReason::MaxSteps);
+    assert_eq!(output.tokens().len(), 2);
+    assert_eq!(output.stream.create.experimental_rt_decode_enabled, false);
+    assert!(!output.stream.chunks.is_empty());
+    assert_eq!(output.stream.queue.host_causality_edges, 0);
+    assert!(
+        output
+            .stream
+            .records
+            .iter()
+            .all(|record| record.device_authoritative && !record.host_causality_edge)
+    );
+}
+
+#[test]
+fn file_backed_hf_generate_runs_mixtral_moe_on_cuda_stream() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    if crate::capabilities::discovery::cuda_smoke().status != SmokeStatus::Ok {
+        return;
+    }
+    let dir = write_mixtral_moe_hf_checkpoint_dir("nerva-hf-generate-mixtral-moe");
+    let runtime = Runtime::new(RuntimeConfig::default()).unwrap();
+    let output = run_hf_causal_lm_cuda_shard_backed_device_generate(
+        &runtime,
+        &dir,
+        &[TokenId(0)],
+        3,
+        2,
+        2,
+        None,
+    )
+    .unwrap();
+    remove_hf_checkpoint_dir(&dir);
+
+    assert_eq!(output.backend, "cuda");
+    assert_eq!(output.max_new_tokens, 2);
+    assert_eq!(output.stop_reason(), HfCausalLmStopReason::MaxSteps);
+    assert_eq!(output.tokens().len(), 2);
+    assert_eq!(output.stream.create.experimental_rt_decode_enabled, false);
+    assert!(!output.stream.chunks.is_empty());
+    assert_eq!(output.stream.queue.host_causality_edges, 0);
     assert!(
         output
             .stream

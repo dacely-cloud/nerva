@@ -105,6 +105,28 @@ pub fn experimental_rt_candidate_bench(
                 .far_oracle_topk_importance_scatter_avg_pages_x1000,
             far_oracle_topk_importance_scatter_max_pages: out
                 .far_oracle_topk_importance_scatter_max_pages,
+            fine_token_projected_topk_tokens: out.fine_token_projected_topk_tokens,
+            fine_token_projected_candidate_tokens: out.fine_token_projected_candidate_tokens,
+            fine_token_projected_token_recall_min_ppm: out
+                .fine_token_projected_token_recall_min_ppm,
+            fine_token_projected_token_recall_avg_ppm: out
+                .fine_token_projected_token_recall_avg_ppm,
+            fine_token_learned_projected_topk_tokens: out.fine_token_learned_projected_topk_tokens,
+            fine_token_learned_projected_candidate_tokens: out
+                .fine_token_learned_projected_candidate_tokens,
+            fine_token_learned_projected_token_recall_min_ppm: out
+                .fine_token_learned_projected_token_recall_min_ppm,
+            fine_token_learned_projected_token_recall_avg_ppm: out
+                .fine_token_learned_projected_token_recall_avg_ppm,
+            norm_stress_topk_tokens: out.norm_stress_topk_tokens,
+            norm_stress_no_augmentation_token_recall_min_ppm: out
+                .norm_stress_no_augmentation_token_recall_min_ppm,
+            norm_stress_no_augmentation_token_recall_avg_ppm: out
+                .norm_stress_no_augmentation_token_recall_avg_ppm,
+            norm_stress_synthetic_norm_augmented_token_recall_min_ppm: out
+                .norm_stress_synthetic_norm_augmented_token_recall_min_ppm,
+            norm_stress_synthetic_norm_augmented_token_recall_avg_ppm: out
+                .norm_stress_synthetic_norm_augmented_token_recall_avg_ppm,
             dense_selector_attention_stage_avg_ns: out.dense_selector_attention_stage_avg_ns,
             rt_selector_attention_stage_avg_ns: out.rt_selector_attention_stage_avg_ns,
             rt_selector_overlapped_attention_stage_avg_ns: out

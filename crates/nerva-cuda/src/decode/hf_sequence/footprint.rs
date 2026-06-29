@@ -3,7 +3,7 @@ use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 
 const U16_BYTES: u64 = 2;
 const F32_BYTES: u64 = 4;
-const LAYER_LAYOUT_BYTES: u64 = 13 * 8;
+const LAYER_LAYOUT_BYTES: u64 = 320;
 const TOKEN_SLOT_BYTES: u64 = 40;
 const DESCRIPTOR_STREAM_STAGING_BYTES: u64 = 64 * 1024 * 1024;
 const KV_CACHE_BLOCK_TOKENS: u64 = 16;
@@ -76,12 +76,14 @@ pub fn estimate_sequence_footprint(
     }
     let layout_bytes = checked_mul(layer_count, LAYER_LAYOUT_BYTES, "layout bytes")?;
     let scratch_bytes = scratch_bytes(
+        request.layers,
         hidden,
         attention_hidden,
         kv_hidden,
         intermediate,
         vocab_size,
     )?;
+    let linear_gdn_state_bytes = linear_gdn_state_bytes(request.layers)?;
     let kv_block_count = context_tokens.div_ceil(KV_CACHE_BLOCK_TOKENS);
     let kv_token_capacity =
         checked_mul(kv_block_count, KV_CACHE_BLOCK_TOKENS, "KV token capacity")?;
@@ -97,6 +99,7 @@ pub fn estimate_sequence_footprint(
         arena_bytes,
         layout_bytes,
         scratch_bytes,
+        linear_gdn_state_bytes,
         resident_kv_bytes,
         kv_block_table_bytes,
         prompt_bytes,
@@ -174,15 +177,122 @@ fn arena_elements(
 }
 
 fn scratch_bytes(
+    layers: &[crate::decode::hf_chain::layer::CudaHfDecodeChainLayer<'_>],
     hidden: u64,
     attention_hidden: u64,
     kv_hidden: u64,
     intermediate: u64,
     vocab_size: u64,
 ) -> Result<u64, String> {
-    let block = hidden * 5 + attention_hidden * 2 + kv_hidden * 2 + intermediate * 3;
+    let block = layers.iter().try_fold(
+        full_attention_scratch_elements(hidden, attention_hidden, kv_hidden, intermediate)?,
+        |max_scratch, layer| -> Result<u64, String> {
+            Ok(max_scratch.max(layer_scratch_elements(
+                layer,
+                hidden,
+                attention_hidden,
+                kv_hidden,
+                intermediate,
+            )?))
+        },
+    )?;
     let final_pass = hidden * 2 + vocab_size;
     checked_mul(block.max(final_pass), F32_BYTES, "scratch bytes")
+}
+
+fn layer_scratch_elements(
+    layer: &crate::decode::hf_chain::layer::CudaHfDecodeChainLayer<'_>,
+    hidden: u64,
+    attention_hidden: u64,
+    kv_hidden: u64,
+    intermediate: u64,
+) -> Result<u64, String> {
+    if layer.attention_kind != crate::decode::hf_chain::layer::CUDA_HF_ATTENTION_LINEAR_GDN {
+        return full_attention_scratch_elements(hidden, attention_hidden, kv_hidden, intermediate);
+    }
+    let Some(gdn) = layer.linear_gdn else {
+        return Err("CUDA HF decode linear GDN layer is missing layout metadata".to_string());
+    };
+    let value_dim = checked_mul(
+        gdn.value_heads as u64,
+        gdn.value_head_dim as u64,
+        "GDN value scratch dim",
+    )?;
+    let key_dim = checked_mul(
+        gdn.key_heads as u64,
+        gdn.key_head_dim as u64,
+        "GDN key scratch dim",
+    )?;
+    let conv_dim = checked_add(
+        checked_mul(key_dim, 2, "GDN conv scratch key dim")?,
+        value_dim,
+        "GDN conv scratch dim",
+    )?;
+    sum_bytes(&[
+        checked_mul(hidden, 5, "GDN hidden scratch")?,
+        checked_mul(conv_dim, 2, "GDN conv scratch")?,
+        checked_mul(value_dim, 3, "GDN value scratch")?,
+        checked_mul(gdn.value_heads as u64, 2, "GDN scalar scratch")?,
+        checked_mul(intermediate, 3, "GDN MLP scratch")?,
+    ])
+}
+
+fn full_attention_scratch_elements(
+    hidden: u64,
+    attention_hidden: u64,
+    kv_hidden: u64,
+    intermediate: u64,
+) -> Result<u64, String> {
+    sum_bytes(&[
+        checked_mul(hidden, 5, "full attention hidden scratch")?,
+        checked_mul(attention_hidden, 3, "full attention scratch")?,
+        checked_mul(kv_hidden, 2, "full attention KV scratch")?,
+        checked_mul(intermediate, 3, "full attention MLP scratch")?,
+    ])
+}
+
+fn linear_gdn_state_bytes(
+    layers: &[crate::decode::hf_chain::layer::CudaHfDecodeChainLayer<'_>],
+) -> Result<u64, String> {
+    layers.iter().try_fold(0, |total, layer| {
+        if layer.attention_kind != crate::decode::hf_chain::layer::CUDA_HF_ATTENTION_LINEAR_GDN {
+            return Ok(total);
+        }
+        let Some(gdn) = layer.linear_gdn else {
+            return Err("CUDA HF decode linear GDN layer is missing layout metadata".to_string());
+        };
+        let value_dim = checked_mul(
+            gdn.value_heads as u64,
+            gdn.value_head_dim as u64,
+            "GDN state value dim",
+        )?;
+        let key_dim = checked_mul(
+            gdn.key_heads as u64,
+            gdn.key_head_dim as u64,
+            "GDN state key dim",
+        )?;
+        let conv_dim = checked_add(
+            checked_mul(key_dim, 2, "GDN state key conv dim")?,
+            value_dim,
+            "GDN state conv dim",
+        )?;
+        let conv_state = checked_mul(
+            conv_dim,
+            (gdn.conv_kernel as u64).saturating_sub(1),
+            "GDN conv state",
+        )?;
+        let recurrent_state =
+            checked_mul(value_dim, gdn.key_head_dim as u64, "GDN recurrent state")?;
+        checked_add(
+            total,
+            checked_mul(
+                checked_add(conv_state, recurrent_state, "GDN state elements")?,
+                F32_BYTES,
+                "GDN state bytes",
+            )?,
+            "GDN state total bytes",
+        )
+    })
 }
 
 fn sum_bytes(values: &[u64]) -> Result<u64, String> {

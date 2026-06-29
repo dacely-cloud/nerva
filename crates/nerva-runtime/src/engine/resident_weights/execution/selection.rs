@@ -10,6 +10,7 @@ use nerva_kernel_contracts::registry::types::query::KernelQuery;
 use nerva_kernel_contracts::registry::types::registry::KernelContractRegistry;
 use nerva_ledger::types::decision::CandidateCost;
 use nerva_ledger::types::metric::MetricSource;
+use nerva_model::weights::layout::entry::WeightBlockRole;
 
 use crate::engine::resident_weights::helpers::{
     estimate_cpu_fallback_weight_ns, estimate_gpu_resident_weight_ns, estimate_gpu_staged_weight_ns,
@@ -67,6 +68,13 @@ pub(super) fn select_resident_weight_strategy(
     compute_capability: Option<u32>,
     costs: ResidentWeightCostModel,
 ) -> Result<ResidentWeightStepSelection> {
+    if matches!(
+        entry.role,
+        WeightBlockRole::LinearALog | WeightBlockRole::LinearNorm
+    ) {
+        return Ok(select_cuda_raw_weight_strategy(entry, device, costs));
+    }
+
     let cuda_plan = registry.resolve(KernelQuery::new(
         KernelOperation::DenseMatVec,
         KernelBackend::Cuda,
@@ -137,6 +145,34 @@ pub(super) fn select_resident_weight_strategy(
         },
     };
     Ok(selection)
+}
+
+fn select_cuda_raw_weight_strategy(
+    entry: &ResidentWeightBlockRef,
+    device: DeviceOrdinal,
+    costs: ResidentWeightCostModel,
+) -> ResidentWeightStepSelection {
+    if entry.tier == MemoryTier::Vram {
+        ResidentWeightStepSelection {
+            strategy: ResidentWeightExecutionStrategy::GpuResident,
+            executor: ExecutionOwner::Gpu(device),
+            predicted_visible_ns: costs.gpu_resident_ns(entry.bytes),
+            metric_source: MetricSource::EstimatedModel,
+            kernel_name: "cuda_resident_raw_f32_weight",
+            fallback: false,
+            reason: "linear attention raw F32 parameter is already resident in VRAM",
+        }
+    } else {
+        ResidentWeightStepSelection {
+            strategy: ResidentWeightExecutionStrategy::GpuStaged,
+            executor: ExecutionOwner::Gpu(device),
+            predicted_visible_ns: costs.gpu_staged_ns(entry.bytes),
+            metric_source: MetricSource::EstimatedModel,
+            kernel_name: "cuda_staged_raw_f32_weight",
+            fallback: false,
+            reason: "linear attention raw F32 parameter is staged for CUDA execution",
+        }
+    }
 }
 
 pub(super) fn resident_weight_candidate_costs(

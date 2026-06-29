@@ -6,6 +6,7 @@ use std::{
 
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
+use nerva_model::hf::contract::validate_exact_runtime_contract;
 use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::parser::parse_hf_config_metadata;
 use nerva_model::weights::file::read_safetensors_header_file;
@@ -77,6 +78,7 @@ pub(super) fn load_shard_backed_weights(dir: &Path) -> Result<ShardBackedWeights
             ),
         })?;
     let metadata = parse_hf_config_metadata(&config)?;
+    validate_exact_runtime_contract(&metadata)?;
     if metadata.tie_word_embeddings {
         return Err(NervaError::InvalidArgument {
             reason: "CUDA descriptor device-only path requires a materialized lm_head".to_string(),

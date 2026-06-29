@@ -1,7 +1,9 @@
 use std::time::Instant;
 
 use nerva_core::types::dtype::DType;
-use nerva_cuda::decode::hf_chain::layer::CudaHfDecodeChainLayer;
+use nerva_cuda::decode::hf_chain::layer::{
+    CUDA_HF_ATTENTION_FULL, CUDA_HF_MLP_DENSE, CudaHfDecodeChainLayer,
+};
 use nerva_cuda::decode::hf_sequence::request::CUDA_HF_DECODE_SEQUENCE_DTYPE_F16;
 use nerva_cuda::decode::hf_sequence::session::request::{
     CudaHfDecodeSequenceSession, CudaHfDecodeSequenceSessionConfig,
@@ -472,6 +474,7 @@ fn create_synthetic_batch_sessions(
         rms_attn_weight: &rms,
         rms_mlp_weight: &rms,
         w_q: &attn_matrix,
+        w_q_gate: None,
         w_k: &attn_matrix,
         q_norm_weight: None,
         k_norm_weight: None,
@@ -484,6 +487,21 @@ fn create_synthetic_batch_sessions(
         w_gate: &mlp_matrix,
         w_up: &mlp_matrix,
         w_down: &down_matrix,
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: None,
+        mlp_kind: CUDA_HF_MLP_DENSE,
+        moe_intermediate: 0,
+        shared_expert_intermediate: 0,
+        num_experts: 0,
+        experts_per_token: 0,
+        norm_topk_prob: false,
+        attention_kind: CUDA_HF_ATTENTION_FULL,
     };
     let layers = [layer];
     let weight_blocks = synthetic_weight_blocks(

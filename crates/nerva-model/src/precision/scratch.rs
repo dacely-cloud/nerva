@@ -29,6 +29,18 @@ pub struct PrecisionTransformerBlockKvScratch {
     pub(crate) attention: BlockwiseAttentionScratch,
     pub(crate) keys: Vec<f32>,
     pub(crate) values: Vec<f32>,
+    pub(crate) gdn: Option<PrecisionGatedDeltaNetScratch>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PrecisionGatedDeltaNetScratch {
+    conv_dim: usize,
+    conv_kernel: usize,
+    value_heads: usize,
+    value_head_dim: usize,
+    key_head_dim: usize,
+    pub(crate) conv_state: Vec<f32>,
+    pub(crate) recurrent_state: Vec<f32>,
 }
 
 impl PrecisionTransformerBlockKvScratch {
@@ -47,11 +59,15 @@ impl PrecisionTransformerBlockKvScratch {
             attention: BlockwiseAttentionScratch::new(shape)?,
             keys: vec![0.0; capacity_tokens * shape.kv_hidden()],
             values: vec![0.0; capacity_tokens * shape.kv_hidden()],
+            gdn: None,
         })
     }
 
     pub fn reset(&mut self) {
         self.len = 0;
+        if let Some(gdn) = &mut self.gdn {
+            gdn.reset();
+        }
     }
 
     pub const fn len(&self) -> usize {
@@ -82,6 +98,81 @@ impl PrecisionTransformerBlockKvScratch {
 
     pub(crate) fn set_len(&mut self, len: usize) {
         self.len = len;
+    }
+
+    pub(crate) fn ensure_gated_delta_net_state(
+        &mut self,
+        conv_dim: usize,
+        conv_kernel: usize,
+        value_heads: usize,
+        value_head_dim: usize,
+        key_head_dim: usize,
+    ) -> Result<()> {
+        if conv_dim == 0
+            || conv_kernel == 0
+            || value_heads == 0
+            || value_head_dim == 0
+            || key_head_dim == 0
+        {
+            return Err(NervaError::InvalidArgument {
+                reason: "precision GatedDeltaNet state dimensions must be non-zero".to_string(),
+            });
+        }
+        let matches = self.gdn.as_ref().is_some_and(|gdn| {
+            gdn.conv_dim == conv_dim
+                && gdn.conv_kernel == conv_kernel
+                && gdn.value_heads == value_heads
+                && gdn.value_head_dim == value_head_dim
+                && gdn.key_head_dim == key_head_dim
+        });
+        if !matches {
+            self.gdn = Some(PrecisionGatedDeltaNetScratch::new(
+                conv_dim,
+                conv_kernel,
+                value_heads,
+                value_head_dim,
+                key_head_dim,
+            )?);
+        }
+        Ok(())
+    }
+}
+
+impl PrecisionGatedDeltaNetScratch {
+    fn new(
+        conv_dim: usize,
+        conv_kernel: usize,
+        value_heads: usize,
+        value_head_dim: usize,
+        key_head_dim: usize,
+    ) -> Result<Self> {
+        let conv_state_len = conv_dim
+            .checked_mul(conv_kernel.saturating_sub(1))
+            .ok_or_else(|| NervaError::AllocationFailed {
+                bytes: conv_dim,
+                reason: "precision GatedDeltaNet conv state size overflow".to_string(),
+            })?;
+        let recurrent_state_len = value_heads
+            .checked_mul(value_head_dim)
+            .and_then(|value| value.checked_mul(key_head_dim))
+            .ok_or_else(|| NervaError::AllocationFailed {
+                bytes: value_heads,
+                reason: "precision GatedDeltaNet recurrent state size overflow".to_string(),
+            })?;
+        Ok(Self {
+            conv_dim,
+            conv_kernel,
+            value_heads,
+            value_head_dim,
+            key_head_dim,
+            conv_state: vec![0.0; conv_state_len],
+            recurrent_state: vec![0.0; recurrent_state_len],
+        })
+    }
+
+    fn reset(&mut self) {
+        self.conv_state.fill(0.0);
+        self.recurrent_state.fill(0.0);
     }
 }
 
