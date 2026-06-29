@@ -341,7 +341,7 @@ fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions()
 }
 
 #[test]
-fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_three_sessions() {
+fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_five_sessions() {
     let _guard = super::cuda_test_lock();
 
     let one = 0x3c00;
@@ -413,14 +413,26 @@ fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_three_sessions()
     if created_c.summary.status != SmokeStatus::Ok {
         return;
     }
+    let created_d = config.create();
+    if created_d.summary.status != SmokeStatus::Ok {
+        return;
+    }
+    let created_e = config.create();
+    if created_e.summary.status != SmokeStatus::Ok {
+        return;
+    }
     let mut session_a = created_a.session.unwrap();
     let mut session_b = created_b.session.unwrap();
     let mut session_c = created_c.session.unwrap();
+    let mut session_d = created_d.session.unwrap();
+    let mut session_e = created_e.session.unwrap();
 
     for (session, token) in [
         (&mut session_a, 0u32),
         (&mut session_b, 1u32),
         (&mut session_c, 2u32),
+        (&mut session_d, 3u32),
+        (&mut session_e, 4u32),
     ] {
         let started = CudaHfDecodeSequenceLoop::start(session, &[token], None);
         if started.summary.status != SmokeStatus::Ok {
@@ -433,21 +445,27 @@ fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_three_sessions()
     }
 
     let batch = {
-        let mut sessions = [&mut session_a, &mut session_b, &mut session_c];
-        CudaHfDecodeSequenceSession::batch_advance_one(&mut sessions, 3, 2)
+        let mut sessions = [
+            &mut session_a,
+            &mut session_b,
+            &mut session_c,
+            &mut session_d,
+            &mut session_e,
+        ];
+        CudaHfDecodeSequenceSession::batch_advance_one(&mut sessions, 5, 2)
     };
     assert_eq!(batch.status, SmokeStatus::Ok);
     assert_eq!(batch.reason, "ready");
     assert!(batch.exact);
-    assert_eq!(batch.block_tokens, 3);
+    assert_eq!(batch.block_tokens, 5);
     assert_eq!(batch.layer_count, 1);
-    assert_eq!(batch.observed_tokens, 3);
-    assert_eq!(batch.tokens, vec![0, 0, 0]);
+    assert_eq!(batch.observed_tokens, 5);
+    assert_eq!(batch.tokens, vec![0, 0, 0, 0, 0]);
     assert_eq!(batch.projection_kernel_launches, 5);
     assert_eq!(batch.pack_kernel_launches, 5);
     assert_eq!(batch.scatter_kernel_launches, 5);
     assert!(batch.dependency_kernel_launches > 0);
-    assert_eq!(batch.sampling_kernel_launches, 3);
+    assert_eq!(batch.sampling_kernel_launches, 5);
     assert!(batch.projection_elapsed_ns > 0);
     assert!(batch.lm_head_elapsed_ns > 0);
     assert_eq!(batch.hot_path_allocations, 0);

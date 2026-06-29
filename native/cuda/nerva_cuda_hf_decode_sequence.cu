@@ -2263,7 +2263,9 @@ __global__ void hf_projection_batch_pack_u16_kernel(
 
 __global__ void hf_projection_batch_pack_small_u16_kernel(
     const uint16_t *src0, const uint16_t *src1, const uint16_t *src2,
-    const uint16_t *src3, uint16_t *dst, uint32_t cols, uint32_t tokens) {
+    const uint16_t *src3, const uint16_t *src4, const uint16_t *src5,
+    const uint16_t *src6, const uint16_t *src7, uint16_t *dst, uint32_t cols,
+    uint32_t tokens) {
   const uint64_t total = static_cast<uint64_t>(cols) * tokens;
   const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
   for (uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x +
@@ -2271,8 +2273,14 @@ __global__ void hf_projection_batch_pack_small_u16_kernel(
        index < total; index += stride) {
     const uint32_t token = static_cast<uint32_t>(index / cols);
     const uint32_t col = static_cast<uint32_t>(index % cols);
-    const uint16_t *src =
-        token == 0 ? src0 : (token == 1 ? src1 : (token == 2 ? src2 : src3));
+    const uint16_t *src = token == 0 ? src0
+                          : token == 1 ? src1
+                          : token == 2 ? src2
+                          : token == 3 ? src3
+                          : token == 4 ? src4
+                          : token == 5 ? src5
+                          : token == 6 ? src6
+                                       : src7;
     dst[index] = src[col];
   }
 }
@@ -2289,7 +2297,8 @@ __global__ void hf_projection_batch_scatter_f32_kernel(
 
 __global__ void hf_projection_batch_scatter_small_f32_kernel(
     const float *src, float *dst0, float *dst1, float *dst2, float *dst3,
-    uint32_t rows, uint32_t tokens) {
+    float *dst4, float *dst5, float *dst6, float *dst7, uint32_t rows,
+    uint32_t tokens) {
   const uint64_t total = static_cast<uint64_t>(rows) * tokens;
   const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
   for (uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x +
@@ -2297,8 +2306,14 @@ __global__ void hf_projection_batch_scatter_small_f32_kernel(
        index < total; index += stride) {
     const uint32_t token = static_cast<uint32_t>(index / rows);
     const uint32_t row = static_cast<uint32_t>(index % rows);
-    float *dst =
-        token == 0 ? dst0 : (token == 1 ? dst1 : (token == 2 ? dst2 : dst3));
+    float *dst = token == 0 ? dst0
+                 : token == 1 ? dst1
+                 : token == 2 ? dst2
+                 : token == 3 ? dst3
+                 : token == 4 ? dst4
+                 : token == 5 ? dst5
+                 : token == 6 ? dst6
+                              : dst7;
     dst[row] = src[index];
   }
 }
@@ -4142,6 +4157,12 @@ uint32_t tune_prefill_chunk_tokens(uint64_t max_context_tokens,
 
 uint32_t ceil_div_u32(uint32_t value, uint32_t divisor) {
   return divisor == 0 ? 0 : (value + divisor - 1u) / divisor;
+}
+
+uint32_t ceil_div_u64_to_u32(uint64_t value, uint32_t divisor) {
+  if (divisor == 0) return 0;
+  const uint64_t blocks = (value + divisor - 1u) / divisor;
+  return blocks > 0xffffffffu ? 0xffffffffu : static_cast<uint32_t>(blocks);
 }
 
 uint32_t next_pow2_at_least(uint32_t value, uint32_t minimum,
@@ -7708,9 +7729,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     }
   }
 
-  const bool use_small_fused_batch = block_tokens >= 2 && block_tokens <= 4;
-  const uint16_t *pack_src[4] = {nullptr, nullptr, nullptr, nullptr};
-  float *scatter_dst[4] = {nullptr, nullptr, nullptr, nullptr};
+  const bool use_small_fused_batch = block_tokens >= 2 && block_tokens <= 8;
+  const uint16_t *pack_src[8] = {nullptr, nullptr, nullptr, nullptr,
+                                 nullptr, nullptr, nullptr, nullptr};
+  float *scatter_dst[8] = {nullptr, nullptr, nullptr, nullptr,
+                           nullptr, nullptr, nullptr, nullptr};
   if (use_small_fused_batch) {
     selected_index = 0;
     for (uint32_t index = 0; index < request->session_count &&
@@ -7743,15 +7766,17 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
   if (collect_profile) {
     err = cudaEventRecord(best->device_start, best->stream);
   }
-  const uint32_t pack_blocks = ceil_div_u32(cols, kDecodeThreads);
   if (err == cudaSuccess && use_small_fused_batch) {
+    const uint32_t pack_blocks = ceil_div_u64_to_u32(
+        static_cast<uint64_t>(cols) * block_tokens, kDecodeThreads);
     hf_projection_batch_pack_small_u16_kernel<<<pack_blocks, kDecodeThreads, 0,
                                                 best->stream>>>(
-        pack_src[0], pack_src[1], pack_src[2], pack_src[3], batch_input, cols,
-        block_tokens);
+        pack_src[0], pack_src[1], pack_src[2], pack_src[3], pack_src[4],
+        pack_src[5], pack_src[6], pack_src[7], batch_input, cols, block_tokens);
     err = cudaGetLastError();
     out->pack_kernel_launches += 1;
   } else {
+    const uint32_t pack_blocks = ceil_div_u32(cols, kDecodeThreads);
     selected_index = 0;
     for (uint32_t index = 0; err == cudaSuccess &&
                              index < request->session_count &&
@@ -7776,15 +7801,18 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     out->projection_kernel_launches += 1;
   }
 
-  const uint32_t scatter_blocks = ceil_div_u32(rows, kDecodeThreads);
   if (err == cudaSuccess && use_small_fused_batch) {
+    const uint32_t scatter_blocks = ceil_div_u64_to_u32(
+        static_cast<uint64_t>(rows) * block_tokens, kDecodeThreads);
     hf_projection_batch_scatter_small_f32_kernel<<<
         scatter_blocks, kDecodeThreads, 0, best->stream>>>(
         batch_output, scatter_dst[0], scatter_dst[1], scatter_dst[2],
-        scatter_dst[3], rows, block_tokens);
+        scatter_dst[3], scatter_dst[4], scatter_dst[5], scatter_dst[6],
+        scatter_dst[7], rows, block_tokens);
     err = cudaGetLastError();
     out->scatter_kernel_launches += 1;
   } else {
+    const uint32_t scatter_blocks = ceil_div_u32(rows, kDecodeThreads);
     selected_index = 0;
     for (uint32_t index = 0; err == cudaSuccess &&
                              index < request->session_count &&
