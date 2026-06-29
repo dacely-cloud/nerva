@@ -150,7 +150,7 @@ fn run_projection_batch_plan_command(args: &mut impl Iterator<Item = String>) ->
             Ok(compatible_requests) => compatible_requests,
             Err(reason) => return exit::parse_error(reason),
         };
-    let target_block_tokens = match parse_optional_usize(args.next(), 8, "target_block_tokens") {
+    let target_block_tokens = match parse_optional_usize(args.next(), 16, "target_block_tokens") {
         Ok(target_block_tokens) => target_block_tokens,
         Err(reason) => return exit::parse_error(reason),
     };
@@ -196,7 +196,7 @@ fn run_projection_batch_exec_probe_command(args: &mut impl Iterator<Item = Strin
         Ok(warmups) => warmups,
         Err(reason) => return exit::parse_error(reason),
     };
-    let target_block_tokens = match parse_optional_usize(args.next(), 8, "target_block_tokens") {
+    let target_block_tokens = match parse_optional_usize(args.next(), 16, "target_block_tokens") {
         Ok(target_block_tokens) => target_block_tokens,
         Err(reason) => return exit::parse_error(reason),
     };

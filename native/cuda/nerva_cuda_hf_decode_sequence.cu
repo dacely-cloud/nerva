@@ -2264,8 +2264,10 @@ __global__ void hf_projection_batch_pack_u16_kernel(
 __global__ void hf_projection_batch_pack_small_u16_kernel(
     const uint16_t *src0, const uint16_t *src1, const uint16_t *src2,
     const uint16_t *src3, const uint16_t *src4, const uint16_t *src5,
-    const uint16_t *src6, const uint16_t *src7, uint16_t *dst, uint32_t cols,
-    uint32_t tokens) {
+    const uint16_t *src6, const uint16_t *src7, const uint16_t *src8,
+    const uint16_t *src9, const uint16_t *src10, const uint16_t *src11,
+    const uint16_t *src12, const uint16_t *src13, const uint16_t *src14,
+    const uint16_t *src15, uint16_t *dst, uint32_t cols, uint32_t tokens) {
   const uint64_t total = static_cast<uint64_t>(cols) * tokens;
   const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
   for (uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x +
@@ -2280,7 +2282,15 @@ __global__ void hf_projection_batch_pack_small_u16_kernel(
                           : token == 4 ? src4
                           : token == 5 ? src5
                           : token == 6 ? src6
-                                       : src7;
+                          : token == 7 ? src7
+                          : token == 8 ? src8
+                          : token == 9 ? src9
+                          : token == 10 ? src10
+                          : token == 11 ? src11
+                          : token == 12 ? src12
+                          : token == 13 ? src13
+                          : token == 14 ? src14
+                                        : src15;
     dst[index] = src[col];
   }
 }
@@ -2297,8 +2307,9 @@ __global__ void hf_projection_batch_scatter_f32_kernel(
 
 __global__ void hf_projection_batch_scatter_small_f32_kernel(
     const float *src, float *dst0, float *dst1, float *dst2, float *dst3,
-    float *dst4, float *dst5, float *dst6, float *dst7, uint32_t rows,
-    uint32_t tokens) {
+    float *dst4, float *dst5, float *dst6, float *dst7, float *dst8,
+    float *dst9, float *dst10, float *dst11, float *dst12, float *dst13,
+    float *dst14, float *dst15, uint32_t rows, uint32_t tokens) {
   const uint64_t total = static_cast<uint64_t>(rows) * tokens;
   const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
   for (uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x +
@@ -2313,7 +2324,15 @@ __global__ void hf_projection_batch_scatter_small_f32_kernel(
                  : token == 4 ? dst4
                  : token == 5 ? dst5
                  : token == 6 ? dst6
-                              : dst7;
+                 : token == 7 ? dst7
+                 : token == 8 ? dst8
+                 : token == 9 ? dst9
+                 : token == 10 ? dst10
+                 : token == 11 ? dst11
+                 : token == 12 ? dst12
+                 : token == 13 ? dst13
+                 : token == 14 ? dst14
+                               : dst15;
     dst[row] = src[index];
   }
 }
@@ -7738,11 +7757,13 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     }
   }
 
-  const bool use_small_fused_batch = block_tokens >= 2 && block_tokens <= 8;
-  const uint16_t *pack_src[8] = {nullptr, nullptr, nullptr, nullptr,
-                                 nullptr, nullptr, nullptr, nullptr};
-  float *scatter_dst[8] = {nullptr, nullptr, nullptr, nullptr,
-                           nullptr, nullptr, nullptr, nullptr};
+  const bool use_small_fused_batch = block_tokens >= 2 && block_tokens <= 16;
+  const uint16_t *pack_src[16] = {
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+  float *scatter_dst[16] = {
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
   if (use_small_fused_batch) {
     selected_index = 0;
     for (uint32_t index = 0; index < request->session_count &&
@@ -7781,7 +7802,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
     hf_projection_batch_pack_small_u16_kernel<<<pack_blocks, kDecodeThreads, 0,
                                                 best->stream>>>(
         pack_src[0], pack_src[1], pack_src[2], pack_src[3], pack_src[4],
-        pack_src[5], pack_src[6], pack_src[7], batch_input, cols, block_tokens);
+        pack_src[5], pack_src[6], pack_src[7], pack_src[8], pack_src[9],
+        pack_src[10], pack_src[11], pack_src[12], pack_src[13], pack_src[14],
+        pack_src[15], batch_input, cols, block_tokens);
     err = cudaGetLastError();
     out->pack_kernel_launches += 1;
   } else {
@@ -7817,7 +7840,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_projection_batch_execute(
         scatter_blocks, kDecodeThreads, 0, best->stream>>>(
         batch_output, scatter_dst[0], scatter_dst[1], scatter_dst[2],
         scatter_dst[3], scatter_dst[4], scatter_dst[5], scatter_dst[6],
-        scatter_dst[7], rows, block_tokens);
+        scatter_dst[7], scatter_dst[8], scatter_dst[9], scatter_dst[10],
+        scatter_dst[11], scatter_dst[12], scatter_dst[13], scatter_dst[14],
+        scatter_dst[15], rows, block_tokens);
     err = cudaGetLastError();
     out->scatter_kernel_launches += 1;
   } else {

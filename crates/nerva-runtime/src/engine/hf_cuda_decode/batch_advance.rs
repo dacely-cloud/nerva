@@ -21,7 +21,7 @@ impl CudaDecodeBatchAdvanceConfig {
 impl Default for CudaDecodeBatchAdvanceConfig {
     fn default() -> Self {
         Self {
-            target_block_tokens: 8,
+            target_block_tokens: 16,
             min_block_tokens: 2,
         }
     }
