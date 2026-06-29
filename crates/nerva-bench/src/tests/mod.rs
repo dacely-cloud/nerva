@@ -5,6 +5,7 @@ mod hf_cuda_generate;
 mod hf_cuda_session;
 mod hf_cuda_session_loop;
 mod hf_cuda_session_stream;
+mod hf_cuda_shared_fork_batch;
 mod hf_decode;
 mod hygiene;
 mod json;

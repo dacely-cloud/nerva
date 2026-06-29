@@ -1,0 +1,217 @@
+use std::fs;
+use std::process::ExitCode;
+
+use nerva_core::types::id::token::TokenId;
+use nerva_model::hf::tokenizer::encode_text_prompt;
+use nerva_runtime::engine::hf_cuda_decode::file_backed::shared_fork_batch::{
+    HfCudaSharedForkBatchOutput, HfCudaSharedForkBatchSchedulerSummary,
+    run_hf_causal_lm_cuda_shared_fork_batch_probe,
+};
+use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
+
+use crate::cli::exit;
+use crate::cli::model::causal_lm_cuda_session_stream::u32s_json;
+use crate::json::json_escape;
+use crate::parse::{parse_optional_u32, parse_optional_usize};
+
+pub(crate) fn run_hf_causal_lm_cuda_shared_fork_batch(
+    args: &mut impl Iterator<Item = String>,
+) -> ExitCode {
+    let path = args.next();
+    let request_count = match parse_optional_usize(args.next(), 2, "request_count") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let max_context = match parse_optional_usize(args.next(), 8192, "max_context_tokens") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let max_new_tokens = match parse_optional_usize(args.next(), 128, "max_new_tokens") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let target_block_tokens =
+        match parse_optional_usize(args.next(), request_count, "target_block_tokens") {
+            Ok(value) => value,
+            Err(reason) => return exit::parse_error(reason),
+        };
+    let min_block_tokens = match parse_optional_usize(args.next(), 2, "min_block_tokens") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let prompt_spec = args.next();
+    let compute_capability = match parse_optional_u32(args.next(), 0, "compute_capability") {
+        Ok(0) => None,
+        Ok(value) => Some(value),
+        Err(reason) => return exit::parse_error(reason),
+    };
+    exit::print_json_result(hf_causal_lm_cuda_shared_fork_batch_json(
+        path,
+        request_count,
+        max_context,
+        max_new_tokens,
+        target_block_tokens,
+        min_block_tokens,
+        prompt_spec,
+        compute_capability,
+    ))
+}
+
+pub(crate) fn hf_causal_lm_cuda_shared_fork_batch_json(
+    path: Option<String>,
+    request_count: usize,
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    target_block_tokens: usize,
+    min_block_tokens: usize,
+    prompt_spec: Option<String>,
+    compute_capability: Option<u32>,
+) -> Result<String, String> {
+    let path =
+        path.ok_or_else(|| "hf-cuda-shared-fork-batch requires checkpoint_dir".to_string())?;
+    let prompt_spec =
+        prompt_spec.ok_or_else(|| "hf-cuda-shared-fork-batch requires prompt_text".to_string())?;
+    let prompt = resolve_prompt_text(&prompt_spec)?;
+    let encoded = encode_text_prompt(&path, &prompt)
+        .map_err(|err| format!("HF CUDA shared fork batch prompt encode failed: {err}"))?;
+    let token_ids = encoded
+        .token_ids
+        .iter()
+        .copied()
+        .map(TokenId)
+        .collect::<Vec<_>>();
+    let runtime = Runtime::new(RuntimeConfig::default())
+        .map_err(|err| format!("runtime init failed: {err:?}"))?;
+    let output = run_hf_causal_lm_cuda_shared_fork_batch_probe(
+        &runtime,
+        &path,
+        &token_ids,
+        request_count,
+        max_context_tokens,
+        max_new_tokens,
+        target_block_tokens,
+        min_block_tokens,
+        compute_capability,
+        false,
+    )
+    .map_err(|err| format!("HF CUDA shared fork batch failed: {err:?}"))?;
+    shared_fork_batch_json(
+        &path,
+        &prompt,
+        encoded.input_mode,
+        &encoded.token_ids,
+        &output,
+    )
+}
+
+fn resolve_prompt_text(prompt_spec: &str) -> Result<String, String> {
+    let Some(path) = prompt_spec.strip_prefix('@') else {
+        return Ok(prompt_spec.to_string());
+    };
+    if path.is_empty() {
+        return Err("hf-cuda-shared-fork-batch prompt file path is empty".to_string());
+    }
+    fs::read_to_string(path).map_err(|err| {
+        format!("hf-cuda-shared-fork-batch failed to read prompt file {path}: {err}")
+    })
+}
+
+fn shared_fork_batch_json(
+    path: &str,
+    prompt: &str,
+    input_mode: &str,
+    prompt_ids: &[u32],
+    output: &HfCudaSharedForkBatchOutput,
+) -> Result<String, String> {
+    let dtype = nerva_model::precision::bits::dtype_label(output.dtype)
+        .map_err(|err| format!("HF CUDA shared fork batch dtype failed: {err:?}"))?;
+    Ok(format!(
+        "{{\"status\":\"ok\",\"backend\":\"cuda\",\"mode\":\"shared_fork_batch\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt\":\"{}\",\"prompt_token_ids\":{},\"prompt_tokens\":{},\"request_count\":{},\"max_new_tokens\":{},\"target_block_tokens\":{},\"min_block_tokens\":{},\"total_tokens\":{},\"tokens_per_second\":{:.6},\"used_batched_projection\":{},\"dtype\":\"{}\",\"layers\":{},\"hidden\":{},\"vocab_size\":{},\"manifest_entries\":{},\"shard_plan_entries\":{},\"tensors_loaded\":{},\"bytes_loaded\":{},\"data_hash\":{},\"data_hash_available\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"first_decode_wall_ns\":{},\"continuous_decode_wall_ns\":{},\"decode_wall_ns\":{},\"scheduler\":{},\"tokens_by_request\":{},\"stopped_by_request\":{},\"resident_weights\":{},\"create\":{},\"fork_creates\":[{}]}}",
+        json_escape(path),
+        input_mode,
+        json_escape(prompt),
+        u32s_json(prompt_ids),
+        prompt_ids.len(),
+        output.request_count,
+        output.max_new_tokens,
+        output.target_block_tokens,
+        output.min_block_tokens,
+        output.total_tokens(),
+        output.tokens_per_second(),
+        output.used_batched_projection(),
+        dtype,
+        output.metadata.num_hidden_layers,
+        output.metadata.hidden_size,
+        output.metadata.vocab_size,
+        output.manifest_entries,
+        output.shard_plan_entries,
+        output.tensors_loaded,
+        output.bytes_loaded,
+        output.data_hash,
+        output.data_hash_available,
+        output.load_wall_ns,
+        output.prefill_wall_ns,
+        output.first_decode_wall_ns,
+        output.continuous_decode_wall_ns,
+        output.decode_wall_ns(),
+        scheduler_json(&output.scheduler),
+        tokens_by_request_json(output),
+        bools_json(&output.stopped_by_request),
+        output.resident_weights.to_json(),
+        output.create.to_json(),
+        output
+            .fork_creates
+            .iter()
+            .map(|summary| summary.to_json())
+            .collect::<Vec<_>>()
+            .join(","),
+    ))
+}
+
+fn scheduler_json(summary: &HfCudaSharedForkBatchSchedulerSummary) -> String {
+    format!(
+        "{{\"scheduler_steps\":{},\"batched_steps\":{},\"fallback_steps\":{},\"batch_failed_steps\":{},\"observed_tokens\":{},\"batch_observed_tokens\":{},\"fallback_observed_tokens\":{},\"batch_projection_elapsed_ns\":{},\"batch_qkv_elapsed_ns\":{},\"batch_attention_output_elapsed_ns\":{},\"batch_gate_up_elapsed_ns\":{},\"batch_down_elapsed_ns\":{},\"batch_lm_head_elapsed_ns\":{},\"batch_pack_kernel_launches\":{},\"batch_projection_kernel_launches\":{},\"batch_scatter_kernel_launches\":{},\"batch_dependency_kernel_launches\":{},\"batch_sampling_kernel_launches\":{},\"batch_sync_calls\":{},\"batch_hot_path_allocations\":{},\"last_plan_reason\":\"{}\",\"last_batch_reason\":\"{}\"}}",
+        summary.scheduler_steps,
+        summary.batched_steps,
+        summary.fallback_steps,
+        summary.batch_failed_steps,
+        summary.observed_tokens,
+        summary.batch_observed_tokens,
+        summary.fallback_observed_tokens,
+        summary.batch_projection_elapsed_ns,
+        summary.batch_qkv_elapsed_ns,
+        summary.batch_attention_output_elapsed_ns,
+        summary.batch_gate_up_elapsed_ns,
+        summary.batch_down_elapsed_ns,
+        summary.batch_lm_head_elapsed_ns,
+        summary.batch_pack_kernel_launches,
+        summary.batch_projection_kernel_launches,
+        summary.batch_scatter_kernel_launches,
+        summary.batch_dependency_kernel_launches,
+        summary.batch_sampling_kernel_launches,
+        summary.batch_sync_calls,
+        summary.batch_hot_path_allocations,
+        summary.last_plan_reason,
+        summary.last_batch_reason,
+    )
+}
+
+fn tokens_by_request_json(output: &HfCudaSharedForkBatchOutput) -> String {
+    let rows = output
+        .tokens_by_request
+        .iter()
+        .map(|tokens| {
+            let values = tokens.iter().map(|token| token.0).collect::<Vec<_>>();
+            u32s_json(&values)
+        })
+        .collect::<Vec<_>>();
+    format!("[{}]", rows.join(","))
+}
+
+fn bools_json(values: &[bool]) -> String {
+    let items = values
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    format!("[{}]", items.join(","))
+}

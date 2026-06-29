@@ -2,8 +2,8 @@ use std::process::ExitCode;
 
 use crate::cli::model::{
     attention, block, causal_lm, causal_lm_cuda, causal_lm_cuda_generate, causal_lm_cuda_session,
-    causal_lm_cuda_session_loop, causal_lm_cuda_session_stream, contracts, parity, precision,
-    prompt, tiny, warm,
+    causal_lm_cuda_session_loop, causal_lm_cuda_session_stream, causal_lm_cuda_shared_fork_batch,
+    contracts, parity, precision, prompt, tiny, warm,
 };
 
 pub(crate) fn dispatch(
@@ -34,6 +34,9 @@ pub(crate) fn dispatch(
         Some("hf-cuda-generate") => Some(causal_lm_cuda_generate::run_hf_causal_lm_cuda_generate(
             args,
         )),
+        Some("hf-cuda-shared-fork-batch") => {
+            Some(causal_lm_cuda_shared_fork_batch::run_hf_causal_lm_cuda_shared_fork_batch(args))
+        }
         Some("vllm-parity") => Some(parity::run_vllm_parity(args)),
         Some("token-parity") => Some(parity::run_token_parity(args)),
         Some("attention") => Some(attention::run_attention()),

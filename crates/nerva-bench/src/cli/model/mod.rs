@@ -9,6 +9,7 @@ pub(crate) mod causal_lm_cuda_perf;
 pub(crate) mod causal_lm_cuda_session;
 pub(crate) mod causal_lm_cuda_session_loop;
 pub(crate) mod causal_lm_cuda_session_stream;
+pub(crate) mod causal_lm_cuda_shared_fork_batch;
 pub(crate) mod causal_lm_text;
 pub(crate) mod contracts;
 pub(crate) mod dispatch;

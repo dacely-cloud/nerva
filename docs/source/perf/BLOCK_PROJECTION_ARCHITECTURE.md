@@ -505,3 +505,40 @@ tiny synthetic model. This is not a Qwen throughput claim; it is the first
 hardware-backed proof that the full batched decode-step composition is callable
 through scheduler-facing runtime code and preserves token output for compatible
 sessions without duplicating resident weights.
+
+## File-Backed Shared-Fork Probe
+
+The bench CLI now also exposes a real checkpoint probe:
+
+```text
+cargo run -p nerva-bench --release -- hf-cuda-shared-fork-batch \
+  <checkpoint_dir> [request_count] [max_context] [max_new_tokens] \
+  [target_block_tokens] [min_block_tokens] prompt_text|@prompt.txt \
+  [compute_capability]
+```
+
+This path loads the checkpoint once, creates `request_count - 1` CUDA session
+forks that share the parent's resident weights, starts each request from the
+same prompt, drains the first prefill-produced token, then runs subsequent
+tokens through `advance_continuous_decode_batch_once`.
+
+The current tiny Qwen3-8B proof run is:
+
+```text
+docs/source/perf/qwen3_8b_shared_fork_batch_probe.json
+
+requests             2
+max context          1024
+max new tokens       4/request
+aggregate decode     188.03 tok/s
+batched steps        3/3
+fallback steps       0
+hot-path allocations 0
+tokens/request       [11, 358, 2776, 4460]
+```
+
+This proves the real file-backed Qwen path can execute through shared-weight
+forks and projection-batched decode steps. It is deliberately a tiny functional
+probe, not a final throughput benchmark. The next benchmark needs longer
+multi-request decode budgets and a comparison against sequential same-session
+decode under the same prompt, context, and request count.
