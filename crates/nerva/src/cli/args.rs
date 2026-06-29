@@ -4,6 +4,10 @@ use nerva_model::hf::tokenizer::PromptFormat;
 pub(crate) const AUTO_CONTEXT_MARGIN: usize = 16;
 pub(crate) const DEFAULT_OUTPUT_TOKENS: usize = 256;
 pub(crate) const DEFAULT_QUEUE_CAPACITY: usize = 1024;
+pub(crate) const DEFAULT_TEMPERATURE: f32 = 1.0;
+pub(crate) const DEFAULT_TOP_P: f32 = 1.0;
+pub(crate) const DEFAULT_TOP_K: u32 = 0;
+pub(crate) const DEFAULT_SEED: u64 = 0;
 
 #[derive(Debug)]
 pub(crate) struct GenerateArgs {
@@ -34,10 +38,10 @@ impl Default for GenerateArgs {
             queue_capacity: None,
             compute_capability: None,
             prompt_format: PromptFormat::Auto,
-            temperature: 0.0,
-            top_p: 1.0,
-            top_k: 0,
-            seed: 0,
+            temperature: DEFAULT_TEMPERATURE,
+            top_p: DEFAULT_TOP_P,
+            top_k: DEFAULT_TOP_K,
+            seed: DEFAULT_SEED,
             rt: false,
             profiling: false,
             json: false,
@@ -76,13 +80,13 @@ struct ClapGenerateArgs {
     debug: bool,
     #[arg(long = "profiling")]
     profiling: bool,
-    #[arg(long = "temperature", default_value_t = 0.0)]
+    #[arg(long = "temperature", default_value_t = DEFAULT_TEMPERATURE)]
     temperature: f32,
-    #[arg(long = "top-p", default_value_t = 1.0)]
+    #[arg(long = "top-p", default_value_t = DEFAULT_TOP_P)]
     top_p: f32,
-    #[arg(long = "top-k", default_value_t = 0)]
+    #[arg(long = "top-k", default_value_t = DEFAULT_TOP_K)]
     top_k: u32,
-    #[arg(long = "seed", default_value_t = 0)]
+    #[arg(long = "seed", default_value_t = DEFAULT_SEED)]
     seed: u64,
     #[arg(long = "rt")]
     rt: bool,
@@ -224,5 +228,18 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         assert!(parse_args(&args).is_err());
+    }
+
+    #[test]
+    fn defaults_match_vllm_sampling_params() {
+        let args = ["-m", "qwen3-8b", "-p", "hello"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let parsed = parse_args(&args).unwrap();
+        assert_eq!(parsed.temperature, 1.0);
+        assert_eq!(parsed.top_p, 1.0);
+        assert_eq!(parsed.top_k, 0);
+        assert_eq!(parsed.seed, 0);
     }
 }
