@@ -14,7 +14,7 @@ use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::tokenizer::stop_token_ids;
 
 use crate::engine::hf_cuda_decode::continuous_batch::{
-    CudaDecodeLoopBatchEntry, advance_continuous_decode_batch_once,
+    advance_continuous_decode_batch_once, CudaDecodeLoopBatchEntry,
 };
 use crate::engine::hf_cuda_decode::file_backed::session::create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling;
 use crate::engine::hf_cuda_decode::projection_batch::{
@@ -77,6 +77,7 @@ impl HfCudaSharedForkBatchOutput {
 pub struct HfCudaSharedForkBatchSchedulerSummary {
     pub scheduler_steps: usize,
     pub batched_steps: usize,
+    pub batch_groups: usize,
     pub fallback_steps: usize,
     pub batch_failed_steps: usize,
     pub observed_tokens: usize,
@@ -340,10 +341,15 @@ fn advance_continuous_until_done(
         if output.used_batched_projection() {
             summary.batched_steps += 1;
         }
+        summary.batch_groups += output
+            .selected
+            .iter()
+            .filter(|selected| selected.used_batched_projection())
+            .count();
         if output.fallback.is_some() {
             summary.fallback_steps += 1;
         }
-        if let Some(selected) = output.selected.as_ref() {
+        for selected in &output.selected {
             match selected.mode {
                 crate::engine::hf_cuda_decode::batch_advance::CudaDecodeBatchAdvanceMode::BatchFailed { reason } => {
                     summary.batch_failed_steps += 1;

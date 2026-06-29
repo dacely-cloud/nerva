@@ -8,16 +8,16 @@ use nerva_cuda::decode::hf_sequence::session::request::{
 };
 use nerva_cuda::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use nerva_cuda::decode::hf_sequence::weight_plan::{
-    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
-    CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
+    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
 };
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_runtime::engine::hf_cuda_decode::continuous_batch::{
-    CudaDecodeLoopBatchEntry, advance_continuous_decode_batch_once,
+    advance_continuous_decode_batch_once, CudaDecodeLoopBatchEntry,
 };
 use nerva_runtime::engine::hf_cuda_decode::projection_batch::{
-    ProjectionBatchCandidate, ProjectionBatchConfig, ProjectionBatchModelKey,
-    ProjectionBatchPlanReason, plan_exact_projection_batch,
+    plan_exact_projection_batch, ProjectionBatchCandidate, ProjectionBatchConfig,
+    ProjectionBatchModelKey, ProjectionBatchPlanReason,
 };
 
 use crate::json::json_escape;
@@ -387,7 +387,8 @@ fn run_synthetic_batched_advance(
     }
     let summary = output
         .selected
-        .and_then(|selected| selected.batch)
+        .into_iter()
+        .find_map(|selected| selected.batch)
         .ok_or_else(|| "continuous batch scheduler returned no batch summary".to_string())?;
     if summary.target_block_tokens
         != u32::try_from(target_block_tokens)

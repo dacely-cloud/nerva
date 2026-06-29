@@ -1,0 +1,280 @@
+{
+  "schema": "nerva-hf-cuda-shared-fork-batch-compare-v1",
+  "measurement_date": "2026-06-29",
+  "host": "RTX 5090",
+  "model": "Qwen3-8B local safetensors snapshot",
+  "command": "cargo run -p nerva-bench --release -- hf-cuda-shared-fork-batch-compare /root/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218 32 128 4 16 2 \"Hello\" 120",
+  "status": "ok",
+  "request_count": 32,
+  "max_context_tokens": 128,
+  "max_new_tokens": 4,
+  "target_block_tokens": 16,
+  "min_block_tokens": 2,
+  "prompt_tokens": 1,
+  "token_match": true,
+  "throughput_speedup": 7.090558,
+  "decode_wall_speedup": 7.090558,
+  "sequential": {
+    "total_tokens": 128,
+    "tokens_per_second": 128.660739,
+    "decode_wall_ns": 994864488,
+    "load_wall_ns": 3801039318,
+    "prefill_wall_ns": 1347286873,
+    "used_batched_projection": false,
+    "scheduler": {
+      "scheduler_steps": 3,
+      "batched_steps": 0,
+      "batch_groups": 0,
+      "fallback_steps": 3,
+      "batch_failed_steps": 0,
+      "observed_tokens": 96,
+      "batch_observed_tokens": 0,
+      "fallback_observed_tokens": 96,
+      "batch_projection_elapsed_ns": 0,
+      "batch_qkv_elapsed_ns": 0,
+      "batch_attention_output_elapsed_ns": 0,
+      "batch_gate_up_elapsed_ns": 0,
+      "batch_down_elapsed_ns": 0,
+      "batch_lm_head_elapsed_ns": 0,
+      "batch_pack_kernel_launches": 0,
+      "batch_projection_kernel_launches": 0,
+      "batch_scatter_kernel_launches": 0,
+      "batch_dependency_kernel_launches": 0,
+      "batch_sampling_kernel_launches": 0,
+      "batch_sync_calls": 0,
+      "batch_hot_path_allocations": 0,
+      "last_plan_reason": "insufficient_compatible_ready",
+      "last_batch_reason": ""
+    }
+  },
+  "batched": {
+    "total_tokens": 128,
+    "tokens_per_second": 912.276451,
+    "decode_wall_ns": 140308346,
+    "load_wall_ns": 3570691287,
+    "prefill_wall_ns": 1316543138,
+    "used_batched_projection": true,
+    "scheduler": {
+      "scheduler_steps": 3,
+      "batched_steps": 3,
+      "batch_groups": 6,
+      "fallback_steps": 0,
+      "batch_failed_steps": 0,
+      "observed_tokens": 96,
+      "batch_observed_tokens": 96,
+      "fallback_observed_tokens": 0,
+      "batch_projection_elapsed_ns": 0,
+      "batch_qkv_elapsed_ns": 0,
+      "batch_attention_output_elapsed_ns": 0,
+      "batch_gate_up_elapsed_ns": 0,
+      "batch_down_elapsed_ns": 0,
+      "batch_lm_head_elapsed_ns": 0,
+      "batch_pack_kernel_launches": 870,
+      "batch_projection_kernel_launches": 870,
+      "batch_scatter_kernel_launches": 870,
+      "batch_dependency_kernel_launches": 14016,
+      "batch_sampling_kernel_launches": 96,
+      "batch_sync_calls": 6,
+      "batch_hot_path_allocations": 0,
+      "last_plan_reason": "ready",
+      "last_batch_reason": "batched"
+    }
+  },
+  "tokens_by_request": [
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ],
+    [
+      11,
+      358,
+      2776,
+      4460
+    ]
+  ],
+  "shared_weight_proof": "direct_shared_weight_fork_lineage",
+  "decode_status": "tiny_real_qwen_comparison_not_full_throughput_claim",
+  "change_note": "compatible shared-fork queues larger than the projection target are split into multiple exact projection batches per scheduler tick instead of falling back after the first group"
+}
