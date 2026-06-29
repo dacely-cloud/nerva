@@ -341,6 +341,119 @@ fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions()
 }
 
 #[test]
+fn hf_decode_sequence_batch_advance_one_fuses_projection_io_for_three_sessions() {
+    let _guard = super::cuda_test_lock();
+
+    let one = 0x3c00;
+    let zero = 0x0000;
+    let hidden = 128;
+    let intermediate = 256;
+    let vocab_size = 8;
+    let embeddings = vec![zero; vocab_size * hidden];
+    let rms = vec![one; hidden];
+    let attn_matrix = vec![zero; hidden * hidden];
+    let mlp_matrix = vec![zero; intermediate * hidden];
+    let down_matrix = vec![zero; hidden * intermediate];
+    let lm_head = vec![zero; vocab_size * hidden];
+    let layer = CudaHfDecodeChainLayer {
+        rms_attn_weight: &rms,
+        rms_mlp_weight: &rms,
+        w_q: &attn_matrix,
+        w_k: &attn_matrix,
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &attn_matrix,
+        w_o: &attn_matrix,
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &mlp_matrix,
+        w_up: &mlp_matrix,
+        w_down: &down_matrix,
+    };
+    let layers = [layer];
+    let weight_blocks = projection_batch_weight_blocks(
+        &embeddings,
+        &rms,
+        &attn_matrix,
+        &mlp_matrix,
+        &down_matrix,
+        &lm_head,
+    );
+    let weight_plan = projection_batch_weight_plan(&weight_blocks);
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden,
+        heads: 1,
+        kv_heads: 1,
+        head_dim: hidden,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 5,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &embeddings,
+        layers: &layers,
+        final_norm_weight: &rms,
+        lm_head: &lm_head,
+        weight_plan: Some(weight_plan),
+        weight_blocks: &weight_blocks,
+        detailed_profile: true,
+    };
+    let created_a = config.create();
+    if created_a.summary.status != SmokeStatus::Ok {
+        return;
+    }
+    let created_b = config.create();
+    if created_b.summary.status != SmokeStatus::Ok {
+        return;
+    }
+    let created_c = config.create();
+    if created_c.summary.status != SmokeStatus::Ok {
+        return;
+    }
+    let mut session_a = created_a.session.unwrap();
+    let mut session_b = created_b.session.unwrap();
+    let mut session_c = created_c.session.unwrap();
+
+    for (session, token) in [
+        (&mut session_a, 0u32),
+        (&mut session_b, 1u32),
+        (&mut session_c, 2u32),
+    ] {
+        let started = CudaHfDecodeSequenceLoop::start(session, &[token], None);
+        if started.summary.status != SmokeStatus::Ok {
+            return;
+        }
+        let mut loop_state = started.loop_state.unwrap();
+        let first = loop_state.advance(1);
+        assert_eq!(first.status, SmokeStatus::Ok);
+        assert_eq!(first.tokens, vec![0]);
+    }
+
+    let batch = {
+        let mut sessions = [&mut session_a, &mut session_b, &mut session_c];
+        CudaHfDecodeSequenceSession::batch_advance_one(&mut sessions, 3, 2)
+    };
+    assert_eq!(batch.status, SmokeStatus::Ok);
+    assert_eq!(batch.reason, "ready");
+    assert!(batch.exact);
+    assert_eq!(batch.block_tokens, 3);
+    assert_eq!(batch.layer_count, 1);
+    assert_eq!(batch.observed_tokens, 3);
+    assert_eq!(batch.tokens, vec![0, 0, 0]);
+    assert_eq!(batch.projection_kernel_launches, 5);
+    assert_eq!(batch.pack_kernel_launches, 5);
+    assert_eq!(batch.scatter_kernel_launches, 5);
+    assert!(batch.dependency_kernel_launches > 0);
+    assert_eq!(batch.sampling_kernel_launches, 3);
+    assert!(batch.projection_elapsed_ns > 0);
+    assert!(batch.lm_head_elapsed_ns > 0);
+    assert_eq!(batch.hot_path_allocations, 0);
+}
+
+#[test]
 fn hf_decode_sequence_loop_batch_advance_one_executes_second_token_for_two_loops() {
     let _guard = super::cuda_test_lock();
 
