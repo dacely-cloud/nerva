@@ -6,7 +6,7 @@ use std::{
 
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
-use nerva_model::hf::contract::validate_exact_runtime_contract;
+use nerva_model::hf::contract::{validate_exact_runtime_contract, validate_weight_layout_contract};
 use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::parser::parse_hf_config_metadata;
 use nerva_model::weights::file::read_safetensors_header_file;
@@ -78,7 +78,7 @@ pub(super) fn load_shard_backed_weights(dir: &Path) -> Result<ShardBackedWeights
             ),
         })?;
     let metadata = parse_hf_config_metadata(&config)?;
-    validate_exact_runtime_contract(&metadata)?;
+    validate_shard_backed_weight_contract(&metadata)?;
     if metadata.tie_word_embeddings {
         return Err(NervaError::InvalidArgument {
             reason: "CUDA descriptor device-only path requires a materialized lm_head".to_string(),
@@ -108,6 +108,13 @@ pub(super) fn load_shard_backed_weights(dir: &Path) -> Result<ShardBackedWeights
         data_hash,
         data_hash_available,
     })
+}
+
+fn validate_shard_backed_weight_contract(metadata: &HfModelMetadata) -> Result<()> {
+    if metadata.architecture.is_deepseek() {
+        return validate_weight_layout_contract(metadata);
+    }
+    validate_exact_runtime_contract(metadata)
 }
 
 fn load_or_synthesize_index(dir: &Path, manifest: &HfTensorManifest) -> Result<String> {
@@ -195,4 +202,91 @@ fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use nerva_model::hf::architecture::HfArchitectureKind;
+    use nerva_model::weights::safetensors::header::synthetic_safetensors_header_for_manifest;
+
+    use super::*;
+
+    #[test]
+    fn load_shard_backed_weights_accepts_deepseek_layout_contract() {
+        let dir = temp_checkpoint_dir("nerva-runtime-deepseek-load");
+        write_deepseek_v3_checkpoint(&dir);
+
+        let weights = load_shard_backed_weights(&dir).unwrap();
+
+        assert_eq!(
+            weights.metadata.architecture,
+            HfArchitectureKind::DeepSeekV3
+        );
+        assert!(weights.manifest.total_weight_bytes > 0);
+        assert_eq!(weights.shard_plan.shards.len(), 1);
+        assert!(weights.data_hash_available);
+
+        let _ = std::fs::remove_file(dir.join("model.safetensors"));
+        let _ = std::fs::remove_file(dir.join("config.json"));
+        let _ = std::fs::remove_dir(dir);
+    }
+
+    fn temp_checkpoint_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_deepseek_v3_checkpoint(dir: &Path) {
+        std::fs::write(dir.join("config.json"), deepseek_v3_fixture_config()).unwrap();
+        let metadata = parse_hf_config_metadata(deepseek_v3_fixture_config()).unwrap();
+        let layout = plan_hf_weight_layout(&metadata).unwrap();
+        let manifest = build_hf_tensor_manifest(&layout).unwrap();
+        let header = synthetic_safetensors_header_for_manifest(&manifest).unwrap();
+        let mut bytes = Vec::with_capacity(8 + header.len() + manifest.total_weight_bytes);
+        bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(header.as_bytes());
+        bytes.resize(bytes.len() + manifest.total_weight_bytes, 0);
+        std::fs::write(dir.join("model.safetensors"), bytes).unwrap();
+    }
+
+    fn deepseek_v3_fixture_config() -> &'static str {
+        r#"{
+            "architectures": ["DeepseekV3ForCausalLM"],
+            "model_type": "deepseek_v3",
+            "hidden_size": 4,
+            "intermediate_size": 8,
+            "moe_intermediate_size": 2,
+            "n_shared_experts": 1,
+            "n_routed_experts": 2,
+            "num_experts_per_tok": 1,
+            "first_k_dense_replace": 1,
+            "moe_layer_freq": 1,
+            "n_group": 1,
+            "topk_group": 1,
+            "topk_method": "noaux_tc",
+            "scoring_func": "sigmoid",
+            "norm_topk_prob": true,
+            "routed_scaling_factor": 1.0,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 2,
+            "q_lora_rank": 2,
+            "kv_lora_rank": 2,
+            "qk_nope_head_dim": 1,
+            "qk_rope_head_dim": 1,
+            "v_head_dim": 1,
+            "vocab_size": 8,
+            "max_position_embeddings": 128,
+            "rms_norm_eps": 0.000001,
+            "tie_word_embeddings": false,
+            "torch_dtype": "bfloat16"
+        }"#
+    }
 }
