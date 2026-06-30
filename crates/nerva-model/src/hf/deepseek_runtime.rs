@@ -84,6 +84,26 @@ pub struct DeepSeekRuntimeWeightContract {
     pub layers: Vec<DeepSeekLayerWeightContract>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeepSeekV4MhcWarmupTokenPlan {
+    pub tokens: usize,
+    pub mhc_pre_num_split: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeepSeekV4MhcWarmupPlan {
+    pub max_tokens: usize,
+    pub hidden_size: usize,
+    pub hc_mult: usize,
+    pub num_sms: usize,
+    pub token_sizes: Vec<DeepSeekV4MhcWarmupTokenPlan>,
+}
+
+pub const DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS: usize = 16_384;
+pub const DEEPSEEK_V4_MHC_DEFAULT_TOKEN_SIZE_CANDIDATES: [usize; 15] = [
+    1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384,
+];
+
 pub fn deepseek_layer_execution_plan(
     metadata: &HfModelMetadata,
 ) -> Result<DeepSeekLayerExecutionPlan> {
@@ -238,6 +258,96 @@ pub fn deepseek_runtime_weight_contract(
     Ok(DeepSeekRuntimeWeightContract {
         architecture: metadata.architecture,
         layers,
+    })
+}
+
+pub fn deepseek_v4_mhc_warmup_token_sizes(
+    max_tokens: usize,
+    cudagraph_capture_sizes: &[usize],
+) -> Vec<usize> {
+    if max_tokens == 0 {
+        return Vec::new();
+    }
+
+    let max_auto_tokens = max_tokens.min(DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS);
+    let mut candidates = Vec::with_capacity(
+        DEEPSEEK_V4_MHC_DEFAULT_TOKEN_SIZE_CANDIDATES.len() + cudagraph_capture_sizes.len() + 1,
+    );
+    candidates.extend(DEEPSEEK_V4_MHC_DEFAULT_TOKEN_SIZE_CANDIDATES);
+    candidates.extend(cudagraph_capture_sizes.iter().copied());
+    candidates.push(max_auto_tokens);
+    candidates.retain(|size| (1..=max_auto_tokens).contains(size));
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+}
+
+pub fn deepseek_v4_mhc_pre_num_split(
+    num_tokens: usize,
+    hidden_size: usize,
+    hc_mult: usize,
+    num_sms: usize,
+) -> Result<usize> {
+    if num_tokens == 0 || hidden_size == 0 || hc_mult == 0 || num_sms == 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 mHC split planning requires non-zero tokens, hidden size, hc_mult, and SM count".to_string(),
+        });
+    }
+
+    let k = hidden_size
+        .checked_mul(hc_mult)
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: format!(
+                "DeepSeek V4 mHC split planning overflowed: hidden_size {hidden_size} * hc_mult {hc_mult}"
+            ),
+        })?;
+    let grid_size = ceil_div(num_tokens, 64);
+    let split_k = num_sms / grid_size;
+    let num_block_k = ceil_div(k, 64);
+    Ok(split_k.min(num_block_k / 4).max(1))
+}
+
+pub fn plan_deepseek_v4_mhc_warmup(
+    metadata: &HfModelMetadata,
+    max_tokens: usize,
+    cudagraph_capture_sizes: &[usize],
+    num_sms: usize,
+) -> Result<DeepSeekV4MhcWarmupPlan> {
+    if metadata.architecture != HfArchitectureKind::DeepSeekV4 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "DeepSeek V4 mHC warmup planning requires DeepSeek V4, got {}",
+                metadata.architecture.as_str()
+            ),
+        });
+    }
+    let hc_mult = metadata
+        .hc_mult
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "DeepSeek V4 mHC warmup planning requires hc_mult metadata".to_string(),
+        })?;
+
+    let token_sizes = deepseek_v4_mhc_warmup_token_sizes(max_tokens, cudagraph_capture_sizes)
+        .into_iter()
+        .map(|tokens| {
+            Ok(DeepSeekV4MhcWarmupTokenPlan {
+                tokens,
+                mhc_pre_num_split: deepseek_v4_mhc_pre_num_split(
+                    tokens,
+                    metadata.hidden_size,
+                    hc_mult,
+                    num_sms,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(DeepSeekV4MhcWarmupPlan {
+        max_tokens,
+        hidden_size: metadata.hidden_size,
+        hc_mult,
+        num_sms,
+        token_sizes,
     })
 }
 
@@ -487,6 +597,11 @@ fn require_kv_group(plan: &crate::hf::deepseek::DeepSeekVllmKvCachePlan, name: &
     }
 }
 
+fn ceil_div(value: usize, divisor: usize) -> usize {
+    debug_assert!(divisor != 0);
+    value / divisor + usize::from(value % divisor != 0)
+}
+
 pub fn deepseek_layer_report(metadata: &HfModelMetadata) -> DeepSeekLayerReport {
     let moe_layers = metadata
         .mlp_layer_types
@@ -592,6 +707,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
     }
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
         primitives.push("deepseek_v4_mhc_compressor_indexer_manifest".to_string());
+        primitives.push("deepseek_v4_mhc_warmup_plan_matches_vllm".to_string());
         primitives.push("deepseek_v4_hash_router_manifest".to_string());
         primitives.push("mxfp4_e2m1_e8m0_block_dequant_reference".to_string());
         primitives.push("cuda_mxfp4_e2m1_e8m0_dequant_api".to_string());
@@ -830,6 +946,7 @@ fn coverage_for_unit(
             "partial",
             &[
                 "deepseek_v4_mhc_compressor_indexer_manifest",
+                "deepseek_v4_mhc_warmup_plan_matches_vllm",
                 "cuda_deepseek_qkv_rmsnorm_api",
                 "cuda_deepseek_qkv_rmsnorm_smoke",
                 "cuda_deepseek_fused_inv_rope_fp8_quant_api",
@@ -840,6 +957,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_execution_guard",
             ],
             &[
+                "execute MHC TileLang-equivalent warmup before first V4 request",
                 "integrate fused Q/KV RMSNorm into MHC pre-head runtime",
                 "integrate fused inverse RoPE FP8 quant into O projection runtime",
                 "implement remaining MHC pre/post-head transforms",

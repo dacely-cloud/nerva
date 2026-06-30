@@ -4,8 +4,11 @@ use crate::hf::deepseek::{
     deepseek_mla_dimensions, plan_deepseek_vllm_kv_cache,
     plan_deepseek_vllm_kv_cache_with_block_size,
 };
-use crate::hf::deepseek_runtime::deepseek_runtime_weight_contract;
-use crate::hf::deepseek_runtime::{DeepSeekAttentionExecutionKind, deepseek_layer_execution_plan};
+use crate::hf::deepseek_runtime::{
+    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS, DeepSeekAttentionExecutionKind,
+    deepseek_layer_execution_plan, deepseek_runtime_weight_contract, deepseek_v4_mhc_pre_num_split,
+    deepseek_v4_mhc_warmup_token_sizes, plan_deepseek_v4_mhc_warmup,
+};
 use crate::hf::metadata::HfMlpLayerKind;
 use crate::hf::parser::parse_hf_config_metadata;
 use crate::weights::layout::entry::WeightBlockRole;
@@ -107,6 +110,53 @@ fn parses_deepseek_v4_flash_metadata() {
             .iter()
             .all(|kind| *kind == HfMlpLayerKind::SparseMoe)
     );
+}
+
+#[test]
+fn deepseek_v4_mhc_warmup_plan_matches_vllm_token_sizes_and_split_k() {
+    let metadata = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
+
+    assert_eq!(DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS, 16_384);
+    assert_eq!(
+        deepseek_v4_mhc_warmup_token_sizes(9000, &[3, 64, 8192, 12_000]),
+        vec![
+            1, 2, 3, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 9000
+        ]
+    );
+    assert_eq!(
+        deepseek_v4_mhc_warmup_token_sizes(20_000, &[17_000, 2048]),
+        vec![
+            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384
+        ]
+    );
+    assert!(deepseek_v4_mhc_warmup_token_sizes(0, &[1]).is_empty());
+
+    assert_eq!(
+        deepseek_v4_mhc_pre_num_split(64, 7168, 4, 120).unwrap(),
+        112
+    );
+    assert_eq!(
+        deepseek_v4_mhc_pre_num_split(8192, 4096, 4, 120).unwrap(),
+        1
+    );
+    assert!(deepseek_v4_mhc_pre_num_split(0, 4096, 4, 120).is_err());
+
+    let plan = plan_deepseek_v4_mhc_warmup(&metadata, 9000, &[3, 64, 8192, 12_000], 120)
+        .expect("DeepSeek V4 mHC warmup should plan for V4 metadata");
+    assert_eq!(plan.max_tokens, 9000);
+    assert_eq!(plan.hidden_size, 4096);
+    assert_eq!(plan.hc_mult, 4);
+    assert_eq!(plan.num_sms, 120);
+    assert_eq!(plan.token_sizes.first().unwrap().tokens, 1);
+    assert_eq!(plan.token_sizes.last().unwrap().tokens, 9000);
+    assert_eq!(plan.token_sizes[0].mhc_pre_num_split, 64);
+    assert_eq!(plan.token_sizes[7].tokens, 64);
+    assert_eq!(plan.token_sizes[7].mhc_pre_num_split, 64);
+    assert_eq!(plan.token_sizes[14].tokens, 8192);
+    assert_eq!(plan.token_sizes[14].mhc_pre_num_split, 1);
+
+    let v3 = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
+    assert!(plan_deepseek_v4_mhc_warmup(&v3, 1024, &[], 120).is_err());
 }
 
 #[test]

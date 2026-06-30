@@ -24,6 +24,10 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("\"v4_c128_layers\":1"));
     assert!(json.contains("\"v4_indexer_layers\":1"));
     assert!(json.contains("\"v4_hash_router_layers\":3"));
+    assert!(json.contains("\"v4_mhc_warmup_max_tokens\":16384"));
+    assert!(json.contains(
+        "\"v4_mhc_warmup_token_sizes\":[1,2,4,8,16,32,64,128,256,512,1024,2048,4096,8192,16384]"
+    ));
     assert!(json.contains("\"runtime_status\":\"unsupported\""));
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("fp8_e4m3fn_decode_matches_torch"));
@@ -56,6 +60,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_hash_router_runtime"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_api"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_smoke"));
+    assert!(json.contains("deepseek_v4_mhc_warmup_plan_matches_vllm"));
     assert!(json.contains("cuda_deepseek_fp8_ds_mla_kv_pack_api"));
     assert!(json.contains("cuda_deepseek_fp8_ds_mla_kv_pack_smoke"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
@@ -121,6 +126,8 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
     assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
     assert!(json.contains("\"unit\":\"deepseek_v32_sparse_attention_indexer\""));
+    assert!(json.contains("\"v4_mhc_warmup_max_tokens\":null"));
+    assert!(json.contains("\"v4_mhc_warmup_token_sizes\":null"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_indexer_query_state_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_indexer_query_state_contents"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_sparse_topk_runtime"));
@@ -265,6 +272,7 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"page_size_bytes\":1728"));
     assert!(json.contains("cuda_deepseek_fp8_ds_mla_kv_pack_api"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_api"));
+    assert!(json.contains("deepseek_v4_mhc_warmup_plan_matches_vllm"));
     assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_api"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
     assert!(json.contains("cuda_deepseek_c128_topk_metadata_api"));
@@ -389,8 +397,8 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-reference-audit-v1\""));
     assert!(json.contains("\"status\":\"ok\""));
-    assert!(json.contains("\"reference_units_total\":15"));
-    assert!(json.contains("\"reference_units_ok\":15"));
+    assert!(json.contains("\"reference_units_total\":16"));
+    assert!(json.contains("\"reference_units_ok\":16"));
     assert!(json.contains("\"reference_units_missing_file\":0"));
     assert!(json.contains("\"reference_units_symbol_gap\":0"));
     assert!(json.contains("\"runtime_parity_status\":\"vllm_reference_sources_pinned\""));
@@ -398,6 +406,7 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("\"execution_unit\":\"v3_mla_moe_model\""));
     assert!(json.contains("\"execution_unit\":\"v4_sparse_mla_backend\""));
+    assert!(json.contains("\"execution_unit\":\"v4_mhc_tilelang_warmup\""));
     assert!(json.contains("\"execution_unit\":\"v4_multi_stream_attention_overlap\""));
     assert!(json.contains("\"execution_unit\":\"v4_swa_cache_spec\""));
     assert!(json.contains("\"execution_unit\":\"v4_save_partial_states\""));
@@ -434,8 +443,8 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
     assert!(json.contains("\"runtime_contract_status\":\"unsupported\""));
     assert!(json.contains("\"vllm_reference_status\":\"ok\""));
-    assert!(json.contains("\"vllm_reference_units_total\":15"));
-    assert!(json.contains("\"vllm_reference_units_ok\":15"));
+    assert!(json.contains("\"vllm_reference_units_total\":16"));
+    assert!(json.contains("\"vllm_reference_units_ok\":16"));
     assert!(json.contains("\"runtime_units_total\":8"));
     assert!(json.contains("\"runtime_blocking_units_total\":8"));
     assert!(json.contains("\"runtime_units_partial\":8"));
@@ -489,6 +498,23 @@ return self.block_size // self.compress_ratio
 return self.storage_block_size * 584
 return self.block_size * 656
 _apply_alignment_padding
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/model_executor/warmup/deepseek_v4_mhc_warmup.py",
+        r#"
+_AUTO_WARMUP_MAX_TOKENS = 16_384
+_DEFAULT_TOKEN_SIZE_CANDIDATES
+def _compute_mhc_pre_num_split(): pass
+block_k = 64
+block_m = 64
+split_k = min(split_k, num_block_k // 4)
+return max(split_k, 1)
+def _select_mhc_warmup_token_sizes(): pass
+def deepseek_v4_mhc_warmup(): pass
+_warmup_layer_mhc
+_warmup_hc_head
 "#,
     );
     write_fixture_file(

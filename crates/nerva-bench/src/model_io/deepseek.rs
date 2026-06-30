@@ -24,10 +24,12 @@ use nerva_model::hf::architecture::HfArchitectureKind;
 use nerva_model::hf::contract::validate_exact_runtime_contract;
 use nerva_model::hf::deepseek::plan_deepseek_vllm_kv_cache;
 use nerva_model::hf::deepseek_runtime::{
-    DeepSeekExecutionUnitCoverage, deepseek_execution_unit_coverage as execution_unit_coverage,
+    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS, DeepSeekExecutionUnitCoverage,
+    deepseek_execution_unit_coverage as execution_unit_coverage,
     deepseek_implemented_primitives as implemented_primitives,
     deepseek_layer_report as layer_report,
     deepseek_required_execution_units as required_execution_units,
+    deepseek_v4_mhc_warmup_token_sizes,
 };
 use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::parser::parse_hf_config_metadata;
@@ -616,9 +618,22 @@ pub(crate) fn deepseek_runtime_plan_json(metadata: &HfModelMetadata) -> Result<S
     let vllm_refs = vllm_reference_units(metadata.architecture);
     let layer_report = layer_report(metadata);
     let claim_allowed = runtime_contract.status == "supported";
+    let v4_mhc_warmup_max_tokens = if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
+        DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS.to_string()
+    } else {
+        "null".to_string()
+    };
+    let v4_mhc_warmup_token_sizes = if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
+        json_usize_array(&deepseek_v4_mhc_warmup_token_sizes(
+            DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS,
+            &[],
+        ))
+    } else {
+        "null".to_string()
+    };
 
     Ok(format!(
-        "{{\"status\":\"ok\",\"schema\":\"nerva-deepseek-runtime-plan-v1\",\"architecture\":\"{}\",\"layers\":{},\"hidden_size\":{},\"heads\":{},\"head_dim\":{},\"moe_layers\":{},\"dense_mlp_layers\":{},\"mla_layers\":{},\"v4_swa_layers\":{},\"v4_c4_layers\":{},\"v4_c128_layers\":{},\"v4_indexer_layers\":{},\"v4_hash_router_layers\":{},\"runtime_status\":\"{}\",\"runtime_reason\":\"{}\",\"implemented_primitives\":{},\"required_execution_units\":{},\"execution_unit_status\":{},\"vllm_reference_units\":{},\"claim_allowed\":{}}}",
+        "{{\"status\":\"ok\",\"schema\":\"nerva-deepseek-runtime-plan-v1\",\"architecture\":\"{}\",\"layers\":{},\"hidden_size\":{},\"heads\":{},\"head_dim\":{},\"moe_layers\":{},\"dense_mlp_layers\":{},\"mla_layers\":{},\"v4_swa_layers\":{},\"v4_c4_layers\":{},\"v4_c128_layers\":{},\"v4_indexer_layers\":{},\"v4_hash_router_layers\":{},\"v4_mhc_warmup_max_tokens\":{},\"v4_mhc_warmup_token_sizes\":{},\"runtime_status\":\"{}\",\"runtime_reason\":\"{}\",\"implemented_primitives\":{},\"required_execution_units\":{},\"execution_unit_status\":{},\"vllm_reference_units\":{},\"claim_allowed\":{}}}",
         metadata.architecture.as_str(),
         metadata.num_hidden_layers,
         metadata.hidden_size,
@@ -632,6 +647,8 @@ pub(crate) fn deepseek_runtime_plan_json(metadata: &HfModelMetadata) -> Result<S
         layer_report.v4_c128_layers,
         layer_report.v4_indexer_layers,
         layer_report.v4_hash_router_layers,
+        v4_mhc_warmup_max_tokens,
+        v4_mhc_warmup_token_sizes,
         runtime_contract.status,
         json_escape(&runtime_contract.reason),
         json_string_array(&implemented),
@@ -640,6 +657,18 @@ pub(crate) fn deepseek_runtime_plan_json(metadata: &HfModelMetadata) -> Result<S
         json_string_array(&vllm_refs),
         claim_allowed,
     ))
+}
+
+fn json_usize_array(values: &[usize]) -> String {
+    let mut out = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        out.push_str(&value.to_string());
+    }
+    out.push(']');
+    out
 }
 
 struct RuntimeContractReport {
@@ -716,6 +745,24 @@ fn deepseek_vllm_reference_specs() -> Vec<DeepSeekVllmReferenceSpec> {
                 "return self.storage_block_size * 584",
                 "return self.block_size * 656",
                 "_apply_alignment_padding",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_mhc_tilelang_warmup",
+            relative_path: "vllm/model_executor/warmup/deepseek_v4_mhc_warmup.py",
+            required_symbols: &[
+                "_AUTO_WARMUP_MAX_TOKENS = 16_384",
+                "_DEFAULT_TOKEN_SIZE_CANDIDATES",
+                "def _compute_mhc_pre_num_split",
+                "block_k = 64",
+                "block_m = 64",
+                "split_k = min(split_k, num_block_k // 4)",
+                "return max(split_k, 1)",
+                "def _select_mhc_warmup_token_sizes",
+                "def deepseek_v4_mhc_warmup",
+                "_warmup_layer_mhc",
+                "_warmup_hc_head",
             ],
         },
         DeepSeekVllmReferenceSpec {
