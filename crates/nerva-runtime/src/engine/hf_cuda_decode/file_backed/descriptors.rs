@@ -189,6 +189,7 @@ fn deepseek_marker(
         qk_rope_head_dim: required_deepseek_usize(metadata.qk_rope_head_dim, "qk_rope_head_dim")?,
         v_head_dim: required_deepseek_usize(metadata.v_head_dim, "v_head_dim")?,
         compress_ratio: execution.compress_ratio,
+        index_topk: execution.index_topk,
         index_n_heads: metadata.index_n_heads.unwrap_or(0),
         index_head_dim: metadata.index_head_dim.unwrap_or(0),
         router_num_groups: metadata.num_expert_groups.unwrap_or(0),

@@ -615,6 +615,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_compress_norm_rope_fp8_cache_smoke".to_string());
         primitives.push("cuda_deepseek_compress_norm_rope_mxfp4_cache_api".to_string());
         primitives.push("cuda_deepseek_compress_norm_rope_mxfp4_cache_smoke".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_index_topk_descriptor".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics".to_string());
     }
 
     primitives
@@ -851,11 +853,14 @@ fn coverage_for_unit(
                 "cuda_deepseek_compressed_slot_mapping_smoke",
                 "cuda_deepseek_c128_topk_metadata_api",
                 "cuda_deepseek_c128_topk_metadata_smoke",
+                "cuda_hf_sequence_deepseek_v4_index_topk_descriptor",
+                "cuda_hf_sequence_deepseek_v4_compressed_scan_metrics",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
             &[
-                "consume packed DeepseekV4 indexer offsets in runtime",
-                "verify C4 indexer page writes and sparse block choices",
+                "compute vLLM C4 indexer query/weight scores in runtime",
+                "select C4 compressed top-k slots with vLLM-compatible local indices",
+                "consume selected sparse compressed slots in DeepSeekV4 attention",
             ],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_parallel_attention_gemm_streams") => (
