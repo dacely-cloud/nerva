@@ -40,6 +40,104 @@ bool linear_gdn_dims_valid(const NervaCudaHfDecodeChainLayer &layer) {
          layer.linear_conv_kernel != 0;
 }
 
+bool deepseek_is_v4(uint32_t mode) {
+  return mode == kDeepSeekModeV4Swa || mode == kDeepSeekModeV4Compressed ||
+         mode == kDeepSeekModeV4CompressedIndexer;
+}
+
+bool deepseek_mode_valid(uint32_t mode) {
+  return mode == kDeepSeekModeV3Mla || mode == kDeepSeekModeV32MlaIndexer ||
+         deepseek_is_v4(mode);
+}
+
+bool deepseek_dims_valid(const NervaCudaHfDecodeChainLayer &layer) {
+  if (!deepseek_mode_valid(layer.deepseek_mode) ||
+      layer.deepseek_q_lora_rank == 0 ||
+      layer.deepseek_qk_rope_head_dim == 0 ||
+      layer.deepseek_v_head_dim == 0 ||
+      layer.deepseek_compress_ratio == 0) {
+    return false;
+  }
+  if (deepseek_is_v4(layer.deepseek_mode)) {
+    if (layer.deepseek_hc_mult == 0 || layer.deepseek_o_lora_rank == 0 ||
+        layer.deepseek_o_groups == 0 ||
+        layer.deepseek_qk_nope_head_dim == 0) {
+      return false;
+    }
+  } else if (layer.deepseek_kv_lora_rank == 0 ||
+             layer.deepseek_qk_nope_head_dim == 0) {
+    return false;
+  }
+  if ((layer.deepseek_flags & kDeepSeekFlagSparseIndexer) != 0 &&
+      (layer.deepseek_index_n_heads == 0 ||
+       layer.deepseek_index_head_dim == 0)) {
+    return false;
+  }
+  return true;
+}
+
+bool has_deepseek_layers(const NervaCudaHfDecodeChainLayer *layers,
+                         uint32_t layer_count) {
+  if (layers == nullptr) {
+    return false;
+  }
+  for (uint32_t index = 0; index < layer_count; ++index) {
+    if (layers[index].attention_kind == kAttentionKindDeepSeekMla) {
+      return true;
+    }
+  }
+  return false;
+}
+
+uint64_t ceil_div_u64_local(uint64_t value, uint64_t divisor) {
+  return divisor == 0 ? 0 : (value + divisor - 1u) / divisor;
+}
+
+uint64_t scale_dim(uint64_t value) { return ceil_div_u64_local(value, 128); }
+
+uint64_t byte_slots(uint64_t rows, uint64_t cols, uint64_t bytes_per_element) {
+  return ceil_div_u64_local(rows * cols * bytes_per_element, sizeof(uint16_t));
+}
+
+uint64_t rank3_slots(uint64_t depth, uint64_t rows, uint64_t cols,
+                     uint64_t bytes_per_element) {
+  return ceil_div_u64_local(depth * rows * cols * bytes_per_element,
+                            sizeof(uint16_t));
+}
+
+uint64_t bf16_slots(uint64_t rows, uint64_t cols) { return rows * cols; }
+uint64_t f32_slots(uint64_t rows, uint64_t cols) { return rows * cols * 2u; }
+uint64_t i64_slots(uint64_t rows, uint64_t cols) { return rows * cols * 4u; }
+uint64_t fp8_slots(uint64_t rows, uint64_t cols) {
+  return byte_slots(rows, cols, 1);
+}
+uint64_t scale_f32_slots(uint64_t rows, uint64_t cols) {
+  return f32_slots(scale_dim(rows), scale_dim(cols));
+}
+uint64_t scale_e8m0_slots(uint64_t rows, uint64_t cols) {
+  return byte_slots(scale_dim(rows), scale_dim(cols), 1);
+}
+uint64_t rank3_f32_slots(uint64_t depth, uint64_t rows, uint64_t cols) {
+  return depth * rows * cols * 2u;
+}
+
+uint64_t deepseek_norm_slots(const NervaCudaHfDecodeChainLayer &layer,
+                             uint64_t rows) {
+  return layer.deepseek_mode == kDeepSeekModeV32MlaIndexer
+             ? f32_slots(rows, 1)
+             : bf16_slots(rows, 1);
+}
+
+void push_deepseek_v4_compressor(uint64_t &cursor, uint64_t compress_ratio,
+                                 uint64_t hidden, uint64_t head_dim) {
+  const uint64_t coff = compress_ratio == 4 ? 2u : 1u;
+  const uint64_t rows = head_dim * coff;
+  push(cursor, f32_slots(compress_ratio, rows));
+  push(cursor, bf16_slots(rows, hidden));
+  push(cursor, bf16_slots(rows, hidden));
+  push(cursor, bf16_slots(head_dim, 1));
+}
+
 uint64_t hash_tokens(const uint32_t *tokens, uint32_t count) {
   uint64_t hash = kFnvOffset;
   for (uint32_t index = 0; index < count; ++index) {
@@ -140,6 +238,10 @@ bool valid_layer(const NervaCudaHfDecodeChainLayer &layer, bool require_sources)
     if (!linear_gdn_dims_valid(layer)) {
       return false;
     }
+  } else if (layer.attention_kind == kAttentionKindDeepSeekMla) {
+    if (!deepseek_dims_valid(layer)) {
+      return false;
+    }
   } else if (layer.attention_kind != kAttentionKindFull) {
     return false;
   }
@@ -155,6 +257,9 @@ bool valid_layer(const NervaCudaHfDecodeChainLayer &layer, bool require_sources)
     return true;
   }
   if (layer.rms_attn_weight == nullptr || layer.rms_mlp_weight == nullptr) {
+    return false;
+  }
+  if (layer.attention_kind == kAttentionKindDeepSeekMla) {
     return false;
   }
   if (layer.attention_kind == kAttentionKindLinearGdn) {
@@ -440,10 +545,225 @@ PackedProjectionShape packed_projection_shape(uint64_t hidden,
   return shape;
 }
 
+void pack_deepseek_static(uint64_t &cursor,
+                          const NervaCudaHfDecodeChainLayer *layers,
+                          uint32_t layer_count, uint64_t hidden) {
+  if (layers == nullptr || layer_count == 0) {
+    return;
+  }
+  const NervaCudaHfDecodeChainLayer &layer = layers[0];
+  if (layer.attention_kind != kAttentionKindDeepSeekMla ||
+      !deepseek_is_v4(layer.deepseek_mode) || layer.deepseek_hc_mult == 0) {
+    return;
+  }
+  const uint64_t hc_mult = layer.deepseek_hc_mult;
+  const uint64_t hc_dim = hidden * hc_mult;
+  push(cursor, f32_slots(hc_mult, 1));
+  push(cursor, f32_slots(hc_mult, hc_dim));
+  push(cursor, f32_slots(1, 1));
+}
+
+void pack_deepseek_v3_attention(SequenceLayerLayout &layout, uint64_t &cursor,
+                                const NervaCudaHfDecodeChainLayer &layer,
+                                uint64_t hidden, uint64_t attention_hidden,
+                                uint64_t head_dim) {
+  const uint64_t heads = attention_hidden / head_dim;
+  const uint64_t q_lora_rank = layer.deepseek_q_lora_rank;
+  const uint64_t kv_lora_rank = layer.deepseek_kv_lora_rank;
+  const uint64_t qk_nope = layer.deepseek_qk_nope_head_dim;
+  const uint64_t qk_rope = layer.deepseek_qk_rope_head_dim;
+  const uint64_t v_head = layer.deepseek_v_head_dim;
+  const uint64_t q_rows = heads * (qk_nope + qk_rope);
+  const uint64_t kv_a_rows = kv_lora_rank + qk_rope;
+  const uint64_t kv_b_rows = heads * (qk_nope + v_head);
+  const uint64_t value_hidden = heads * v_head;
+
+  layout.w_q = push(cursor, fp8_slots(q_lora_rank, hidden));
+  push(cursor, scale_f32_slots(q_lora_rank, hidden));
+  layout.q_norm = push(cursor, deepseek_norm_slots(layer, q_lora_rank));
+  push(cursor, fp8_slots(q_rows, q_lora_rank));
+  push(cursor, scale_f32_slots(q_rows, q_lora_rank));
+  layout.w_k = push(cursor, fp8_slots(kv_a_rows, hidden));
+  push(cursor, scale_f32_slots(kv_a_rows, hidden));
+  layout.k_norm = push(cursor, deepseek_norm_slots(layer, kv_lora_rank));
+  layout.w_v = push(cursor, fp8_slots(kv_b_rows, kv_lora_rank));
+  push(cursor, scale_f32_slots(kv_b_rows, kv_lora_rank));
+  layout.w_o = push(cursor, fp8_slots(hidden, value_hidden));
+  push(cursor, scale_f32_slots(hidden, value_hidden));
+
+  if ((layer.deepseek_flags & kDeepSeekFlagSparseIndexer) != 0) {
+    const uint64_t index_rows = static_cast<uint64_t>(layer.deepseek_index_n_heads) *
+                                layer.deepseek_index_head_dim;
+    push(cursor, fp8_slots(index_rows, q_lora_rank));
+    push(cursor, scale_f32_slots(index_rows, q_lora_rank));
+    push(cursor, fp8_slots(layer.deepseek_index_head_dim, hidden));
+    push(cursor, scale_f32_slots(layer.deepseek_index_head_dim, hidden));
+    push(cursor, f32_slots(layer.deepseek_index_head_dim, 1));
+    push(cursor, f32_slots(layer.deepseek_index_head_dim, 1));
+    push(cursor, bf16_slots(layer.deepseek_index_n_heads, hidden));
+  }
+}
+
+void pack_deepseek_v4_attention(SequenceLayerLayout &layout, uint64_t &cursor,
+                                const NervaCudaHfDecodeChainLayer &layer,
+                                uint64_t hidden, uint64_t attention_hidden,
+                                uint64_t head_dim) {
+  const uint64_t heads = attention_hidden / head_dim;
+  const uint64_t hc_mult = layer.deepseek_hc_mult;
+  const uint64_t hc_dim = hidden * hc_mult;
+  const uint64_t mix_hc = hc_mult * (hc_mult + 2u);
+  const uint64_t q_lora_rank = layer.deepseek_q_lora_rank;
+  const uint64_t q_rows = attention_hidden;
+  const uint64_t wo_a_rows =
+      static_cast<uint64_t>(layer.deepseek_o_groups) * layer.deepseek_o_lora_rank;
+  const uint64_t wo_a_cols = q_rows / layer.deepseek_o_groups;
+
+  push(cursor, f32_slots(mix_hc, 1));
+  push(cursor, f32_slots(mix_hc, hc_dim));
+  push(cursor, f32_slots(3, 1));
+  push(cursor, f32_slots(mix_hc, 1));
+  push(cursor, f32_slots(mix_hc, hc_dim));
+  push(cursor, f32_slots(3, 1));
+  push(cursor, f32_slots(heads, 1));
+  layout.w_q = push(cursor, fp8_slots(q_lora_rank, hidden));
+  push(cursor, scale_e8m0_slots(q_lora_rank, hidden));
+  push(cursor, fp8_slots(q_rows, q_lora_rank));
+  push(cursor, scale_e8m0_slots(q_rows, q_lora_rank));
+  layout.q_norm = push(cursor, bf16_slots(q_lora_rank, 1));
+  layout.w_k = push(cursor, fp8_slots(head_dim, hidden));
+  push(cursor, scale_e8m0_slots(head_dim, hidden));
+  layout.k_norm = push(cursor, bf16_slots(head_dim, 1));
+  layout.w_o = push(cursor, fp8_slots(wo_a_rows, wo_a_cols));
+  push(cursor, scale_e8m0_slots(wo_a_rows, wo_a_cols));
+  push(cursor, fp8_slots(hidden, wo_a_rows));
+  push(cursor, scale_e8m0_slots(hidden, wo_a_rows));
+
+  if ((layer.deepseek_flags & kDeepSeekFlagCompressor) != 0 &&
+      layer.deepseek_compress_ratio > 1) {
+    push_deepseek_v4_compressor(cursor, layer.deepseek_compress_ratio, hidden,
+                                head_dim);
+  }
+  if (layer.deepseek_compress_ratio == 4) {
+    const uint64_t index_rows = static_cast<uint64_t>(layer.deepseek_index_n_heads) *
+                                layer.deepseek_index_head_dim;
+    push(cursor, fp8_slots(index_rows, q_lora_rank));
+    push(cursor, scale_e8m0_slots(index_rows, q_lora_rank));
+    push_deepseek_v4_compressor(cursor, 4, hidden,
+                                layer.deepseek_index_head_dim);
+    push(cursor, bf16_slots(layer.deepseek_index_n_heads, hidden));
+  }
+}
+
+void pack_deepseek_dense_mlp(uint64_t &cursor, uint64_t hidden,
+                             uint64_t intermediate) {
+  push(cursor, fp8_slots(intermediate, hidden));
+  push(cursor, scale_f32_slots(intermediate, hidden));
+  push(cursor, fp8_slots(intermediate, hidden));
+  push(cursor, scale_f32_slots(intermediate, hidden));
+  push(cursor, fp8_slots(hidden, intermediate));
+  push(cursor, scale_f32_slots(hidden, intermediate));
+}
+
+void pack_deepseek_v3_moe(SequenceLayerLayout &layout, uint64_t &cursor,
+                          const NervaCudaHfDecodeChainLayer &layer,
+                          uint64_t hidden) {
+  const uint64_t num_experts = layer.num_experts;
+  const uint64_t moe_intermediate = layer.moe_intermediate;
+  const uint64_t shared_intermediate = layer.shared_expert_intermediate;
+  layout.w_router = push(cursor, bf16_slots(num_experts, hidden));
+  if ((layer.deepseek_flags & kDeepSeekFlagRouterBias) != 0) {
+    push(cursor, f32_slots(num_experts, 1));
+  }
+  if (shared_intermediate != 0) {
+    layout.w_shared_expert_gate =
+        push(cursor, fp8_slots(shared_intermediate, hidden));
+    push(cursor, scale_f32_slots(shared_intermediate, hidden));
+    layout.w_shared_expert_up =
+        push(cursor, fp8_slots(shared_intermediate, hidden));
+    push(cursor, scale_f32_slots(shared_intermediate, hidden));
+    layout.w_shared_expert_down =
+        push(cursor, fp8_slots(hidden, shared_intermediate));
+    push(cursor, scale_f32_slots(hidden, shared_intermediate));
+  }
+  layout.w_expert_gate_up = cursor;
+  push(cursor, rank3_slots(num_experts, moe_intermediate, hidden, 1));
+  push(cursor, rank3_f32_slots(num_experts, scale_dim(moe_intermediate),
+                               scale_dim(hidden)));
+  push(cursor, rank3_slots(num_experts, moe_intermediate, hidden, 1));
+  push(cursor, rank3_f32_slots(num_experts, scale_dim(moe_intermediate),
+                               scale_dim(hidden)));
+  layout.w_expert_down =
+      push(cursor, rank3_slots(num_experts, hidden, moe_intermediate, 1));
+  push(cursor, rank3_f32_slots(num_experts, scale_dim(hidden),
+                               scale_dim(moe_intermediate)));
+}
+
+void pack_deepseek_v4_moe(SequenceLayerLayout &layout, uint64_t &cursor,
+                          const NervaCudaHfDecodeChainLayer &layer,
+                          uint64_t hidden, uint64_t vocab_size) {
+  const uint64_t num_experts = layer.num_experts;
+  const uint64_t top_k = layer.experts_per_token;
+  const uint64_t moe_intermediate = layer.moe_intermediate;
+  const uint64_t shared_intermediate = layer.shared_expert_intermediate;
+  layout.w_router = push(cursor, bf16_slots(num_experts, hidden));
+  if ((layer.deepseek_flags & kDeepSeekFlagHashRouter) != 0) {
+    push(cursor, i64_slots(vocab_size, top_k));
+  } else {
+    push(cursor, f32_slots(num_experts, 1));
+  }
+  if (shared_intermediate != 0) {
+    layout.w_shared_expert_gate =
+        push(cursor, fp8_slots(shared_intermediate, hidden));
+    push(cursor, scale_e8m0_slots(shared_intermediate, hidden));
+    layout.w_shared_expert_up =
+        push(cursor, fp8_slots(shared_intermediate, hidden));
+    push(cursor, scale_e8m0_slots(shared_intermediate, hidden));
+    layout.w_shared_expert_down =
+        push(cursor, fp8_slots(hidden, shared_intermediate));
+    push(cursor, scale_e8m0_slots(hidden, shared_intermediate));
+  }
+  const uint64_t half_hidden = hidden / 2u;
+  const uint64_t half_intermediate = moe_intermediate / 2u;
+  layout.w_expert_gate_up = cursor;
+  push(cursor, rank3_slots(num_experts, moe_intermediate, half_hidden, 1));
+  push(cursor, rank3_slots(num_experts, moe_intermediate,
+                           ceil_div_u64_local(half_hidden, 16), 1));
+  push(cursor, rank3_slots(num_experts, moe_intermediate, half_hidden, 1));
+  push(cursor, rank3_slots(num_experts, moe_intermediate,
+                           ceil_div_u64_local(half_hidden, 16), 1));
+  layout.w_expert_down =
+      push(cursor, rank3_slots(num_experts, hidden, half_intermediate, 1));
+  push(cursor, rank3_slots(num_experts, hidden,
+                           ceil_div_u64_local(half_intermediate, 16), 1));
+}
+
+void pack_deepseek_layer(SequenceLayerLayout &layout, uint64_t &cursor,
+                         const NervaCudaHfDecodeChainLayer &layer,
+                         uint64_t hidden, uint64_t attention_hidden,
+                         uint64_t head_dim, uint64_t intermediate,
+                         uint64_t vocab_size) {
+  layout.rms_attn = push(cursor, deepseek_norm_slots(layer, hidden));
+  if (deepseek_is_v4(layer.deepseek_mode)) {
+    pack_deepseek_v4_attention(layout, cursor, layer, hidden, attention_hidden,
+                               head_dim);
+  } else {
+    pack_deepseek_v3_attention(layout, cursor, layer, hidden, attention_hidden,
+                               head_dim);
+  }
+  layout.rms_mlp = push(cursor, deepseek_norm_slots(layer, hidden));
+  if (layer.mlp_kind != kMlpKindSparseMoe) {
+    pack_deepseek_dense_mlp(cursor, hidden, intermediate);
+  } else if (deepseek_is_v4(layer.deepseek_mode)) {
+    pack_deepseek_v4_moe(layout, cursor, layer, hidden, vocab_size);
+  } else {
+    pack_deepseek_v3_moe(layout, cursor, layer, hidden);
+  }
+}
+
 void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
                 const NervaCudaHfDecodeChainLayer &layer, uint64_t hidden,
                 uint64_t attention_hidden, uint64_t kv_hidden, uint64_t head_dim,
-                uint64_t intermediate) {
+                uint64_t intermediate, uint64_t vocab_size) {
   layout.mlp_kind = layer.mlp_kind;
   layout.moe_intermediate = layer.moe_intermediate;
   layout.shared_expert_intermediate = layer.shared_expert_intermediate;
@@ -499,6 +819,11 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.linear_key_head_dim = layer.linear_key_head_dim;
   layout.linear_value_head_dim = layer.linear_value_head_dim;
   layout.linear_conv_kernel = layer.linear_conv_kernel;
+  if (layer.attention_kind == kAttentionKindDeepSeekMla) {
+    pack_deepseek_layer(layout, cursor, layer, hidden, attention_hidden,
+                        head_dim, intermediate, vocab_size);
+    return;
+  }
   if (layer.attention_kind == kAttentionKindLinearGdn) {
     const uint64_t value_dim = linear_gdn_value_dim(layer);
     const uint64_t conv_dim = linear_gdn_conv_dim(layer);

@@ -98,9 +98,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->arena_layout.embeddings = push(elements, vocab_size * hidden);
   session->arena_layout.input = push(elements, hidden);
   session->arena_layout.scratch = push(elements, hidden);
+  pack_deepseek_static(elements, request->layers, request->layer_count, hidden);
   for (uint32_t index = 0; index < request->layer_count; ++index) {
     pack_layer(layouts[index], elements, request->layers[index], hidden,
-               attention_hidden, kv_hidden, request->head_dim, intermediate);
+               attention_hidden, kv_hidden, request->head_dim, intermediate,
+               vocab_size);
   }
   uint64_t linear_gdn_conv_state_elements = 0;
   uint64_t linear_gdn_recurrent_state_elements = 0;
@@ -117,6 +119,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     return -1;
   }
   if (!validate_weight_descriptors(request, session->resident_weight_bytes, out)) {
+    out->failure_stage = kCreateStageInvalidRequest;
+    delete session;
+    return -1;
+  }
+  if (has_deepseek_layers(request->layers, request->layer_count)) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorNotSupported);
     out->failure_stage = kCreateStageInvalidRequest;
     delete session;
     return -1;

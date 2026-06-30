@@ -35,9 +35,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   arena_layout.embeddings = push(elements, vocab_size * hidden);
   arena_layout.input = push(elements, hidden);
   arena_layout.scratch = push(elements, hidden);
+  pack_deepseek_static(elements, request->layers, request->layer_count, hidden);
   for (uint32_t index = 0; index < request->layer_count; ++index) {
     pack_layer(layouts[index], elements, request->layers[index], hidden,
-               attention_hidden, kv_hidden, request->head_dim, intermediate);
+               attention_hidden, kv_hidden, request->head_dim, intermediate,
+               vocab_size);
   }
   uint64_t linear_gdn_conv_state_elements = 0;
   uint64_t linear_gdn_recurrent_state_elements = 0;
@@ -53,6 +55,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
     return -1;
   }
   if (!validate_weight_descriptors(request, resident_weight_bytes, out)) {
+    out->status = -1;
+    return -1;
+  }
+  if (has_deepseek_layers(request->layers, request->layer_count)) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorNotSupported);
     out->status = -1;
     return -1;
   }
