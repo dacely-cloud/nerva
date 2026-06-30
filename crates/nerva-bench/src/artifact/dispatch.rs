@@ -6,8 +6,8 @@ use crate::{
         config::{run_layout_probe, run_manifest_probe, run_metadata_probe},
         deepseek::{
             run_deepseek_cuda_primitive_bench, run_deepseek_cuda_readiness,
-            run_deepseek_runtime_plan, run_deepseek_vllm_parity_gate,
-            run_deepseek_vllm_reference_audit,
+            run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan,
+            run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
         },
         resident::{
             run_hotset_probe, run_resident_shard_probe, run_resident_weight_probe,
@@ -169,6 +169,18 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "deepseek-vllm-reference-audit" => run_deepseek_vllm_reference_audit(args.first().cloned()),
         "deepseek-vllm-parity-gate" => {
             run_deepseek_vllm_parity_gate(args.first().cloned(), args.get(1).cloned())
+        }
+        "deepseek-vllm-benchmark-plan" => {
+            let max_context_tokens =
+                parse_optional_usize(args.get(2).cloned(), 16_000, "context_tokens")?;
+            let max_new_tokens = parse_optional_usize(args.get(3).cloned(), 2048, "output_tokens")?;
+            run_deepseek_vllm_benchmark_plan(
+                args.first().cloned(),
+                args.get(1).cloned(),
+                max_context_tokens,
+                max_new_tokens,
+                args.get(4).cloned(),
+            )
         }
         "safetensors" => run_safetensors_probe(args.first().cloned(), args.get(1).cloned()),
         "safetensors-shards" => run_safetensors_shard_probe(

@@ -1,7 +1,8 @@
 use crate::model_io::deepseek::{
     DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
     deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
-    run_deepseek_runtime_plan, run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
+    run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_parity_gate,
+    run_deepseek_vllm_reference_audit,
 };
 
 #[test]
@@ -469,6 +470,57 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
         json.contains("benchmark V4 mHC, sparse MLA, and MegaMoE throughput against /root/vllm")
     );
     assert!(json.contains("verify full-layer routed outputs against vLLM"));
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
+    let dir = std::env::temp_dir().join(format!(
+        "nerva-bench-deepseek-vllm-plan-{}",
+        std::process::id()
+    ));
+    let checkpoint = dir.join("checkpoint");
+    let vllm_root = dir.join("vllm-root");
+    let prompt_path = dir.join("prompt.txt");
+    write_vllm_reference_fixture(&vllm_root);
+    std::fs::create_dir_all(&checkpoint).unwrap();
+    std::fs::write(checkpoint.join("config.json"), deepseek_v4_config()).unwrap();
+    std::fs::write(checkpoint.join("model.safetensors"), b"fixture").unwrap();
+    std::fs::write(
+        &prompt_path,
+        "Tell me a long story about deterministic inference.",
+    )
+    .unwrap();
+
+    let json = run_deepseek_vllm_benchmark_plan(
+        Some(checkpoint.to_string_lossy().into_owned()),
+        Some(format!("@{}", prompt_path.display())),
+        16_000,
+        2048,
+        Some(vllm_root.to_string_lossy().into_owned()),
+    )
+    .expect("benchmark plan should parse DeepSeek config and fixture vLLM root");
+
+    assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-benchmark-plan-v1\""));
+    assert!(json.contains("\"status\":\"ready\""));
+    assert!(json.contains("\"architecture\":\"deepseek_v4\""));
+    assert!(json.contains("\"weights_present\":true"));
+    assert!(json.contains("\"prompt_status\":\"ok\""));
+    assert!(json.contains("\"vllm_reference_status\":\"ok\""));
+    assert!(json.contains("\"runtime_units_total\":9"));
+    assert!(json.contains("\"runtime_blocking_units_total\":8"));
+    assert!(json.contains("\"benchmark_allowed\":false"));
+    assert!(json.contains("\"claim_allowed\":false"));
+    assert!(json.contains("\"nerva_generate\""));
+    assert!(json.contains("\"--json\""));
+    assert!(json.contains("\"nerva_bench_generate\""));
+    assert!(json.contains("\"hf-cuda-generate\""));
+    assert!(json.contains("\"vllm_generate\""));
+    assert!(json.contains("\"tools/deepseek_vllm_generate.py\""));
+    assert!(json.contains("\"--max-model-len\""));
+    assert!(json.contains("\"--max-tokens\""));
+    assert!(json.contains("same greedy sampler temperature=0 top_p=1 top_k=0 seed=0"));
 
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -148,6 +148,201 @@ pub(crate) fn run_deepseek_vllm_parity_gate(
     ))
 }
 
+pub(crate) fn run_deepseek_vllm_benchmark_plan(
+    checkpoint_dir: Option<String>,
+    prompt_spec: Option<String>,
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    vllm_root_arg: Option<String>,
+) -> Result<String, String> {
+    let checkpoint_dir = checkpoint_dir
+        .ok_or_else(|| "deepseek-vllm-benchmark-plan requires checkpoint_dir".to_string())?;
+    let prompt_spec = prompt_spec.ok_or_else(|| {
+        "deepseek-vllm-benchmark-plan requires prompt_text|@prompt.txt".to_string()
+    })?;
+    if max_context_tokens == 0 || max_new_tokens == 0 {
+        return Err(
+            "deepseek-vllm-benchmark-plan requires non-zero context and output tokens".to_string(),
+        );
+    }
+
+    let checkpoint_path = PathBuf::from(&checkpoint_dir);
+    let config_path = checkpoint_path.join("config.json");
+    let checkpoint_exists = checkpoint_path.is_dir();
+    let weights_present = checkpoint_path
+        .join("model.safetensors.index.json")
+        .exists()
+        || checkpoint_path.join("model.safetensors").exists();
+    let prompt_present = prompt_path_status(&prompt_spec);
+    let vllm_root = PathBuf::from(vllm_root_arg.unwrap_or_else(|| "/root/vllm".to_string()));
+    let vllm_units = deepseek_vllm_reference_specs()
+        .iter()
+        .map(|spec| read_vllm_reference_unit(&vllm_root, spec))
+        .collect::<Vec<_>>();
+    let vllm_reference_status = vllm_reference_status(&vllm_units);
+
+    let (architecture, config_status, config_error, runtime_units, runtime_blockers) =
+        match std::fs::read_to_string(&config_path) {
+            Ok(config) => match parse_hf_config_metadata(&config) {
+                Ok(metadata) if metadata.architecture.is_deepseek() => {
+                    let execution_units = execution_unit_coverage(&metadata);
+                    let blockers = execution_units
+                        .iter()
+                        .filter(|unit| {
+                            unit.status != "complete" && unit.status != "optional_missing"
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    (
+                        Some(metadata.architecture.as_str().to_string()),
+                        "ok",
+                        None,
+                        execution_units,
+                        blockers,
+                    )
+                }
+                Ok(metadata) => (
+                    Some(metadata.architecture.as_str().to_string()),
+                    "non_deepseek",
+                    Some(format!(
+                        "checkpoint config architecture is {}, expected DeepSeek V3/V3.2/V4",
+                        metadata.architecture.as_str()
+                    )),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                Err(err) => (
+                    None,
+                    "parse_failed",
+                    Some(format!("{err:?}")),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            },
+            Err(err) => (
+                None,
+                "missing_config",
+                Some(format!("failed to read {}: {err}", config_path.display())),
+                Vec::new(),
+                Vec::new(),
+            ),
+        };
+
+    let status = if !checkpoint_exists {
+        "missing_checkpoint"
+    } else if config_status != "ok" {
+        "config_blocked"
+    } else if !weights_present {
+        "missing_weights"
+    } else if prompt_present != "ok" {
+        "missing_prompt"
+    } else if vllm_reference_status != "ok" {
+        "vllm_reference_blocked"
+    } else {
+        "ready"
+    };
+    let benchmark_allowed = status == "ready" && runtime_blockers.is_empty();
+
+    let nerva_generate = vec![
+        "cargo".to_string(),
+        "run".to_string(),
+        "--release".to_string(),
+        "-p".to_string(),
+        "nerva".to_string(),
+        "--".to_string(),
+        "--json".to_string(),
+        "-m".to_string(),
+        checkpoint_dir.clone(),
+        "-p".to_string(),
+        prompt_spec.clone(),
+        "-c".to_string(),
+        max_context_tokens.to_string(),
+        "-o".to_string(),
+        max_new_tokens.to_string(),
+        "--temperature".to_string(),
+        "0".to_string(),
+        "--top-p".to_string(),
+        "1".to_string(),
+        "--top-k".to_string(),
+        "0".to_string(),
+        "--seed".to_string(),
+        "0".to_string(),
+    ];
+    let nerva_bench = vec![
+        "cargo".to_string(),
+        "run".to_string(),
+        "--release".to_string(),
+        "-p".to_string(),
+        "nerva-bench".to_string(),
+        "--".to_string(),
+        "hf-cuda-generate".to_string(),
+        checkpoint_dir.clone(),
+        max_context_tokens.to_string(),
+        max_new_tokens.to_string(),
+        "1024".to_string(),
+        prompt_spec.clone(),
+    ];
+    let vllm_generate = vec![
+        "python3".to_string(),
+        "tools/deepseek_vllm_generate.py".to_string(),
+        "--model".to_string(),
+        checkpoint_dir.clone(),
+        "--prompt".to_string(),
+        prompt_spec.clone(),
+        "--max-model-len".to_string(),
+        max_context_tokens.to_string(),
+        "--max-tokens".to_string(),
+        max_new_tokens.to_string(),
+        "--temperature".to_string(),
+        "0".to_string(),
+        "--top-p".to_string(),
+        "1".to_string(),
+        "--top-k".to_string(),
+        "0".to_string(),
+        "--seed".to_string(),
+        "0".to_string(),
+        "--dtype".to_string(),
+        "bfloat16".to_string(),
+    ];
+
+    Ok(format!(
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-plan-v1\",\"architecture\":{},\"checkpoint_dir\":\"{}\",\"checkpoint_exists\":{},\"config_path\":\"{}\",\"config_status\":\"{}\",\"config_error\":{},\"weights_present\":{},\"prompt_spec\":\"{}\",\"prompt_status\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_root\":\"{}\",\"vllm_reference_status\":\"{}\",\"vllm_reference_units_total\":{},\"vllm_reference_units_ok\":{},\"runtime_units_total\":{},\"runtime_blocking_units_total\":{},\"runtime_blocking_units\":{},\"commands\":{{\"nerva_generate\":{},\"nerva_bench_generate\":{},\"vllm_generate\":{}}},\"required_comparison\":[\"same checkpoint directory\",\"same prompt text\",\"same greedy sampler temperature=0 top_p=1 top_k=0 seed=0\",\"compare generated token ids and generated text\",\"compare post-load/decode tokens_per_second and p99 latency\"],\"runtime_parity_status\":\"{}\",\"performance_status\":\"{}\",\"benchmark_allowed\":{},\"claim_allowed\":false}}",
+        status,
+        json_opt_string(architecture.as_deref()),
+        json_escape(&checkpoint_dir),
+        checkpoint_exists,
+        json_escape(&config_path.display().to_string()),
+        config_status,
+        json_opt_string(config_error.as_deref()),
+        weights_present,
+        json_escape(&prompt_spec),
+        prompt_present,
+        max_context_tokens,
+        max_new_tokens,
+        json_escape(&vllm_root.display().to_string()),
+        vllm_reference_status,
+        vllm_units.len(),
+        vllm_units.iter().filter(|unit| unit.status == "ok").count(),
+        runtime_units.len(),
+        runtime_blockers.len(),
+        execution_unit_coverage_json(&runtime_blockers),
+        json_string_array(&nerva_generate),
+        json_string_array(&nerva_bench),
+        json_string_array(&vllm_generate),
+        if benchmark_allowed {
+            "ready_for_same_checkpoint_run"
+        } else {
+            "blocked_before_same_checkpoint_run"
+        },
+        if benchmark_allowed {
+            "ready_for_vllm_runtime_benchmark"
+        } else {
+            "not_benchmarked"
+        },
+        benchmark_allowed,
+    ))
+}
+
 fn deepseek_vllm_parity_gate_json(
     config_path: &str,
     vllm_root: &Path,
@@ -191,17 +386,7 @@ fn deepseek_vllm_parity_gate_json(
         .iter()
         .filter(|unit| unit.status == "failed")
         .count();
-    let vllm_reference_status = if vllm_failed > 0 {
-        "failed"
-    } else if vllm_missing > 0 {
-        "missing_reference"
-    } else if vllm_symbol_gap > 0 {
-        "symbol_gap"
-    } else if vllm_ok == vllm_units.len() {
-        "ok"
-    } else {
-        "incomplete"
-    };
+    let vllm_reference_status = vllm_reference_status(vllm_units);
     let claim_allowed = runtime_contract.status == "supported"
         && runtime_blockers.is_empty()
         && vllm_reference_status == "ok";
@@ -301,17 +486,7 @@ fn deepseek_vllm_reference_audit_json(
         .filter(|unit| unit.status == "symbol_gap")
         .count();
     let failed = units.iter().filter(|unit| unit.status == "failed").count();
-    let status = if failed > 0 {
-        "failed"
-    } else if missing_file > 0 {
-        "missing_reference"
-    } else if symbol_gap > 0 {
-        "symbol_gap"
-    } else if ok == units.len() {
-        "ok"
-    } else {
-        "incomplete"
-    };
+    let status = vllm_reference_status(units);
 
     format!(
         "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-reference-audit-v1\",\"vllm_root\":\"{}\",\"reference_units_total\":{},\"reference_units_ok\":{},\"reference_units_missing_file\":{},\"reference_units_symbol_gap\":{},\"reference_units_failed\":{},\"runtime_parity_status\":\"vllm_reference_sources_pinned\",\"performance_status\":\"source_audit_only_not_runtime_benchmark\",\"claim_allowed\":false,\"units\":{}}}",
@@ -669,6 +844,35 @@ fn json_usize_array(values: &[usize]) -> String {
     }
     out.push(']');
     out
+}
+
+fn prompt_path_status(prompt_spec: &str) -> &'static str {
+    let Some(path) = prompt_spec.strip_prefix('@') else {
+        return "ok";
+    };
+    if path.is_empty() {
+        return "missing";
+    }
+    if Path::new(path).is_file() {
+        "ok"
+    } else {
+        "missing"
+    }
+}
+
+fn vllm_reference_status(units: &[DeepSeekVllmReferenceUnit]) -> &'static str {
+    let ok = units.iter().filter(|unit| unit.status == "ok").count();
+    if units.iter().any(|unit| unit.status == "failed") {
+        "failed"
+    } else if units.iter().any(|unit| unit.status == "missing_file") {
+        "missing_reference"
+    } else if units.iter().any(|unit| unit.status == "symbol_gap") {
+        "symbol_gap"
+    } else if ok == units.len() {
+        "ok"
+    } else {
+        "incomplete"
+    }
 }
 
 struct RuntimeContractReport {
