@@ -193,14 +193,6 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
       value_rows, block_rows, block_cols, scratch.residual);
   if (err != cudaSuccess) return err;
 
-  if (layout.mlp_kind == kMlpKindSparseMoe) {
-    return cudaErrorNotSupported;
-  }
-  if (layout.w_gate == kMissingOffset || layout.w_up == kMissingOffset ||
-      layout.w_down == kMissingOffset) {
-    return cudaErrorInvalidValue;
-  }
-
   hf_deepseek_residual_mlp_norm_encode_kernel<<<1, kDecodeNormThreads, 0,
                                                 session->stream>>>(
       session->device_arena, layout, session->dtype,
@@ -210,6 +202,20 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
       session->device_projection_input);
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
+
+  if (layout.mlp_kind == kMlpKindSparseMoe) {
+    hf_deepseek_v3_sparse_moe_encode_kernel<<<1, kDecodeThreads, 0,
+                                              session->stream>>>(
+        session->device_arena, layout, session->dtype, session->hidden,
+        attention_rows, kv_cache_width, session->intermediate,
+        session->device_step, max_steps, session->device_scratch,
+        session->device_projection_input);
+    return cudaGetLastError();
+  }
+  if (layout.w_gate == kMissingOffset || layout.w_up == kMissingOffset ||
+      layout.w_down == kMissingOffset) {
+    return cudaErrorInvalidValue;
+  }
 
   const uint64_t gate_scale =
       deepseek_f32_scale_offset(layout.w_gate, session->intermediate,

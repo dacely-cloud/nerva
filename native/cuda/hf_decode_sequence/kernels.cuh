@@ -133,6 +133,11 @@ __global__ void hf_layer_sparse_moe_encode_kernel(
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float *scratch, uint16_t *projection_input);
+__global__ void hf_deepseek_v3_sparse_moe_encode_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float *scratch, uint16_t *projection_input);
 __global__ void hf_layer_finish_kernel(
     uint16_t *arena, uint64_t output_offset, uint32_t dtype, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,

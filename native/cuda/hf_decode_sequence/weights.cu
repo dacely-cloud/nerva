@@ -839,6 +839,10 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.deepseek_compress_ratio = layer.deepseek_compress_ratio;
   layout.deepseek_index_n_heads = layer.deepseek_index_n_heads;
   layout.deepseek_index_head_dim = layer.deepseek_index_head_dim;
+  layout.deepseek_router_num_groups = layer.deepseek_router_num_groups;
+  layout.deepseek_router_topk_groups = layer.deepseek_router_topk_groups;
+  layout.deepseek_routed_scaling_factor =
+      layer.deepseek_routed_scaling_factor;
   layout.rms_attn = kMissingOffset;
   layout.rms_mlp = kMissingOffset;
   layout.w_q = kMissingOffset;

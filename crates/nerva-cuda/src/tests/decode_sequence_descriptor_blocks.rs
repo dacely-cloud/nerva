@@ -198,6 +198,9 @@ fn null_layer() -> NervaCudaHfDecodeChainLayer {
         deepseek_compress_ratio: 0,
         deepseek_index_n_heads: 0,
         deepseek_index_head_dim: 0,
+        deepseek_router_num_groups: 0,
+        deepseek_router_topk_groups: 0,
+        deepseek_routed_scaling_factor: 1.0,
     }
 }
 

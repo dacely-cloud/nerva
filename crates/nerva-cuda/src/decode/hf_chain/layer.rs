@@ -57,7 +57,7 @@ pub struct CudaHfDecodeChainLayer<'a> {
     pub attention_kind: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CudaHfDeepSeekLayer {
     pub mode: u32,
     pub flags: u32,
@@ -72,6 +72,9 @@ pub struct CudaHfDeepSeekLayer {
     pub compress_ratio: usize,
     pub index_n_heads: usize,
     pub index_head_dim: usize,
+    pub router_num_groups: usize,
+    pub router_topk_groups: usize,
+    pub routed_scaling_factor: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -280,6 +283,15 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             deepseek_compress_ratio: self.deepseek.map_or(0, |layer| layer.compress_ratio as u32),
             deepseek_index_n_heads: self.deepseek.map_or(0, |layer| layer.index_n_heads as u32),
             deepseek_index_head_dim: self.deepseek.map_or(0, |layer| layer.index_head_dim as u32),
+            deepseek_router_num_groups: self
+                .deepseek
+                .map_or(0, |layer| layer.router_num_groups as u32),
+            deepseek_router_topk_groups: self
+                .deepseek
+                .map_or(0, |layer| layer.router_topk_groups as u32),
+            deepseek_routed_scaling_factor: self
+                .deepseek
+                .map_or(1.0, |layer| layer.routed_scaling_factor),
         }
     }
 
@@ -346,6 +358,15 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             deepseek_compress_ratio: self.deepseek.map_or(0, |layer| layer.compress_ratio as u32),
             deepseek_index_n_heads: self.deepseek.map_or(0, |layer| layer.index_n_heads as u32),
             deepseek_index_head_dim: self.deepseek.map_or(0, |layer| layer.index_head_dim as u32),
+            deepseek_router_num_groups: self
+                .deepseek
+                .map_or(0, |layer| layer.router_num_groups as u32),
+            deepseek_router_topk_groups: self
+                .deepseek
+                .map_or(0, |layer| layer.router_topk_groups as u32),
+            deepseek_routed_scaling_factor: self
+                .deepseek
+                .map_or(1.0, |layer| layer.routed_scaling_factor),
         }
     }
 
@@ -549,6 +570,20 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
                         "CUDA HF decode chain DeepSeek shared expert intermediate exceeds scratch capacity"
                             .to_string(),
                     );
+                }
+                if let Some(layer) = self.deepseek {
+                    if layer.is_v3_mla()
+                        && (layer.router_num_groups == 0
+                            || layer.router_topk_groups == 0
+                            || layer.router_topk_groups > layer.router_num_groups
+                            || self.num_experts % layer.router_num_groups != 0
+                            || !layer.routed_scaling_factor.is_finite())
+                    {
+                        return Some(
+                            "CUDA HF decode chain DeepSeek V3 sparse MoE requires valid grouped-router metadata"
+                                .to_string(),
+                        );
+                    }
                 }
                 None
             }

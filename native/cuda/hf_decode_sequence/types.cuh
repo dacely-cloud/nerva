@@ -131,6 +131,9 @@ struct SequenceLayerLayout {
   uint32_t deepseek_compress_ratio;
   uint32_t deepseek_index_n_heads;
   uint32_t deepseek_index_head_dim;
+  uint32_t deepseek_router_num_groups;
+  uint32_t deepseek_router_topk_groups;
+  float deepseek_routed_scaling_factor;
   uint64_t deepseek_q_a_scale;
   uint64_t deepseek_q_b;
   uint64_t deepseek_q_b_scale;

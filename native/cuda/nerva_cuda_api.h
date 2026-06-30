@@ -310,6 +310,9 @@ typedef struct NervaCudaHfDecodeChainLayer {
   uint32_t deepseek_compress_ratio;
   uint32_t deepseek_index_n_heads;
   uint32_t deepseek_index_head_dim;
+  uint32_t deepseek_router_num_groups;
+  uint32_t deepseek_router_topk_groups;
+  float deepseek_routed_scaling_factor;
 } NervaCudaHfDecodeChainLayer;
 
 typedef struct NervaCudaHfDecodeChainRequest {

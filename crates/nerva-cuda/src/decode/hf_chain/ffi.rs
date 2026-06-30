@@ -60,6 +60,9 @@ pub(crate) struct NervaCudaHfDecodeChainLayer {
     pub(crate) deepseek_compress_ratio: u32,
     pub(crate) deepseek_index_n_heads: u32,
     pub(crate) deepseek_index_head_dim: u32,
+    pub(crate) deepseek_router_num_groups: u32,
+    pub(crate) deepseek_router_topk_groups: u32,
+    pub(crate) deepseek_routed_scaling_factor: f32,
 }
 
 #[repr(C)]

@@ -119,6 +119,9 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
         compress_ratio: 4,
         index_n_heads: 64,
         index_head_dim: 128,
+        router_num_groups: 0,
+        router_topk_groups: 0,
+        routed_scaling_factor: 1.0,
     };
     let layer = CudaHfDecodeChainLayer {
         rms_attn_weight: &rms,
@@ -178,12 +181,28 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     assert_eq!(ffi.deepseek_compress_ratio, deepseek.compress_ratio as u32);
     assert_eq!(ffi.deepseek_index_n_heads, deepseek.index_n_heads as u32);
     assert_eq!(ffi.deepseek_index_head_dim, deepseek.index_head_dim as u32);
+    assert_eq!(
+        ffi.deepseek_router_num_groups,
+        deepseek.router_num_groups as u32
+    );
+    assert_eq!(
+        ffi.deepseek_router_topk_groups,
+        deepseek.router_topk_groups as u32
+    );
+    assert_eq!(
+        ffi.deepseek_routed_scaling_factor,
+        deepseek.routed_scaling_factor
+    );
 
     let descriptor = layer.to_descriptor_layout_ffi();
     assert!(descriptor.w_q.is_null());
     assert!(descriptor.w_gate.is_null());
     assert_eq!(descriptor.deepseek_mode, deepseek.mode);
     assert_eq!(descriptor.deepseek_flags, deepseek.flags);
+    assert_eq!(
+        descriptor.deepseek_router_num_groups,
+        deepseek.router_num_groups as u32
+    );
 }
 
 #[test]
@@ -202,6 +221,9 @@ fn deepseek_v3_mla_shape_matches_vllm_contract() {
         compress_ratio: 1,
         index_n_heads: 0,
         index_head_dim: 0,
+        router_num_groups: 8,
+        router_topk_groups: 4,
+        routed_scaling_factor: 2.5,
     };
 
     assert!(deepseek.is_v3_mla());
@@ -570,7 +592,7 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
         plan.deepseek_compressor_ape,
         CUDA_HF_SEQUENCE_MISSING_OFFSET
     );
-    assert_eq!(plan.layout_bytes, 568);
+    assert_eq!(plan.layout_bytes, 576);
     assert!(plan.resident_weight_bytes > 0);
 
     let request = CudaHfDecodeSequenceRequest {
@@ -702,6 +724,112 @@ fn deepseek_v32_dense_session_runs_through_sampling() {
 }
 
 #[test]
+fn deepseek_v32_sparse_moe_session_runs_through_sampling() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let mut layer = tiny_deepseek_v32_descriptor_layer();
+    layer.mlp_kind = CUDA_HF_MLP_SPARSE_MOE;
+    layer.moe_intermediate = 4;
+    layer.shared_expert_intermediate = 2;
+    layer.num_experts = 2;
+    layer.experts_per_token = 1;
+    layer.norm_topk_prob = true;
+    layer.deepseek = layer.deepseek.map(|mut deepseek| {
+        deepseek.flags |= CUDA_HF_DEEPSEEK_FLAG_MOE | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS;
+        deepseek.router_num_groups = 1;
+        deepseek.router_topk_groups = 1;
+        deepseek.routed_scaling_factor = 1.0;
+        deepseek
+    });
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept tiny V3.2 sparse MoE layer");
+    assert_ne!(plan.w_router, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.w_expert_gate_up, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.w_expert_down, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+
+    let weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: plan.resident_weight_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        max_context_tokens: 4,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: Default::default(),
+    };
+
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V3.2 DeepSeek sparse MoE should pass session creation: {:?}",
+        created.summary.error
+    );
+    let mut session = created
+        .session
+        .expect("V3.2 sparse MoE session handle should exist");
+
+    let summary = session.run(&[0], 2, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V3.2 DeepSeek sparse MoE path should run through sampling: {:?}",
+        summary.error
+    );
+    assert_eq!(summary.steps, 2);
+    assert_eq!(summary.tokens.len(), 2);
+    assert_eq!(summary.kv_tokens, 2);
+    assert_eq!(summary.graph_replays, 2);
+    assert!(summary.graph_nodes > 0);
+}
+
+#[test]
 fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     let layer = tiny_deepseek_v4_descriptor_layer();
     let layers = [layer];
@@ -756,7 +884,7 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     assert_eq!(plan.rms_mlp, 558);
     assert_eq!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_eq!(plan.deepseek_kv_b_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
-    assert_eq!(plan.layout_bytes, 568);
+    assert_eq!(plan.layout_bytes, 576);
 }
 
 fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
@@ -799,6 +927,9 @@ fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             compress_ratio: 1,
             index_n_heads: 2,
             index_head_dim: 2,
+            router_num_groups: 1,
+            router_topk_groups: 1,
+            routed_scaling_factor: 1.0,
         }),
         mlp_kind: 0,
         moe_intermediate: 0,
@@ -853,6 +984,9 @@ fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             compress_ratio: 4,
             index_n_heads: 1,
             index_head_dim: 2,
+            router_num_groups: 0,
+            router_topk_groups: 0,
+            routed_scaling_factor: 1.0,
         }),
         mlp_kind: CUDA_HF_MLP_SPARSE_MOE,
         moe_intermediate: 4,

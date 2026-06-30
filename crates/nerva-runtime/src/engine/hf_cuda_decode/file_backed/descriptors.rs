@@ -191,6 +191,9 @@ fn deepseek_marker(
         compress_ratio: execution.compress_ratio,
         index_n_heads: metadata.index_n_heads.unwrap_or(0),
         index_head_dim: metadata.index_head_dim.unwrap_or(0),
+        router_num_groups: metadata.num_expert_groups.unwrap_or(0),
+        router_topk_groups: metadata.topk_group.unwrap_or(0),
+        routed_scaling_factor: metadata.routed_scaling_factor.unwrap_or(1.0),
     })
 }
 
