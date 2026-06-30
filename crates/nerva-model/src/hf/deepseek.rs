@@ -46,32 +46,38 @@ pub struct DeepSeekVllmKvCacheSpec {
     pub num_kv_heads: usize,
     pub head_size: usize,
     pub dtype: DType,
+    pub kv_quant_mode: &'static str,
     pub cache_dtype_str: String,
     pub compress_ratio: usize,
     pub sliding_window: Option<usize>,
     pub alignment: Option<usize>,
     pub model_version: Option<&'static str>,
     pub real_page_size_bytes: usize,
+    pub page_size_padded: Option<usize>,
     pub page_size_bytes: usize,
+    pub indexes_kv_by_block_stride: bool,
 }
 
 impl DeepSeekVllmKvCacheSpec {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"kind\":\"{}\",\"block_size\":{},\"storage_block_size\":{},\"num_kv_heads\":{},\"head_size\":{},\"dtype\":\"{}\",\"cache_dtype_str\":\"{}\",\"compress_ratio\":{},\"sliding_window\":{},\"alignment\":{},\"model_version\":{},\"real_page_size_bytes\":{},\"page_size_bytes\":{}}}",
+            "{{\"kind\":\"{}\",\"block_size\":{},\"storage_block_size\":{},\"num_kv_heads\":{},\"head_size\":{},\"dtype\":\"{}\",\"kv_quant_mode\":\"{}\",\"cache_dtype_str\":\"{}\",\"compress_ratio\":{},\"sliding_window\":{},\"alignment\":{},\"model_version\":{},\"real_page_size_bytes\":{},\"page_size_padded\":{},\"page_size_bytes\":{},\"indexes_kv_by_block_stride\":{}}}",
             self.kind,
             self.block_size,
             self.storage_block_size,
             self.num_kv_heads,
             self.head_size,
             dtype_to_str(self.dtype),
+            self.kv_quant_mode,
             json_escape(&self.cache_dtype_str),
             self.compress_ratio,
             json_opt_usize(self.sliding_window),
             json_opt_usize(self.alignment),
             json_opt_str(self.model_version),
             self.real_page_size_bytes,
+            json_opt_usize(self.page_size_padded),
             self.page_size_bytes,
+            self.indexes_kv_by_block_stride,
         )
     }
 }
@@ -460,6 +466,7 @@ fn spec_from_parts(
         Some(alignment) => round_up(real_page_size_bytes, alignment)?,
         None => real_page_size_bytes,
     };
+    let page_size_padded = (page_size_bytes != real_page_size_bytes).then_some(page_size_bytes);
     Ok(DeepSeekVllmKvCacheSpec {
         kind,
         block_size,
@@ -467,13 +474,16 @@ fn spec_from_parts(
         num_kv_heads: 1,
         head_size,
         dtype,
+        kv_quant_mode: "none",
         cache_dtype_str: cache_dtype_str.to_string(),
         compress_ratio,
         sliding_window,
         alignment,
         model_version,
         real_page_size_bytes,
+        page_size_padded,
         page_size_bytes,
+        indexes_kv_by_block_stride: false,
     })
 }
 

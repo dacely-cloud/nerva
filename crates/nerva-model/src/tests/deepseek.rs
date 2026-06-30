@@ -5,10 +5,10 @@ use crate::hf::deepseek::{
     plan_deepseek_vllm_kv_cache_with_block_size,
 };
 use crate::hf::deepseek_runtime::{
-    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS, DeepSeekAttentionExecutionKind,
     deepseek_execution_unit_coverage, deepseek_implemented_primitives,
     deepseek_layer_execution_plan, deepseek_runtime_weight_contract, deepseek_v4_mhc_pre_num_split,
     deepseek_v4_mhc_warmup_token_sizes, plan_deepseek_v4_mhc_warmup,
+    DeepSeekAttentionExecutionKind, DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS,
 };
 use crate::hf::metadata::HfMlpLayerKind;
 use crate::hf::parser::parse_hf_config_metadata;
@@ -55,11 +55,9 @@ fn parses_deepseek_v3_mla_and_grouped_moe_metadata() {
             HfMlpLayerKind::SparseMoe,
         ]
     );
-    assert!(
-        metadata
-            .to_json()
-            .contains("\"architecture\":\"deepseek_v3\"")
-    );
+    assert!(metadata
+        .to_json()
+        .contains("\"architecture\":\"deepseek_v3\""));
     assert!(metadata.to_json().contains("\"qk_rope_head_dim\":64"));
 }
 
@@ -105,12 +103,10 @@ fn parses_deepseek_v4_flash_metadata() {
     assert_eq!(metadata.num_hash_layers, Some(3));
     assert_eq!(metadata.swiglu_limit, Some(10.0));
     assert_eq!(metadata.expert_dtype.as_deref(), Some("fp4"));
-    assert!(
-        metadata
-            .mlp_layer_types
-            .iter()
-            .all(|kind| *kind == HfMlpLayerKind::SparseMoe)
-    );
+    assert!(metadata
+        .mlp_layer_types
+        .iter()
+        .all(|kind| *kind == HfMlpLayerKind::SparseMoe));
 }
 
 #[test]
@@ -120,15 +116,11 @@ fn deepseek_v4_mhc_warmup_plan_matches_vllm_token_sizes_and_split_k() {
     assert_eq!(DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS, 16_384);
     assert_eq!(
         deepseek_v4_mhc_warmup_token_sizes(9000, &[3, 64, 8192, 12_000]),
-        vec![
-            1, 2, 3, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 9000
-        ]
+        vec![1, 2, 3, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 9000]
     );
     assert_eq!(
         deepseek_v4_mhc_warmup_token_sizes(20_000, &[17_000, 2048]),
-        vec![
-            1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384
-        ]
+        vec![1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384]
     );
     assert!(deepseek_v4_mhc_warmup_token_sizes(0, &[1]).is_empty());
 
@@ -190,16 +182,14 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
         .find(|unit| unit.unit == "deepseek_v4_mhc_pre_post_head")
         .expect("DeepSeek V4 should report mHC coverage");
     assert_eq!(mhc.status, "complete");
-    assert!(
-        mhc.validated_primitives
-            .iter()
-            .any(|item| item == "cuda_deepseek_mhc_fused_post_pre_api")
-    );
-    assert!(
-        mhc.validated_primitives
-            .iter()
-            .any(|item| item == "cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime")
-    );
+    assert!(mhc
+        .validated_primitives
+        .iter()
+        .any(|item| item == "cuda_deepseek_mhc_fused_post_pre_api"));
+    assert!(mhc
+        .validated_primitives
+        .iter()
+        .any(|item| item == "cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime"));
     assert!(mhc.remaining_gaps.is_empty());
 
     let swa = coverage
@@ -254,12 +244,10 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
         .iter()
         .find(|unit| unit.unit == "deepseek_v4_hash_and_bias_router")
         .expect("DeepSeek V4 should report hash/bias router coverage");
-    assert!(
-        router
-            .validated_primitives
-            .iter()
-            .any(|item| item == "deepseek_v4_full_routed_moe_hash_reference")
-    );
+    assert!(router
+        .validated_primitives
+        .iter()
+        .any(|item| item == "deepseek_v4_full_routed_moe_hash_reference"));
 
     let parity = coverage
         .iter()
@@ -289,6 +277,9 @@ fn deepseek_vllm_kv_plan_matches_v3_and_v32_mla_cache_contracts() {
     assert_eq!(v3_plan.groups[0].name, "v3_main_mla");
     assert_eq!(v3_plan.groups[0].layers, 6);
     assert_eq!(v3_plan.groups[0].spec.head_size, 576);
+    assert_eq!(v3_plan.groups[0].spec.kv_quant_mode, "none");
+    assert_eq!(v3_plan.groups[0].spec.page_size_padded, None);
+    assert!(!v3_plan.groups[0].spec.indexes_kv_by_block_stride);
     assert_eq!(v3_plan.groups[0].spec.real_page_size_bytes, 64 * 576 * 2);
 
     let v32 = parse_hf_config_metadata(deepseek_v32_config()).unwrap();
@@ -296,15 +287,17 @@ fn deepseek_vllm_kv_plan_matches_v3_and_v32_mla_cache_contracts() {
     assert_eq!(v32_plan.groups.len(), 2);
     assert_eq!(v32_plan.groups[0].name, "v3_2_main_mla");
     assert_eq!(v32_plan.groups[0].spec.dtype, DType::U8);
+    assert_eq!(v32_plan.groups[0].spec.kv_quant_mode, "none");
+    assert_eq!(v32_plan.groups[0].spec.page_size_padded, None);
     assert_eq!(v32_plan.groups[0].spec.real_page_size_bytes, 64 * 656);
     assert_eq!(v32_plan.groups[1].name, "v3_2_sparse_indexer");
     assert_eq!(v32_plan.groups[1].spec.head_size, 132);
+    assert_eq!(v32_plan.groups[1].spec.page_size_padded, None);
+    assert!(!v32_plan.groups[1].spec.indexes_kv_by_block_stride);
     assert_eq!(v32_plan.groups[1].spec.real_page_size_bytes, 64 * 132);
-    assert!(
-        v32_plan
-            .to_json()
-            .contains("/root/vllm/vllm/v1/attention/backends/mla/indexer.py")
-    );
+    assert!(v32_plan
+        .to_json()
+        .contains("/root/vllm/vllm/v1/attention/backends/mla/indexer.py"));
 }
 
 #[test]
@@ -328,20 +321,25 @@ fn deepseek_vllm_kv_plan_matches_v4_sparse_swa_and_indexer_contracts() {
     assert_eq!(swa.spec.block_size, 64);
     assert_eq!(swa.spec.sliding_window, Some(4096));
     assert_eq!(swa.spec.real_page_size_bytes, 64 * 584);
+    assert_eq!(swa.spec.page_size_padded, Some(37440));
     assert_eq!(swa.spec.page_size_bytes, 37440);
+    assert!(!swa.spec.indexes_kv_by_block_stride);
 
     let c4 = &plan.groups[1];
     assert_eq!(c4.name, "v4_c4_mla");
     assert_eq!(c4.layers, 1);
     assert_eq!(c4.spec.storage_block_size, 64);
     assert_eq!(c4.spec.real_page_size_bytes, 64 * 584);
+    assert_eq!(c4.spec.page_size_padded, Some(37440));
     assert_eq!(c4.spec.alignment, Some(576));
+    assert_eq!(c4.spec.kv_quant_mode, "none");
 
     let c4_indexer = &plan.groups[2];
     assert_eq!(c4_indexer.name, "v4_c4_mla_indexer");
     assert_eq!(c4_indexer.spec.head_size, 132);
     assert_eq!(c4_indexer.spec.storage_block_size, 64);
     assert_eq!(c4_indexer.spec.real_page_size_bytes, 64 * 132);
+    assert_eq!(c4_indexer.spec.page_size_padded, Some(8640));
     assert_eq!(c4_indexer.spec.page_size_bytes, 8640);
 
     let c128 = &plan.groups[3];
@@ -349,17 +347,21 @@ fn deepseek_vllm_kv_plan_matches_v4_sparse_swa_and_indexer_contracts() {
     assert_eq!(c128.layers, 1);
     assert_eq!(c128.spec.storage_block_size, 2);
     assert_eq!(c128.spec.real_page_size_bytes, 2 * 584);
+    assert_eq!(c128.spec.page_size_padded, Some(1728));
     assert_eq!(c128.spec.page_size_bytes, 1728);
 
     let c128_indexer = &plan.groups[4];
     assert_eq!(c128_indexer.name, "v4_c128_mla_indexer");
     assert_eq!(c128_indexer.spec.storage_block_size, 2);
     assert_eq!(c128_indexer.spec.real_page_size_bytes, 2 * 132);
+    assert_eq!(c128_indexer.spec.page_size_padded, Some(576));
     assert_eq!(c128_indexer.spec.page_size_bytes, 576);
-    assert!(
-        plan.to_json()
-            .contains("/root/vllm/vllm/models/deepseek_v4/sparse_mla.py")
-    );
+    assert!(plan
+        .to_json()
+        .contains("/root/vllm/vllm/models/deepseek_v4/sparse_mla.py"));
+    assert!(plan
+        .to_json()
+        .contains("\"indexes_kv_by_block_stride\":false"));
 }
 
 #[test]
@@ -369,18 +371,14 @@ fn deepseek_layer_execution_plan_matches_vllm_v3_v32_and_v4_modes() {
     assert_eq!(v3_plan.cache_dtype_str, "bfloat16");
     assert_eq!(v3_plan.default_block_size, 64);
     assert_eq!(v3_plan.layers.len(), 6);
-    assert!(
-        v3_plan
-            .layers
-            .iter()
-            .all(|layer| layer.attention_kind == DeepSeekAttentionExecutionKind::V3Mla)
-    );
-    assert!(
-        v3_plan
-            .layers
-            .iter()
-            .all(|layer| layer.primary_kv_cache_group == "v3_main_mla")
-    );
+    assert!(v3_plan
+        .layers
+        .iter()
+        .all(|layer| layer.attention_kind == DeepSeekAttentionExecutionKind::V3Mla));
+    assert!(v3_plan
+        .layers
+        .iter()
+        .all(|layer| layer.primary_kv_cache_group == "v3_main_mla"));
     assert!(!v3_plan.layers[0].uses_moe);
     assert!(v3_plan.layers[3].uses_moe);
 
@@ -396,18 +394,14 @@ fn deepseek_layer_execution_plan_matches_vllm_v3_v32_and_v4_modes() {
         v32_plan.layers[0].indexer_kv_cache_group.as_deref(),
         Some("v3_2_sparse_indexer")
     );
-    assert!(
-        v32_plan
-            .layers
-            .iter()
-            .all(|layer| layer.uses_sparse_indexer)
-    );
-    assert!(
-        v32_plan
-            .layers
-            .iter()
-            .all(|layer| layer.uses_compressed_indexer_cache)
-    );
+    assert!(v32_plan
+        .layers
+        .iter()
+        .all(|layer| layer.uses_sparse_indexer));
+    assert!(v32_plan
+        .layers
+        .iter()
+        .all(|layer| layer.uses_compressed_indexer_cache));
 
     let v4 = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
     let v4_plan = deepseek_layer_execution_plan(&v4).unwrap();
@@ -489,18 +483,14 @@ fn deepseek_runtime_weight_contract_binds_execution_modes_to_layer_roles() {
 
     let v32 = parse_hf_config_metadata(deepseek_v32_config()).unwrap();
     let v32_contract = deepseek_runtime_weight_contract(&v32).unwrap();
-    assert!(
-        v32_contract
-            .layers
-            .iter()
-            .all(|layer| has_role(layer, WeightBlockRole::DeepSeekIndexerWeightsProjection))
-    );
-    assert!(
-        v32_contract
-            .layers
-            .iter()
-            .all(|layer| has_role(layer, WeightBlockRole::DeepSeekIndexerKeyNormBias))
-    );
+    assert!(v32_contract
+        .layers
+        .iter()
+        .all(|layer| has_role(layer, WeightBlockRole::DeepSeekIndexerWeightsProjection)));
+    assert!(v32_contract
+        .layers
+        .iter()
+        .all(|layer| has_role(layer, WeightBlockRole::DeepSeekIndexerKeyNormBias)));
 
     let v4 = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
     let v4_contract = deepseek_runtime_weight_contract(&v4).unwrap();
