@@ -257,16 +257,13 @@ __device__ float decode_megamoe_fp4_weight(const uint8_t *packed,
          nerva::deepseek::e8m0_exponent_bits_to_f32(scale_exp);
 }
 
-__global__ void deepseek_megamoe_experts_kernel(
+__global__ void deepseek_megamoe_gate_up_kernel(
     const uint8_t *x_fp8,
     const uint32_t *x_scales,
     const int64_t *topk_ids,
-    const float *topk_weights,
     const uint8_t *w13_packed,
     const uint8_t *w13_scales,
-    const uint8_t *w2_packed,
-    const uint8_t *w2_scales,
-    float *output,
+    float *activation,
     uint32_t num_tokens,
     uint32_t hidden_size,
     uint32_t intermediate_size,
@@ -275,89 +272,122 @@ __global__ void deepseek_megamoe_experts_kernel(
     float swiglu_limit,
     uint32_t hidden_blocks,
     int32_t *expert_error) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) {
+  if (threadIdx.x != 0) {
     return;
   }
-  if (num_tokens == 0 || hidden_size == 0 || intermediate_size == 0 ||
-      num_experts == 0 || top_k == 0 || hidden_size % 32u != 0 ||
-      intermediate_size % 32u != 0) {
-    *expert_error = -1;
+  if (*expert_error != 0) {
     return;
   }
 
-  const uint64_t output_values =
-      static_cast<uint64_t>(num_tokens) * hidden_size;
-  for (uint64_t index = 0; index < output_values; ++index) {
-    output[index] = 0.0f;
+  const uint32_t route = blockIdx.x;
+  const uint32_t intermediate = blockIdx.y;
+  if (route >= num_tokens * top_k || intermediate >= intermediate_size) {
+    return;
   }
-
+  const uint32_t token = route / top_k;
   const uint64_t w13_rows = static_cast<uint64_t>(intermediate_size) * 2u;
   const uint64_t w13_packed_cols = hidden_size / 2u;
   const uint64_t w13_scale_cols = hidden_size / 32u;
+
+  const int64_t expert_id_signed = topk_ids[route];
+  if (expert_id_signed < 0) {
+    activation[static_cast<uint64_t>(route) * intermediate_size + intermediate] =
+        0.0f;
+    return;
+  }
+  const uint32_t expert_id = static_cast<uint32_t>(expert_id_signed);
+  if (expert_id >= num_experts) {
+    *expert_error = -2;
+    return;
+  }
+
+  float gate = 0.0f;
+  float up = 0.0f;
+  const uint64_t gate_row =
+      static_cast<uint64_t>(expert_id) * w13_rows + intermediate;
+  const uint64_t up_row = static_cast<uint64_t>(expert_id) * w13_rows +
+                          intermediate_size + intermediate;
+  const uint64_t gate_packed_base = gate_row * w13_packed_cols;
+  const uint64_t up_packed_base = up_row * w13_packed_cols;
+  const uint64_t gate_scale_base = gate_row * w13_scale_cols;
+  const uint64_t up_scale_base = up_row * w13_scale_cols;
+  for (uint32_t hidden = 0; hidden < hidden_size; ++hidden) {
+    const float x = decode_megamoe_x(
+        x_fp8, x_scales, token, hidden, hidden_size, hidden_blocks);
+    gate += x * decode_megamoe_fp4_weight(w13_packed,
+                                          w13_scales,
+                                          gate_packed_base,
+                                          gate_scale_base,
+                                          hidden);
+    up += x * decode_megamoe_fp4_weight(w13_packed,
+                                        w13_scales,
+                                        up_packed_base,
+                                        up_scale_base,
+                                        hidden);
+  }
+  activation[static_cast<uint64_t>(route) * intermediate_size + intermediate] =
+      swiglu_dynamic(gate, up, 1u, swiglu_limit);
+}
+
+__global__ void deepseek_megamoe_down_kernel(const int64_t *topk_ids,
+                                             const float *topk_weights,
+                                             const uint8_t *w2_packed,
+                                             const uint8_t *w2_scales,
+                                             const float *activation,
+                                             float *output,
+                                             uint32_t num_tokens,
+                                             uint32_t hidden_size,
+                                             uint32_t intermediate_size,
+                                             uint32_t num_experts,
+                                             uint32_t top_k,
+                                             int32_t *expert_error) {
+  if (threadIdx.x != 0) {
+    return;
+  }
+  if (*expert_error != 0) {
+    return;
+  }
+
+  const uint32_t output_index = blockIdx.x;
+  if (output_index >= num_tokens * hidden_size) {
+    return;
+  }
+  const uint32_t token = output_index / hidden_size;
+  const uint32_t out_hidden = output_index - token * hidden_size;
   const uint64_t w2_packed_cols = intermediate_size / 2u;
   const uint64_t w2_scale_cols = intermediate_size / 32u;
+  float token_sum = 0.0f;
 
-  for (uint32_t token = 0; token < num_tokens; ++token) {
-    for (uint32_t rank = 0; rank < top_k; ++rank) {
-      const uint64_t route_offset = static_cast<uint64_t>(token) * top_k + rank;
-      const int64_t expert_id_signed = topk_ids[route_offset];
-      if (expert_id_signed < 0) {
-        continue;
-      }
-      const uint32_t expert_id = static_cast<uint32_t>(expert_id_signed);
-      if (expert_id >= num_experts) {
-        *expert_error = -2;
-        return;
-      }
-      const float route_weight = topk_weights[route_offset];
-
-      for (uint32_t out_hidden = 0; out_hidden < hidden_size; ++out_hidden) {
-        float routed_sum = 0.0f;
-        for (uint32_t intermediate = 0; intermediate < intermediate_size;
-             ++intermediate) {
-          float gate = 0.0f;
-          float up = 0.0f;
-          const uint64_t gate_row =
-              static_cast<uint64_t>(expert_id) * w13_rows + intermediate;
-          const uint64_t up_row = static_cast<uint64_t>(expert_id) * w13_rows +
-                                  intermediate_size + intermediate;
-          const uint64_t gate_packed_base = gate_row * w13_packed_cols;
-          const uint64_t up_packed_base = up_row * w13_packed_cols;
-          const uint64_t gate_scale_base = gate_row * w13_scale_cols;
-          const uint64_t up_scale_base = up_row * w13_scale_cols;
-          for (uint32_t hidden = 0; hidden < hidden_size; ++hidden) {
-            const float x = decode_megamoe_x(
-                x_fp8, x_scales, token, hidden, hidden_size, hidden_blocks);
-            gate += x * decode_megamoe_fp4_weight(w13_packed,
-                                                  w13_scales,
-                                                  gate_packed_base,
-                                                  gate_scale_base,
-                                                  hidden);
-            up += x * decode_megamoe_fp4_weight(w13_packed,
-                                                w13_scales,
-                                                up_packed_base,
-                                                up_scale_base,
-                                                hidden);
-          }
-
-          const float activation = swiglu_dynamic(gate, up, 1u, swiglu_limit);
-          const uint64_t w2_row =
-              static_cast<uint64_t>(expert_id) * hidden_size + out_hidden;
-          const uint64_t w2_packed_base = w2_row * w2_packed_cols;
-          const uint64_t w2_scale_base = w2_row * w2_scale_cols;
-          routed_sum += activation *
-                        decode_megamoe_fp4_weight(w2_packed,
-                                                  w2_scales,
-                                                  w2_packed_base,
-                                                  w2_scale_base,
-                                                  intermediate);
-        }
-        output[static_cast<uint64_t>(token) * hidden_size + out_hidden] +=
-            route_weight * routed_sum;
-      }
+  for (uint32_t rank = 0; rank < top_k; ++rank) {
+    const uint64_t route_offset = static_cast<uint64_t>(token) * top_k + rank;
+    const int64_t expert_id_signed = topk_ids[route_offset];
+    if (expert_id_signed < 0) {
+      continue;
     }
+    const uint32_t expert_id = static_cast<uint32_t>(expert_id_signed);
+    if (expert_id >= num_experts) {
+      *expert_error = -2;
+      return;
+    }
+    const float route_weight = topk_weights[route_offset];
+    const uint64_t w2_row =
+        static_cast<uint64_t>(expert_id) * hidden_size + out_hidden;
+    const uint64_t w2_packed_base = w2_row * w2_packed_cols;
+    const uint64_t w2_scale_base = w2_row * w2_scale_cols;
+    float routed_sum = 0.0f;
+    for (uint32_t intermediate = 0; intermediate < intermediate_size;
+         ++intermediate) {
+      routed_sum +=
+          activation[route_offset * intermediate_size + intermediate] *
+          decode_megamoe_fp4_weight(w2_packed,
+                                    w2_scales,
+                                    w2_packed_base,
+                                    w2_scale_base,
+                                    intermediate);
+    }
+    token_sum += route_weight * routed_sum;
   }
-  *expert_error = 0;
+  output[output_index] = token_sum;
 }
 
 __global__ void deepseek_moe_forward_kernel(const float *input,
@@ -1117,10 +1147,11 @@ extern "C" int nerva_cuda_deepseek_megamoe_experts(
   uint8_t *d_w13_scales = nullptr;
   uint8_t *d_w2_packed = nullptr;
   uint8_t *d_w2_scales = nullptr;
+  float *d_activation = nullptr;
   float *d_output = nullptr;
   int32_t *d_expert_error = nullptr;
   float *h_output = nullptr;
-  int32_t h_expert_error = -1;
+  int32_t h_expert_error = 0;
   cudaStream_t stream = nullptr;
 
   const uint64_t tokens = request->num_tokens;
@@ -1142,11 +1173,14 @@ extern "C" int nerva_cuda_deepseek_megamoe_experts(
       sizeof(uint8_t) * w2_rows * (intermediate / 2u);
   const uint64_t w2_scales_bytes =
       sizeof(uint8_t) * w2_rows * (intermediate / 32u);
+  const uint64_t activation_values = tokens * top_k * intermediate;
+  const uint64_t activation_bytes = sizeof(float) * activation_values;
   const uint64_t output_values = tokens * hidden;
   const uint64_t output_bytes = sizeof(float) * output_values;
   const uint64_t expert_error_bytes = sizeof(int32_t);
 
-  if (output_values > UINT32_MAX) {
+  if (tokens * top_k > UINT32_MAX || intermediate > UINT32_MAX ||
+      output_values > UINT32_MAX) {
     out->expert_error = -3;
     return -1;
   }
@@ -1170,6 +1204,8 @@ extern "C" int nerva_cuda_deepseek_megamoe_experts(
   if (err != cudaSuccess) goto cleanup;
   err = cudaMalloc(reinterpret_cast<void **>(&d_w2_scales), w2_scales_bytes);
   if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_activation), activation_bytes);
+  if (err != cudaSuccess) goto cleanup;
   err = cudaMalloc(reinterpret_cast<void **>(&d_output), output_bytes);
   if (err != cudaSuccess) goto cleanup;
   err = cudaMalloc(reinterpret_cast<void **>(&d_expert_error),
@@ -1178,7 +1214,7 @@ extern "C" int nerva_cuda_deepseek_megamoe_experts(
   out->device_arena_bytes =
       x_fp8_bytes + x_scales_bytes + topk_ids_bytes + topk_weights_bytes +
       w13_packed_bytes + w13_scales_bytes + w2_packed_bytes +
-      w2_scales_bytes + output_bytes + expert_error_bytes;
+      w2_scales_bytes + activation_bytes + output_bytes + expert_error_bytes;
 
   err = cudaHostAlloc(reinterpret_cast<void **>(&h_output),
                       output_bytes,
@@ -1247,16 +1283,19 @@ extern "C" int nerva_cuda_deepseek_megamoe_experts(
       w13_packed_bytes + w13_scales_bytes + w2_packed_bytes +
       w2_scales_bytes + expert_error_bytes;
 
-  deepseek_megamoe_experts_kernel<<<1, 1, 0, stream>>>(
+  deepseek_megamoe_gate_up_kernel<<<
+      dim3(static_cast<uint32_t>(tokens * top_k),
+           static_cast<uint32_t>(intermediate),
+           1),
+      1,
+      0,
+      stream>>>(
       d_x_fp8,
       d_x_scales,
       d_topk_ids,
-      d_topk_weights,
       d_w13_packed,
       d_w13_scales,
-      d_w2_packed,
-      d_w2_scales,
-      d_output,
+      d_activation,
       request->num_tokens,
       request->hidden_size,
       request->intermediate_size,
@@ -1265,6 +1304,26 @@ extern "C" int nerva_cuda_deepseek_megamoe_experts(
       request->swiglu_limit,
       static_cast<uint32_t>(hidden_blocks),
       d_expert_error);
+  out->kernel_launches += 1;
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  deepseek_megamoe_down_kernel<<<
+      static_cast<uint32_t>(output_values),
+      1,
+      0,
+      stream>>>(d_topk_ids,
+                d_topk_weights,
+                d_w2_packed,
+                d_w2_scales,
+                d_activation,
+                d_output,
+                request->num_tokens,
+                request->hidden_size,
+                request->intermediate_size,
+                request->num_experts,
+                request->top_k,
+                d_expert_error);
   out->kernel_launches += 1;
   err = cudaGetLastError();
   if (err != cudaSuccess) goto cleanup;
@@ -1301,6 +1360,7 @@ cleanup:
   if (h_output != nullptr) cudaFreeHost(h_output);
   if (d_expert_error != nullptr) cudaFree(d_expert_error);
   if (d_output != nullptr) cudaFree(d_output);
+  if (d_activation != nullptr) cudaFree(d_activation);
   if (d_w2_scales != nullptr) cudaFree(d_w2_scales);
   if (d_w2_packed != nullptr) cudaFree(d_w2_packed);
   if (d_w13_scales != nullptr) cudaFree(d_w13_scales);

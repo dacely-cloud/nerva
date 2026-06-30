@@ -268,7 +268,7 @@ fn deepseek_megamoe_experts_matches_fp8_fp4_reference() {
             "index={index} actual={actual} expected={expected}"
         );
     }
-    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.kernel_launches, 2);
     assert_eq!(summary.sync_calls, 1);
     assert_eq!(summary.hot_path_allocations, 0);
     assert!(summary.output_hash != 0);
