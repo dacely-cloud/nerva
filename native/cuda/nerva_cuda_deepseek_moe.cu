@@ -227,6 +227,139 @@ __global__ void deepseek_megamoe_prepare_kernel(
   }
 }
 
+__device__ float decode_megamoe_x(const uint8_t *x_fp8,
+                                  const uint32_t *x_scales,
+                                  uint32_t token,
+                                  uint32_t hidden,
+                                  uint32_t hidden_size,
+                                  uint32_t hidden_blocks) {
+  const uint32_t hidden_block = hidden / kMegaMoeBlockK;
+  const uint32_t block_offset = hidden - hidden_block * kMegaMoeBlockK;
+  const uint32_t group = block_offset / kMegaMoeGroupK;
+  const uint32_t packed_scale = x_scales[token * hidden_blocks + hidden_block];
+  const uint8_t scale_exp =
+      static_cast<uint8_t>((packed_scale >> (group * 8u)) & 0xffu);
+  const float scale = nerva::deepseek::e8m0_exponent_bits_to_f32(scale_exp);
+  return nerva::deepseek::f8_e4m3fn_bits_to_f32(
+             x_fp8[static_cast<uint64_t>(token) * hidden_size + hidden]) *
+         scale;
+}
+
+__device__ float decode_megamoe_fp4_weight(const uint8_t *packed,
+                                           const uint8_t *scales,
+                                           uint64_t row_base_packed,
+                                           uint64_t row_base_scales,
+                                           uint32_t col) {
+  const uint8_t byte = packed[row_base_packed + col / 2u];
+  const uint8_t nibble = (col & 1u) == 0u ? (byte & 0x0fu) : (byte >> 4u);
+  const uint8_t scale_exp = scales[row_base_scales + col / 32u];
+  return nerva::deepseek::mxfp4_e2m1_nibble_to_f32(nibble) *
+         nerva::deepseek::e8m0_exponent_bits_to_f32(scale_exp);
+}
+
+__global__ void deepseek_megamoe_experts_kernel(
+    const uint8_t *x_fp8,
+    const uint32_t *x_scales,
+    const int64_t *topk_ids,
+    const float *topk_weights,
+    const uint8_t *w13_packed,
+    const uint8_t *w13_scales,
+    const uint8_t *w2_packed,
+    const uint8_t *w2_scales,
+    float *output,
+    uint32_t num_tokens,
+    uint32_t hidden_size,
+    uint32_t intermediate_size,
+    uint32_t num_experts,
+    uint32_t top_k,
+    float swiglu_limit,
+    uint32_t hidden_blocks,
+    int32_t *expert_error) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  if (num_tokens == 0 || hidden_size == 0 || intermediate_size == 0 ||
+      num_experts == 0 || top_k == 0 || hidden_size % 32u != 0 ||
+      intermediate_size % 32u != 0) {
+    *expert_error = -1;
+    return;
+  }
+
+  const uint64_t output_values =
+      static_cast<uint64_t>(num_tokens) * hidden_size;
+  for (uint64_t index = 0; index < output_values; ++index) {
+    output[index] = 0.0f;
+  }
+
+  const uint64_t w13_rows = static_cast<uint64_t>(intermediate_size) * 2u;
+  const uint64_t w13_packed_cols = hidden_size / 2u;
+  const uint64_t w13_scale_cols = hidden_size / 32u;
+  const uint64_t w2_packed_cols = intermediate_size / 2u;
+  const uint64_t w2_scale_cols = intermediate_size / 32u;
+
+  for (uint32_t token = 0; token < num_tokens; ++token) {
+    for (uint32_t rank = 0; rank < top_k; ++rank) {
+      const uint64_t route_offset = static_cast<uint64_t>(token) * top_k + rank;
+      const int64_t expert_id_signed = topk_ids[route_offset];
+      if (expert_id_signed < 0) {
+        continue;
+      }
+      const uint32_t expert_id = static_cast<uint32_t>(expert_id_signed);
+      if (expert_id >= num_experts) {
+        *expert_error = -2;
+        return;
+      }
+      const float route_weight = topk_weights[route_offset];
+
+      for (uint32_t out_hidden = 0; out_hidden < hidden_size; ++out_hidden) {
+        float routed_sum = 0.0f;
+        for (uint32_t intermediate = 0; intermediate < intermediate_size;
+             ++intermediate) {
+          float gate = 0.0f;
+          float up = 0.0f;
+          const uint64_t gate_row =
+              static_cast<uint64_t>(expert_id) * w13_rows + intermediate;
+          const uint64_t up_row = static_cast<uint64_t>(expert_id) * w13_rows +
+                                  intermediate_size + intermediate;
+          const uint64_t gate_packed_base = gate_row * w13_packed_cols;
+          const uint64_t up_packed_base = up_row * w13_packed_cols;
+          const uint64_t gate_scale_base = gate_row * w13_scale_cols;
+          const uint64_t up_scale_base = up_row * w13_scale_cols;
+          for (uint32_t hidden = 0; hidden < hidden_size; ++hidden) {
+            const float x = decode_megamoe_x(
+                x_fp8, x_scales, token, hidden, hidden_size, hidden_blocks);
+            gate += x * decode_megamoe_fp4_weight(w13_packed,
+                                                  w13_scales,
+                                                  gate_packed_base,
+                                                  gate_scale_base,
+                                                  hidden);
+            up += x * decode_megamoe_fp4_weight(w13_packed,
+                                                w13_scales,
+                                                up_packed_base,
+                                                up_scale_base,
+                                                hidden);
+          }
+
+          const float activation = swiglu_dynamic(gate, up, 1u, swiglu_limit);
+          const uint64_t w2_row =
+              static_cast<uint64_t>(expert_id) * hidden_size + out_hidden;
+          const uint64_t w2_packed_base = w2_row * w2_packed_cols;
+          const uint64_t w2_scale_base = w2_row * w2_scale_cols;
+          routed_sum += activation *
+                        decode_megamoe_fp4_weight(w2_packed,
+                                                  w2_scales,
+                                                  w2_packed_base,
+                                                  w2_scale_base,
+                                                  intermediate);
+        }
+        output[static_cast<uint64_t>(token) * hidden_size + out_hidden] +=
+            route_weight * routed_sum;
+      }
+    }
+  }
+  *expert_error = 0;
+}
+
 __global__ void deepseek_moe_forward_kernel(const float *input,
                                             const uint32_t *expert_ids,
                                             const float *expert_weights,
@@ -383,6 +516,21 @@ void clear_megamoe_prepare_result(
   }
 }
 
+void clear_megamoe_experts_result(
+    const NervaCudaDeepSeekMegaMoeExpertsRequest *request,
+    NervaCudaDeepSeekMegaMoeExpertsResult *out) {
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  out->expert_error = -1;
+  if (request != nullptr) {
+    out->num_tokens = request->num_tokens;
+    out->hidden_size = request->hidden_size;
+    out->intermediate_size = request->intermediate_size;
+    out->num_experts = request->num_experts;
+    out->top_k = request->top_k;
+  }
+}
+
 int fail_forward(NervaCudaDeepSeekMoeForwardResult *out, cudaError_t err) {
   out->cuda_error = static_cast<int32_t>(err);
   out->status = -1;
@@ -390,6 +538,13 @@ int fail_forward(NervaCudaDeepSeekMoeForwardResult *out, cudaError_t err) {
 }
 
 int fail_megamoe_prepare(NervaCudaDeepSeekMegaMoePrepareResult *out,
+                         cudaError_t err) {
+  out->cuda_error = static_cast<int32_t>(err);
+  out->status = -1;
+  return -1;
+}
+
+int fail_megamoe_experts(NervaCudaDeepSeekMegaMoeExpertsResult *out,
                          cudaError_t err) {
   out->cuda_error = static_cast<int32_t>(err);
   out->status = -1;
@@ -414,6 +569,19 @@ bool validate_megamoe_prepare_request(
          request->topk_weights_out != nullptr && request->num_tokens > 0 &&
          request->hidden_size > 0 && request->top_k > 0 &&
          request->hidden_size % kMegaMoeBlockK == 0;
+}
+
+bool validate_megamoe_experts_request(
+    const NervaCudaDeepSeekMegaMoeExpertsRequest *request) {
+  return request != nullptr && request->x_fp8 != nullptr &&
+         request->x_scales != nullptr && request->topk_ids != nullptr &&
+         request->topk_weights != nullptr && request->w13_packed != nullptr &&
+         request->w13_scales != nullptr && request->w2_packed != nullptr &&
+         request->w2_scales != nullptr && request->output != nullptr &&
+         request->num_tokens > 0 && request->hidden_size > 0 &&
+         request->intermediate_size > 0 && request->num_experts > 0 &&
+         request->top_k > 0 && request->hidden_size % kMegaMoeBlockK == 0 &&
+         request->intermediate_size % 32u == 0;
 }
 
 }  // namespace
@@ -914,6 +1082,236 @@ cleanup:
 
   if (err != cudaSuccess) {
     return fail_megamoe_prepare(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_deepseek_megamoe_experts(
+    const NervaCudaDeepSeekMegaMoeExpertsRequest *request,
+    NervaCudaDeepSeekMegaMoeExpertsResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_megamoe_experts_result(request, out);
+  if (!validate_megamoe_experts_request(request)) {
+    return -1;
+  }
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail_megamoe_experts(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail_megamoe_experts(out, cudaErrorNoDevice);
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail_megamoe_experts(out, err);
+  }
+
+  uint8_t *d_x_fp8 = nullptr;
+  uint32_t *d_x_scales = nullptr;
+  int64_t *d_topk_ids = nullptr;
+  float *d_topk_weights = nullptr;
+  uint8_t *d_w13_packed = nullptr;
+  uint8_t *d_w13_scales = nullptr;
+  uint8_t *d_w2_packed = nullptr;
+  uint8_t *d_w2_scales = nullptr;
+  float *d_output = nullptr;
+  int32_t *d_expert_error = nullptr;
+  float *h_output = nullptr;
+  int32_t h_expert_error = -1;
+  cudaStream_t stream = nullptr;
+
+  const uint64_t tokens = request->num_tokens;
+  const uint64_t hidden = request->hidden_size;
+  const uint64_t intermediate = request->intermediate_size;
+  const uint64_t experts = request->num_experts;
+  const uint64_t top_k = request->top_k;
+  const uint64_t hidden_blocks = hidden / kMegaMoeBlockK;
+  const uint64_t x_fp8_bytes = sizeof(uint8_t) * tokens * hidden;
+  const uint64_t x_scales_bytes = sizeof(uint32_t) * tokens * hidden_blocks;
+  const uint64_t topk_ids_bytes = sizeof(int64_t) * tokens * top_k;
+  const uint64_t topk_weights_bytes = sizeof(float) * tokens * top_k;
+  const uint64_t w13_rows = experts * 2u * intermediate;
+  const uint64_t w13_packed_bytes = sizeof(uint8_t) * w13_rows * (hidden / 2u);
+  const uint64_t w13_scales_bytes =
+      sizeof(uint8_t) * w13_rows * (hidden / 32u);
+  const uint64_t w2_rows = experts * hidden;
+  const uint64_t w2_packed_bytes =
+      sizeof(uint8_t) * w2_rows * (intermediate / 2u);
+  const uint64_t w2_scales_bytes =
+      sizeof(uint8_t) * w2_rows * (intermediate / 32u);
+  const uint64_t output_values = tokens * hidden;
+  const uint64_t output_bytes = sizeof(float) * output_values;
+  const uint64_t expert_error_bytes = sizeof(int32_t);
+
+  if (output_values > UINT32_MAX) {
+    out->expert_error = -3;
+    return -1;
+  }
+
+  err = cudaMalloc(reinterpret_cast<void **>(&d_x_fp8), x_fp8_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_x_scales), x_scales_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_topk_ids), topk_ids_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_topk_weights),
+                   topk_weights_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_w13_packed),
+                   w13_packed_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_w13_scales),
+                   w13_scales_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_w2_packed), w2_packed_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_w2_scales), w2_scales_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_output), output_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_expert_error),
+                   expert_error_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  out->device_arena_bytes =
+      x_fp8_bytes + x_scales_bytes + topk_ids_bytes + topk_weights_bytes +
+      w13_packed_bytes + w13_scales_bytes + w2_packed_bytes +
+      w2_scales_bytes + output_bytes + expert_error_bytes;
+
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_output),
+                      output_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  out->pinned_host_bytes = output_bytes;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_x_fp8,
+                        request->x_fp8,
+                        x_fp8_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_x_scales,
+                        request->x_scales,
+                        x_scales_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_topk_ids,
+                        request->topk_ids,
+                        topk_ids_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_topk_weights,
+                        request->topk_weights,
+                        topk_weights_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_w13_packed,
+                        request->w13_packed,
+                        w13_packed_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_w13_scales,
+                        request->w13_scales,
+                        w13_scales_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_w2_packed,
+                        request->w2_packed,
+                        w2_packed_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_w2_scales,
+                        request->w2_scales,
+                        w2_scales_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_expert_error,
+                        &h_expert_error,
+                        expert_error_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes =
+      x_fp8_bytes + x_scales_bytes + topk_ids_bytes + topk_weights_bytes +
+      w13_packed_bytes + w13_scales_bytes + w2_packed_bytes +
+      w2_scales_bytes + expert_error_bytes;
+
+  deepseek_megamoe_experts_kernel<<<1, 1, 0, stream>>>(
+      d_x_fp8,
+      d_x_scales,
+      d_topk_ids,
+      d_topk_weights,
+      d_w13_packed,
+      d_w13_scales,
+      d_w2_packed,
+      d_w2_scales,
+      d_output,
+      request->num_tokens,
+      request->hidden_size,
+      request->intermediate_size,
+      request->num_experts,
+      request->top_k,
+      request->swiglu_limit,
+      static_cast<uint32_t>(hidden_blocks),
+      d_expert_error);
+  out->kernel_launches += 1;
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(h_output,
+                        d_output,
+                        output_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(&h_expert_error,
+                        d_expert_error,
+                        expert_error_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->d2h_bytes = output_bytes + expert_error_bytes;
+
+  err = cudaStreamSynchronize(stream);
+  out->sync_calls += 1;
+  if (err != cudaSuccess) goto cleanup;
+
+  out->expert_error = h_expert_error;
+  if (h_expert_error == 0) {
+    memcpy(request->output, h_output, output_bytes);
+    out->output_hash = hash_f32_bits(
+        request->output,
+        static_cast<uint32_t>(output_values));
+    out->status = 0;
+  }
+
+cleanup:
+  if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_output != nullptr) cudaFreeHost(h_output);
+  if (d_expert_error != nullptr) cudaFree(d_expert_error);
+  if (d_output != nullptr) cudaFree(d_output);
+  if (d_w2_scales != nullptr) cudaFree(d_w2_scales);
+  if (d_w2_packed != nullptr) cudaFree(d_w2_packed);
+  if (d_w13_scales != nullptr) cudaFree(d_w13_scales);
+  if (d_w13_packed != nullptr) cudaFree(d_w13_packed);
+  if (d_topk_weights != nullptr) cudaFree(d_topk_weights);
+  if (d_topk_ids != nullptr) cudaFree(d_topk_ids);
+  if (d_x_scales != nullptr) cudaFree(d_x_scales);
+  if (d_x_fp8 != nullptr) cudaFree(d_x_fp8);
+
+  if (err != cudaSuccess) {
+    return fail_megamoe_experts(out, err);
   }
   return out->status == 0 ? 0 : -1;
 }

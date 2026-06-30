@@ -10,6 +10,9 @@ use nerva_cuda::deepseek_kv::partial_states::deepseek_save_partial_states;
 use nerva_cuda::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use nerva_cuda::deepseek_mla::qkv_norm::deepseek_qkv_rmsnorm;
+use nerva_cuda::deepseek_moe::experts::{
+    CudaDeepSeekMegaMoeExpertsInput, deepseek_megamoe_experts,
+};
 use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
 use nerva_cuda::deepseek_moe::prepare::{
     CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare,
@@ -545,6 +548,7 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
         ),
         bench_primitive("routed_moe_forward", iterations, bench_moe_forward),
         bench_primitive("megamoe_prepare", iterations, bench_megamoe_prepare),
+        bench_primitive("megamoe_experts", iterations, bench_megamoe_experts),
     ];
     Ok(deepseek_cuda_primitive_bench_report_json(
         iterations, &samples,
@@ -1728,6 +1732,100 @@ fn bench_megamoe_prepare() -> DeepSeekPrimitiveMetrics {
         sync_calls: summary.sync_calls,
         hot_path_allocations: summary.hot_path_allocations,
         error: summary.error,
+    }
+}
+
+fn bench_megamoe_experts() -> DeepSeekPrimitiveMetrics {
+    let num_tokens = 2usize;
+    let hidden_size = 128usize;
+    let intermediate_size = 32usize;
+    let num_experts = 2usize;
+    let top_k = 2usize;
+    let mut x_fp8 = vec![0u8; num_tokens * hidden_size];
+    for token in 0..num_tokens {
+        for hidden in 0..8usize {
+            x_fp8[token * hidden_size + hidden] =
+                [0x38u8, 0x30, 0x28, 0x40, 0x34, 0x3c, 0x2c, 0x44][hidden];
+        }
+    }
+    let x_scales = vec![0x7f7f7f7fu32; num_tokens * (hidden_size / 128)];
+    let topk_ids = [0i64, 1, 1, 0];
+    let topk_weights = [0.75f32, 0.25, 0.5, 0.5];
+    let (w13_packed, w13_scales, w2_packed, w2_scales) =
+        megamoe_expert_weights(hidden_size, intermediate_size, num_experts);
+    let summary = deepseek_megamoe_experts(CudaDeepSeekMegaMoeExpertsInput {
+        num_tokens: num_tokens as u32,
+        hidden_size: hidden_size as u32,
+        intermediate_size: intermediate_size as u32,
+        num_experts: num_experts as u32,
+        top_k: top_k as u32,
+        swiglu_limit: 7.0,
+        x_fp8: &x_fp8,
+        x_scales: &x_scales,
+        topk_ids: &topk_ids,
+        topk_weights: &topk_weights,
+        w13_packed: &w13_packed,
+        w13_scales: &w13_scales,
+        w2_packed: &w2_packed,
+        w2_scales: &w2_scales,
+    });
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn megamoe_expert_weights(
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_experts: usize,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+    let w13_rows_per_expert = intermediate_size * 2;
+    let w13_packed_cols = hidden_size / 2;
+    let w13_scale_cols = hidden_size / 32;
+    let w2_packed_cols = intermediate_size / 2;
+    let w2_scale_cols = intermediate_size / 32;
+    let mut w13_packed = vec![0u8; num_experts * w13_rows_per_expert * w13_packed_cols];
+    let w13_scales = vec![127u8; num_experts * w13_rows_per_expert * w13_scale_cols];
+    let mut w2_packed = vec![0u8; num_experts * hidden_size * w2_packed_cols];
+    let w2_scales = vec![127u8; num_experts * hidden_size * w2_scale_cols];
+
+    set_packed_nibble(&mut w13_packed, 0, 0, w13_packed_cols, 2);
+    set_packed_nibble(&mut w13_packed, 0, 1, w13_packed_cols, 1);
+    set_packed_nibble(&mut w13_packed, intermediate_size, 2, w13_packed_cols, 2);
+    set_packed_nibble(&mut w2_packed, 0, 0, w2_packed_cols, 3);
+    set_packed_nibble(&mut w2_packed, 1, 0, w2_packed_cols, 10);
+
+    let expert_1_base = w13_rows_per_expert;
+    set_packed_nibble(&mut w13_packed, expert_1_base + 1, 3, w13_packed_cols, 3);
+    set_packed_nibble(
+        &mut w13_packed,
+        expert_1_base + intermediate_size + 1,
+        4,
+        w13_packed_cols,
+        1,
+    );
+    let expert_1_w2_base = hidden_size;
+    set_packed_nibble(&mut w2_packed, expert_1_w2_base + 2, 1, w2_packed_cols, 4);
+    set_packed_nibble(&mut w2_packed, expert_1_w2_base + 3, 1, w2_packed_cols, 9);
+
+    (w13_packed, w13_scales, w2_packed, w2_scales)
+}
+
+fn set_packed_nibble(packed: &mut [u8], row: usize, col: usize, packed_cols: usize, nibble: u8) {
+    let index = row * packed_cols + col / 2;
+    if col & 1 == 0 {
+        packed[index] = (packed[index] & 0xf0) | (nibble & 0x0f);
+    } else {
+        packed[index] = (packed[index] & 0x0f) | ((nibble & 0x0f) << 4);
     }
 }
 

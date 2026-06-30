@@ -2008,6 +2008,44 @@ typedef struct NervaCudaDeepSeekMegaMoePrepareResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekMegaMoePrepareResult;
 
+typedef struct NervaCudaDeepSeekMegaMoeExpertsRequest {
+  uint32_t num_tokens;
+  uint32_t hidden_size;
+  uint32_t intermediate_size;
+  uint32_t num_experts;
+  uint32_t top_k;
+  float swiglu_limit;
+  const uint8_t *x_fp8;
+  const uint32_t *x_scales;
+  const int64_t *topk_ids;
+  const float *topk_weights;
+  const uint8_t *w13_packed;
+  const uint8_t *w13_scales;
+  const uint8_t *w2_packed;
+  const uint8_t *w2_scales;
+  float *output;
+} NervaCudaDeepSeekMegaMoeExpertsRequest;
+
+typedef struct NervaCudaDeepSeekMegaMoeExpertsResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t expert_error;
+  uint32_t num_tokens;
+  uint32_t hidden_size;
+  uint32_t intermediate_size;
+  uint32_t num_experts;
+  uint32_t top_k;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekMegaMoeExpertsResult;
+
 int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out);
 int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      uint32_t ring_capacity,
@@ -2163,6 +2201,9 @@ int nerva_cuda_deepseek_moe_forward(
 int nerva_cuda_deepseek_megamoe_prepare(
     const NervaCudaDeepSeekMegaMoePrepareRequest *request,
     NervaCudaDeepSeekMegaMoePrepareResult *out);
+int nerva_cuda_deepseek_megamoe_experts(
+    const NervaCudaDeepSeekMegaMoeExpertsRequest *request,
+    NervaCudaDeepSeekMegaMoeExpertsResult *out);
 
 #ifdef __cplusplus
 }

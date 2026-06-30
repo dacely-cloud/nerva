@@ -1,3 +1,4 @@
+use crate::deepseek_moe::experts::{CudaDeepSeekMegaMoeExpertsInput, deepseek_megamoe_experts};
 use crate::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
 use crate::deepseek_moe::prepare::{CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare};
 use crate::deepseek_moe::probe::deepseek_moe_smoke;
@@ -189,6 +190,90 @@ fn deepseek_megamoe_prepare_matches_vllm_input_staging_contract() {
     assert!(summary.topk_hash != 0);
 }
 
+#[test]
+fn deepseek_megamoe_experts_matches_fp8_fp4_reference() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let num_tokens = 2usize;
+    let hidden_size = 128usize;
+    let intermediate_size = 32usize;
+    let num_experts = 2usize;
+    let top_k = 2usize;
+    let mut hidden_states = vec![0.0f32; num_tokens * hidden_size];
+    for token in 0..num_tokens {
+        for hidden in 0..8usize {
+            hidden_states[token * hidden_size + hidden] =
+                (token as f32 + 1.0) * ((hidden as f32 + 1.0) * 0.125);
+        }
+    }
+    let topk_ids = [0i64, 1, 1, 0];
+    let topk_weights = [0.75f32, 0.25, 0.5, 0.5];
+    let (x_fp8, x_scales, staged_ids, staged_weights) = reference_megamoe_prepare(
+        &hidden_states,
+        &topk_ids,
+        &topk_weights,
+        None,
+        num_tokens,
+        hidden_size,
+        top_k,
+    );
+    let (w13_packed, w13_scales, w2_packed, w2_scales) =
+        reference_megamoe_expert_weights(hidden_size, intermediate_size, num_experts);
+
+    let summary = deepseek_megamoe_experts(CudaDeepSeekMegaMoeExpertsInput {
+        num_tokens: num_tokens as u32,
+        hidden_size: hidden_size as u32,
+        intermediate_size: intermediate_size as u32,
+        num_experts: num_experts as u32,
+        top_k: top_k as u32,
+        swiglu_limit: 7.0,
+        x_fp8: &x_fp8,
+        x_scales: &x_scales,
+        topk_ids: &staged_ids,
+        topk_weights: &staged_weights,
+        w13_packed: &w13_packed,
+        w13_scales: &w13_scales,
+        w2_packed: &w2_packed,
+        w2_scales: &w2_scales,
+    });
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let expected = reference_megamoe_experts(
+        num_tokens,
+        hidden_size,
+        intermediate_size,
+        num_experts,
+        top_k,
+        7.0,
+        &x_fp8,
+        &x_scales,
+        &staged_ids,
+        &staged_weights,
+        &w13_packed,
+        &w13_scales,
+        &w2_packed,
+        &w2_scales,
+    );
+    assert_eq!(summary.num_tokens, num_tokens as u32);
+    assert_eq!(summary.hidden_size, hidden_size as u32);
+    assert_eq!(summary.intermediate_size, intermediate_size as u32);
+    assert_eq!(summary.num_experts, num_experts as u32);
+    assert_eq!(summary.top_k, top_k as u32);
+    assert_eq!(summary.expert_error, 0);
+    for (index, (actual, expected)) in summary.output.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (actual - expected).abs() <= 1e-4,
+            "index={index} actual={actual} expected={expected}"
+        );
+    }
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert!(summary.output_hash != 0);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reference_moe_forward(
     hidden_size: usize,
@@ -301,6 +386,169 @@ fn reference_megamoe_prepare(
     }
 
     (x_fp8, x_scales, topk_ids_out, topk_weights_out)
+}
+
+fn reference_megamoe_expert_weights(
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_experts: usize,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+    let w13_rows_per_expert = intermediate_size * 2;
+    let w13_packed_cols = hidden_size / 2;
+    let w13_scale_cols = hidden_size / 32;
+    let w2_packed_cols = intermediate_size / 2;
+    let w2_scale_cols = intermediate_size / 32;
+    let mut w13_packed = vec![0u8; num_experts * w13_rows_per_expert * w13_packed_cols];
+    let w13_scales = vec![127u8; num_experts * w13_rows_per_expert * w13_scale_cols];
+    let mut w2_packed = vec![0u8; num_experts * hidden_size * w2_packed_cols];
+    let w2_scales = vec![127u8; num_experts * hidden_size * w2_scale_cols];
+
+    set_packed_nibble(&mut w13_packed, 0, 0, w13_packed_cols, 2);
+    set_packed_nibble(&mut w13_packed, 0, 1, w13_packed_cols, 1);
+    set_packed_nibble(&mut w13_packed, intermediate_size, 2, w13_packed_cols, 2);
+    set_packed_nibble(&mut w2_packed, 0, 0, w2_packed_cols, 3);
+    set_packed_nibble(&mut w2_packed, 1, 0, w2_packed_cols, 10);
+
+    let expert_1_base = w13_rows_per_expert;
+    set_packed_nibble(&mut w13_packed, expert_1_base + 1, 3, w13_packed_cols, 3);
+    set_packed_nibble(
+        &mut w13_packed,
+        expert_1_base + intermediate_size + 1,
+        4,
+        w13_packed_cols,
+        1,
+    );
+    let expert_1_w2_base = hidden_size;
+    set_packed_nibble(&mut w2_packed, expert_1_w2_base + 2, 1, w2_packed_cols, 4);
+    set_packed_nibble(&mut w2_packed, expert_1_w2_base + 3, 1, w2_packed_cols, 9);
+
+    (w13_packed, w13_scales, w2_packed, w2_scales)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reference_megamoe_experts(
+    num_tokens: usize,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_experts: usize,
+    top_k: usize,
+    swiglu_limit: f32,
+    x_fp8: &[u8],
+    x_scales: &[u32],
+    topk_ids: &[i64],
+    topk_weights: &[f32],
+    w13_packed: &[u8],
+    w13_scales: &[u8],
+    w2_packed: &[u8],
+    w2_scales: &[u8],
+) -> Vec<f32> {
+    let mut output = vec![0.0f32; num_tokens * hidden_size];
+    let w13_rows = intermediate_size * 2;
+    let w13_packed_cols = hidden_size / 2;
+    let w13_scale_cols = hidden_size / 32;
+    let w2_packed_cols = intermediate_size / 2;
+    let w2_scale_cols = intermediate_size / 32;
+    for token in 0..num_tokens {
+        for rank in 0..top_k {
+            let route_offset = token * top_k + rank;
+            let expert_id = topk_ids[route_offset];
+            if expert_id < 0 {
+                continue;
+            }
+            let expert_id = expert_id as usize;
+            assert!(expert_id < num_experts);
+            for out_hidden in 0..hidden_size {
+                let mut routed_sum = 0.0f32;
+                for intermediate in 0..intermediate_size {
+                    let gate_row = expert_id * w13_rows + intermediate;
+                    let up_row = expert_id * w13_rows + intermediate_size + intermediate;
+                    let gate_packed_base = gate_row * w13_packed_cols;
+                    let up_packed_base = up_row * w13_packed_cols;
+                    let gate_scale_base = gate_row * w13_scale_cols;
+                    let up_scale_base = up_row * w13_scale_cols;
+                    let mut gate = 0.0f32;
+                    let mut up = 0.0f32;
+                    for hidden in 0..hidden_size {
+                        let x = decode_megamoe_x_ref(x_fp8, x_scales, token, hidden, hidden_size);
+                        gate += x * decode_mxfp4_ref(
+                            w13_packed,
+                            w13_scales,
+                            gate_packed_base,
+                            gate_scale_base,
+                            hidden,
+                        );
+                        up += x * decode_mxfp4_ref(
+                            w13_packed,
+                            w13_scales,
+                            up_packed_base,
+                            up_scale_base,
+                            hidden,
+                        );
+                    }
+                    let activation = swiglu(gate, up, true, swiglu_limit);
+                    let w2_row = expert_id * hidden_size + out_hidden;
+                    let w2_packed_base = w2_row * w2_packed_cols;
+                    let w2_scale_base = w2_row * w2_scale_cols;
+                    routed_sum += activation
+                        * decode_mxfp4_ref(
+                            w2_packed,
+                            w2_scales,
+                            w2_packed_base,
+                            w2_scale_base,
+                            intermediate,
+                        );
+                }
+                output[token * hidden_size + out_hidden] += topk_weights[route_offset] * routed_sum;
+            }
+        }
+    }
+    output
+}
+
+fn set_packed_nibble(packed: &mut [u8], row: usize, col: usize, packed_cols: usize, nibble: u8) {
+    let index = row * packed_cols + col / 2;
+    if col & 1 == 0 {
+        packed[index] = (packed[index] & 0xf0) | (nibble & 0x0f);
+    } else {
+        packed[index] = (packed[index] & 0x0f) | ((nibble & 0x0f) << 4);
+    }
+}
+
+fn decode_megamoe_x_ref(
+    x_fp8: &[u8],
+    x_scales: &[u32],
+    token: usize,
+    hidden: usize,
+    hidden_size: usize,
+) -> f32 {
+    let hidden_blocks = hidden_size / 128;
+    let hidden_block = hidden / 128;
+    let block_offset = hidden - hidden_block * 128;
+    let group = block_offset / 32;
+    let packed_scale = x_scales[token * hidden_blocks + hidden_block];
+    let scale_exp = ((packed_scale >> (group * 8)) & 0xff) as u8;
+    let scale = f32::from_bits((scale_exp as u32) << 23);
+    f8_e4m3fn_bits_to_f32(x_fp8[token * hidden_size + hidden]) * scale
+}
+
+fn decode_mxfp4_ref(
+    packed: &[u8],
+    scales: &[u8],
+    row_base_packed: usize,
+    row_base_scales: usize,
+    col: usize,
+) -> f32 {
+    let byte = packed[row_base_packed + col / 2];
+    let nibble = if col & 1 == 0 { byte & 0x0f } else { byte >> 4 };
+    let scale_exp = scales[row_base_scales + col / 32];
+    mxfp4_e2m1_nibble_to_f32(nibble) * f32::from_bits((scale_exp as u32) << 23)
+}
+
+fn mxfp4_e2m1_nibble_to_f32(nibble: u8) -> f32 {
+    const TABLE: [f32; 16] = [
+        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+    ];
+    TABLE[(nibble & 0x0f) as usize]
 }
 
 fn ceil_e8m0_exponent(scale: f32) -> u8 {

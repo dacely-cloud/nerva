@@ -105,6 +105,48 @@ pub(crate) struct NervaCudaDeepSeekMegaMoePrepareResult {
     pub(crate) hot_path_allocations: u64,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaDeepSeekMegaMoeExpertsRequest {
+    pub(crate) num_tokens: u32,
+    pub(crate) hidden_size: u32,
+    pub(crate) intermediate_size: u32,
+    pub(crate) num_experts: u32,
+    pub(crate) top_k: u32,
+    pub(crate) swiglu_limit: f32,
+    pub(crate) x_fp8: *const u8,
+    pub(crate) x_scales: *const u32,
+    pub(crate) topk_ids: *const i64,
+    pub(crate) topk_weights: *const f32,
+    pub(crate) w13_packed: *const u8,
+    pub(crate) w13_scales: *const u8,
+    pub(crate) w2_packed: *const u8,
+    pub(crate) w2_scales: *const u8,
+    pub(crate) output: *mut f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NervaCudaDeepSeekMegaMoeExpertsResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) device_count: i32,
+    pub(crate) expert_error: i32,
+    pub(crate) num_tokens: u32,
+    pub(crate) hidden_size: u32,
+    pub(crate) intermediate_size: u32,
+    pub(crate) num_experts: u32,
+    pub(crate) top_k: u32,
+    pub(crate) output_hash: u64,
+    pub(crate) device_arena_bytes: u64,
+    pub(crate) pinned_host_bytes: u64,
+    pub(crate) h2d_bytes: u64,
+    pub(crate) d2h_bytes: u64,
+    pub(crate) kernel_launches: u64,
+    pub(crate) sync_calls: u64,
+    pub(crate) hot_path_allocations: u64,
+}
+
 unsafe extern "C" {
     fn nerva_cuda_deepseek_moe_smoke(out: *mut NervaCudaDeepSeekMoeSmokeResult) -> c_int;
     fn nerva_cuda_deepseek_moe_forward(
@@ -114,6 +156,10 @@ unsafe extern "C" {
     fn nerva_cuda_deepseek_megamoe_prepare(
         request: *const NervaCudaDeepSeekMegaMoePrepareRequest,
         out: *mut NervaCudaDeepSeekMegaMoePrepareResult,
+    ) -> c_int;
+    fn nerva_cuda_deepseek_megamoe_experts(
+        request: *const NervaCudaDeepSeekMegaMoeExpertsRequest,
+        out: *mut NervaCudaDeepSeekMegaMoeExpertsResult,
     ) -> c_int;
 }
 
@@ -133,4 +179,11 @@ pub(crate) fn run_deepseek_megamoe_prepare(
     out: &mut NervaCudaDeepSeekMegaMoePrepareResult,
 ) -> c_int {
     unsafe { nerva_cuda_deepseek_megamoe_prepare(request, out) }
+}
+
+pub(crate) fn run_deepseek_megamoe_experts(
+    request: &NervaCudaDeepSeekMegaMoeExpertsRequest,
+    out: &mut NervaCudaDeepSeekMegaMoeExpertsResult,
+) -> c_int {
+    unsafe { nerva_cuda_deepseek_megamoe_experts(request, out) }
 }
