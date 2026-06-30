@@ -1,6 +1,7 @@
 pub mod architecture;
 pub mod contract;
 pub mod deepseek;
+pub mod deepseek_runtime;
 pub mod hash;
 pub mod linear_attention;
 pub mod metadata;

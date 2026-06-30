@@ -1,6 +1,7 @@
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::hf::architecture::HfArchitectureKind;
+use crate::hf::deepseek_runtime::deepseek_exact_runtime_blocked_reason;
 use crate::hf::linear_attention::{ConvStateLayout, Qwen35GatedDeltaNetSpec};
 use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 
@@ -8,15 +9,12 @@ const EXACT_RUNTIME_MOE_EXPERTS_MAX: usize = 256;
 const EXACT_RUNTIME_MOE_TOP_K_MAX: usize = 16;
 
 pub fn validate_exact_runtime_contract(metadata: &HfModelMetadata) -> Result<()> {
+    validate_weight_layout_contract(metadata)?;
     if metadata.architecture.is_deepseek() {
         return Err(NervaError::InvalidArgument {
-            reason: format!(
-                "HF architecture {} is recognized, but the exact runtime does not yet implement DeepSeek MLA attention, block-quantized FP8/FP4 weights, compressed KV/indexer state, and DeepSeek grouped MoE routing",
-                metadata.architecture.as_str()
-            ),
+            reason: deepseek_exact_runtime_blocked_reason(metadata),
         });
     }
-    validate_weight_layout_contract(metadata)?;
     validate_exact_runtime_attention(metadata)
 }
 
