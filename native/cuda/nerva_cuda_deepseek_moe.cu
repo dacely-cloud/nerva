@@ -109,6 +109,73 @@ __global__ void deepseek_moe_smoke_kernel(DeviceMoeOutput *out) {
   compute_deepseek_moe(out->output);
 }
 
+__device__ float swiglu_dynamic(float gate,
+                                float up,
+                                uint32_t clamp_swiglu,
+                                float swiglu_limit) {
+  if (clamp_swiglu != 0) {
+    gate = fminf(gate, swiglu_limit);
+    up = clamp_value(up, -swiglu_limit, swiglu_limit);
+  }
+  return silu(gate) * up;
+}
+
+__global__ void deepseek_moe_forward_kernel(const float *input,
+                                            const uint32_t *expert_ids,
+                                            const float *expert_weights,
+                                            const float *w_gate,
+                                            const float *w_up,
+                                            const float *w_down,
+                                            float *activation,
+                                            float *output,
+                                            uint32_t hidden_size,
+                                            uint32_t intermediate_size,
+                                            uint32_t num_experts,
+                                            uint32_t top_k,
+                                            uint32_t clamp_swiglu,
+                                            float swiglu_limit,
+                                            int32_t *moe_error) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  if (hidden_size == 0 || intermediate_size == 0 || num_experts == 0 ||
+      top_k == 0) {
+    *moe_error = -1;
+    return;
+  }
+
+  for (uint32_t hidden = 0; hidden < hidden_size; ++hidden) {
+    output[hidden] = 0.0f;
+  }
+
+  const uint32_t expert_stride = intermediate_size * hidden_size;
+  const uint32_t down_expert_stride = hidden_size * intermediate_size;
+  for (uint32_t rank = 0; rank < top_k; ++rank) {
+    const uint32_t expert = expert_ids[rank];
+    if (expert >= num_experts) {
+      *moe_error = -2;
+      return;
+    }
+    const float route_weight = expert_weights[rank];
+    const uint32_t expert_base = expert * expert_stride;
+    const uint32_t down_base = expert * down_expert_stride;
+
+    for (uint32_t row = 0; row < intermediate_size; ++row) {
+      const uint32_t start = expert_base + row * hidden_size;
+      const float gate = dot(w_gate + start, input, hidden_size);
+      const float up = dot(w_up + start, input, hidden_size);
+      activation[row] = swiglu_dynamic(gate, up, clamp_swiglu, swiglu_limit);
+    }
+
+    for (uint32_t hidden = 0; hidden < hidden_size; ++hidden) {
+      const uint32_t start = down_base + hidden * intermediate_size;
+      output[hidden] +=
+          route_weight * dot(w_down + start, activation, intermediate_size);
+    }
+  }
+  *moe_error = 0;
+}
+
 uint32_t f32_bits(float value) {
   uint32_t bits = 0;
   memcpy(&bits, &value, sizeof(bits));
@@ -165,6 +232,36 @@ int fail(NervaCudaDeepSeekMoeSmokeResult *out, cudaError_t err) {
   out->cuda_error = static_cast<int32_t>(err);
   out->status = -1;
   return -1;
+}
+
+void clear_forward_result(const NervaCudaDeepSeekMoeForwardRequest *request,
+                          NervaCudaDeepSeekMoeForwardResult *out) {
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  out->moe_error = -1;
+  if (request != nullptr) {
+    out->hidden_size = request->hidden_size;
+    out->intermediate_size = request->intermediate_size;
+    out->num_experts = request->num_experts;
+    out->top_k = request->top_k;
+    out->clamp_swiglu = request->clamp_swiglu;
+    out->swiglu_limit = request->swiglu_limit;
+  }
+}
+
+int fail_forward(NervaCudaDeepSeekMoeForwardResult *out, cudaError_t err) {
+  out->cuda_error = static_cast<int32_t>(err);
+  out->status = -1;
+  return -1;
+}
+
+bool validate_forward_request(const NervaCudaDeepSeekMoeForwardRequest *request) {
+  return request != nullptr && request->input != nullptr &&
+         request->expert_ids != nullptr && request->expert_weights != nullptr &&
+         request->w_gate != nullptr && request->w_up != nullptr &&
+         request->w_down != nullptr && request->output != nullptr &&
+         request->hidden_size > 0 && request->intermediate_size > 0 &&
+         request->num_experts > 0 && request->top_k > 0;
 }
 
 }  // namespace
@@ -242,6 +339,198 @@ cleanup:
 
   if (err != cudaSuccess) {
     return fail(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_deepseek_moe_forward(
+    const NervaCudaDeepSeekMoeForwardRequest *request,
+    NervaCudaDeepSeekMoeForwardResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_forward_result(request, out);
+  if (!validate_forward_request(request)) {
+    return -1;
+  }
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail_forward(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail_forward(out, cudaErrorNoDevice);
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail_forward(out, err);
+  }
+
+  float *d_input = nullptr;
+  uint32_t *d_expert_ids = nullptr;
+  float *d_expert_weights = nullptr;
+  float *d_w_gate = nullptr;
+  float *d_w_up = nullptr;
+  float *d_w_down = nullptr;
+  float *d_activation = nullptr;
+  float *d_output = nullptr;
+  float *h_output = nullptr;
+  int32_t *d_moe_error = nullptr;
+  int32_t h_moe_error = -1;
+  cudaStream_t stream = nullptr;
+
+  const uint64_t hidden = request->hidden_size;
+  const uint64_t intermediate = request->intermediate_size;
+  const uint64_t num_experts = request->num_experts;
+  const uint64_t top_k = request->top_k;
+  const uint64_t input_bytes = sizeof(float) * hidden;
+  const uint64_t expert_ids_bytes = sizeof(uint32_t) * top_k;
+  const uint64_t expert_weights_bytes = sizeof(float) * top_k;
+  const uint64_t expert_matrix_bytes =
+      sizeof(float) * num_experts * intermediate * hidden;
+  const uint64_t down_bytes = sizeof(float) * num_experts * hidden * intermediate;
+  const uint64_t activation_bytes = sizeof(float) * intermediate;
+  const uint64_t output_bytes = sizeof(float) * hidden;
+  const uint64_t moe_error_bytes = sizeof(int32_t);
+
+  err = cudaMalloc(reinterpret_cast<void **>(&d_input), input_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_expert_ids), expert_ids_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_expert_weights),
+                   expert_weights_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_w_gate), expert_matrix_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_w_up), expert_matrix_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_w_down), down_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_activation), activation_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_output), output_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_moe_error), moe_error_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  out->device_arena_bytes = input_bytes + expert_ids_bytes +
+                            expert_weights_bytes + expert_matrix_bytes * 2 +
+                            down_bytes + activation_bytes + output_bytes +
+                            moe_error_bytes;
+
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_output),
+                      output_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  out->pinned_host_bytes = output_bytes;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_input,
+                        request->input,
+                        input_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_expert_ids,
+                        request->expert_ids,
+                        expert_ids_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_expert_weights,
+                        request->expert_weights,
+                        expert_weights_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_w_gate,
+                        request->w_gate,
+                        expert_matrix_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_w_up,
+                        request->w_up,
+                        expert_matrix_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_w_down,
+                        request->w_down,
+                        down_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_moe_error,
+                        &h_moe_error,
+                        moe_error_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes = input_bytes + expert_ids_bytes + expert_weights_bytes +
+                   expert_matrix_bytes * 2 + down_bytes + moe_error_bytes;
+
+  deepseek_moe_forward_kernel<<<1, 1, 0, stream>>>(
+      d_input,
+      d_expert_ids,
+      d_expert_weights,
+      d_w_gate,
+      d_w_up,
+      d_w_down,
+      d_activation,
+      d_output,
+      request->hidden_size,
+      request->intermediate_size,
+      request->num_experts,
+      request->top_k,
+      request->clamp_swiglu,
+      request->swiglu_limit,
+      d_moe_error);
+  out->kernel_launches += 1;
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(h_output,
+                        d_output,
+                        output_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(&h_moe_error,
+                        d_moe_error,
+                        moe_error_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->d2h_bytes = output_bytes + moe_error_bytes;
+
+  err = cudaStreamSynchronize(stream);
+  out->sync_calls += 1;
+  if (err != cudaSuccess) goto cleanup;
+
+  out->moe_error = h_moe_error;
+  if (h_moe_error == 0) {
+    memcpy(request->output, h_output, output_bytes);
+    out->output_hash =
+        hash_f32_bits(request->output, request->hidden_size);
+    out->status = 0;
+  }
+
+cleanup:
+  if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_output != nullptr) cudaFreeHost(h_output);
+  if (d_moe_error != nullptr) cudaFree(d_moe_error);
+  if (d_output != nullptr) cudaFree(d_output);
+  if (d_activation != nullptr) cudaFree(d_activation);
+  if (d_w_down != nullptr) cudaFree(d_w_down);
+  if (d_w_up != nullptr) cudaFree(d_w_up);
+  if (d_w_gate != nullptr) cudaFree(d_w_gate);
+  if (d_expert_weights != nullptr) cudaFree(d_expert_weights);
+  if (d_expert_ids != nullptr) cudaFree(d_expert_ids);
+  if (d_input != nullptr) cudaFree(d_input);
+
+  if (err != cudaSuccess) {
+    return fail_forward(out, err);
   }
   return out->status == 0 ? 0 : -1;
 }

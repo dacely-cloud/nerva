@@ -33,6 +33,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_deepseek_mla_decode_api"));
     assert!(json.contains("cuda_deepseek_mla_decode_mqa_smoke"));
     assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
+    assert!(json.contains("cuda_deepseek_routed_moe_api"));
     assert!(json.contains("precision_moe_deepseek_v3_grouped_router"));
     assert!(json.contains("precision_moe_deepseek_router_correction_bias_load"));
     assert!(json.contains("cuda_deepseek_router_route_api"));

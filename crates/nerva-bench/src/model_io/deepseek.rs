@@ -286,6 +286,7 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         "cuda_deepseek_mla_decode_api".to_string(),
         "cuda_deepseek_mla_decode_mqa_smoke".to_string(),
         "deepseek_routed_moe_reference".to_string(),
+        "cuda_deepseek_routed_moe_api".to_string(),
         "cuda_deepseek_routed_moe_smoke".to_string(),
         "deepseek_v3_grouped_sigmoid_router_reference".to_string(),
         "precision_moe_deepseek_v3_grouped_router".to_string(),
@@ -399,6 +400,7 @@ fn coverage_for_unit(
                 "partial",
                 &[
                     "deepseek_routed_moe_reference",
+                    "cuda_deepseek_routed_moe_api",
                     "cuda_deepseek_routed_moe_smoke",
                     "fp8_e4m3fn_e8m0_block_dequant_reference",
                     "cuda_fp8_e4m3fn_e8m0_dequant_api",
@@ -500,6 +502,7 @@ fn coverage_for_unit(
                     "cuda_mxfp4_e2m1_e8m0_dequant_api",
                     "cuda_mxfp4_e2m1_e8m0_block_dequant_smoke",
                     "deepseek_routed_moe_reference",
+                    "cuda_deepseek_routed_moe_api",
                     "cuda_deepseek_routed_moe_smoke",
                 ],
                 &[
