@@ -1,7 +1,7 @@
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::hf::architecture::HfArchitectureKind;
-use crate::hf::deepseek_runtime::deepseek_exact_runtime_blocked_reason;
+use crate::hf::deepseek_runtime::validate_deepseek_exact_runtime_contract;
 use crate::hf::linear_attention::{ConvStateLayout, Qwen35GatedDeltaNetSpec};
 use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 
@@ -11,9 +11,7 @@ const EXACT_RUNTIME_MOE_TOP_K_MAX: usize = 16;
 pub fn validate_exact_runtime_contract(metadata: &HfModelMetadata) -> Result<()> {
     validate_weight_layout_contract(metadata)?;
     if metadata.architecture.is_deepseek() {
-        return Err(NervaError::InvalidArgument {
-            reason: deepseek_exact_runtime_blocked_reason(metadata),
-        });
+        return validate_deepseek_exact_runtime_contract(metadata);
     }
     validate_exact_runtime_attention(metadata)
 }

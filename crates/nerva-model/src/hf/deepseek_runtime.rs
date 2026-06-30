@@ -854,8 +854,34 @@ pub fn deepseek_runtime_blocking_units(
         .collect()
 }
 
+pub fn validate_deepseek_exact_runtime_contract(metadata: &HfModelMetadata) -> Result<()> {
+    if !metadata.architecture.is_deepseek() {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "DeepSeek runtime contract requires a DeepSeek architecture, got {}",
+                metadata.architecture.as_str()
+            ),
+        });
+    }
+    let blockers = deepseek_runtime_blocking_units(metadata);
+    if blockers.is_empty() {
+        Ok(())
+    } else {
+        Err(NervaError::InvalidArgument {
+            reason: deepseek_exact_runtime_blocked_reason_from_blockers(metadata, &blockers),
+        })
+    }
+}
+
 pub fn deepseek_exact_runtime_blocked_reason(metadata: &HfModelMetadata) -> String {
     let blockers = deepseek_runtime_blocking_units(metadata);
+    deepseek_exact_runtime_blocked_reason_from_blockers(metadata, &blockers)
+}
+
+fn deepseek_exact_runtime_blocked_reason_from_blockers(
+    metadata: &HfModelMetadata,
+    blockers: &[DeepSeekExecutionUnitCoverage],
+) -> String {
     let blocker_summary = if blockers.is_empty() {
         "no blocking execution units are recorded".to_string()
     } else {

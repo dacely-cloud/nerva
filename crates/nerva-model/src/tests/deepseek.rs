@@ -8,7 +8,8 @@ use crate::hf::deepseek_runtime::{
     deepseek_execution_unit_coverage, deepseek_implemented_primitives,
     deepseek_layer_execution_plan, deepseek_runtime_weight_contract, deepseek_v4_mhc_pre_num_split,
     deepseek_v4_mhc_warmup_token_sizes, plan_deepseek_v4_mhc_warmup,
-    DeepSeekAttentionExecutionKind, DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS,
+    validate_deepseek_exact_runtime_contract, DeepSeekAttentionExecutionKind,
+    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS,
 };
 use crate::hf::metadata::HfMlpLayerKind;
 use crate::hf::parser::parse_hf_config_metadata;
@@ -639,6 +640,14 @@ fn recognized_deepseek_configs_fail_exact_runtime_contract_precisely() {
         assert!(reason.contains("DeepSeek MLA attention"), "{reason}");
         assert!(reason.contains("block-quantized"), "{reason}");
         assert!(reason.contains("/root/vllm"), "{reason}");
+        assert_eq!(
+            format!(
+                "{:?}",
+                validate_deepseek_exact_runtime_contract(&metadata).unwrap_err()
+            ),
+            format!("{:?}", NervaError::InvalidArgument { reason }),
+            "general exact runtime contract should delegate to the DeepSeek coverage-driven gate"
+        );
     }
 
     assert!(
