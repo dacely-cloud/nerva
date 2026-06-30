@@ -4,7 +4,10 @@ use crate::cli::exit;
 use crate::model_io::config::{
     run_layout_probe, run_manifest_coverage_probe, run_manifest_probe, run_metadata_probe,
 };
-use crate::model_io::deepseek::{run_deepseek_cuda_readiness, run_deepseek_runtime_plan};
+use crate::model_io::deepseek::{
+    run_deepseek_cuda_primitive_bench, run_deepseek_cuda_readiness, run_deepseek_runtime_plan,
+    run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
+};
 use crate::model_io::resident::{
     run_hotset_probe, run_resident_shard_probe, run_resident_weight_probe,
     run_weight_execution_probe,
@@ -30,6 +33,13 @@ pub(crate) fn dispatch(
         Some("deepseek-cuda-readiness") => Some(exit::print_json_result(
             run_deepseek_cuda_readiness(args.next()),
         )),
+        Some("deepseek-cuda-primitive-bench") => Some(run_deepseek_cuda_primitive_bench_cli(args)),
+        Some("deepseek-vllm-reference-audit") => Some(exit::print_json_result(
+            run_deepseek_vllm_reference_audit(args.next()),
+        )),
+        Some("deepseek-vllm-parity-gate") => Some(exit::print_json_result(
+            run_deepseek_vllm_parity_gate(args.next(), args.next()),
+        )),
         Some("safetensors") => Some(exit::print_json_result(run_safetensors_probe(
             args.next(),
             args.next(),
@@ -47,6 +57,14 @@ pub(crate) fn dispatch(
         Some("weight-exec") => Some(run_weight_execution(args)),
         _ => None,
     }
+}
+
+fn run_deepseek_cuda_primitive_bench_cli(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let iterations = match parse_optional_usize(args.next(), 16, "iterations") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    exit::print_json_result(run_deepseek_cuda_primitive_bench(iterations))
 }
 
 fn run_resident_shards(args: &mut impl Iterator<Item = String>) -> ExitCode {

@@ -88,6 +88,8 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
     assert!(json.contains("cuda_hf_sequence_deepseek_execution_guard"));
     assert!(json.contains("deepseek_v4_mhc_pre_post_head"));
+    assert!(json.contains("deepseek_v4_vllm_e2e_parity"));
+    assert!(json.contains("run same-checkpoint V4 greedy text differential against /root/vllm"));
     assert!(json.contains("\"execution_unit_status\""));
     assert!(json.contains("\"unit\":\"deepseek_v4_megamoe_int8_fp4_experts\""));
     assert!(json.contains("implement V4 MegaMoE int8/fp4 expert kernels"));
@@ -142,6 +144,10 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
         json.contains("run full-size V3.2 sparse MLA attention differential against vLLM runtime")
     );
     assert!(json.contains("benchmark V3.2 sparse MLA decode against vLLM FlashMLA sparse decode"));
+    assert!(json.contains("deepseek_v32_vllm_e2e_parity"));
+    assert!(json.contains(
+        "run same-checkpoint V3.2 sparse MLA greedy text differential against /root/vllm"
+    ));
     assert!(json.contains("\"runtime_status\":\"unsupported\""));
     assert!(json.contains("\"claim_allowed\":false"));
 
@@ -449,7 +455,7 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"vllm_reference_status\":\"ok\""));
     assert!(json.contains("\"vllm_reference_units_total\":18"));
     assert!(json.contains("\"vllm_reference_units_ok\":18"));
-    assert!(json.contains("\"runtime_units_total\":8"));
+    assert!(json.contains("\"runtime_units_total\":9"));
     assert!(json.contains("\"runtime_blocking_units_total\":8"));
     assert!(json.contains("\"runtime_units_partial\":8"));
     assert!(json.contains("\"runtime_units_missing\":0"));
@@ -458,6 +464,10 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"performance_status\":\"blocked_until_runtime_units_complete\""));
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("\"performance_comparison_allowed\":false"));
+    assert!(json.contains("\"deepseek_v4_vllm_e2e_parity\""));
+    assert!(
+        json.contains("benchmark V4 mHC, sparse MLA, and MegaMoE throughput against /root/vllm")
+    );
     assert!(json.contains("verify full-layer routed outputs against vLLM"));
 
     let _ = std::fs::remove_dir_all(dir);
