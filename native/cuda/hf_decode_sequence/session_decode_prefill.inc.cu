@@ -579,6 +579,18 @@ cudaError_t launch_cublas_layer_session_step(
           session->device_step, max_steps, session->rms_eps,
           session->device_scratch, session->device_projection_input);
       err = cudaGetLastError();
+    } else if (err == cudaSuccess && is_deepseek_v4_native) {
+      hf_deepseek_v4_finish_final_norm_encode_kernel<<<
+          1, 1, 0, session->stream>>>(
+          session->device_arena, session->arena_layout, layout, session->dtype,
+          session->dtype, session->hidden, layer_attention_hidden,
+          layer_kv_hidden, session->intermediate, session->device_step,
+          max_steps, session->rms_eps, session->device_scratch,
+          session->device_projection_input,
+          session->device_deepseek_mhc_residual,
+          session->device_deepseek_mhc_post_mix,
+          session->device_deepseek_mhc_comb_mix);
+      err = cudaGetLastError();
     } else if (err == cudaSuccess) {
       hf_layer_finish_final_norm_encode_kernel<<<
           1, kDecodeNormThreads, 0, session->stream>>>(
@@ -873,6 +885,18 @@ cudaError_t profile_cublas_layer_session_step(
           attention_hidden, kv_hidden, session->intermediate,
           session->device_step, max_steps, session->rms_eps,
           session->device_scratch, session->device_projection_input);
+      err = cudaGetLastError();
+    } else if (err == cudaSuccess && layout_is_deepseek_v4_native(layout)) {
+      hf_deepseek_v4_finish_final_norm_encode_kernel<<<
+          1, 1, 0, session->stream>>>(
+          session->device_arena, session->arena_layout, layout, session->dtype,
+          session->dtype, session->hidden, attention_hidden, kv_hidden,
+          session->intermediate, session->device_step, max_steps,
+          session->rms_eps, session->device_scratch,
+          session->device_projection_input,
+          session->device_deepseek_mhc_residual,
+          session->device_deepseek_mhc_post_mix,
+          session->device_deepseek_mhc_comb_mix);
       err = cudaGetLastError();
     } else if (err == cudaSuccess) {
       hf_layer_finish_final_norm_encode_kernel<<<

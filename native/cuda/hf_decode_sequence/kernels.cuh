@@ -215,6 +215,13 @@ __global__ void hf_layer_finish_final_norm_encode_kernel(
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
     uint32_t *step_cursor, uint32_t max_steps, float rms_eps, float *scratch,
     uint16_t *projection_input);
+__global__ void hf_deepseek_v4_finish_final_norm_encode_kernel(
+    uint16_t *arena, SequenceArenaLayout arena_layout, SequenceLayerLayout layout,
+    uint32_t dtype, uint32_t final_norm_weight_dtype, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, float rms_eps, float *scratch,
+    uint16_t *projection_input, float *deepseek_mhc_residual,
+    float *deepseek_mhc_post_mix, float *deepseek_mhc_comb_mix);
 __global__ void hf_final_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint64_t input_offset,
     uint32_t dtype, uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
