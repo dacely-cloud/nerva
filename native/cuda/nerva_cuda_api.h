@@ -1050,6 +1050,43 @@ typedef struct NervaCudaDeepSeekQuantSmokeResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekQuantSmokeResult;
 
+typedef struct NervaCudaDeepSeekQuantFp8DequantRequest {
+  uint32_t rows;
+  uint32_t cols;
+  uint32_t block_rows;
+  uint32_t block_cols;
+  const uint8_t *weights;
+  const uint8_t *scales;
+  float *output;
+} NervaCudaDeepSeekQuantFp8DequantRequest;
+
+typedef struct NervaCudaDeepSeekQuantMxfp4DequantRequest {
+  uint32_t rows;
+  uint32_t packed_cols;
+  uint32_t scale_packed_cols;
+  const uint8_t *packed;
+  const uint8_t *scales;
+  float *output;
+} NervaCudaDeepSeekQuantMxfp4DequantRequest;
+
+typedef struct NervaCudaDeepSeekQuantDequantResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t rows;
+  uint32_t cols;
+  uint32_t block_rows;
+  uint32_t block_cols;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekQuantDequantResult;
+
 typedef struct NervaCudaDeepSeekRouterSmokeResult {
   int32_t status;
   int32_t cuda_error;
@@ -1232,6 +1269,12 @@ int nerva_cuda_experimental_rt_candidate_bench(
     const NervaCudaExperimentalRtCandidateBenchRequest *request,
     NervaCudaExperimentalRtCandidateBenchResult *out);
 int nerva_cuda_deepseek_quant_smoke(NervaCudaDeepSeekQuantSmokeResult *out);
+int nerva_cuda_deepseek_quant_fp8_dequant(
+    const NervaCudaDeepSeekQuantFp8DequantRequest *request,
+    NervaCudaDeepSeekQuantDequantResult *out);
+int nerva_cuda_deepseek_quant_mxfp4_dequant(
+    const NervaCudaDeepSeekQuantMxfp4DequantRequest *request,
+    NervaCudaDeepSeekQuantDequantResult *out);
 int nerva_cuda_deepseek_router_smoke(NervaCudaDeepSeekRouterSmokeResult *out);
 int nerva_cuda_deepseek_router_route(
     const NervaCudaDeepSeekRouterRouteRequest *request,

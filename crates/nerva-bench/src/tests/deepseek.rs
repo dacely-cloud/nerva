@@ -28,6 +28,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("e8m0_scale_upcast_matches_vllm_raw_exponent_path"));
     assert!(json.contains("cuda_fp8_e4m3fn_e8m0_block_dequant_smoke"));
     assert!(json.contains("deepseek_vllm_kv_cache_spec_planner"));
+    assert!(json.contains("cuda_fp8_e4m3fn_e8m0_dequant_api"));
     assert!(json.contains("deepseek_mla_decode_mqa_reference"));
     assert!(json.contains("cuda_deepseek_mla_decode_mqa_smoke"));
     assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
@@ -37,6 +38,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
     assert!(json.contains("deepseek_v4_mhc_compressor_indexer_manifest"));
     assert!(json.contains("mxfp4_e2m1_e8m0_block_dequant_reference"));
+    assert!(json.contains("cuda_mxfp4_e2m1_e8m0_dequant_api"));
     assert!(json.contains("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke"));
     assert!(json.contains("deepseek_v4_sqrtsoftplus_hash_router_reference"));
     assert!(json.contains("precision_moe_deepseek_v4_sqrtsoftplus_router"));

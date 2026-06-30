@@ -279,6 +279,7 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         "fp8_e4m3fn_decode_matches_torch".to_string(),
         "e8m0_scale_upcast_matches_vllm_raw_exponent_path".to_string(),
         "fp8_e4m3fn_e8m0_block_dequant_reference".to_string(),
+        "cuda_fp8_e4m3fn_e8m0_dequant_api".to_string(),
         "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke".to_string(),
         "deepseek_vllm_kv_cache_spec_planner".to_string(),
         "deepseek_mla_decode_mqa_reference".to_string(),
@@ -296,6 +297,7 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         primitives.push("deepseek_v4_mhc_compressor_indexer_manifest".to_string());
         primitives.push("deepseek_v4_hash_router_manifest".to_string());
         primitives.push("mxfp4_e2m1_e8m0_block_dequant_reference".to_string());
+        primitives.push("cuda_mxfp4_e2m1_e8m0_dequant_api".to_string());
         primitives.push("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke".to_string());
         primitives.push("deepseek_v4_sqrtsoftplus_hash_router_reference".to_string());
         primitives.push("precision_moe_deepseek_v4_sqrtsoftplus_router".to_string());
@@ -353,6 +355,7 @@ fn coverage_for_unit(
                     "fp8_e4m3fn_decode_matches_torch",
                     "e8m0_scale_upcast_matches_vllm_raw_exponent_path",
                     "fp8_e4m3fn_e8m0_block_dequant_reference",
+                    "cuda_fp8_e4m3fn_e8m0_dequant_api",
                     "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
                 ],
                 &[
@@ -396,6 +399,7 @@ fn coverage_for_unit(
                     "deepseek_routed_moe_reference",
                     "cuda_deepseek_routed_moe_smoke",
                     "fp8_e4m3fn_e8m0_block_dequant_reference",
+                    "cuda_fp8_e4m3fn_e8m0_dequant_api",
                     "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
                 ],
                 &[
@@ -430,6 +434,7 @@ fn coverage_for_unit(
                 &[
                     "deepseek_vllm_kv_cache_spec_planner",
                     "fp8_e4m3fn_e8m0_block_dequant_reference",
+                    "cuda_fp8_e4m3fn_e8m0_dequant_api",
                     "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
                 ],
                 &[
@@ -484,6 +489,7 @@ fn coverage_for_unit(
                 "partial",
                 &[
                     "mxfp4_e2m1_e8m0_block_dequant_reference",
+                    "cuda_mxfp4_e2m1_e8m0_dequant_api",
                     "cuda_mxfp4_e2m1_e8m0_block_dequant_smoke",
                     "deepseek_routed_moe_reference",
                     "cuda_deepseek_routed_moe_smoke",

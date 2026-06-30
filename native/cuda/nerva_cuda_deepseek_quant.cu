@@ -95,6 +95,56 @@ __global__ void mxfp4_e2m1_block_dequant_kernel(
       nerva::deepseek::mxfp4_e2m1_nibble_to_f32(byte >> 4) * scale;
 }
 
+__global__ void fp8_e4m3fn_block_dequant_dynamic_kernel(
+    const uint8_t *weights,
+    const uint8_t *scales,
+    float *output,
+    uint32_t rows,
+    uint32_t cols,
+    uint32_t block_rows,
+    uint32_t block_cols) {
+  const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint32_t values = rows * cols;
+  if (idx >= values) {
+    return;
+  }
+  const uint32_t row = idx / cols;
+  const uint32_t col = idx - row * cols;
+  const uint32_t scale_cols = (cols + block_cols - 1) / block_cols;
+  const uint32_t scale_idx =
+      (row / block_rows) * scale_cols + (col / block_cols);
+  output[idx] =
+      nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[idx]) *
+      nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
+}
+
+__global__ void mxfp4_e2m1_block_dequant_dynamic_kernel(
+    const uint8_t *packed,
+    const uint8_t *scales,
+    float *output,
+    uint32_t rows,
+    uint32_t packed_cols,
+    uint32_t scale_packed_cols) {
+  const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint32_t values = rows * packed_cols;
+  if (idx >= values) {
+    return;
+  }
+  const uint32_t row = idx / packed_cols;
+  const uint32_t packed_col = idx - row * packed_cols;
+  const uint32_t scale_cols =
+      (packed_cols + scale_packed_cols - 1) / scale_packed_cols;
+  const uint32_t scale_idx = row * scale_cols + packed_col / scale_packed_cols;
+  const float scale =
+      nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
+  const uint8_t byte = packed[idx];
+  const uint32_t out_idx = idx * 2;
+  output[out_idx] =
+      nerva::deepseek::mxfp4_e2m1_nibble_to_f32(byte & 0x0fu) * scale;
+  output[out_idx + 1] =
+      nerva::deepseek::mxfp4_e2m1_nibble_to_f32(byte >> 4) * scale;
+}
+
 uint32_t f32_bits(float value) {
   uint32_t bits = 0;
   memcpy(&bits, &value, sizeof(bits));
@@ -147,6 +197,32 @@ int fail(NervaCudaDeepSeekQuantSmokeResult *out, cudaError_t err) {
   out->cuda_error = static_cast<int32_t>(err);
   out->status = -1;
   return -1;
+}
+
+void clear_dequant_result(NervaCudaDeepSeekQuantDequantResult *out) {
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+}
+
+int fail_dequant(NervaCudaDeepSeekQuantDequantResult *out, cudaError_t err) {
+  out->cuda_error = static_cast<int32_t>(err);
+  out->status = -1;
+  return -1;
+}
+
+bool validate_fp8_request(const NervaCudaDeepSeekQuantFp8DequantRequest *request) {
+  return request != nullptr && request->weights != nullptr &&
+         request->scales != nullptr && request->output != nullptr &&
+         request->rows > 0 && request->cols > 0 && request->block_rows > 0 &&
+         request->block_cols > 0;
+}
+
+bool validate_mxfp4_request(
+    const NervaCudaDeepSeekQuantMxfp4DequantRequest *request) {
+  return request != nullptr && request->packed != nullptr &&
+         request->scales != nullptr && request->output != nullptr &&
+         request->rows > 0 && request->packed_cols > 0 &&
+         request->scale_packed_cols > 0;
 }
 
 }  // namespace
@@ -306,6 +382,246 @@ cleanup:
 
   if (err != cudaSuccess) {
     return fail(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_deepseek_quant_fp8_dequant(
+    const NervaCudaDeepSeekQuantFp8DequantRequest *request,
+    NervaCudaDeepSeekQuantDequantResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_dequant_result(out);
+  if (!validate_fp8_request(request)) {
+    return -1;
+  }
+  out->rows = request->rows;
+  out->cols = request->cols;
+  out->block_rows = request->block_rows;
+  out->block_cols = request->block_cols;
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail_dequant(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail_dequant(out, cudaErrorNoDevice);
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail_dequant(out, err);
+  }
+
+  uint8_t *d_weights = nullptr;
+  uint8_t *d_scales = nullptr;
+  float *d_output = nullptr;
+  float *h_output = nullptr;
+  cudaStream_t stream = nullptr;
+
+  const uint64_t value_count =
+      static_cast<uint64_t>(request->rows) * request->cols;
+  const uint64_t scale_cols =
+      (static_cast<uint64_t>(request->cols) + request->block_cols - 1) /
+      request->block_cols;
+  const uint64_t scale_rows =
+      (static_cast<uint64_t>(request->rows) + request->block_rows - 1) /
+      request->block_rows;
+  const uint64_t weights_bytes = value_count;
+  const uint64_t scales_bytes = scale_rows * scale_cols;
+  const uint64_t output_bytes = sizeof(float) * value_count;
+
+  err = cudaMalloc(reinterpret_cast<void **>(&d_weights), weights_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_scales), scales_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_output), output_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  out->device_arena_bytes = weights_bytes + scales_bytes + output_bytes;
+
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_output),
+                      output_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  out->pinned_host_bytes = output_bytes;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_weights,
+                        request->weights,
+                        weights_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_scales,
+                        request->scales,
+                        scales_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes = weights_bytes + scales_bytes;
+
+  {
+    constexpr uint32_t threads = 256;
+    const uint32_t blocks =
+        static_cast<uint32_t>((value_count + threads - 1) / threads);
+    fp8_e4m3fn_block_dequant_dynamic_kernel<<<blocks, threads, 0, stream>>>(
+        d_weights,
+        d_scales,
+        d_output,
+        request->rows,
+        request->cols,
+        request->block_rows,
+        request->block_cols);
+    out->kernel_launches += 1;
+  }
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(h_output,
+                        d_output,
+                        output_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->d2h_bytes = output_bytes;
+
+  err = cudaStreamSynchronize(stream);
+  out->sync_calls += 1;
+  if (err != cudaSuccess) goto cleanup;
+
+  memcpy(request->output, h_output, output_bytes);
+  out->output_hash =
+      hash_f32_bits(request->output, static_cast<uint32_t>(value_count));
+  out->status = 0;
+
+cleanup:
+  if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_output != nullptr) cudaFreeHost(h_output);
+  if (d_output != nullptr) cudaFree(d_output);
+  if (d_scales != nullptr) cudaFree(d_scales);
+  if (d_weights != nullptr) cudaFree(d_weights);
+  if (err != cudaSuccess) {
+    return fail_dequant(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_deepseek_quant_mxfp4_dequant(
+    const NervaCudaDeepSeekQuantMxfp4DequantRequest *request,
+    NervaCudaDeepSeekQuantDequantResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_dequant_result(out);
+  if (!validate_mxfp4_request(request)) {
+    return -1;
+  }
+  out->rows = request->rows;
+  out->cols = request->packed_cols * 2;
+  out->block_rows = 1;
+  out->block_cols = request->scale_packed_cols * 2;
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail_dequant(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail_dequant(out, cudaErrorNoDevice);
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail_dequant(out, err);
+  }
+
+  uint8_t *d_packed = nullptr;
+  uint8_t *d_scales = nullptr;
+  float *d_output = nullptr;
+  float *h_output = nullptr;
+  cudaStream_t stream = nullptr;
+
+  const uint64_t packed_count =
+      static_cast<uint64_t>(request->rows) * request->packed_cols;
+  const uint64_t scale_cols =
+      (static_cast<uint64_t>(request->packed_cols) +
+       request->scale_packed_cols - 1) /
+      request->scale_packed_cols;
+  const uint64_t scales_bytes = static_cast<uint64_t>(request->rows) * scale_cols;
+  const uint64_t packed_bytes = packed_count;
+  const uint64_t output_values = packed_count * 2;
+  const uint64_t output_bytes = sizeof(float) * output_values;
+
+  err = cudaMalloc(reinterpret_cast<void **>(&d_packed), packed_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_scales), scales_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_output), output_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  out->device_arena_bytes = packed_bytes + scales_bytes + output_bytes;
+
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_output),
+                      output_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  out->pinned_host_bytes = output_bytes;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_packed,
+                        request->packed,
+                        packed_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_scales,
+                        request->scales,
+                        scales_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes = packed_bytes + scales_bytes;
+
+  {
+    constexpr uint32_t threads = 256;
+    const uint32_t blocks =
+        static_cast<uint32_t>((packed_count + threads - 1) / threads);
+    mxfp4_e2m1_block_dequant_dynamic_kernel<<<blocks, threads, 0, stream>>>(
+        d_packed,
+        d_scales,
+        d_output,
+        request->rows,
+        request->packed_cols,
+        request->scale_packed_cols);
+    out->kernel_launches += 1;
+  }
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(h_output,
+                        d_output,
+                        output_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->d2h_bytes = output_bytes;
+
+  err = cudaStreamSynchronize(stream);
+  out->sync_calls += 1;
+  if (err != cudaSuccess) goto cleanup;
+
+  memcpy(request->output, h_output, output_bytes);
+  out->output_hash =
+      hash_f32_bits(request->output, static_cast<uint32_t>(output_values));
+  out->status = 0;
+
+cleanup:
+  if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_output != nullptr) cudaFreeHost(h_output);
+  if (d_output != nullptr) cudaFree(d_output);
+  if (d_scales != nullptr) cudaFree(d_scales);
+  if (d_packed != nullptr) cudaFree(d_packed);
+  if (err != cudaSuccess) {
+    return fail_dequant(out, err);
   }
   return out->status == 0 ? 0 : -1;
 }
