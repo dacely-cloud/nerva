@@ -56,6 +56,13 @@ constexpr uint32_t kPrefillChunkBaseTokens = 1024;
 constexpr uint32_t kPrefillChunkMaxTokens = 8192;
 constexpr uint32_t kProjectionBatchWorkspaceTokens = 32;
 constexpr uint32_t kKvCacheBlockTokens = 16;
+constexpr uint32_t kDeepSeekV32PackedKvBlockTokens = 64;
+constexpr uint32_t kDeepSeekV32PackedKvNopeBytes = 512;
+constexpr uint32_t kDeepSeekV32PackedKvScaleBytes = 16;
+constexpr uint32_t kDeepSeekV32PackedKvRopeValues = 64;
+constexpr uint32_t kDeepSeekV32PackedKvTokenBytes =
+    kDeepSeekV32PackedKvNopeBytes + kDeepSeekV32PackedKvScaleBytes +
+    kDeepSeekV32PackedKvRopeValues * 2u;
 constexpr uint32_t kDeepSeekV4PackedKvDefaultBlockTokens = 64;
 constexpr uint32_t kDeepSeekV4PackedKvC128BlockTokens = 2;
 constexpr uint32_t kDeepSeekV4PackedKvAlignmentBytes = 576;

@@ -187,7 +187,10 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
       session->device_step, max_steps, session->rope_theta, scratch.q,
       scratch.k, scratch.v, session->device_projection_input,
       session->device_kv_keys, session->kv_block_count,
-      session->device_kv_block_table, session->device_projection_input);
+      session->device_kv_block_table, session->device_projection_input,
+      session->device_deepseek_v32_mla_kv,
+      deepseek_v32_mla_kv_layer_offset_bytes(session, layer_index),
+      deepseek_v32_mla_kv_block_count(session, layout));
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
 

@@ -87,7 +87,9 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     const float *kv_a, float *latent_output,
     const uint16_t *kv_latent_norm, uint16_t *kv_keys,
     uint32_t kv_block_count, const uint32_t *kv_block_table,
-    uint16_t *projection_input);
+    uint16_t *projection_input, uint8_t *deepseek_v32_mla_kv,
+    uint64_t deepseek_v32_mla_kv_offset_bytes,
+    uint32_t deepseek_v32_mla_kv_block_count);
 __global__ void hf_layer_qkv_attention_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t kv_heads,

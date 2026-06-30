@@ -817,6 +817,78 @@ __device__ bool deepseek_session_write_fp8_ds_mla_swa_kv(
   return true;
 }
 
+__device__ bool deepseek_session_write_v32_fp8_ds_mla_kv(
+    uint8_t *kv_cache, uint64_t kv_offset_bytes, uint32_t block_count,
+    const SequenceLayerLayout &layout, uint32_t position, uint32_t dtype,
+    const uint16_t *kv_latent_norm, const float *kv_a, float rope_theta) {
+  if (kv_cache == nullptr || kv_latent_norm == nullptr || kv_a == nullptr ||
+      block_count == 0 ||
+      layout.attention_kind != kAttentionKindDeepSeekMla ||
+      layout.deepseek_mode != kDeepSeekModeV32MlaIndexer ||
+      layout.deepseek_kv_lora_rank != kDeepSeekV32PackedKvNopeBytes ||
+      layout.deepseek_qk_rope_head_dim != kDeepSeekV32PackedKvRopeValues) {
+    return false;
+  }
+  const uint32_t block = position / kDeepSeekV32PackedKvBlockTokens;
+  if (block >= block_count) {
+    return false;
+  }
+  const uint32_t kv_pos = position % kDeepSeekV32PackedKvBlockTokens;
+  uint8_t *row =
+      kv_cache + kv_offset_bytes +
+      (static_cast<uint64_t>(block) * kDeepSeekV32PackedKvBlockTokens +
+       kv_pos) *
+          kDeepSeekV32PackedKvTokenBytes;
+  uint8_t *nope_ptr = row;
+  float *scale_ptr = reinterpret_cast<float *>(
+      row + kDeepSeekV32PackedKvNopeBytes);
+  uint8_t *rope_ptr =
+      row + kDeepSeekV32PackedKvNopeBytes + kDeepSeekV32PackedKvScaleBytes;
+
+  constexpr uint32_t kScaleBlockValues = 128;
+  constexpr uint32_t kScaleCount =
+      kDeepSeekV32PackedKvNopeBytes / kScaleBlockValues;
+  for (uint32_t scale_index = 0; scale_index < kScaleCount; ++scale_index) {
+    const uint32_t start = scale_index * kScaleBlockValues;
+    float absmax = 0.0f;
+    for (uint32_t dim = 0; dim < kScaleBlockValues; ++dim) {
+      const float value = encoded_to_f32(kv_latent_norm[start + dim], dtype);
+      const float quant_input = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(value));
+      absmax = fmaxf(absmax, fabsf(quant_input));
+    }
+    const float raw = fmaxf(absmax, 1.0e-4f) / 448.0f;
+    const float scale = exp2f(ceilf(log2f(raw)));
+    scale_ptr[scale_index] = scale;
+    for (uint32_t dim = 0; dim < kScaleBlockValues; ++dim) {
+      const uint32_t source_dim = start + dim;
+      const float value = encoded_to_f32(kv_latent_norm[source_dim], dtype);
+      const float quant_input = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(value));
+      const float scaled = fminf(fmaxf(quant_input / scale, -448.0f), 448.0f);
+      nope_ptr[source_dim] =
+          deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
+    }
+  }
+
+  const uint32_t rope_half = kDeepSeekV32PackedKvRopeValues / 2u;
+  for (uint32_t dim = 0; dim < kDeepSeekV32PackedKvRopeValues; ++dim) {
+    float value = kv_a[kDeepSeekV32PackedKvNopeBytes + dim];
+    if (rope_half != 0) {
+      const uint32_t offset = dim % rope_half;
+      value = deepseek_rope_value_serial(
+          kv_a[kDeepSeekV32PackedKvNopeBytes + offset],
+          kv_a[kDeepSeekV32PackedKvNopeBytes + offset + rope_half], offset,
+          kDeepSeekV32PackedKvRopeValues, position, rope_theta,
+          dim >= rope_half);
+    }
+    const uint16_t bits = deepseek_session_f32_to_bf16_bits(value);
+    rope_ptr[dim * 2u] = static_cast<uint8_t>(bits & 0xffu);
+    rope_ptr[dim * 2u + 1u] = static_cast<uint8_t>(bits >> 8u);
+  }
+  return true;
+}
+
 __device__ float deepseek_session_read_fp8_ds_mla_swa_kv(
     const uint8_t *kv_cache, uint64_t kv_offset_bytes, uint32_t block_count,
     const SequenceLayerLayout &layout, uint32_t position, uint32_t dim) {
@@ -1115,7 +1187,9 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     const float *kv_a, float *latent_output,
     const uint16_t *kv_latent_norm, uint16_t *kv_keys,
     uint32_t kv_block_count, const uint32_t *kv_block_table,
-    uint16_t *projection_input) {
+    uint16_t *projection_input, uint8_t *deepseek_v32_mla_kv,
+    uint64_t deepseek_v32_mla_kv_offset_bytes,
+    uint32_t deepseek_v32_mla_kv_block_count) {
   if (blockIdx.x != 0 || threadIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
     return;
@@ -1155,6 +1229,10 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     }
     kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
   }
+  deepseek_session_write_v32_fp8_ds_mla_kv(
+      deepseek_v32_mla_kv, deepseek_v32_mla_kv_offset_bytes,
+      deepseek_v32_mla_kv_block_count, layout, position, dtype,
+      kv_latent_norm, kv_a, rope_theta);
 
   const float softmax_scale = rsqrtf(static_cast<float>(qk_head_dim));
   const uint32_t kv_b_cols = kv_lora_rank;
