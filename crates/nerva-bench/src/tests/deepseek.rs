@@ -31,11 +31,16 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("deepseek_mla_decode_mqa_reference"));
     assert!(json.contains("cuda_deepseek_mla_decode_mqa_smoke"));
     assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
+    assert!(json.contains("precision_moe_deepseek_v3_grouped_router"));
+    assert!(json.contains("precision_moe_deepseek_router_correction_bias_load"));
     assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
     assert!(json.contains("deepseek_v4_mhc_compressor_indexer_manifest"));
     assert!(json.contains("mxfp4_e2m1_e8m0_block_dequant_reference"));
     assert!(json.contains("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke"));
     assert!(json.contains("deepseek_v4_sqrtsoftplus_hash_router_reference"));
+    assert!(json.contains("precision_moe_deepseek_v4_sqrtsoftplus_router"));
+    assert!(json.contains("deepseek_v4_hash_route_table_i64_loader"));
+    assert!(json.contains("precision_moe_deepseek_v4_hash_route_table"));
     assert!(json.contains("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke"));
     assert!(json.contains("deepseek_v4_mhc_pre_post_head"));
     assert!(json.contains("\"execution_unit_status\""));
@@ -70,6 +75,7 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("deepseek_mla_decode_mqa_reference"));
     assert!(json.contains("cuda_deepseek_mla_decode_mqa_smoke"));
     assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
+    assert!(json.contains("precision_moe_deepseek_v3_grouped_router"));
     assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
     assert!(json.contains("\"unit\":\"deepseek_v32_sparse_attention_indexer\""));
     assert!(json.contains("implement V3.2 sparse indexer query/key/weights runtime"));
@@ -132,7 +138,9 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"execution_unit_status\""));
     assert!(json.contains("\"unit\":\"deepseek_v4_hash_and_bias_router\""));
     assert!(json.contains("\"status\":\"partial\""));
-    assert!(json.contains("integrate hash routing by token id into decode layers"));
+    assert!(json.contains("precision_moe_deepseek_v4_hash_route_table"));
+    assert!(json.contains("deepseek_v4_hash_route_table_i64_loader"));
+    assert!(json.contains("integrate hash and bias routing into CUDA exact runtime decode layers"));
     assert!(json.contains("\"unit\":\"deepseek_v4_parallel_attention_gemm_streams\""));
     assert!(json.contains("\"status\":\"missing\""));
     assert!(json.contains("\"default_block_size\":256"));

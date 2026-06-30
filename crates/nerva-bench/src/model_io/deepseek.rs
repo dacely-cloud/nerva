@@ -286,6 +286,8 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         "deepseek_routed_moe_reference".to_string(),
         "cuda_deepseek_routed_moe_smoke".to_string(),
         "deepseek_v3_grouped_sigmoid_router_reference".to_string(),
+        "precision_moe_deepseek_v3_grouped_router".to_string(),
+        "precision_moe_deepseek_router_correction_bias_load".to_string(),
         "cuda_deepseek_v3_grouped_sigmoid_router_smoke".to_string(),
     ];
 
@@ -295,6 +297,9 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         primitives.push("mxfp4_e2m1_e8m0_block_dequant_reference".to_string());
         primitives.push("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke".to_string());
         primitives.push("deepseek_v4_sqrtsoftplus_hash_router_reference".to_string());
+        primitives.push("precision_moe_deepseek_v4_sqrtsoftplus_router".to_string());
+        primitives.push("deepseek_v4_hash_route_table_i64_loader".to_string());
+        primitives.push("precision_moe_deepseek_v4_hash_route_table".to_string());
         primitives.push("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke".to_string());
     }
 
@@ -371,11 +376,13 @@ fn coverage_for_unit(
                 "partial",
                 &[
                     "deepseek_v3_grouped_sigmoid_router_reference",
+                    "precision_moe_deepseek_v3_grouped_router",
+                    "precision_moe_deepseek_router_correction_bias_load",
                     "cuda_deepseek_v3_grouped_sigmoid_router_smoke",
                 ],
                 &[
-                    "integrate grouped sigmoid router into full decode layers",
-                    "load and apply e_score_correction_bias from checkpoints",
+                    "integrate grouped sigmoid router into CUDA exact runtime decode layers",
+                    "verify full-layer routed outputs against vLLM",
                 ],
             ),
             (
@@ -460,11 +467,14 @@ fn coverage_for_unit(
                 &[
                     "deepseek_v4_hash_router_manifest",
                     "deepseek_v4_sqrtsoftplus_hash_router_reference",
+                    "precision_moe_deepseek_v4_sqrtsoftplus_router",
+                    "deepseek_v4_hash_route_table_i64_loader",
+                    "precision_moe_deepseek_v4_hash_route_table",
                     "cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke",
                 ],
                 &[
-                    "integrate hash routing by token id into decode layers",
-                    "load and apply e_score_correction_bias for non-hash V4 layers",
+                    "integrate hash and bias routing into CUDA exact runtime decode layers",
+                    "verify full-layer routed outputs against vLLM",
                 ],
             ),
             (HfArchitectureKind::DeepSeekV4, "deepseek_v4_megamoe_int8_fp4_experts") => (

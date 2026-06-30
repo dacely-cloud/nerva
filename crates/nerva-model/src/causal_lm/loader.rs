@@ -24,7 +24,8 @@ use crate::weights::manifest::build_hf_tensor_manifest;
 use crate::weights::safetensors::planner::plan_safetensors_shards_for_manifest;
 use crate::weights::safetensors::shard::{SafetensorsShardHeader, SafetensorsShardPlan};
 use crate::weights::tensor::{
-    LoadedSafetensorsTensorF32, LoadedSafetensorsTensorU16, read_safetensors_tensor_f32_with_hash,
+    LoadedSafetensorsTensorF32, LoadedSafetensorsTensorI64, LoadedSafetensorsTensorU16,
+    read_safetensors_tensor_f32_with_hash, read_safetensors_tensor_i64_with_hash,
     read_safetensors_tensor_u16_with_hash,
 };
 
@@ -711,6 +712,18 @@ fn load_sparse_moe_layer(
             accounting,
         )?)?;
     }
+    if plan.entries.iter().any(|entry| {
+        entry.role == WeightBlockRole::DeepSeekV4HashRouteTable && entry.layer == Some(layer)
+    }) {
+        block = block.with_hash_route_table(load_layer_tensor_usize_from_i64(
+            dir,
+            plan,
+            WeightBlockRole::DeepSeekV4HashRouteTable,
+            layer,
+            options,
+            accounting,
+        )?)?;
+    }
     if attention_qkv_bias || attention_output_bias {
         block = block.with_optional_attention_biases(
             load_enabled_bias_tensor(
@@ -858,6 +871,30 @@ fn load_layer_tensor_f32(
     Ok(tensor.values)
 }
 
+fn load_layer_tensor_usize_from_i64(
+    dir: &Path,
+    plan: &SafetensorsShardPlan,
+    role: WeightBlockRole,
+    layer: u32,
+    options: HfCausalLmLoadOptions,
+    accounting: &mut LoadAccounting,
+) -> Result<Vec<usize>> {
+    let tensor = load_tensor_i64(dir, plan, role, Some(layer), options)?;
+    accounting.record(tensor.bytes_read, tensor.data_hash);
+    tensor
+        .values
+        .into_iter()
+        .map(|value| {
+            usize::try_from(value).map_err(|_| NervaError::InvalidArgument {
+                reason: format!(
+                    "HF causal LM tensor {} contains negative or too-large expert id",
+                    tensor.name
+                ),
+            })
+        })
+        .collect()
+}
+
 fn load_enabled_bias_tensor(
     dir: &Path,
     plan: &SafetensorsShardPlan,
@@ -921,6 +958,30 @@ fn load_tensor_f32(
             ),
         })?;
     read_safetensors_tensor_f32_with_hash(
+        dir.join(&entry.shard_file),
+        entry,
+        options.compute_data_hash,
+    )
+}
+
+fn load_tensor_i64(
+    dir: &Path,
+    plan: &SafetensorsShardPlan,
+    role: WeightBlockRole,
+    layer: Option<u32>,
+    options: HfCausalLmLoadOptions,
+) -> Result<LoadedSafetensorsTensorI64> {
+    let entry = plan
+        .entries
+        .iter()
+        .find(|entry| entry.role == role && entry.layer == layer && entry.expert.is_none())
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: format!(
+                "HF causal LM missing i64 tensor role {:?} layer {:?}",
+                role, layer
+            ),
+        })?;
+    read_safetensors_tensor_i64_with_hash(
         dir.join(&entry.shard_file),
         entry,
         options.compute_data_hash,

@@ -85,8 +85,9 @@ impl HfCausalLmModel {
                 &mut scratch.hidden_bits,
             )?;
             for (layer, kv) in self.layers.iter().zip(scratch.kv_layers.iter_mut()) {
-                layer.forward_decode_with_kv_into(
+                layer.forward_decode_with_token_kv_into(
                     &scratch.hidden_bits,
+                    Some(current),
                     kv,
                     &mut scratch.next_bits,
                     &mut ledger,
@@ -151,17 +152,19 @@ impl HfCausalLmModel {
         for (layer_index, layer) in self.layers.iter().enumerate() {
             let kv = &mut scratch.kv_layers[layer_index];
             if primary {
-                layer.forward_prefill_sequence_into(
+                layer.forward_prefill_sequence_with_tokens_into(
                     &scratch.sequence_bits[..values],
                     prompt_tokens.len(),
+                    Some(prompt_tokens),
                     kv,
                     &mut scratch.sequence_next_bits[..values],
                     ledger,
                 )?;
             } else {
-                layer.forward_prefill_sequence_into(
+                layer.forward_prefill_sequence_with_tokens_into(
                     &scratch.sequence_next_bits[..values],
                     prompt_tokens.len(),
+                    Some(prompt_tokens),
                     kv,
                     &mut scratch.sequence_bits[..values],
                     ledger,

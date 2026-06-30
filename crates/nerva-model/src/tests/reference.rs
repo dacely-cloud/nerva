@@ -2,6 +2,7 @@ use crate::common::math::{sigmoid, silu};
 use crate::common::shape::TransformerBlockShape;
 use crate::precision::block::moe::{
     PrecisionMoeConfig, PrecisionMoeRouterKind, select_moe_route_for_logits,
+    select_moe_route_for_logits_with_hash_token,
 };
 use crate::reference::block::types::ReferenceTransformerBlock;
 use crate::reference::moe::{
@@ -261,7 +262,56 @@ fn precision_moe_deepseek_v4_router_matches_reference() {
 }
 
 #[test]
-fn precision_moe_deepseek_v4_hash_router_requires_runtime_route_table() {
+fn precision_moe_deepseek_v4_hash_router_matches_reference() {
+    let logits = [4.0, -1.0, 0.0, 2.0];
+    let hash_table = [
+        0usize, 1, 3, // token 0
+        2, 1, 3, // token 1
+        3, 0, 2, // token 2
+    ];
+    let precision_route = select_moe_route_for_logits_with_hash_token(
+        &logits,
+        &[99.0, 99.0, 99.0, 99.0],
+        &hash_table,
+        Some(1),
+        PrecisionMoeConfig {
+            moe_intermediate: 2,
+            shared_expert_intermediate: 0,
+            num_experts: 4,
+            experts_per_token: 3,
+            norm_topk_prob: true,
+            router_kind: PrecisionMoeRouterKind::DeepSeekV4Hash {
+                routed_scaling_factor: 1.0,
+            },
+        },
+    )
+    .unwrap();
+    let reference_route = deepseek_v4_sqrtsoftplus_route(
+        &logits,
+        Some(&[99.0, 99.0, 99.0, 99.0]),
+        Some(&[2usize, 1usize, 3usize]),
+        DeepSeekV4RouterConfig {
+            top_k: 3,
+            renormalize: true,
+            routed_scaling_factor: 1.0,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        precision_route
+            .iter()
+            .map(|(expert, _)| *expert)
+            .collect::<Vec<_>>(),
+        reference_route.expert_ids
+    );
+    for ((_, actual), expected) in precision_route.iter().zip(reference_route.weights.iter()) {
+        assert!((actual - expected).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn precision_moe_deepseek_v4_hash_router_requires_route_table() {
     let error = select_moe_route_for_logits(
         &[4.0, -1.0, 0.0, 2.0],
         &[0.0, 0.0, 0.0, 0.0],
@@ -277,7 +327,7 @@ fn precision_moe_deepseek_v4_hash_router_requires_runtime_route_table() {
         },
     )
     .unwrap_err();
-    assert!(format!("{error:?}").contains("token-id route tables"));
+    assert!(format!("{error:?}").contains("tid2eid route table"));
 }
 
 #[test]

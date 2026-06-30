@@ -52,8 +52,9 @@ impl HfCausalLmModel {
             )?;
             let mut ledger = TokenLedger::new(step as u64);
             for layer in &self.layers {
-                layer.forward_into(
+                layer.forward_with_token_into(
                     &scratch.hidden_bits,
+                    Some(current),
                     &mut scratch.block,
                     &mut scratch.next_bits,
                     &mut ledger,

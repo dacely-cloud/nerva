@@ -1,5 +1,6 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
+use nerva_core::types::id::token::TokenId;
 use nerva_core::types::memory::tier::MemoryTier;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
@@ -44,6 +45,7 @@ pub struct PrecisionMoeTransformerBlock {
     o_bias: Option<Vec<u16>>,
     router: Vec<u16>,
     router_correction_bias: Vec<f32>,
+    hash_route_table: Vec<usize>,
     expert_gate_up: Vec<u16>,
     expert_down: Vec<u16>,
     shared_expert_gate: Vec<u16>,
@@ -105,6 +107,7 @@ pub struct PrecisionMoeTransformerBlockEncodedView<'a> {
     pub o_bias: Option<&'a [u16]>,
     pub router: &'a [u16],
     pub router_correction_bias: &'a [f32],
+    pub hash_route_table: &'a [usize],
     pub expert_gate_up: &'a [u16],
     pub expert_down: &'a [u16],
     pub shared_expert_gate: &'a [u16],
@@ -179,6 +182,7 @@ impl PrecisionMoeTransformerBlock {
             o_bias: None,
             router,
             router_correction_bias: Vec::new(),
+            hash_route_table: Vec::new(),
             expert_gate_up,
             expert_down,
             shared_expert_gate,
@@ -272,6 +276,17 @@ impl PrecisionMoeTransformerBlock {
         Ok(self)
     }
 
+    pub fn with_hash_route_table(mut self, table: Vec<usize>) -> Result<Self> {
+        validate_hash_route_table(
+            &table,
+            self.num_experts,
+            self.experts_per_token,
+            self.router_kind,
+        )?;
+        self.hash_route_table = table;
+        Ok(self)
+    }
+
     pub const fn rope_theta(&self) -> Option<f32> {
         self.rope_theta
     }
@@ -326,6 +341,7 @@ impl PrecisionMoeTransformerBlock {
             o_bias: self.o_bias.as_deref(),
             router: &self.router,
             router_correction_bias: &self.router_correction_bias,
+            hash_route_table: &self.hash_route_table,
             expert_gate_up: &self.expert_gate_up,
             expert_down: &self.expert_down,
             shared_expert_gate: &self.shared_expert_gate,
@@ -340,6 +356,17 @@ impl PrecisionMoeTransformerBlock {
     pub fn forward_into(
         &self,
         input: &[u16],
+        scratch: &mut PrecisionTransformerBlockScratch,
+        output: &mut [u16],
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
+        self.forward_with_token_into(input, None, scratch, output, ledger)
+    }
+
+    pub fn forward_with_token_into(
+        &self,
+        input: &[u16],
+        route_token: Option<TokenId>,
         scratch: &mut PrecisionTransformerBlockScratch,
         output: &mut [u16],
         ledger: &mut TokenLedger,
@@ -376,6 +403,7 @@ impl PrecisionMoeTransformerBlock {
             &mut scratch.up,
             &mut scratch.ff,
             &mut scratch.down,
+            route_token,
             output,
         )
     }
@@ -388,7 +416,33 @@ impl PrecisionMoeTransformerBlock {
         output: &mut [u16],
         ledger: &mut TokenLedger,
     ) -> Result<()> {
+        self.forward_prefill_sequence_with_tokens_into(
+            input,
+            token_count,
+            None,
+            scratch,
+            output,
+            ledger,
+        )
+    }
+
+    pub fn forward_prefill_sequence_with_tokens_into(
+        &self,
+        input: &[u16],
+        token_count: usize,
+        route_tokens: Option<&[TokenId]>,
+        scratch: &mut PrecisionTransformerBlockKvScratch,
+        output: &mut [u16],
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
         let values = self.require_sequence_io(input, output, token_count, scratch)?;
+        if let Some(tokens) = route_tokens {
+            require_len(
+                "precision MoE prefill route tokens",
+                tokens.len(),
+                token_count,
+            )?;
+        }
         scratch.reset();
         for row in 0..token_count {
             let start = row * self.shape.hidden;
@@ -402,6 +456,7 @@ impl PrecisionMoeTransformerBlock {
                 row,
                 scratch,
                 &mut output[start..start + self.shape.hidden],
+                route_tokens.map(|tokens| tokens[row]),
                 ledger,
             )?;
         }
@@ -412,6 +467,17 @@ impl PrecisionMoeTransformerBlock {
     pub fn forward_decode_with_kv_into(
         &self,
         input: &[u16],
+        scratch: &mut PrecisionTransformerBlockKvScratch,
+        output: &mut [u16],
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
+        self.forward_decode_with_token_kv_into(input, None, scratch, output, ledger)
+    }
+
+    pub fn forward_decode_with_token_kv_into(
+        &self,
+        input: &[u16],
+        route_token: Option<TokenId>,
         scratch: &mut PrecisionTransformerBlockKvScratch,
         output: &mut [u16],
         ledger: &mut TokenLedger,
@@ -431,7 +497,15 @@ impl PrecisionMoeTransformerBlock {
         scratch.require_capacity(self.shape, next_len)?;
         let position = scratch.len();
         self.append_kv_from_input(input, position, scratch)?;
-        self.forward_with_visible_kv(input, next_len, position, scratch, output, ledger)
+        self.forward_with_visible_kv(
+            input,
+            next_len,
+            position,
+            scratch,
+            output,
+            route_token,
+            ledger,
+        )
     }
 
     fn require_sequence_io(
@@ -516,6 +590,7 @@ impl PrecisionMoeTransformerBlock {
         position: usize,
         scratch: &mut PrecisionTransformerBlockKvScratch,
         output: &mut [u16],
+        route_token: Option<TokenId>,
         ledger: &mut TokenLedger,
     ) -> Result<()> {
         decode_vec_into(self.dtype, input, &mut scratch.token.input)?;
@@ -576,6 +651,7 @@ impl PrecisionMoeTransformerBlock {
             &mut scratch.token.up,
             &mut scratch.token.ff,
             &mut scratch.token.down,
+            route_token,
             output,
         )
     }
@@ -639,6 +715,7 @@ impl PrecisionMoeTransformerBlock {
         up: &mut [f32],
         ff: &mut [f32],
         down: &mut [f32],
+        route_token: Option<TokenId>,
         output: &mut [u16],
     ) -> Result<()> {
         mat_vec_encoded_row_major(self.dtype, &self.w_o, attn, residual)?;
@@ -655,7 +732,7 @@ impl PrecisionMoeTransformerBlock {
             self.rms_eps,
             mlp_norm,
         )?;
-        self.add_sparse_moe_into(mlp_norm, gate, up, ff, down, residual)?;
+        self.add_sparse_moe_into(mlp_norm, gate, up, ff, down, residual, route_token)?;
         encode_vec_into(self.dtype, residual, output)
     }
 
@@ -667,12 +744,15 @@ impl PrecisionMoeTransformerBlock {
         ff: &mut [f32],
         down: &mut [f32],
         residual: &mut [f32],
+        route_token: Option<TokenId>,
     ) -> Result<()> {
         let mut router_logits = vec![0.0f32; self.num_experts];
         mat_vec_encoded_row_major(self.dtype, &self.router, input, &mut router_logits)?;
-        let selected = select_moe_route_for_logits(
+        let selected = select_moe_route_for_logits_with_hash_token(
             &router_logits,
             &self.router_correction_bias,
+            &self.hash_route_table,
+            route_token.map(|token| token.0 as usize),
             self.config(),
         )?;
 
@@ -935,9 +1015,53 @@ fn validate_routed_scaling_factor(value: f32) -> Result<()> {
     }
 }
 
+fn validate_hash_route_table(
+    table: &[usize],
+    num_experts: usize,
+    experts_per_token: usize,
+    router_kind: PrecisionMoeRouterKind,
+) -> Result<()> {
+    if !matches!(router_kind, PrecisionMoeRouterKind::DeepSeekV4Hash { .. }) {
+        if table.is_empty() {
+            return Ok(());
+        }
+        return Err(NervaError::InvalidArgument {
+            reason: "hash route table is only valid for DeepSeek V4 hash MoE routing".to_string(),
+        });
+    }
+    if table.is_empty() {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 hash MoE routing requires tid2eid route table".to_string(),
+        });
+    }
+    if !table.len().is_multiple_of(experts_per_token) {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 hash route table length must be divisible by top-k".to_string(),
+        });
+    }
+    if table.iter().any(|expert| *expert >= num_experts) {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 hash route table contains expert id outside num_experts"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub(crate) fn select_moe_route_for_logits(
     router_logits: &[f32],
     correction_bias: &[f32],
+    config: PrecisionMoeConfig,
+) -> Result<Vec<(usize, f32)>> {
+    select_moe_route_for_logits_with_hash_token(router_logits, correction_bias, &[], None, config)
+}
+
+pub(crate) fn select_moe_route_for_logits_with_hash_token(
+    router_logits: &[f32],
+    correction_bias: &[f32],
+    hash_route_table: &[usize],
+    route_token: Option<usize>,
     config: PrecisionMoeConfig,
 ) -> Result<Vec<(usize, f32)>> {
     require_len("router logits", router_logits.len(), config.num_experts)?;
@@ -990,17 +1114,61 @@ pub(crate) fn select_moe_route_for_logits(
             finish_route_weights(&mut selected, config.norm_topk_prob, routed_scaling_factor);
             selected
         }
-        PrecisionMoeRouterKind::DeepSeekV4Hash { .. } => {
-            return Err(NervaError::InvalidArgument {
-                reason: "DeepSeek V4 hash MoE routing requires token-id route tables in runtime"
-                    .to_string(),
-            });
-        }
+        PrecisionMoeRouterKind::DeepSeekV4Hash {
+            routed_scaling_factor,
+        } => deepseek_v4_hash_route(
+            router_logits,
+            hash_route_table,
+            route_token,
+            config,
+            routed_scaling_factor,
+        )?,
     };
 
     if matches!(config.router_kind, PrecisionMoeRouterKind::Softmax) && config.norm_topk_prob {
         finish_route_weights(&mut selected, true, 1.0);
     }
+    Ok(selected)
+}
+
+fn deepseek_v4_hash_route(
+    router_logits: &[f32],
+    hash_route_table: &[usize],
+    route_token: Option<usize>,
+    config: PrecisionMoeConfig,
+    routed_scaling_factor: f32,
+) -> Result<Vec<(usize, f32)>> {
+    validate_hash_route_table(
+        hash_route_table,
+        config.num_experts,
+        config.experts_per_token,
+        config.router_kind,
+    )?;
+    let route_token = route_token.ok_or_else(|| NervaError::InvalidArgument {
+        reason: "DeepSeek V4 hash MoE routing requires input token ids".to_string(),
+    })?;
+    let start = route_token
+        .checked_mul(config.experts_per_token)
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "DeepSeek V4 hash route table row offset overflow".to_string(),
+        })?;
+    let end = start + config.experts_per_token;
+    let expert_ids =
+        hash_route_table
+            .get(start..end)
+            .ok_or_else(|| NervaError::InvalidArgument {
+                reason: "DeepSeek V4 hash route token id is outside tid2eid table".to_string(),
+            })?;
+    let scores = router_logits
+        .iter()
+        .map(|value| softplus(*value).sqrt())
+        .collect::<Vec<_>>();
+    let mut selected = expert_ids
+        .iter()
+        .copied()
+        .map(|expert| (expert, scores[expert]))
+        .collect::<Vec<_>>();
+    finish_route_weights(&mut selected, config.norm_topk_prob, routed_scaling_factor);
     Ok(selected)
 }
 

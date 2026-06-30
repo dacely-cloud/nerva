@@ -41,6 +41,14 @@ pub struct LoadedSafetensorsTensorF32 {
     pub data_hash: u64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadedSafetensorsTensorI64 {
+    pub name: String,
+    pub values: Vec<i64>,
+    pub bytes_read: usize,
+    pub data_hash: u64,
+}
+
 pub fn read_safetensors_tensor_u16(
     shard_path: impl AsRef<Path>,
     entry: &SafetensorsShardPlanEntry,
@@ -120,6 +128,44 @@ pub fn read_safetensors_tensor_f32_with_hash(
     })
 }
 
+pub fn read_safetensors_tensor_i64_with_hash(
+    shard_path: impl AsRef<Path>,
+    entry: &SafetensorsShardPlanEntry,
+    compute_hash: bool,
+) -> Result<LoadedSafetensorsTensorI64> {
+    if entry.dtype != DType::I64 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors tensor {} has dtype {:?}; i64 tensor loading supports only I64",
+                entry.tensor_name, entry.dtype
+            ),
+        });
+    }
+    if entry.bytes % 8 != 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors tensor {} byte count {} is not divisible by 8",
+                entry.tensor_name, entry.bytes
+            ),
+        });
+    }
+    let bytes = read_safetensors_tensor_bytes(shard_path, entry)?;
+    let values = bytes
+        .chunks_exact(8)
+        .map(|chunk| {
+            i64::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+            ])
+        })
+        .collect::<Vec<_>>();
+    Ok(LoadedSafetensorsTensorI64 {
+        name: entry.tensor_name.clone(),
+        values,
+        bytes_read: entry.bytes,
+        data_hash: if compute_hash { hash_bytes(&bytes) } else { 0 },
+    })
+}
+
 fn read_safetensors_tensor_bytes(
     shard_path: impl AsRef<Path>,
     entry: &SafetensorsShardPlanEntry,
@@ -181,5 +227,50 @@ fn dtype_json_label(dtype: DType) -> &'static str {
         DType::I64 => "i64",
         DType::F8E4M3 => "float8_e4m3",
         DType::F8E8M0 => "float8_e8m0",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nerva_core::types::dtype::DType;
+    use nerva_core::types::memory::tier::MemoryTier;
+
+    use super::read_safetensors_tensor_i64_with_hash;
+    use crate::weights::layout::entry::WeightBlockRole;
+    use crate::weights::safetensors::shard::SafetensorsShardPlanEntry;
+
+    #[test]
+    fn reads_i64_safetensors_tensor_for_deepseek_hash_routes() {
+        let path = std::env::temp_dir().join(format!(
+            "nerva-i64-safetensors-{}-{}.bin",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&17_i64.to_le_bytes());
+        bytes.extend_from_slice(&3_i64.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+        let entry = SafetensorsShardPlanEntry {
+            tensor_name: "layers.0.ffn.gate.tid2eid".to_string(),
+            shard_file: "model.safetensors".to_string(),
+            role: WeightBlockRole::DeepSeekV4HashRouteTable,
+            layer: Some(0),
+            expert: None,
+            dtype: DType::I64,
+            tier: MemoryTier::Dram,
+            bytes: bytes.len(),
+            data_offset_begin: 0,
+            data_offset_end: bytes.len(),
+            file_offset_begin: 0,
+            file_offset_end: bytes.len(),
+        };
+
+        let tensor = read_safetensors_tensor_i64_with_hash(&path, &entry, true).unwrap();
+
+        assert_eq!(tensor.name, "layers.0.ffn.gate.tid2eid");
+        assert_eq!(tensor.values, vec![17, 3]);
+        assert_eq!(tensor.bytes_read, 16);
+        assert_ne!(tensor.data_hash, 0);
+        let _ = std::fs::remove_file(path);
     }
 }

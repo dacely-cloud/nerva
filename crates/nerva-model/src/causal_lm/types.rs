@@ -95,6 +95,7 @@ impl HfCausalLmLayer {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn forward_into(
         &self,
         input: &[u16],
@@ -102,13 +103,27 @@ impl HfCausalLmLayer {
         output: &mut [u16],
         ledger: &mut TokenLedger,
     ) -> Result<()> {
+        self.forward_with_token_into(input, None, scratch, output, ledger)
+    }
+
+    pub(crate) fn forward_with_token_into(
+        &self,
+        input: &[u16],
+        route_token: Option<TokenId>,
+        scratch: &mut PrecisionTransformerBlockScratch,
+        output: &mut [u16],
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
         match self {
             Self::Dense(layer) => layer.forward_into(input, scratch, output, ledger),
-            Self::SparseMoe(layer) => layer.forward_into(input, scratch, output, ledger),
+            Self::SparseMoe(layer) => {
+                layer.forward_with_token_into(input, route_token, scratch, output, ledger)
+            }
             Self::GatedDeltaNetMoe(layer) => layer.forward_into(input, scratch, output, ledger),
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn forward_prefill_sequence_into(
         &self,
         input: &[u16],
@@ -117,19 +132,44 @@ impl HfCausalLmLayer {
         output: &mut [u16],
         ledger: &mut TokenLedger,
     ) -> Result<()> {
+        self.forward_prefill_sequence_with_tokens_into(
+            input,
+            token_count,
+            None,
+            scratch,
+            output,
+            ledger,
+        )
+    }
+
+    pub(crate) fn forward_prefill_sequence_with_tokens_into(
+        &self,
+        input: &[u16],
+        token_count: usize,
+        route_tokens: Option<&[TokenId]>,
+        scratch: &mut PrecisionTransformerBlockKvScratch,
+        output: &mut [u16],
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
         match self {
             Self::Dense(layer) => {
                 layer.forward_prefill_sequence_into(input, token_count, scratch, output, ledger)
             }
-            Self::SparseMoe(layer) => {
-                layer.forward_prefill_sequence_into(input, token_count, scratch, output, ledger)
-            }
+            Self::SparseMoe(layer) => layer.forward_prefill_sequence_with_tokens_into(
+                input,
+                token_count,
+                route_tokens,
+                scratch,
+                output,
+                ledger,
+            ),
             Self::GatedDeltaNetMoe(layer) => {
                 layer.forward_prefill_sequence_into(input, token_count, scratch, output, ledger)
             }
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn forward_decode_with_kv_into(
         &self,
         input: &[u16],
@@ -137,10 +177,21 @@ impl HfCausalLmLayer {
         output: &mut [u16],
         ledger: &mut TokenLedger,
     ) -> Result<()> {
+        self.forward_decode_with_token_kv_into(input, None, scratch, output, ledger)
+    }
+
+    pub(crate) fn forward_decode_with_token_kv_into(
+        &self,
+        input: &[u16],
+        route_token: Option<TokenId>,
+        scratch: &mut PrecisionTransformerBlockKvScratch,
+        output: &mut [u16],
+        ledger: &mut TokenLedger,
+    ) -> Result<()> {
         match self {
             Self::Dense(layer) => layer.forward_decode_with_kv_into(input, scratch, output, ledger),
             Self::SparseMoe(layer) => {
-                layer.forward_decode_with_kv_into(input, scratch, output, ledger)
+                layer.forward_decode_with_token_kv_into(input, route_token, scratch, output, ledger)
             }
             Self::GatedDeltaNetMoe(layer) => {
                 layer.forward_decode_with_kv_into(input, scratch, output, ledger)
