@@ -3,8 +3,8 @@ use crate::decode::hf_chain::layer::{
     CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
     CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer,
-    CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_DENSE,
+    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::layout_plan::{
@@ -830,6 +830,101 @@ fn deepseek_v32_sparse_moe_session_runs_through_sampling() {
 }
 
 #[test]
+fn deepseek_v4_swa_dense_session_runs_through_sampling() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let layer = tiny_deepseek_v4_swa_dense_descriptor_layer();
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept tiny V4 SWA dense layer");
+    assert_ne!(
+        plan.deepseek_attention_sink,
+        CUDA_HF_SEQUENCE_MISSING_OFFSET
+    );
+    assert_ne!(plan.deepseek_o_b, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+
+    let weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: plan.resident_weight_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        max_context_tokens: 4,
+        rms_eps: 1e-5,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: Default::default(),
+    };
+
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V4 SWA dense DeepSeek should pass session creation: {:?}",
+        created.summary.error
+    );
+    let mut session = created
+        .session
+        .expect("V4 SWA dense session handle should exist");
+
+    let summary = session.run(&[0], 2, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V4 SWA dense DeepSeek path should run through sampling: {:?}",
+        summary.error
+    );
+    assert_eq!(summary.steps, 2);
+    assert_eq!(summary.tokens.len(), 2);
+    assert_eq!(summary.kv_tokens, 2);
+    assert_eq!(summary.graph_replays, 2);
+    assert!(summary.graph_nodes > 0);
+}
+
+#[test]
 fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     let layer = tiny_deepseek_v4_descriptor_layer();
     let layers = [layer];
@@ -994,6 +1089,60 @@ fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
         num_experts: 2,
         experts_per_token: 1,
         norm_topk_prob: true,
+        attention_kind: CUDA_HF_ATTENTION_DEEPSEEK_MLA,
+    }
+}
+
+fn tiny_deepseek_v4_swa_dense_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
+    CudaHfDecodeChainLayer {
+        rms_attn_weight: &[],
+        rms_mlp_weight: &[],
+        w_q: &[],
+        w_q_gate: None,
+        w_k: &[],
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &[],
+        w_o: &[],
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &[],
+        w_up: &[],
+        w_down: &[],
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: None,
+        deepseek: Some(CudaHfDeepSeekLayer {
+            mode: CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+            flags: 0,
+            hc_mult: 2,
+            q_lora_rank: 2,
+            kv_lora_rank: 0,
+            o_lora_rank: 2,
+            o_groups: 1,
+            qk_nope_head_dim: 1,
+            qk_rope_head_dim: 1,
+            v_head_dim: 2,
+            compress_ratio: 1,
+            index_n_heads: 0,
+            index_head_dim: 0,
+            router_num_groups: 0,
+            router_topk_groups: 0,
+            routed_scaling_factor: 1.0,
+        }),
+        mlp_kind: CUDA_HF_MLP_DENSE,
+        moe_intermediate: 0,
+        shared_expert_intermediate: 0,
+        num_experts: 0,
+        experts_per_token: 0,
+        norm_topk_prob: false,
         attention_kind: CUDA_HF_ATTENTION_DEEPSEEK_MLA,
     }
 }

@@ -96,10 +96,16 @@ bool has_unsupported_deepseek_layers(const NervaCudaHfDecodeChainLayer *layers,
   }
   for (uint32_t index = 0; index < layer_count; ++index) {
     const NervaCudaHfDecodeChainLayer &layer = layers[index];
-    if (layer.attention_kind == kAttentionKindDeepSeekMla &&
-        layer.deepseek_mode != kDeepSeekModeV3Mla &&
-        layer.deepseek_mode != kDeepSeekModeV32MlaIndexer) {
-      return true;
+    if (layer.attention_kind == kAttentionKindDeepSeekMla) {
+      const bool supported_v3 =
+          layer.deepseek_mode == kDeepSeekModeV3Mla ||
+          layer.deepseek_mode == kDeepSeekModeV32MlaIndexer;
+      const bool supported_v4_swa_dense =
+          layer.deepseek_mode == kDeepSeekModeV4Swa &&
+          layer.mlp_kind == kMlpKindDense;
+      if (!supported_v3 && !supported_v4_swa_dense) {
+        return true;
+      }
     }
   }
   return false;

@@ -194,6 +194,17 @@ bool layout_is_deepseek_v3_mla(const SequenceLayerLayout &layout) {
           layout.deepseek_mode == kDeepSeekModeV32MlaIndexer);
 }
 
+bool layout_is_deepseek_v4_swa_dense(const SequenceLayerLayout &layout) {
+  return layout.attention_kind == kAttentionKindDeepSeekMla &&
+         layout.deepseek_mode == kDeepSeekModeV4Swa &&
+         layout.mlp_kind == kMlpKindDense;
+}
+
+bool layout_is_native_deepseek_session(const SequenceLayerLayout &layout) {
+  return layout_is_deepseek_v3_mla(layout) ||
+         layout_is_deepseek_v4_swa_dense(layout);
+}
+
 uint64_t layout_deepseek_v3_qk_head_dim(const SequenceLayerLayout &layout) {
   return sat_add_u64(layout.deepseek_qk_nope_head_dim,
                      layout.deepseek_qk_rope_head_dim);
@@ -215,6 +226,14 @@ uint64_t layout_deepseek_v3_kv_cache_width(const SequenceLayerLayout &layout,
   const uint64_t width = sat_add_u64(layout.deepseek_kv_lora_rank,
                                      layout.deepseek_qk_rope_head_dim);
   return width == 0 ? fallback_kv_hidden : width;
+}
+
+uint64_t layout_deepseek_kv_cache_width(const SequenceLayerLayout &layout,
+                                        uint64_t fallback_kv_hidden) {
+  if (layout_is_deepseek_v4_swa_dense(layout)) {
+    return layout.deepseek_qk_nope_head_dim + layout.deepseek_qk_rope_head_dim;
+  }
+  return layout_deepseek_v3_kv_cache_width(layout, fallback_kv_hidden);
 }
 
 uint64_t layout_deepseek_v3_kv_b_rows(const SequenceLayerLayout &layout,
@@ -241,6 +260,9 @@ uint64_t layout_deepseek_v3_value_rows(const SequenceLayerLayout &layout,
 
 uint64_t layer_attention_workspace_rows(const SequenceLayerLayout &layout,
                                         uint64_t attention_hidden) {
+  if (layout_is_deepseek_v4_swa_dense(layout)) {
+    return std::max<uint64_t>(attention_hidden, layout.deepseek_q_lora_rank);
+  }
   if (!layout_is_deepseek_v3_mla(layout)) return attention_hidden;
   uint64_t rows = layout_deepseek_v3_q_rows(layout, attention_hidden);
   rows = std::max(rows, layout_deepseek_v3_kv_b_rows(layout, attention_hidden));
@@ -261,8 +283,7 @@ uint64_t max_kv_cache_width(const std::vector<SequenceLayerLayout> &layouts,
                             uint64_t kv_hidden) {
   uint64_t width = kv_hidden;
   for (const SequenceLayerLayout &layout : layouts) {
-    width = std::max(width,
-                     layout_deepseek_v3_kv_cache_width(layout, kv_hidden));
+    width = std::max(width, layout_deepseek_kv_cache_width(layout, kv_hidden));
   }
   return width;
 }
@@ -272,10 +293,10 @@ uint64_t layer_scratch_elements(const SequenceLayerLayout &layout,
                                 uint64_t attention_hidden,
                                 uint64_t kv_hidden,
                                 uint64_t intermediate) {
-  if (layout_is_deepseek_v3_mla(layout)) {
+  if (layout_is_native_deepseek_session(layout)) {
     return full_attention_scratch_elements(
         hidden, layer_attention_workspace_rows(layout, attention_hidden),
-        layout_deepseek_v3_kv_cache_width(layout, kv_hidden), intermediate);
+        layout_deepseek_kv_cache_width(layout, kv_hidden), intermediate);
   }
   if (layout.attention_kind != kAttentionKindLinearGdn) {
     return full_attention_scratch_elements(hidden, attention_hidden, kv_hidden,
@@ -862,7 +883,7 @@ bool session_has_deepseek_layers(
   return false;
 }
 
-bool session_has_only_deepseek_v3_layers(
+bool session_has_only_native_deepseek_layers(
     const NervaCudaHfDecodeSequenceSession *session) {
   if (session == nullptr ||
       session->host_layouts.size() != session->layer_count ||
@@ -872,7 +893,7 @@ bool session_has_only_deepseek_v3_layers(
   bool has_deepseek = false;
   for (const SequenceLayerLayout &layout : session->host_layouts) {
     if (layout.attention_kind == kAttentionKindDeepSeekMla) {
-      if (!layout_is_deepseek_v3_mla(layout)) {
+      if (!layout_is_native_deepseek_session(layout)) {
         return false;
       }
       has_deepseek = true;
@@ -896,7 +917,7 @@ bool use_cublas_layer_path(const NervaCudaHfDecodeSequenceSession *session) {
 
 bool use_layer_decode_path(const NervaCudaHfDecodeSequenceSession *session) {
   return use_cublas_layer_path(session) ||
-         (session_has_only_deepseek_v3_layers(session) &&
+         (session_has_only_native_deepseek_layers(session) &&
           session->device_projection_input != nullptr &&
           session->device_scratch != nullptr && session->device_arena != nullptr &&
           session->cublas != nullptr && session->cublas_lt != nullptr);
