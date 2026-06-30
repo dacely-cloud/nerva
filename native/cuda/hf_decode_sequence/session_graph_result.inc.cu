@@ -231,6 +231,10 @@ void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
   out->experimental_rt_local_window_tokens =
       session->experimental_rt_local_window_tokens;
   out->experimental_rt_sink_tokens = session->experimental_rt_sink_tokens;
+  out->deepseek_v4_attention_aux_streams =
+      session->deepseek_v4_attention_aux_stream_count;
+  out->deepseek_v4_attention_events =
+      session->deepseek_v4_attention_event_count;
   out->descriptor_gpu_resident_h2d_bytes = session->descriptor_gpu_resident_h2d_bytes;
   out->descriptor_gpu_staged_h2d_bytes = session->descriptor_gpu_staged_h2d_bytes;
   out->resident_kv_bytes = session_resident_kv_bytes(session);

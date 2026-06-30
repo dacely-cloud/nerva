@@ -128,6 +128,11 @@ struct NervaCudaHfDecodeSequenceSession {
   void *cublas_workspace = nullptr;
   std::shared_ptr<SessionSharedWeights> shared_weights;
   cudaStream_t stream = nullptr;
+  uint32_t deepseek_v4_attention_aux_stream_count = 0;
+  uint32_t deepseek_v4_attention_event_count = 0;
+  cudaStream_t
+      deepseek_v4_attention_aux_streams[kDeepSeekV4AttentionAuxStreamCount] = {};
+  cudaEvent_t deepseek_v4_attention_events[kDeepSeekV4AttentionEventCount] = {};
   cublasHandle_t cublas = nullptr;
   cublasLtHandle_t cublas_lt = nullptr;
 #if NERVA_HAVE_CUDNN_FRONTEND

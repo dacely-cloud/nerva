@@ -1550,6 +1550,14 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
                 "V4 SWA baseline session should create: {:?}",
                 created.summary.error
             );
+            assert_eq!(
+                created.summary.deepseek_v4_attention_aux_streams, 3,
+                "V4 SWA attention sessions should provision aux GEMM streams"
+            );
+            assert_eq!(
+                created.summary.deepseek_v4_attention_events, 4,
+                "V4 SWA attention sessions should provision aux stream events"
+            );
             swa_kv_bytes = Some(created.summary.resident_kv_bytes);
         },
     );
@@ -1567,6 +1575,14 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
             SmokeStatus::Ok,
             "V4 compressed-indexer session should create: {:?}",
             created.summary.error
+        );
+        assert_eq!(
+            created.summary.deepseek_v4_attention_aux_streams, 3,
+            "V4 attention sessions should provision the vLLM-style aux GEMM streams"
+        );
+        assert_eq!(
+            created.summary.deepseek_v4_attention_events, 4,
+            "V4 attention sessions should provision fan-out/join events for aux streams"
         );
         assert!(
             created.summary.resident_kv_bytes > swa_kv_bytes,
@@ -1595,6 +1611,14 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
             SmokeStatus::Ok,
             "V4 C128 compressed-indexer session should create: {:?}",
             created.summary.error
+        );
+        assert_eq!(
+            created.summary.deepseek_v4_attention_aux_streams, 3,
+            "V4 C128 attention sessions should provision aux GEMM streams"
+        );
+        assert_eq!(
+            created.summary.deepseek_v4_attention_events, 4,
+            "V4 C128 attention sessions should provision aux stream events"
         );
         assert_eq!(
             created.summary.resident_kv_bytes - 2048,

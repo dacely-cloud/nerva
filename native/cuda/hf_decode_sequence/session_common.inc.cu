@@ -21,6 +21,20 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   session->cudnn_decode_sdpa = nullptr;
   if (session->cudnn != nullptr) cudnnDestroy(session->cudnn);
 #endif
+  for (uint32_t index = 0; index < kDeepSeekV4AttentionEventCount; ++index) {
+    if (session->deepseek_v4_attention_events[index] != nullptr) {
+      cudaEventDestroy(session->deepseek_v4_attention_events[index]);
+      session->deepseek_v4_attention_events[index] = nullptr;
+    }
+  }
+  session->deepseek_v4_attention_event_count = 0;
+  for (uint32_t index = 0; index < kDeepSeekV4AttentionAuxStreamCount; ++index) {
+    if (session->deepseek_v4_attention_aux_streams[index] != nullptr) {
+      cudaStreamDestroy(session->deepseek_v4_attention_aux_streams[index]);
+      session->deepseek_v4_attention_aux_streams[index] = nullptr;
+    }
+  }
+  session->deepseek_v4_attention_aux_stream_count = 0;
   if (session->profile_stop != nullptr) cudaEventDestroy(session->profile_stop);
   if (session->profile_start != nullptr) cudaEventDestroy(session->profile_start);
   if (session->device_stop != nullptr) cudaEventDestroy(session->device_stop);
@@ -1204,6 +1218,52 @@ bool session_has_deepseek_layers(
     }
   }
   return false;
+}
+
+bool session_has_deepseek_v4_native_layers(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr ||
+      session->host_layouts.size() != session->layer_count) {
+    return false;
+  }
+  for (const SequenceLayerLayout &layout : session->host_layouts) {
+    if (layout_is_deepseek_v4_native(layout)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+cudaError_t initialize_deepseek_v4_attention_aux_resources(
+    NervaCudaHfDecodeSequenceSession *session) {
+  if (!session_has_deepseek_v4_native_layers(session)) {
+    return cudaSuccess;
+  }
+  for (uint32_t index = 0; index < kDeepSeekV4AttentionAuxStreamCount;
+       ++index) {
+    if (session->deepseek_v4_attention_aux_streams[index] != nullptr) {
+      continue;
+    }
+    cudaError_t err = cudaStreamCreateWithFlags(
+        &session->deepseek_v4_attention_aux_streams[index],
+        cudaStreamNonBlocking);
+    if (err != cudaSuccess) {
+      return err;
+    }
+    session->deepseek_v4_attention_aux_stream_count += 1;
+  }
+  for (uint32_t index = 0; index < kDeepSeekV4AttentionEventCount; ++index) {
+    if (session->deepseek_v4_attention_events[index] != nullptr) {
+      continue;
+    }
+    cudaError_t err = cudaEventCreateWithFlags(
+        &session->deepseek_v4_attention_events[index], cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+      return err;
+    }
+    session->deepseek_v4_attention_event_count += 1;
+  }
+  return cudaSuccess;
 }
 
 bool session_has_only_native_deepseek_layers(

@@ -626,6 +626,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources".to_string());
     }
 
     primitives
@@ -870,10 +871,10 @@ fn coverage_for_unit(
             ],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_parallel_attention_gemm_streams") => (
-            "missing",
-            &[],
+            "partial",
+            &["cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources"],
             &[
-                "parallelize attention GEMM/compressor/indexer streams like vLLM",
+                "schedule attention GEMM/compressor/indexer kernels onto the V4 aux streams like vLLM",
                 "measure stream overlap against vLLM DeepseekV4 attention",
             ],
         ),

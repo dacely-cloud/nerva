@@ -74,6 +74,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources"));
     assert!(json.contains("cuda_hf_sequence_deepseek_descriptor_abi"));
     assert!(json.contains("cuda_hf_sequence_deepseek_footprint_accounting"));
     assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
@@ -240,7 +241,10 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_bias_router_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_hash_router_runtime"));
     assert!(json.contains("\"unit\":\"deepseek_v4_parallel_attention_gemm_streams\""));
-    assert!(json.contains("\"status\":\"missing\""));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources"));
+    assert!(json.contains(
+        "schedule attention GEMM/compressor/indexer kernels onto the V4 aux streams like vLLM"
+    ));
     assert!(json.contains("\"default_block_size\":256"));
     assert!(json.contains("\"v4_swa\""));
     assert!(json.contains("\"v4_c4_mla\""));
@@ -370,8 +374,8 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-reference-audit-v1\""));
     assert!(json.contains("\"status\":\"ok\""));
-    assert!(json.contains("\"reference_units_total\":14"));
-    assert!(json.contains("\"reference_units_ok\":14"));
+    assert!(json.contains("\"reference_units_total\":15"));
+    assert!(json.contains("\"reference_units_ok\":15"));
     assert!(json.contains("\"reference_units_missing_file\":0"));
     assert!(json.contains("\"reference_units_symbol_gap\":0"));
     assert!(json.contains("\"runtime_parity_status\":\"vllm_reference_sources_pinned\""));
@@ -379,6 +383,7 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("\"execution_unit\":\"v3_mla_moe_model\""));
     assert!(json.contains("\"execution_unit\":\"v4_sparse_mla_backend\""));
+    assert!(json.contains("\"execution_unit\":\"v4_multi_stream_attention_overlap\""));
     assert!(json.contains("\"execution_unit\":\"v4_swa_cache_spec\""));
     assert!(json.contains("\"execution_unit\":\"v4_save_partial_states\""));
     assert!(json.contains("\"execution_unit\":\"v4_fused_qkv_rmsnorm\""));
@@ -414,12 +419,12 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
     assert!(json.contains("\"runtime_contract_status\":\"unsupported\""));
     assert!(json.contains("\"vllm_reference_status\":\"ok\""));
-    assert!(json.contains("\"vllm_reference_units_total\":14"));
-    assert!(json.contains("\"vllm_reference_units_ok\":14"));
+    assert!(json.contains("\"vllm_reference_units_total\":15"));
+    assert!(json.contains("\"vllm_reference_units_ok\":15"));
     assert!(json.contains("\"runtime_units_total\":8"));
     assert!(json.contains("\"runtime_blocking_units_total\":8"));
-    assert!(json.contains("\"runtime_units_partial\":7"));
-    assert!(json.contains("\"runtime_units_missing\":1"));
+    assert!(json.contains("\"runtime_units_partial\":8"));
+    assert!(json.contains("\"runtime_units_missing\":0"));
     assert!(json.contains("\"deepseek_v4_parallel_attention_gemm_streams\""));
     assert!(json.contains("\"runtime_parity_status\":\"blocked_before_end_to_end_parity\""));
     assert!(json.contains("\"performance_status\":\"blocked_until_runtime_units_complete\""));
@@ -485,6 +490,17 @@ fp8_ds_mla
 DeepseekV4SWACache
 alignment=576 if uses_fp8_ds_mla_layout else None
 self.quant_block_size = 128
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/utils/multi_stream_utils.py",
+        r#"
+def maybe_execute_in_parallel(): pass
+def execute_in_parallel(): pass
+start_event.record
+done_events[i].record
+ev.wait
 "#,
     );
     write_fixture_file(

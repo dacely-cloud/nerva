@@ -618,6 +618,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
     failure_stage = kCreateStageStopEventCreate;
     err = cudaEventCreate(&session->profile_stop);
   }
+  if (err == cudaSuccess) {
+    failure_stage = kCreateStageDeepSeekV4AttentionAuxInit;
+    err = initialize_deepseek_v4_attention_aux_resources(session);
+  }
   if (err == cudaSuccess && session->experimental_rt_decode_requested != 0) {
     failure_stage = kCreateStageExperimentalRtDecodeInit;
     err = initialize_experimental_rt_selector(session);

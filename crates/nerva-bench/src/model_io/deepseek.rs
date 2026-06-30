@@ -737,6 +737,18 @@ fn deepseek_vllm_reference_specs() -> Vec<DeepSeekVllmReferenceSpec> {
         },
         DeepSeekVllmReferenceSpec {
             architecture: "deepseek_v4",
+            execution_unit: "v4_multi_stream_attention_overlap",
+            relative_path: "vllm/utils/multi_stream_utils.py",
+            required_symbols: &[
+                "def maybe_execute_in_parallel",
+                "def execute_in_parallel",
+                "start_event.record",
+                "done_events[i].record",
+                "ev.wait",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
             execution_unit: "v4_compressor_cache",
             relative_path: "vllm/models/deepseek_v4/compressor.py",
             required_symbols: &[
