@@ -107,6 +107,14 @@ pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling_
     let resident_weights = shard_backed_resident_weights(runtime, &weights, compute_capability)?;
     let weight_plan = cuda_weight_plan(&resident_weights.summary, &resident_weights.descriptors)?;
     let layers = descriptor_marker_layers(&weights.metadata)?;
+    let mut experimental_rt = experimental_rt;
+    if experimental_rt.local_window_tokens
+        == CudaHfDecodeSequenceExperimentalRtConfig::default().local_window_tokens
+    {
+        if let Some(sliding_window) = weights.metadata.sliding_window {
+            experimental_rt.local_window_tokens = sliding_window.min(u32::MAX as usize) as u32;
+        }
+    }
     let created = CudaHfDecodeSequenceSessionConfig {
         dtype: cuda_dtype(weights.dtype)?,
         hidden: weights.metadata.hidden_size,

@@ -489,6 +489,7 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t deepseek_v3_grouped_router_selections;
   uint64_t deepseek_v4_bias_router_selections;
   uint64_t deepseek_v4_hash_router_selections;
+  uint64_t deepseek_raw_attention_tokens_scanned;
 } NervaCudaHfDecodeSequenceResult;
 
 typedef struct NervaCudaHfDecodeSequenceLayoutPlanRequest {

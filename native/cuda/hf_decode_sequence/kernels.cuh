@@ -158,7 +158,7 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
-    uint64_t *deepseek_runtime_counters);
+    uint64_t *deepseek_runtime_counters, uint32_t local_window_tokens);
 __global__ void hf_layer_finish_kernel(
     uint16_t *arena, uint64_t output_offset, uint32_t dtype, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,

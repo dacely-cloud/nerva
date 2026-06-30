@@ -221,6 +221,7 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             deepseek_v3_grouped_router_selections: out.deepseek_v3_grouped_router_selections,
             deepseek_v4_bias_router_selections: out.deepseek_v4_bias_router_selections,
             deepseek_v4_hash_router_selections: out.deepseek_v4_hash_router_selections,
+            deepseek_raw_attention_tokens_scanned: out.deepseek_raw_attention_tokens_scanned,
             error,
         }
     }

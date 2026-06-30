@@ -14,7 +14,9 @@ use crate::decode::hf_sequence::layout_plan::{
 use crate::decode::hf_sequence::request::{
     CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
-use crate::decode::hf_sequence::session::request::CudaHfDecodeSequenceSessionConfig;
+use crate::decode::hf_sequence::session::request::{
+    CudaHfDecodeSequenceExperimentalRtConfig, CudaHfDecodeSequenceSessionConfig,
+};
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{
     CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
@@ -1215,6 +1217,46 @@ fn deepseek_v4_compressed_dense_short_session_runs_through_sampling() {
 }
 
 #[test]
+fn deepseek_v4_swa_dense_respects_sliding_window_limit() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let mut rt = CudaHfDecodeSequenceExperimentalRtConfig::default();
+    rt.local_window_tokens = 3;
+    with_tiny_deepseek_v4_descriptor_session_with_rt(
+        tiny_deepseek_v4_swa_dense_descriptor_layer(),
+        8,
+        rt,
+        |created| {
+            if created.summary.status == SmokeStatus::Unavailable {
+                return;
+            }
+            assert_eq!(
+                created.summary.status,
+                SmokeStatus::Ok,
+                "V4 SWA session should create before sliding-window accounting: {:?}",
+                created.summary.error
+            );
+            let mut session = created.session.expect("V4 SWA session handle should exist");
+
+            let summary = session.run(&[0], 6, None);
+            assert_eq!(
+                summary.status,
+                SmokeStatus::Ok,
+                "V4 SWA decode should use the configured local window: {:?}",
+                summary.error
+            );
+            assert_eq!(summary.steps, 6);
+            assert_eq!(summary.kv_tokens, 6);
+            assert_eq!(summary.graph_replays, 6);
+            assert_eq!(summary.deepseek_raw_attention_tokens_scanned, 15);
+            assert_eq!(summary.deepseek_compressed_kv_writes, 0);
+            assert_eq!(summary.deepseek_compressed_kv_attention_reads, 0);
+            assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 0);
+        },
+    );
+}
+
+#[test]
 fn deepseek_v4_compressed_indexer_short_session_runs_through_sampling() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
@@ -1600,6 +1642,22 @@ fn with_tiny_deepseek_v4_descriptor_session(
         crate::decode::hf_sequence::session::request::CudaHfDecodeSequenceSessionCreateOutput,
     ),
 ) {
+    with_tiny_deepseek_v4_descriptor_session_with_rt(
+        layer,
+        max_context_tokens,
+        CudaHfDecodeSequenceExperimentalRtConfig::default(),
+        run,
+    );
+}
+
+fn with_tiny_deepseek_v4_descriptor_session_with_rt(
+    layer: CudaHfDecodeChainLayer<'static>,
+    max_context_tokens: usize,
+    experimental_rt: CudaHfDecodeSequenceExperimentalRtConfig,
+    run: impl FnOnce(
+        crate::decode::hf_sequence::session::request::CudaHfDecodeSequenceSessionCreateOutput,
+    ),
+) {
     let layers = [layer];
     let plan = CudaHfDecodeSequenceLayoutPlanRequest {
         hidden: 4,
@@ -1658,7 +1716,7 @@ fn with_tiny_deepseek_v4_descriptor_session(
         }),
         weight_blocks: &weight_blocks,
         detailed_profile: false,
-        experimental_rt: Default::default(),
+        experimental_rt,
     };
 
     run(config.create());

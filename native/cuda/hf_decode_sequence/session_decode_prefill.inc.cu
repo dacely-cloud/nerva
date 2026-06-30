@@ -290,7 +290,8 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       session->device_deepseek_indexer_kv,
       deepseek_v4_indexer_kv_layer_offset_bytes(session, layer_index),
       deepseek_v4_compressed_kv_block_count(session, layout),
-      session->device_deepseek_runtime_counters);
+      session->device_deepseek_runtime_counters,
+      session->experimental_rt_local_window_tokens);
   return cudaGetLastError();
 }
 

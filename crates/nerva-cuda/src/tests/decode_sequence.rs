@@ -85,6 +85,7 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         deepseek_v3_grouped_router_selections: 0,
         deepseek_v4_bias_router_selections: 0,
         deepseek_v4_hash_router_selections: 0,
+        deepseek_raw_attention_tokens_scanned: 0,
         error: None,
     };
     let json = summary.to_json();
@@ -103,6 +104,7 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         "\"deepseek_v3_grouped_router_selections\":0",
         "\"deepseek_v4_bias_router_selections\":0",
         "\"deepseek_v4_hash_router_selections\":0",
+        "\"deepseek_raw_attention_tokens_scanned\":0",
     ] {
         assert!(json.contains(expected));
     }
