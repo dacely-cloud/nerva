@@ -1,20 +1,22 @@
-use crate::deepseek_kv::c4_indexer_topk::{
-    deepseek_c4_indexer_topk, deepseek_c4_indexer_topk_reference,
-};
 use crate::deepseek_kv::c128_topk::{
     deepseek_c128_topk_metadata, deepseek_c128_topk_metadata_reference,
 };
+use crate::deepseek_kv::c4_indexer_topk::{
+    deepseek_c4_indexer_topk, deepseek_c4_indexer_topk_reference,
+};
 use crate::deepseek_kv::compress_cache::{
-    CudaDeepSeekCompressNormRopeFp8CacheInput, DEEPSEEK_COMPRESS_SCALE_E8M0,
-    DEEPSEEK_COMPRESS_SCALE_MXFP4, deepseek_compress_norm_rope_fp8_cache,
+    deepseek_compress_norm_rope_fp8_cache, CudaDeepSeekCompressNormRopeFp8CacheInput,
+    DEEPSEEK_COMPRESS_SCALE_E8M0, DEEPSEEK_COMPRESS_SCALE_MXFP4,
 };
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
-use crate::deepseek_kv::partial_states::deepseek_save_partial_states;
+use crate::deepseek_kv::partial_states::{
+    deepseek_save_partial_states, deepseek_save_partial_states_reference,
+};
 use crate::deepseek_kv::slot_mapping::{
     deepseek_compressed_slot_mapping, deepseek_compressed_slot_mapping_reference,
 };
 use crate::deepseek_kv::summary::{
-    CudaDeepSeekC4IndexerTopkSummary, CudaDeepSeekC128TopkMetadataSummary,
+    CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekC4IndexerTopkSummary,
     CudaDeepSeekCompressNormRopeFp8CacheSummary, CudaDeepSeekCompressedSlotMappingSummary,
     CudaDeepSeekKvSummary, CudaDeepSeekSavePartialStatesSummary,
 };
@@ -256,15 +258,48 @@ pub fn deepseek_save_partial_states_smoke() -> CudaDeepSeekSavePartialStatesSumm
     ];
     let positions = [5, 6, 7];
     let slot_mapping = [1, -1, 4];
+    let expected = match deepseek_save_partial_states_reference(
+        &kv,
+        &score,
+        &ape,
+        &positions,
+        &slot_mapping,
+        4,
+        3,
+        4,
+        4,
+        2,
+    ) {
+        Ok(expected) => expected,
+        Err(err) => {
+            let mut failed = deepseek_save_partial_states(
+                &kv,
+                &score,
+                &ape,
+                &positions,
+                &slot_mapping,
+                4,
+                3,
+                4,
+                4,
+                2,
+            );
+            failed.status = SmokeStatus::Failed;
+            failed.error = Some(format!(
+                "DeepSeek save partial states reference failed: {err}"
+            ));
+            return failed;
+        }
+    };
     let summary =
         deepseek_save_partial_states(&kv, &score, &ape, &positions, &slot_mapping, 4, 3, 4, 4, 2);
     if summary.status != SmokeStatus::Ok {
         return summary;
     }
 
-    if !save_partial_state_matches(&summary.state_cache)
-        || summary.written_tokens != 2
-        || summary.skipped_tokens != 1
+    if !f32_slices_close(&summary.state_cache, &expected.state_cache)
+        || summary.written_tokens != expected.written_tokens
+        || summary.skipped_tokens != expected.skipped_tokens
         || summary.kernel_launches != 1
         || summary.sync_calls != 1
         || summary.hot_path_allocations != 0
@@ -566,23 +601,6 @@ pub(crate) fn reference_compress_norm_rope_fp8_cache(fixture: &CompressCacheFixt
     kv_cache
 }
 
-fn save_partial_state_matches(state_cache: &[f32]) -> bool {
-    let mut expected = vec![0.0f32; 2 * 4 * 2 * 4];
-    let row_stride = 8usize;
-    let block_stride = 32usize;
-    let token0_base = row_stride;
-    expected[token0_base..token0_base + 3].copy_from_slice(&[1.0, 2.0, 3.0]);
-    expected[token0_base + 4..token0_base + 7].copy_from_slice(&[40.1, 50.2, 60.3]);
-    let token2_base = block_stride;
-    expected[token2_base..token2_base + 3].copy_from_slice(&[7.0, 8.0, 9.0]);
-    expected[token2_base + 4..token2_base + 7].copy_from_slice(&[100.7, 110.8, 120.9]);
-    state_cache.len() == expected.len()
-        && state_cache
-            .iter()
-            .zip(expected.iter())
-            .all(|(actual, expected)| (*actual - *expected).abs() < 1e-4)
-}
-
 pub fn c4_indexer_topk_fixture() -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<i32>) {
     let query = vec![
         1.0, 0.0, // token 0, head 0
@@ -605,6 +623,10 @@ pub fn c4_indexer_topk_fixture() -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<i32>) {
 }
 
 pub fn scores_close(actual: &[f32], expected: &[f32]) -> bool {
+    f32_slices_close(actual, expected)
+}
+
+fn f32_slices_close(actual: &[f32], expected: &[f32]) -> bool {
     actual.len() == expected.len()
         && actual
             .iter()

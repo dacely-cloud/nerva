@@ -1,11 +1,82 @@
 use crate::deepseek_kv::ffi::{
-    NervaCudaDeepSeekSavePartialStatesRequest, NervaCudaDeepSeekSavePartialStatesResult,
-    run_deepseek_save_partial_states,
+    run_deepseek_save_partial_states, NervaCudaDeepSeekSavePartialStatesRequest,
+    NervaCudaDeepSeekSavePartialStatesResult,
 };
 use crate::deepseek_kv::summary::CudaDeepSeekSavePartialStatesSummary;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;
 use crate::smoke::status::SmokeStatus;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeepSeekSavePartialStatesReference {
+    pub state_cache: Vec<f32>,
+    pub written_tokens: u32,
+    pub skipped_tokens: u32,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn deepseek_save_partial_states_reference(
+    kv: &[f32],
+    score: &[f32],
+    ape: &[f32],
+    positions: &[i64],
+    slot_mapping: &[i64],
+    block_size: u32,
+    head_size: u32,
+    state_width: u32,
+    compress_ratio: u32,
+    num_blocks: u32,
+) -> Result<DeepSeekSavePartialStatesReference, String> {
+    let shape = validate_save_partial_states_shape(
+        kv,
+        score,
+        ape,
+        positions,
+        slot_mapping,
+        block_size,
+        head_size,
+        state_width,
+        compress_ratio,
+        num_blocks,
+    )?;
+    let mut state_cache = vec![0.0f32; shape.state_values];
+    let row_stride = shape.state_width * 2;
+    let block_stride = shape.block_size * row_stride;
+    let mut written_tokens = 0u32;
+    let mut skipped_tokens = 0u32;
+
+    for token_idx in 0..shape.num_tokens {
+        let slot_id = slot_mapping[token_idx];
+        if slot_id < 0 {
+            skipped_tokens += 1;
+            continue;
+        }
+        let slot_id = slot_id as usize;
+        let block_idx = slot_id / shape.block_size;
+        let pos_in_block = slot_id % shape.block_size;
+        let base = block_idx * block_stride + pos_in_block * row_stride;
+        let position = positions[token_idx];
+        let ape_row = if position >= 0 {
+            position as usize % shape.compress_ratio
+        } else {
+            0
+        };
+
+        for dim in 0..shape.head_size {
+            state_cache[base + dim] = kv[token_idx * shape.head_size + dim];
+            state_cache[base + shape.state_width + dim] =
+                score[token_idx * shape.head_size + dim] + ape[ape_row * shape.head_size + dim];
+        }
+        written_tokens += 1;
+    }
+
+    Ok(DeepSeekSavePartialStatesReference {
+        state_cache,
+        written_tokens,
+        skipped_tokens,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn deepseek_save_partial_states(
     kv: &[f32],
     score: &[f32],
@@ -18,39 +89,20 @@ pub fn deepseek_save_partial_states(
     compress_ratio: u32,
     num_blocks: u32,
 ) -> CudaDeepSeekSavePartialStatesSummary {
-    let num_tokens = positions.len();
-    let token_values = num_tokens
-        .checked_mul(head_size as usize)
-        .unwrap_or(usize::MAX);
-    let ape_values = (compress_ratio as usize)
-        .checked_mul(head_size as usize)
-        .unwrap_or(usize::MAX);
-    let state_values = (num_blocks as usize)
-        .checked_mul(block_size as usize)
-        .and_then(|value| value.checked_mul(state_width as usize))
-        .and_then(|value| value.checked_mul(2))
-        .unwrap_or(usize::MAX);
-    let max_slot = (num_blocks as i64)
-        .checked_mul(block_size as i64)
-        .unwrap_or(i64::MAX);
-    if num_tokens == 0
-        || block_size == 0
-        || head_size == 0
-        || state_width < head_size
-        || compress_ratio == 0
-        || num_blocks == 0
-        || num_tokens > u32::MAX as usize
-        || kv.len() != token_values
-        || score.len() != token_values
-        || ape.len() != ape_values
-        || slot_mapping.len() != num_tokens
-        || slot_mapping
-            .iter()
-            .any(|slot| *slot < -1 || *slot >= max_slot)
-        || state_values == usize::MAX
-    {
+    let Ok(shape) = validate_save_partial_states_shape(
+        kv,
+        score,
+        ape,
+        positions,
+        slot_mapping,
+        block_size,
+        head_size,
+        state_width,
+        compress_ratio,
+        num_blocks,
+    ) else {
         return failed_summary(
-            num_tokens as u32,
+            positions.len() as u32,
             block_size,
             head_size,
             state_width,
@@ -59,11 +111,11 @@ pub fn deepseek_save_partial_states(
             Vec::new(),
             "invalid DeepSeek save partial states shape",
         );
-    }
+    };
 
-    let mut state_cache = vec![0.0f32; state_values];
+    let mut state_cache = vec![0.0f32; shape.state_values];
     let request = NervaCudaDeepSeekSavePartialStatesRequest {
-        num_tokens: num_tokens as u32,
+        num_tokens: shape.num_tokens as u32,
         block_size,
         head_size,
         state_width,
@@ -79,6 +131,73 @@ pub fn deepseek_save_partial_states(
     let mut out = NervaCudaDeepSeekSavePartialStatesResult::default();
     let return_code = run_deepseek_save_partial_states(&request, &mut out);
     summarize(return_code, out, state_cache)
+}
+
+#[derive(Clone, Copy)]
+struct SavePartialStatesShape {
+    num_tokens: usize,
+    block_size: usize,
+    head_size: usize,
+    state_width: usize,
+    compress_ratio: usize,
+    state_values: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_save_partial_states_shape(
+    kv: &[f32],
+    score: &[f32],
+    ape: &[f32],
+    positions: &[i64],
+    slot_mapping: &[i64],
+    block_size: u32,
+    head_size: u32,
+    state_width: u32,
+    compress_ratio: u32,
+    num_blocks: u32,
+) -> Result<SavePartialStatesShape, String> {
+    let num_tokens = positions.len();
+    let token_values = num_tokens
+        .checked_mul(head_size as usize)
+        .ok_or_else(|| "DeepSeek save partial states token shape overflow".to_string())?;
+    let ape_values = (compress_ratio as usize)
+        .checked_mul(head_size as usize)
+        .ok_or_else(|| "DeepSeek save partial states APE shape overflow".to_string())?;
+    let state_values = (num_blocks as usize)
+        .checked_mul(block_size as usize)
+        .and_then(|value| value.checked_mul(state_width as usize))
+        .and_then(|value| value.checked_mul(2))
+        .ok_or_else(|| "DeepSeek save partial states cache shape overflow".to_string())?;
+    let max_slot = (num_blocks as i64)
+        .checked_mul(block_size as i64)
+        .ok_or_else(|| "DeepSeek save partial states slot shape overflow".to_string())?;
+
+    if num_tokens == 0
+        || block_size == 0
+        || head_size == 0
+        || state_width < head_size
+        || compress_ratio == 0
+        || num_blocks == 0
+        || num_tokens > u32::MAX as usize
+        || kv.len() != token_values
+        || score.len() != token_values
+        || ape.len() != ape_values
+        || slot_mapping.len() != num_tokens
+        || slot_mapping
+            .iter()
+            .any(|slot| *slot < -1 || *slot >= max_slot)
+    {
+        return Err("invalid DeepSeek save partial states shape".to_string());
+    }
+
+    Ok(SavePartialStatesShape {
+        num_tokens,
+        block_size: block_size as usize,
+        head_size: head_size as usize,
+        state_width: state_width as usize,
+        compress_ratio: compress_ratio as usize,
+        state_values,
+    })
 }
 
 fn summarize(

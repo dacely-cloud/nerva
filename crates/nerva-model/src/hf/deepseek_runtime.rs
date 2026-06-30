@@ -779,6 +779,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("deepseek_c4_indexer_topk_reference".to_string());
         primitives.push("cuda_deepseek_c4_indexer_topk_api".to_string());
         primitives.push("cuda_deepseek_c4_indexer_topk_smoke".to_string());
+        primitives.push("deepseek_save_partial_states_reference".to_string());
         primitives.push("cuda_deepseek_save_partial_states_api".to_string());
         primitives.push("cuda_deepseek_save_partial_states_smoke".to_string());
         primitives.push("cuda_deepseek_compress_norm_rope_fp8_cache_api".to_string());
@@ -1077,6 +1078,7 @@ fn coverage_for_unit(
                 "deepseek_v4_mhc_compressor_indexer_manifest",
                 "cuda_deepseek_qkv_rmsnorm_api",
                 "cuda_deepseek_qkv_rmsnorm_smoke",
+                "deepseek_save_partial_states_reference",
                 "cuda_deepseek_save_partial_states_api",
                 "cuda_deepseek_save_partial_states_smoke",
                 "cuda_deepseek_compress_norm_rope_fp8_cache_api",

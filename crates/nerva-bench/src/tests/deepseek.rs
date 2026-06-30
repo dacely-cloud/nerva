@@ -1,8 +1,8 @@
 use crate::model_io::deepseek::{
-    DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
     deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
     run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_compare,
     run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
+    DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
 };
 
 #[test]
@@ -84,6 +84,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("deepseek_c4_indexer_topk_reference"));
     assert!(json.contains("cuda_deepseek_c4_indexer_topk_api"));
     assert!(json.contains("cuda_deepseek_c4_indexer_topk_smoke"));
+    assert!(json.contains("deepseek_save_partial_states_reference"));
     assert!(json.contains("cuda_deepseek_save_partial_states_api"));
     assert!(json.contains("cuda_deepseek_save_partial_states_smoke"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_api"));
@@ -315,6 +316,7 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("cuda_deepseek_c128_topk_metadata_api"));
     assert!(json.contains("deepseek_c4_indexer_topk_reference"));
     assert!(json.contains("cuda_deepseek_c4_indexer_topk_api"));
+    assert!(json.contains("deepseek_save_partial_states_reference"));
     assert!(json.contains("cuda_deepseek_save_partial_states_api"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_api"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_mxfp4_cache_api"));
@@ -498,11 +500,8 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(
         json.contains("benchmark V4 mHC, sparse MLA, and MegaMoE throughput against /root/vllm")
     );
-    assert!(
-        json.contains(
-            "run same-checkpoint full-layer routed output differential against /root/vllm"
-        )
-    );
+    assert!(json
+        .contains("run same-checkpoint full-layer routed output differential against /root/vllm"));
 
     let _ = std::fs::remove_dir_all(dir);
 }
