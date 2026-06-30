@@ -489,8 +489,11 @@ Current knobs:
 cargo run -p nerva-bench -- experimental-rt 524288 8 512 64 64 36
 cargo run -p nerva-bench -- experimental-rt-sweep 524288 8 1024 64 64 1 36
 cargo run -p nerva-bench -- experimental-rt-matrix 16 64 36
-cargo run -p nerva -- -m qwen3-8b -p "Tell me a story" -c 32768 -o 2048 --rt
+cargo run -p nerva -- -m qwen3-8b -p "Tell me a story" -c 32768 -o 2048 \
+  --rt-mode sparse --rt-far-pages 14 --rt-local-window 4096 --rt-sink-tokens 128
 ```
+
+The current Qwen decode path has two selector policies. The default sparse RT policy uses OptiX traversal to produce a sink/local/far page pattern and then runs the normal CUDA selected-page attention path. For semantic experiments, `NERVA_EXPERIMENTAL_RT_QK_SELECTOR=1` switches the Qwen decode integration to a CUDA query/key-aware page selector that scores real KV keys with the live query and still reuses the existing decode, attention, KV, graph, and sampler machinery. That Q/K selector is semantic, but it is not using RT cores yet; it is intentionally labeled separately in JSON as `cuda_qk_representative_page_selector`.
 
 The measured 512k-token synthetic selector point on an RTX 5090 is:
 
@@ -518,7 +521,7 @@ The current real-model integration has three modes:
 | `--rt-mode sparse` | Use selected pages in the sparse attention path when the selected page count is below dense page count. |
 | `--rt-mode auto` | Enable sparse mode only when the runtime can use it; otherwise fall back explicitly. |
 
-The open performance question is whether RT-selected far pages plus local/sink attention reduce full per-token latency at 32k and above without losing quality. The selector result is promising; full decode improvement remains under measurement.
+The open performance question is whether RT-selected far pages plus local/sink attention reduce full per-token latency at 32k and above without losing quality. The selector result is promising; full decode improvement remains under measurement. A real semantic RT selector still needs a page-descriptor BVH and CUDA rerank path; the current semantic Q/K selector is the correctness-facing step before that.
 
 ### MoE support
 
@@ -559,7 +562,7 @@ Implemented or actively wired:
 | Attention and KV probes | Exact online-softmax blockwise attention, KV page residency decisions, prefetch, demotion, eviction, and stall ledger events. |
 | Warm compute | CPU-resident, GPU-resident, GPU-staged, and hybrid matvec candidates are measured instead of assumed. |
 | Transport groundwork | Fabric topology, RDMA/DPDK/backend capability classification, DPDK UDP chunk planning, registration-cache invariants, stage-pipeline planning, and same-node multi-GPU island planning. |
-| Experimental RT | OptiX-backed candidate selection, CUDA rerank, selected-page sparse attention counters, shadow/sparse/auto modes, and synthetic attention-stage estimates. |
+| Experimental RT | OptiX-backed synthetic candidate selection, CUDA selected-page attention, query/key-aware CUDA selector experiments, shadow/sparse/auto modes, and synthetic attention-stage estimates. |
 | MoE groundwork | Qwen3-MoE parser, manifest, shared-expert roles, loader wiring, native contract limits, and real-config manifest tests. |
 
 Not finished:
@@ -567,7 +570,7 @@ Not finished:
 | Area | Current limitation |
 |---|---|
 | Production serving | No production scheduler/API server yet. |
-| Full RT decode proof | Candidate selection is measured; full Qwen decode speedup and quality bounds are still being tested. |
+| Full RT decode proof | Candidate selection is measured; full Qwen decode speedup, semantic RT selection, and quality bounds are still being tested. |
 | Long-context overprovisioning | Hot/warm/cold KV design exists, but exact multi-tier long-context decode is not complete. |
 | Qwen3.5 hybrid attention | Configs are recognized and intentionally rejected until the required attention runtime exists. |
 | Distributed execution | Transport and stage probes exist; multi-host inference is still future work. |
@@ -622,7 +625,7 @@ This repository is in the runtime foundation stage, so it is not a production mo
 | Qwen3-8B vLLM comparison | Checked-in artifacts record NERVA/vLLM short-decode latency and exact token identity parity for the local Qwen3-8B snapshot. |
 | vLLM token parity | A vLLM-style token artifact is compared against NERVA token IDs with exact mismatch, missing, extra, and hash accounting. |
 | Tiered attention | Exact online-softmax blockwise attention merges warm DRAM and hot VRAM KV blocks without changing semantics. |
-| Experimental RT selector | OptiX-backed page candidate selection, CUDA rerank, synthetic attention-stage estimates, and Qwen decode shadow/sparse/auto flags are wired for measurement. |
+| Experimental RT selector | OptiX-backed synthetic page candidate selection, selected-page CUDA attention, Q/K-aware CUDA selector experiments, synthetic attention-stage estimates, and Qwen decode shadow/sparse/auto flags are wired for measurement. |
 | Warm compute | Exact dense matvec candidates compare CPU-resident, GPU-resident, GPU-staged, and hybrid execution with selected-owner ledgering. |
 | Qwen3-MoE groundwork | Qwen3-MoE parser, real per-expert manifest entries, shared-expert roles, native contract limits, and loader wiring are present; full production MoE decode remains under development. |
 | Kernel contracts | Decode-kernel contract descriptors validate launch bounds, device-resident buffers, and zero hot-path allocation permission. |

@@ -217,6 +217,14 @@ extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
     if (local_err != cudaSuccess) {
       return local_err;
     }
+    local_err = launch_experimental_rt_qk_page_selector(
+        session, request->layer_index, attention_chunks, max_steps, best->stream);
+    if (local_err != cudaSuccess) {
+      return local_err;
+    }
+    if (experimental_rt_qk_selector_active(session, attention_chunks)) {
+      out->dependency_kernel_launches += 1;
+    }
 
     const uint32_t query_group = session->heads / session->kv_heads;
     const bool use_shared_warp_gqa =

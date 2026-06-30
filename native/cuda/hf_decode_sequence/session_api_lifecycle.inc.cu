@@ -170,6 +170,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->experimental_rt_local_window_tokens =
       request->experimental_rt_local_window_tokens;
   session->experimental_rt_sink_tokens = request->experimental_rt_sink_tokens;
+  session->experimental_rt_query_key_selector =
+      experimental_rt_query_key_selector_enabled();
+  session->experimental_prefill_local_window_tokens =
+      experimental_prefill_local_window_tokens();
   session->rms_eps = request->rms_eps;
   session->rope_theta = request->rope_theta;
   session->layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);
@@ -760,11 +764,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
   }
   if (err == cudaSuccess) err = cudaEventRecord(session->device_start, session->stream);
   for (uint32_t step = 0; err == cudaSuccess && step < context_steps; ++step) {
-    const bool rt_launch =
-        experimental_rt_should_launch_for(session, 0);
+    uint32_t rt_launched = 0;
     err = launch_experimental_rt_selector(
-        session, request->prompt_token_count + step, 0);
-    if (err == cudaSuccess && rt_launch) {
+        session, request->prompt_token_count + step, 0, &rt_launched);
+    if (err == cudaSuccess && rt_launched != 0) {
       out->kernel_launches += 1;
     }
     if (err != cudaSuccess) {
@@ -866,6 +869,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
   session->active_sampler = normalize_hf_decode_sampler_config(request->sampler);
   session->pending_prefill_available = 0;
   session->projection_batch_own_stream_synchronized = 0;
+  session->experimental_rt_selector_cache_valid = 0;
   cudaError_t err = cudaMemsetAsync(session->device_slots, 0,
                                     session->slots_bytes, session->stream);
   if (err == cudaSuccess)
@@ -982,11 +986,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
     const uint32_t current_position = session->active_cursor + step;
     const uint32_t dense_attention_chunks =
         decode_attention_chunks_for_cursor(session, current_position);
-    const bool rt_launch =
-        experimental_rt_should_launch_for(session, dense_attention_chunks);
+    uint32_t rt_launched = 0;
     err = launch_experimental_rt_selector(session, current_position,
-                                          dense_attention_chunks);
-    if (err == cudaSuccess && rt_launch) {
+                                          dense_attention_chunks, &rt_launched);
+    if (err == cudaSuccess && rt_launched != 0) {
       out->kernel_launches += 1;
       out->experimental_rt_selector_launches += 1;
     }

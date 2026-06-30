@@ -141,6 +141,10 @@ cudaError_t launch_cublas_layer_session_step(
           use_cudnn_decode_sdpa ? session->device_decode_seq_len_q : nullptr,
           use_cudnn_decode_sdpa ? session->device_decode_seq_len_kv : nullptr);
       err = cudaGetLastError();
+      if (err == cudaSuccess) {
+        err = launch_experimental_rt_qk_page_selector(
+            session, layer_index, attention_chunks, max_steps, session->stream);
+      }
       bool ran_cudnn_decode_sdpa = false;
 #if NERVA_HAVE_CUDNN_FRONTEND
       if (err == cudaSuccess && use_cudnn_decode_sdpa) {
@@ -397,6 +401,10 @@ cudaError_t profile_cublas_layer_session_step(
           use_cudnn_decode_sdpa ? session->device_decode_seq_len_q : nullptr,
           use_cudnn_decode_sdpa ? session->device_decode_seq_len_kv : nullptr);
       err = cudaGetLastError();
+      if (err == cudaSuccess) {
+        err = launch_experimental_rt_qk_page_selector(
+            session, layer_index, attention_chunks, max_steps, session->stream);
+      }
       bool ran_cudnn_decode_sdpa = false;
 #if NERVA_HAVE_CUDNN_FRONTEND
       if (err == cudaSuccess && use_cudnn_decode_sdpa) {
@@ -717,8 +725,11 @@ cudaError_t launch_cublas_session_prefill(
           query_group == kGroupedGqaHeads &&
           session->heads % session->kv_heads == 0 &&
           session->head_dim <= kSharedWarpGqaHeadDimMax;
+      const uint32_t prefill_local_window_tokens =
+          session->experimental_prefill_local_window_tokens;
 #if NERVA_HAVE_CUDNN_FRONTEND
       const bool use_cudnn_sdpa =
+          prefill_local_window_tokens == 0 &&
           session->cudnn_prefill_sdpa_disabled == 0 &&
           session->cudnn != nullptr &&
           session->device_prefill_qkv_encoded != nullptr &&
@@ -772,7 +783,8 @@ cudaError_t launch_cublas_session_prefill(
               session->max_context_tokens, chunk_start, chunk_tokens,
               session->device_prefill_qkv, session->device_kv_keys,
               session->device_kv_values, session->kv_block_count,
-              session->device_kv_block_table, session->device_prefill_attn);
+              session->device_kv_block_table, session->device_prefill_attn,
+              prefill_local_window_tokens);
         } else {
           const dim3 grid(chunk_tokens, session->heads);
           hf_prefill_attention_kernel<<<grid, session->head_threads,
@@ -782,7 +794,8 @@ cudaError_t launch_cublas_session_prefill(
               session->head_dim, session->max_context_tokens, chunk_start,
               chunk_tokens, session->device_prefill_qkv, session->device_kv_keys,
               session->device_kv_values, session->kv_block_count,
-              session->device_kv_block_table, session->device_prefill_attn);
+              session->device_kv_block_table, session->device_prefill_attn,
+              prefill_local_window_tokens);
         }
           err = cudaGetLastError();
           out->kernel_launches += 1;

@@ -24,8 +24,15 @@ struct NervaCudaHfDecodeSequenceSession {
   uint64_t experimental_rt_candidate_pages_bytes = 0;
   uint64_t experimental_rt_shadow_launches = 0;
   uint32_t experimental_rt_sparse_attention_active = 0;
+  uint32_t experimental_rt_selector_cache_valid = 0;
+  uint32_t experimental_rt_selector_cached_active_pages = 0;
+  uint32_t experimental_rt_selector_cached_current_page = 0;
+  uint32_t experimental_rt_selector_cached_local_pages = 0;
+  uint32_t experimental_rt_selector_cached_sink_pages = 0;
   void *experimental_rt_selector = nullptr;
   uint32_t *device_experimental_rt_candidate_pages = nullptr;
+  uint32_t experimental_rt_query_key_selector = 0;
+  uint32_t experimental_prefill_local_window_tokens = 0;
   float rms_eps = 0.0f;
   float rope_theta = 0.0f;
   SequenceArenaLayout arena_layout{};

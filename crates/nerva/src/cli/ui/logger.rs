@@ -434,6 +434,22 @@ impl NervaCliLoggerInner {
     }
 
     fn print_plain_prefill_progress(&mut self, progress: HfCudaDeviceSessionChunkProgress) {
+        if progress.wall_ns == 0 {
+            self.print_plain_line(
+                progress.phase.as_str(),
+                vec![
+                    paint(
+                        self.color,
+                        Tone::Green,
+                        format!("prompt {} tokens", progress.observed),
+                    ),
+                    metric(self.color, "wall", "running", Tone::Yellow),
+                    metric(self.color, "kv", "building", Tone::Magenta),
+                ]
+                .join("  "),
+            );
+            return;
+        }
         let wall = Duration::from_nanos(progress.wall_ns.max(1));
         let rate = format::tokens_per_s(progress.observed, wall);
         self.print_plain_line(

@@ -147,6 +147,11 @@ where
         .iter()
         .map(|token| token.0)
         .collect::<Vec<_>>();
+    let requested_tokens = chunk_steps.saturating_mul(chunks);
+    progress(HfCudaDeviceSessionChunkProgress::prefill_started(
+        requested_tokens,
+        prompt_tokens.len(),
+    ));
     let prefill_started = Instant::now();
     let started = CudaHfDecodeSequenceLoop::start_with_sampler(
         &mut session.session,
@@ -164,7 +169,6 @@ where
                 .unwrap_or_else(|| "CUDA HF session stream start failed".to_string()),
         });
     }
-    let requested_tokens = chunk_steps.saturating_mul(chunks);
     progress(HfCudaDeviceSessionChunkProgress::from_prefill_summary(
         requested_tokens,
         prefill_wall_ns,

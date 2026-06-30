@@ -26,6 +26,7 @@ pub(crate) struct GenerateArgs {
     pub rt_mode: String,
     pub rt_page_tokens: Option<usize>,
     pub rt_pages: Option<usize>,
+    pub rt_far_pages: Option<usize>,
     pub rt_local_window_tokens: Option<usize>,
     pub rt_sink_tokens: Option<usize>,
     pub profiling: bool,
@@ -51,6 +52,7 @@ impl Default for GenerateArgs {
             rt_mode: "auto".to_string(),
             rt_page_tokens: None,
             rt_pages: None,
+            rt_far_pages: None,
             rt_local_window_tokens: None,
             rt_sink_tokens: None,
             profiling: false,
@@ -106,6 +108,8 @@ struct ClapGenerateArgs {
     rt_page_tokens: Option<usize>,
     #[arg(long = "rt-pages", value_parser = parse_token_count)]
     rt_pages: Option<usize>,
+    #[arg(long = "rt-far-pages", value_parser = parse_token_count)]
+    rt_far_pages: Option<usize>,
     #[arg(long = "rt-local-window", value_parser = parse_token_count)]
     rt_local_window_tokens: Option<usize>,
     #[arg(long = "rt-sink-tokens", value_parser = parse_token_count)]
@@ -131,16 +135,21 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
     let parsed = ClapGenerateArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
     if parsed.help {
         return Err(
-            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling] [--chat|--raw] [--json] [--debug]"
+            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling] [--chat|--raw] [--json] [--debug]"
                 .to_string(),
         );
     }
     validate_sampling(parsed.temperature, parsed.top_p)?;
     validate_positive_count("--rt-page-tokens", parsed.rt_page_tokens)?;
     validate_positive_count("--rt-pages", parsed.rt_pages)?;
+    validate_positive_count("--rt-far-pages", parsed.rt_far_pages)?;
+    if parsed.rt_pages.is_some() && parsed.rt_far_pages.is_some() {
+        return Err("--rt-pages and --rt-far-pages are mutually exclusive".to_string());
+    }
     let rt_mode = parsed.rt_mode.unwrap_or_else(|| "auto".to_string());
     let rt_knobs_requested = parsed.rt_page_tokens.is_some()
         || parsed.rt_pages.is_some()
+        || parsed.rt_far_pages.is_some()
         || parsed.rt_local_window_tokens.is_some()
         || parsed.rt_sink_tokens.is_some();
     Ok(GenerateArgs {
@@ -165,6 +174,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
         rt_mode,
         rt_page_tokens: parsed.rt_page_tokens,
         rt_pages: parsed.rt_pages,
+        rt_far_pages: parsed.rt_far_pages,
         rt_local_window_tokens: parsed.rt_local_window_tokens,
         rt_sink_tokens: parsed.rt_sink_tokens,
         profiling: parsed.profiling,
@@ -243,6 +253,8 @@ mod tests {
             "-rt",
             "--rt-pages",
             "256",
+            "--rt-far-pages",
+            "16",
             "--rt-page-tokens",
             "64",
             "--rt-local-window",
@@ -253,6 +265,11 @@ mod tests {
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
+        assert!(parse_args(&args).is_err());
+        let args = args
+            .into_iter()
+            .filter(|arg| arg != "--rt-far-pages" && arg != "16")
+            .collect::<Vec<_>>();
         let parsed = parse_args(&args).unwrap();
         assert_eq!(parsed.model.as_deref(), Some("qwen3-8b"));
         assert_eq!(parsed.prompt.as_deref(), Some("hello"));
@@ -266,6 +283,7 @@ mod tests {
         assert!(parsed.rt);
         assert_eq!(parsed.rt_mode, "auto");
         assert_eq!(parsed.rt_pages, Some(256));
+        assert_eq!(parsed.rt_far_pages, None);
         assert_eq!(parsed.rt_page_tokens, Some(64));
         assert_eq!(parsed.rt_local_window_tokens, Some(4 * 1024));
         assert_eq!(parsed.rt_sink_tokens, Some(0));
@@ -296,8 +314,36 @@ mod tests {
     }
 
     #[test]
+    fn rt_far_pages_enable_rt() {
+        let args = [
+            "-m",
+            "qwen3-8b",
+            "-p",
+            "hello",
+            "--rt-far-pages",
+            "14",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let parsed = parse_args(&args).unwrap();
+        assert!(parsed.rt);
+        assert_eq!(parsed.rt_far_pages, Some(14));
+        assert_eq!(parsed.rt_pages, None);
+    }
+
+    #[test]
     fn rejects_zero_rt_pages() {
         let args = ["-m", "qwen3-8b", "-p", "hello", "--rt-pages", "0"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(parse_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_rt_far_pages() {
+        let args = ["-m", "qwen3-8b", "-p", "hello", "--rt-far-pages", "0"]
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();

@@ -18,13 +18,21 @@ void launch_hf_layer_attention_chunk_kernel(
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
     const uint32_t *kv_block_table, const uint32_t *selected_chunks);
+void launch_hf_experimental_qk_page_selector_kernel(
+    cudaStream_t stream, dim3 grid, uint32_t dtype, uint32_t layer_index,
+    uint32_t hidden, uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    uint32_t selected_pages, uint32_t local_window_tokens,
+    uint32_t sink_tokens, float *scratch, const uint16_t *kv_keys,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint32_t *candidate_pages);
 void launch_hf_prefill_grouped_gqa_attention_direct_kernel(
     cudaStream_t stream, dim3 grid, uint32_t dtype, uint32_t layer_index,
     uint32_t heads, uint32_t kv_heads, uint32_t head_dim, uint32_t max_steps,
     uint32_t chunk_start, uint32_t chunk_tokens, const float *qkv,
     const uint16_t *kv_keys, const uint16_t *kv_values,
     uint32_t kv_block_count, const uint32_t *kv_block_table,
-    uint16_t *attn_out);
+    uint16_t *attn_out, uint32_t local_window_tokens);
 
 __global__ void hf_decode_final_head_rows_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t dtype,
@@ -147,7 +155,8 @@ __global__ void hf_prefill_attention_kernel(
     uint32_t head_dim, uint32_t max_steps, uint32_t chunk_start,
     uint32_t chunk_tokens, const float *qkv, const uint16_t *kv_keys,
     const uint16_t *kv_values, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint16_t *attn_out);
+    const uint32_t *kv_block_table, uint16_t *attn_out,
+    uint32_t local_window_tokens);
 __global__ void hf_prefill_mlp_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,

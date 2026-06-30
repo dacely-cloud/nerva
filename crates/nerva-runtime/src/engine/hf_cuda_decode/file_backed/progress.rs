@@ -52,6 +52,40 @@ pub struct HfCudaDeviceSessionChunkProgress {
 }
 
 impl HfCudaDeviceSessionChunkProgress {
+    pub fn prefill_started(requested: usize, prompt_tokens: usize) -> Self {
+        Self {
+            phase: HfCudaDeviceProgressPhase::Prefill,
+            generated: 0,
+            requested,
+            chunk_requested: requested,
+            chunk_index: 0,
+            observed: prompt_tokens,
+            hit_stop: false,
+            wall_ns: 0,
+            device_ns: 0,
+            projection_ns: 0,
+            qkv_projection_ns: 0,
+            attention_output_projection_ns: 0,
+            gate_up_projection_ns: 0,
+            down_projection_ns: 0,
+            lm_head_projection_ns: 0,
+            attention_ns: 0,
+            mlp_ns: 0,
+            norm_ns: 0,
+            sampling_ns: 0,
+            graph_nodes: 0,
+            graph_replays: 0,
+            graph_cache_hits: 0,
+            kernel_launches: 0,
+            kv_tokens: 0,
+            h2d_bytes: 0,
+            d2h_bytes: 0,
+            sync_calls: 0,
+            host_causality_edges: 0,
+            hot_path_allocations: 0,
+        }
+    }
+
     pub fn from_summary(
         generated: usize,
         requested: usize,

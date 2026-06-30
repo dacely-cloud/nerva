@@ -82,9 +82,6 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
     if let Some(page_tokens) = optional_u32_count("--rt-page-tokens", parsed.rt_page_tokens)? {
         rt_decode.page_tokens = page_tokens;
     }
-    if let Some(pages) = optional_u32_count("--rt-pages", parsed.rt_pages)? {
-        rt_decode.pages = pages;
-    }
     if let Some(local_window_tokens) =
         optional_u32_count("--rt-local-window", parsed.rt_local_window_tokens)?
     {
@@ -92,6 +89,15 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
     }
     if let Some(sink_tokens) = optional_u32_count("--rt-sink-tokens", parsed.rt_sink_tokens)? {
         rt_decode.sink_tokens = sink_tokens;
+    }
+    if let Some(far_pages) = optional_u32_count("--rt-far-pages", parsed.rt_far_pages)? {
+        let local_pages = ceil_div_u32(rt_decode.local_window_tokens, rt_decode.page_tokens);
+        let sink_pages = ceil_div_u32(rt_decode.sink_tokens, rt_decode.page_tokens);
+        rt_decode.pages = far_pages
+            .saturating_add(local_pages)
+            .saturating_add(sink_pages);
+    } else if let Some(pages) = optional_u32_count("--rt-pages", parsed.rt_pages)? {
+        rt_decode.pages = pages;
     }
     let queue_capacity = parsed.queue_capacity.unwrap_or(DEFAULT_QUEUE_CAPACITY);
     let stop_token_ids = stop_token_ids(&model_path_string)?;
@@ -250,8 +256,35 @@ fn generate_json_output(
         })
         .collect::<Vec<_>>()
         .join(",");
+    let rt_page_tokens = output.stream.create.experimental_rt_page_tokens;
+    let rt_total_pages = output.stream.create.experimental_rt_pages;
+    let rt_local_pages = ceil_div_u32(
+        output
+            .stream
+            .create
+            .experimental_rt_local_window_tokens,
+        rt_page_tokens,
+    );
+    let rt_sink_pages = ceil_div_u32(
+        output.stream.create.experimental_rt_sink_tokens,
+        rt_page_tokens,
+    );
+    let rt_reserved_pages = rt_local_pages.saturating_add(rt_sink_pages);
+    let rt_far_pages = rt_total_pages.saturating_sub(rt_reserved_pages);
+    let rt_selected_tokens = rt_total_pages.saturating_mul(rt_page_tokens);
+    let rt_local_tokens = rt_local_pages.saturating_mul(rt_page_tokens);
+    let rt_sink_page_tokens = rt_sink_pages.saturating_mul(rt_page_tokens);
+    let rt_far_tokens = rt_far_pages.saturating_mul(rt_page_tokens);
+    let rt_selector_policy = rt_selector_policy(
+        output.stream.create.experimental_rt_decode_requested,
+        output.stream.create.experimental_rt_decode_enabled,
+        output.stream.create.experimental_rt_mode,
+        experimental_rt_qk_selector_from_env(),
+    );
+    let experimental_prefill_local_window_tokens =
+        experimental_prefill_local_window_tokens_from_env();
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"page_tokens\":{},\"pages\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
+        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"selector_policy\":\"{}\",\"query_key_aware_selector\":{},\"page_tokens\":{},\"pages\":{},\"selected_pages\":{},\"local_pages\":{},\"sink_pages\":{},\"far_pages\":{},\"selected_tokens\":{},\"local_page_tokens\":{},\"sink_page_tokens\":{},\"far_tokens\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"experimental_prefill_local_window_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
         json_escape(output.backend),
         env!("CARGO_PKG_VERSION"),
         json_escape(path),
@@ -264,11 +297,22 @@ fn generate_json_output(
         output.stream.create.experimental_rt_decode_requested,
         output.stream.create.experimental_rt_decode_enabled,
         rt_mode_name(output.stream.create.experimental_rt_mode),
-        output.stream.create.experimental_rt_page_tokens,
-        output.stream.create.experimental_rt_pages,
+        rt_selector_policy,
+        experimental_rt_qk_selector_from_env(),
+        rt_page_tokens,
+        rt_total_pages,
+        rt_total_pages,
+        rt_local_pages,
+        rt_sink_pages,
+        rt_far_pages,
+        rt_selected_tokens,
+        rt_local_tokens,
+        rt_sink_page_tokens,
+        rt_far_tokens,
         output.stream.create.experimental_rt_local_window_tokens,
         output.stream.create.experimental_rt_sink_tokens,
         output.stream.create.prefill_chunk_tokens,
+        experimental_prefill_local_window_tokens,
         output.stream.create.head_threads,
         json_escape(prompt),
         prompt_ids
@@ -334,6 +378,57 @@ fn rt_mode_name(mode: u32) -> &'static str {
         2 => "shadow",
         3 => "sparse",
         _ => "auto",
+    }
+}
+
+fn rt_selector_policy(
+    requested: bool,
+    enabled: bool,
+    mode: u32,
+    qk_selector: bool,
+) -> &'static str {
+    if !requested {
+        "none"
+    } else if !enabled {
+        "unavailable_or_dense_fallback"
+    } else if qk_selector {
+        "cuda_qk_representative_page_selector"
+    } else if mode == 2 {
+        "optix_synthetic_page_pattern_shadow_only"
+    } else {
+        "optix_synthetic_sink_local_far_page_pattern"
+    }
+}
+
+fn experimental_rt_qk_selector_from_env() -> bool {
+    let Ok(value) = std::env::var("NERVA_EXPERIMENTAL_RT_QK_SELECTOR") else {
+        return false;
+    };
+    matches!(
+        value.trim().as_bytes().first().copied(),
+        Some(b'1' | b'y' | b'Y' | b't' | b'T')
+    )
+}
+
+fn experimental_prefill_local_window_tokens_from_env() -> u32 {
+    let Ok(value) = std::env::var("NERVA_EXPERIMENTAL_PREFILL_LOCAL_WINDOW_TOKENS") else {
+        return 0;
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    match trimmed.parse::<u64>() {
+        Ok(0) | Err(_) => 0,
+        Ok(value) => value.min(u64::from(u32::MAX)) as u32,
+    }
+}
+
+fn ceil_div_u32(value: u32, divisor: u32) -> u32 {
+    if value == 0 || divisor == 0 {
+        0
+    } else {
+        value.saturating_add(divisor - 1) / divisor
     }
 }
 

@@ -99,6 +99,7 @@ void reset_session_graph(NervaCudaHfDecodeSequenceSession *session) {
   session->cached_eos_token = 0;
   session->cached_attention_chunks = 0;
   session->cached_experimental_rt_sparse_attention_active = 0;
+  session->experimental_rt_selector_cache_valid = 0;
   session->cached_sampler = default_hf_decode_sampler_config();
   session->cached_graph_nodes = 0;
   session->cached_projection_ns = 0;
@@ -255,7 +256,8 @@ bool experimental_rt_sparse_available(
     const NervaCudaHfDecodeSequenceSession *session,
     uint32_t dense_attention_chunks) {
   return session != nullptr && session->experimental_rt_decode_enabled != 0 &&
-         session->experimental_rt_selector != nullptr &&
+         (session->experimental_rt_selector != nullptr ||
+          session->experimental_rt_query_key_selector != 0) &&
          session->device_experimental_rt_candidate_pages != nullptr &&
          dense_attention_chunks != 0 &&
          session->experimental_rt_pages != 0 &&
@@ -276,7 +278,11 @@ bool experimental_rt_should_launch_for(
     const NervaCudaHfDecodeSequenceSession *session,
     uint32_t dense_attention_chunks) {
   if (session == nullptr || session->experimental_rt_decode_enabled == 0 ||
-      session->experimental_rt_selector == nullptr) {
+      (session->experimental_rt_selector == nullptr &&
+       session->experimental_rt_query_key_selector == 0)) {
+    return false;
+  }
+  if (session->experimental_rt_query_key_selector != 0) {
     return false;
   }
   if (session->experimental_rt_mode == kExperimentalRtModeShadow) {
@@ -293,6 +299,39 @@ const uint32_t *experimental_rt_selected_chunks_for(
              : nullptr;
 }
 
+bool experimental_rt_qk_selector_active(
+    const NervaCudaHfDecodeSequenceSession *session,
+    uint32_t attention_chunks) {
+  return session != nullptr && session->experimental_rt_query_key_selector != 0 &&
+         session->experimental_rt_sparse_attention_active != 0 &&
+         session->experimental_rt_page_tokens == kDecodeAttentionChunkTokens &&
+         attention_chunks == session->experimental_rt_pages &&
+         session->device_experimental_rt_candidate_pages != nullptr;
+}
+
+cudaError_t launch_experimental_rt_qk_page_selector(
+    NervaCudaHfDecodeSequenceSession *session, uint32_t layer_index,
+    uint32_t attention_chunks, uint32_t max_steps, cudaStream_t stream) {
+  if (!experimental_rt_qk_selector_active(session, attention_chunks)) {
+    return cudaSuccess;
+  }
+  const uint32_t local_pages = experimental_rt_local_pages(session);
+  const uint32_t sink_pages = experimental_rt_sink_pages(session);
+  const uint32_t fixed_pages = local_pages + sink_pages;
+  const uint32_t far_slots =
+      attention_chunks > fixed_pages ? attention_chunks - fixed_pages : 1u;
+  const dim3 grid(session->kv_heads, far_slots);
+  launch_hf_experimental_qk_page_selector_kernel(
+      stream, grid, session->dtype, layer_index, session->hidden,
+      session->heads, session->kv_heads, session->head_dim,
+      session->intermediate, session->device_step, max_steps, attention_chunks,
+      session->experimental_rt_local_window_tokens,
+      session->experimental_rt_sink_tokens, session->device_scratch,
+      session->device_kv_keys, session->kv_block_count,
+      session->device_kv_block_table, session->device_experimental_rt_candidate_pages);
+  return cudaGetLastError();
+}
+
 cudaError_t initialize_experimental_rt_selector(
     NervaCudaHfDecodeSequenceSession *session) {
   if (session == nullptr || session->experimental_rt_decode_requested == 0) {
@@ -304,6 +343,10 @@ cudaError_t initialize_experimental_rt_selector(
       clamp_nonzero_u32(session->experimental_rt_page_tokens, 64u);
   const uint32_t pages = ceil_div_u32(session->max_context_tokens, page_tokens);
   if (pages == 0) {
+    return cudaErrorInvalidValue;
+  }
+  if (session->experimental_rt_query_key_selector != 0 &&
+      page_tokens != kDecodeAttentionChunkTokens) {
     return cudaErrorInvalidValue;
   }
   const uint32_t requested_candidates =
@@ -331,6 +374,11 @@ cudaError_t initialize_experimental_rt_selector(
   if (err != cudaSuccess) {
     return err;
   }
+  if (session->experimental_rt_query_key_selector != 0) {
+    session->experimental_rt_decode_enabled = 1;
+    session->experimental_rt_selector_cache_valid = 0;
+    return cudaSuccess;
+  }
   int32_t rt_cuda_error = static_cast<int32_t>(cudaSuccess);
   void *selector = nullptr;
   const int rt_status = nerva_cuda_rt_candidate_selector_create(
@@ -347,12 +395,16 @@ cudaError_t initialize_experimental_rt_selector(
   }
   session->experimental_rt_selector = selector;
   session->experimental_rt_decode_enabled = 1;
+  session->experimental_rt_selector_cache_valid = 0;
   return cudaSuccess;
 }
 
 cudaError_t launch_experimental_rt_selector(
     NervaCudaHfDecodeSequenceSession *session, uint32_t current_position,
-    uint32_t dense_attention_chunks) {
+    uint32_t dense_attention_chunks, uint32_t *launched_out) {
+  if (launched_out != nullptr) {
+    *launched_out = 0;
+  }
   if (!experimental_rt_should_launch_for(session, dense_attention_chunks)) {
     return cudaSuccess;
   }
@@ -365,17 +417,34 @@ cudaError_t launch_experimental_rt_selector(
       session->experimental_rt_page_tokens == 0
           ? 0u
           : current_position / session->experimental_rt_page_tokens;
+  const uint32_t local_pages = experimental_rt_local_pages(session);
+  const uint32_t sink_pages = experimental_rt_sink_pages(session);
+  if (session->experimental_rt_mode != kExperimentalRtModeShadow &&
+      session->experimental_rt_selector_cache_valid != 0 &&
+      session->experimental_rt_selector_cached_active_pages == active_pages &&
+      session->experimental_rt_selector_cached_current_page == current_page &&
+      session->experimental_rt_selector_cached_local_pages == local_pages &&
+      session->experimental_rt_selector_cached_sink_pages == sink_pages) {
+    return cudaSuccess;
+  }
   int32_t rt_cuda_error = static_cast<int32_t>(cudaSuccess);
   const int rt_status = nerva_cuda_rt_candidate_selector_launch(
       session->experimental_rt_selector, session->stream, active_pages,
-      current_page, experimental_rt_local_pages(session),
-      experimental_rt_sink_pages(session), &rt_cuda_error);
+      current_page, local_pages, sink_pages, &rt_cuda_error);
   if (rt_status != 0) {
     return rt_cuda_error == static_cast<int32_t>(cudaSuccess)
                ? cudaErrorUnknown
                : static_cast<cudaError_t>(rt_cuda_error);
   }
+  session->experimental_rt_selector_cache_valid = 1;
+  session->experimental_rt_selector_cached_active_pages = active_pages;
+  session->experimental_rt_selector_cached_current_page = current_page;
+  session->experimental_rt_selector_cached_local_pages = local_pages;
+  session->experimental_rt_selector_cached_sink_pages = sink_pages;
   session->experimental_rt_shadow_launches += 1;
+  if (launched_out != nullptr) {
+    *launched_out = 1;
+  }
   return cudaSuccess;
 }
 
@@ -422,8 +491,17 @@ uint32_t tune_prefill_chunk_tokens(uint64_t max_context_tokens,
   if (max_context_tokens == 0) return 0;
   const uint64_t base =
       std::min<uint64_t>(kPrefillChunkBaseTokens, max_context_tokens);
+  uint64_t configured_max = kPrefillChunkMaxTokens;
+  const char *max_env = getenv("NERVA_PREFILL_CHUNK_MAX_TOKENS");
+  if (max_env != nullptr && max_env[0] != '\0') {
+    char *end = nullptr;
+    const unsigned long long parsed = strtoull(max_env, &end, 10);
+    if (end != max_env && parsed != 0ull) {
+      configured_max = parsed;
+    }
+  }
   const uint64_t max_target =
-      std::min<uint64_t>(kPrefillChunkMaxTokens, max_context_tokens);
+      std::min<uint64_t>(configured_max, max_context_tokens);
   const uint64_t min_chunk = std::min<uint64_t>(base, max_context_tokens);
   if (free_device_bytes == 0) {
     return static_cast<uint32_t>(base);
@@ -461,6 +539,30 @@ uint32_t ceil_div_u64_to_u32(uint64_t value, uint32_t divisor) {
   if (divisor == 0) return 0;
   const uint64_t blocks = (value + divisor - 1u) / divisor;
   return blocks > 0xffffffffu ? 0xffffffffu : static_cast<uint32_t>(blocks);
+}
+
+uint32_t experimental_prefill_local_window_tokens() {
+  const char *env = getenv("NERVA_EXPERIMENTAL_PREFILL_LOCAL_WINDOW_TOKENS");
+  if (env == nullptr || env[0] == '\0') {
+    return 0;
+  }
+  char *end = nullptr;
+  const unsigned long long parsed = strtoull(env, &end, 10);
+  if (end == env || parsed == 0ull) {
+    return 0;
+  }
+  return parsed > 0xffffffffull ? 0xffffffffu : static_cast<uint32_t>(parsed);
+}
+
+uint32_t experimental_rt_query_key_selector_enabled() {
+  const char *env = getenv("NERVA_EXPERIMENTAL_RT_QK_SELECTOR");
+  if (env == nullptr || env[0] == '\0') {
+    return 0;
+  }
+  return (env[0] == '1' || env[0] == 'y' || env[0] == 'Y' ||
+          env[0] == 't' || env[0] == 'T')
+             ? 1u
+             : 0u;
 }
 
 cudaError_t deinterleave_descriptor_query_gate_weights(

@@ -171,7 +171,8 @@ __global__ void hf_prefill_attention_kernel(
     uint32_t head_dim, uint32_t max_steps, uint32_t chunk_start,
     uint32_t chunk_tokens, const float *qkv, const uint16_t *kv_keys,
     const uint16_t *kv_values, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint16_t *attn_out) {
+    const uint32_t *kv_block_table, uint16_t *attn_out,
+    uint32_t local_window_tokens) {
   const uint32_t local_token = blockIdx.x;
   const uint32_t head = blockIdx.y;
   if (local_token >= chunk_tokens || head >= heads) {
@@ -195,7 +196,11 @@ __global__ void hf_prefill_attention_kernel(
   const float scale = rsqrtf(static_cast<float>(head_dim));
   float local_m = -INFINITY;
   float local_l = 0.0f;
-  for (uint32_t token = 0; token <= global_pos; ++token) {
+  const uint32_t token_start =
+      local_window_tokens == 0 || global_pos + 1u <= local_window_tokens
+          ? 0u
+          : global_pos + 1u - local_window_tokens;
+  for (uint32_t token = token_start; token <= global_pos; ++token) {
     const uint64_t token_base = kv_cache_token_base(
         layer_index, kv_block_count, kv_block_table, token, kv_hidden,
         kv_start);
