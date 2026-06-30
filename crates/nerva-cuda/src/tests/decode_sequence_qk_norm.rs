@@ -44,6 +44,7 @@ fn hf_decode_sequence_accepts_qk_norm_descriptor_blocks() {
         w_shared_expert_down: None,
         w_shared_expert_router: None,
         linear_gdn: None,
+        deepseek: None,
         mlp_kind: 0,
         moe_intermediate: 0,
         shared_expert_intermediate: 0,

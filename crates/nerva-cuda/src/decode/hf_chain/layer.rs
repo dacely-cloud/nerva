@@ -6,8 +6,19 @@ pub const CUDA_HF_MLP_DENSE: u32 = 0;
 pub const CUDA_HF_MLP_SPARSE_MOE: u32 = 1;
 pub const CUDA_HF_ATTENTION_FULL: u32 = 0;
 pub const CUDA_HF_ATTENTION_LINEAR_GDN: u32 = 1;
+pub const CUDA_HF_ATTENTION_DEEPSEEK_MLA: u32 = 2;
 pub const CUDA_HF_MOE_EXPERTS_MAX: usize = 256;
 pub const CUDA_HF_MOE_TOP_K_MAX: usize = 16;
+pub const CUDA_HF_DEEPSEEK_MODE_V3_MLA: u32 = 1;
+pub const CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER: u32 = 2;
+pub const CUDA_HF_DEEPSEEK_MODE_V4_SWA: u32 = 3;
+pub const CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED: u32 = 4;
+pub const CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER: u32 = 5;
+pub const CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER: u32 = 1 << 0;
+pub const CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR: u32 = 1 << 1;
+pub const CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER: u32 = 1 << 2;
+pub const CUDA_HF_DEEPSEEK_FLAG_MOE: u32 = 1 << 3;
+pub const CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW: u32 = 1 << 4;
 
 #[derive(Clone, Debug)]
 pub struct CudaHfDecodeChainLayer<'a> {
@@ -35,6 +46,7 @@ pub struct CudaHfDecodeChainLayer<'a> {
     pub w_shared_expert_down: Option<&'a [u16]>,
     pub w_shared_expert_router: Option<&'a [u16]>,
     pub linear_gdn: Option<CudaHfLinearGdnLayer<'a>>,
+    pub deepseek: Option<CudaHfDeepSeekLayer>,
     pub mlp_kind: u32,
     pub moe_intermediate: usize,
     pub shared_expert_intermediate: usize,
@@ -42,6 +54,22 @@ pub struct CudaHfDecodeChainLayer<'a> {
     pub experts_per_token: usize,
     pub norm_topk_prob: bool,
     pub attention_kind: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CudaHfDeepSeekLayer {
+    pub mode: u32,
+    pub flags: u32,
+    pub q_lora_rank: usize,
+    pub kv_lora_rank: usize,
+    pub o_lora_rank: usize,
+    pub o_groups: usize,
+    pub qk_nope_head_dim: usize,
+    pub qk_rope_head_dim: usize,
+    pub v_head_dim: usize,
+    pub compress_ratio: usize,
+    pub index_n_heads: usize,
+    pub index_head_dim: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -76,14 +104,19 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
                 self.validate_full_attention(hidden, attention_hidden, kv_hidden, head_dim)
             }
             CUDA_HF_ATTENTION_LINEAR_GDN => self.validate_linear_gdn(hidden),
+            CUDA_HF_ATTENTION_DEEPSEEK_MLA => self.validate_deepseek_mla(hidden),
             other => Some(format!(
                 "CUDA HF decode chain unsupported attention kind {other}"
             )),
         };
-        let mlp_error = match self.mlp_kind {
-            CUDA_HF_MLP_DENSE => self.validate_dense_mlp(hidden, intermediate),
-            CUDA_HF_MLP_SPARSE_MOE => self.validate_sparse_moe_mlp(hidden, intermediate),
-            other => Some(format!("CUDA HF decode chain unsupported MLP kind {other}")),
+        let mlp_error = if self.attention_kind == CUDA_HF_ATTENTION_DEEPSEEK_MLA {
+            self.validate_deepseek_mlp_metadata(intermediate)
+        } else {
+            match self.mlp_kind {
+                CUDA_HF_MLP_DENSE => self.validate_dense_mlp(hidden, intermediate),
+                CUDA_HF_MLP_SPARSE_MOE => self.validate_sparse_moe_mlp(hidden, intermediate),
+                other => Some(format!("CUDA HF decode chain unsupported MLP kind {other}")),
+            }
         };
         attention_error
             .or(mlp_error)
@@ -154,6 +187,22 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             experts_per_token: self.experts_per_token as u32,
             norm_topk_prob: self.norm_topk_prob as u32,
             attention_kind: self.attention_kind,
+            deepseek_mode: self.deepseek.map_or(0, |layer| layer.mode),
+            deepseek_flags: self.deepseek.map_or(0, |layer| layer.flags),
+            deepseek_q_lora_rank: self.deepseek.map_or(0, |layer| layer.q_lora_rank as u32),
+            deepseek_kv_lora_rank: self.deepseek.map_or(0, |layer| layer.kv_lora_rank as u32),
+            deepseek_o_lora_rank: self.deepseek.map_or(0, |layer| layer.o_lora_rank as u32),
+            deepseek_o_groups: self.deepseek.map_or(0, |layer| layer.o_groups as u32),
+            deepseek_qk_nope_head_dim: self
+                .deepseek
+                .map_or(0, |layer| layer.qk_nope_head_dim as u32),
+            deepseek_qk_rope_head_dim: self
+                .deepseek
+                .map_or(0, |layer| layer.qk_rope_head_dim as u32),
+            deepseek_v_head_dim: self.deepseek.map_or(0, |layer| layer.v_head_dim as u32),
+            deepseek_compress_ratio: self.deepseek.map_or(0, |layer| layer.compress_ratio as u32),
+            deepseek_index_n_heads: self.deepseek.map_or(0, |layer| layer.index_n_heads as u32),
+            deepseek_index_head_dim: self.deepseek.map_or(0, |layer| layer.index_head_dim as u32),
         }
     }
 
@@ -203,6 +252,22 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             experts_per_token: self.experts_per_token as u32,
             norm_topk_prob: self.norm_topk_prob as u32,
             attention_kind: self.attention_kind,
+            deepseek_mode: self.deepseek.map_or(0, |layer| layer.mode),
+            deepseek_flags: self.deepseek.map_or(0, |layer| layer.flags),
+            deepseek_q_lora_rank: self.deepseek.map_or(0, |layer| layer.q_lora_rank as u32),
+            deepseek_kv_lora_rank: self.deepseek.map_or(0, |layer| layer.kv_lora_rank as u32),
+            deepseek_o_lora_rank: self.deepseek.map_or(0, |layer| layer.o_lora_rank as u32),
+            deepseek_o_groups: self.deepseek.map_or(0, |layer| layer.o_groups as u32),
+            deepseek_qk_nope_head_dim: self
+                .deepseek
+                .map_or(0, |layer| layer.qk_nope_head_dim as u32),
+            deepseek_qk_rope_head_dim: self
+                .deepseek
+                .map_or(0, |layer| layer.qk_rope_head_dim as u32),
+            deepseek_v_head_dim: self.deepseek.map_or(0, |layer| layer.v_head_dim as u32),
+            deepseek_compress_ratio: self.deepseek.map_or(0, |layer| layer.compress_ratio as u32),
+            deepseek_index_n_heads: self.deepseek.map_or(0, |layer| layer.index_n_heads as u32),
+            deepseek_index_head_dim: self.deepseek.map_or(0, |layer| layer.index_head_dim as u32),
         }
     }
 
@@ -309,6 +374,105 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             }
         }
         None
+    }
+
+    fn validate_deepseek_mla(&self, hidden: usize) -> Option<String> {
+        if self.linear_gdn.is_some()
+            || self.w_q.len()
+                + self.w_k.len()
+                + self.w_v.len()
+                + self.w_o.len()
+                + self.w_gate.len()
+                + self.w_up.len()
+                + self.w_down.len()
+                != 0
+        {
+            return Some(
+                "CUDA HF decode chain DeepSeek MLA layer cannot carry standard QKV/MLP weights"
+                    .to_string(),
+            );
+        }
+        if self.rms_attn_weight.len() != hidden || self.rms_mlp_weight.len() != hidden {
+            return Some(
+                "CUDA HF decode chain DeepSeek MLA RMS lengths must match hidden".to_string(),
+            );
+        }
+        let Some(layer) = self.deepseek else {
+            return Some("CUDA HF decode chain DeepSeek MLA layer is missing metadata".to_string());
+        };
+        if layer.mode == 0
+            || layer.q_lora_rank == 0
+            || layer.qk_rope_head_dim == 0
+            || layer.v_head_dim == 0
+            || layer.compress_ratio == 0
+        {
+            return Some(
+                "CUDA HF decode chain DeepSeek MLA core dimensions must be non-zero".to_string(),
+            );
+        }
+        if matches!(
+            layer.mode,
+            CUDA_HF_DEEPSEEK_MODE_V3_MLA | CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER
+        ) && (layer.kv_lora_rank == 0 || layer.qk_nope_head_dim == 0)
+        {
+            return Some(
+                "CUDA HF decode chain DeepSeek V3/V3.2 MLA dimensions must be non-zero".to_string(),
+            );
+        }
+        if matches!(
+            layer.mode,
+            CUDA_HF_DEEPSEEK_MODE_V4_SWA
+                | CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED
+                | CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER
+        ) && (layer.o_lora_rank == 0 || layer.o_groups == 0 || layer.qk_nope_head_dim == 0)
+        {
+            return Some(
+                "CUDA HF decode chain DeepSeek V4 MLA dimensions must be non-zero".to_string(),
+            );
+        }
+        if layer.flags & CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER != 0
+            && (layer.index_n_heads == 0 || layer.index_head_dim == 0)
+        {
+            return Some(
+                "CUDA HF decode chain DeepSeek sparse indexer dimensions must be non-zero"
+                    .to_string(),
+            );
+        }
+        None
+    }
+
+    fn validate_deepseek_mlp_metadata(&self, intermediate: usize) -> Option<String> {
+        match self.mlp_kind {
+            CUDA_HF_MLP_DENSE => None,
+            CUDA_HF_MLP_SPARSE_MOE => {
+                if self.moe_intermediate == 0
+                    || self.num_experts == 0
+                    || self.experts_per_token == 0
+                    || self.experts_per_token > self.num_experts
+                    || self.num_experts > CUDA_HF_MOE_EXPERTS_MAX
+                    || self.experts_per_token > CUDA_HF_MOE_TOP_K_MAX
+                {
+                    return Some(
+                        "CUDA HF decode chain DeepSeek sparse MoE dimensions must be non-zero and fit native expert/top-k limits"
+                            .to_string(),
+                    );
+                }
+                if self.moe_intermediate > intermediate {
+                    return Some(
+                        "CUDA HF decode chain DeepSeek sparse MoE intermediate exceeds scratch capacity"
+                            .to_string(),
+                    );
+                }
+                if self.shared_expert_intermediate > intermediate {
+                    return Some(
+                        "CUDA HF decode chain DeepSeek shared expert intermediate exceeds scratch capacity"
+                            .to_string(),
+                    );
+                }
+                None
+            }
+            other => Some(format!("CUDA HF decode chain unsupported MLP kind {other}")),
+        }
     }
 
     fn full_attention_required_lengths(

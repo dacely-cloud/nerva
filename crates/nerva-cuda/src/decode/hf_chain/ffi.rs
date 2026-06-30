@@ -47,6 +47,18 @@ pub(crate) struct NervaCudaHfDecodeChainLayer {
     pub(crate) experts_per_token: u32,
     pub(crate) norm_topk_prob: u32,
     pub(crate) attention_kind: u32,
+    pub(crate) deepseek_mode: u32,
+    pub(crate) deepseek_flags: u32,
+    pub(crate) deepseek_q_lora_rank: u32,
+    pub(crate) deepseek_kv_lora_rank: u32,
+    pub(crate) deepseek_o_lora_rank: u32,
+    pub(crate) deepseek_o_groups: u32,
+    pub(crate) deepseek_qk_nope_head_dim: u32,
+    pub(crate) deepseek_qk_rope_head_dim: u32,
+    pub(crate) deepseek_v_head_dim: u32,
+    pub(crate) deepseek_compress_ratio: u32,
+    pub(crate) deepseek_index_n_heads: u32,
+    pub(crate) deepseek_index_head_dim: u32,
 }
 
 #[repr(C)]

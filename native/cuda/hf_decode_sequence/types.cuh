@@ -12,6 +12,17 @@ constexpr uint32_t kMlpKindDense = 0;
 constexpr uint32_t kMlpKindSparseMoe = 1;
 constexpr uint32_t kAttentionKindFull = 0;
 constexpr uint32_t kAttentionKindLinearGdn = 1;
+constexpr uint32_t kAttentionKindDeepSeekMla = 2;
+constexpr uint32_t kDeepSeekModeV3Mla = 1;
+constexpr uint32_t kDeepSeekModeV32MlaIndexer = 2;
+constexpr uint32_t kDeepSeekModeV4Swa = 3;
+constexpr uint32_t kDeepSeekModeV4Compressed = 4;
+constexpr uint32_t kDeepSeekModeV4CompressedIndexer = 5;
+constexpr uint32_t kDeepSeekFlagSparseIndexer = 1u << 0;
+constexpr uint32_t kDeepSeekFlagCompressor = 1u << 1;
+constexpr uint32_t kDeepSeekFlagHashRouter = 1u << 2;
+constexpr uint32_t kDeepSeekFlagMoe = 1u << 3;
+constexpr uint32_t kDeepSeekFlagSlidingWindow = 1u << 4;
 constexpr uint32_t kSparseMoeExpertsMax = 256;
 constexpr uint32_t kSparseMoeTopKMax = 16;
 constexpr uint32_t kRequestId = 1;
@@ -105,6 +116,18 @@ struct SequenceLayerLayout {
   uint32_t experts_per_token;
   uint32_t norm_topk_prob;
   uint32_t attention_kind;
+  uint32_t deepseek_mode;
+  uint32_t deepseek_flags;
+  uint32_t deepseek_q_lora_rank;
+  uint32_t deepseek_kv_lora_rank;
+  uint32_t deepseek_o_lora_rank;
+  uint32_t deepseek_o_groups;
+  uint32_t deepseek_qk_nope_head_dim;
+  uint32_t deepseek_qk_rope_head_dim;
+  uint32_t deepseek_v_head_dim;
+  uint32_t deepseek_compress_ratio;
+  uint32_t deepseek_index_n_heads;
+  uint32_t deepseek_index_head_dim;
 };
 
 struct PackedProjectionShape {

@@ -451,6 +451,18 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.experts_per_token = layer.experts_per_token;
   layout.norm_topk_prob = layer.norm_topk_prob == 0 ? 0u : 1u;
   layout.attention_kind = layer.attention_kind;
+  layout.deepseek_mode = layer.deepseek_mode;
+  layout.deepseek_flags = layer.deepseek_flags;
+  layout.deepseek_q_lora_rank = layer.deepseek_q_lora_rank;
+  layout.deepseek_kv_lora_rank = layer.deepseek_kv_lora_rank;
+  layout.deepseek_o_lora_rank = layer.deepseek_o_lora_rank;
+  layout.deepseek_o_groups = layer.deepseek_o_groups;
+  layout.deepseek_qk_nope_head_dim = layer.deepseek_qk_nope_head_dim;
+  layout.deepseek_qk_rope_head_dim = layer.deepseek_qk_rope_head_dim;
+  layout.deepseek_v_head_dim = layer.deepseek_v_head_dim;
+  layout.deepseek_compress_ratio = layer.deepseek_compress_ratio;
+  layout.deepseek_index_n_heads = layer.deepseek_index_n_heads;
+  layout.deepseek_index_head_dim = layer.deepseek_index_head_dim;
   layout.rms_attn = kMissingOffset;
   layout.rms_mlp = kMissingOffset;
   layout.w_q = kMissingOffset;

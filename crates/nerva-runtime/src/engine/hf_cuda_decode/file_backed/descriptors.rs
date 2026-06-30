@@ -84,6 +84,7 @@ pub(super) fn descriptor_marker_layers(
                 w_shared_expert_down: None,
                 w_shared_expert_router: None,
                 linear_gdn: linear_gdn_marker(metadata, layer),
+                deepseek: None,
                 mlp_kind: if sparse_moe {
                     CUDA_HF_MLP_SPARSE_MOE
                 } else {

@@ -297,6 +297,18 @@ typedef struct NervaCudaHfDecodeChainLayer {
   uint32_t experts_per_token;
   uint32_t norm_topk_prob;
   uint32_t attention_kind;
+  uint32_t deepseek_mode;
+  uint32_t deepseek_flags;
+  uint32_t deepseek_q_lora_rank;
+  uint32_t deepseek_kv_lora_rank;
+  uint32_t deepseek_o_lora_rank;
+  uint32_t deepseek_o_groups;
+  uint32_t deepseek_qk_nope_head_dim;
+  uint32_t deepseek_qk_rope_head_dim;
+  uint32_t deepseek_v_head_dim;
+  uint32_t deepseek_compress_ratio;
+  uint32_t deepseek_index_n_heads;
+  uint32_t deepseek_index_head_dim;
 } NervaCudaHfDecodeChainLayer;
 
 typedef struct NervaCudaHfDecodeChainRequest {

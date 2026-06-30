@@ -495,6 +495,7 @@ fn create_synthetic_batch_sessions(
         w_shared_expert_down: None,
         w_shared_expert_router: None,
         linear_gdn: None,
+        deepseek: None,
         mlp_kind: CUDA_HF_MLP_DENSE,
         moe_intermediate: 0,
         shared_expert_intermediate: 0,

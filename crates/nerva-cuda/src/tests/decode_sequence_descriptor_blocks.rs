@@ -185,6 +185,18 @@ fn null_layer() -> NervaCudaHfDecodeChainLayer {
         experts_per_token: 0,
         norm_topk_prob: 0,
         attention_kind: CUDA_HF_ATTENTION_FULL,
+        deepseek_mode: 0,
+        deepseek_flags: 0,
+        deepseek_q_lora_rank: 0,
+        deepseek_kv_lora_rank: 0,
+        deepseek_o_lora_rank: 0,
+        deepseek_o_groups: 0,
+        deepseek_qk_nope_head_dim: 0,
+        deepseek_qk_rope_head_dim: 0,
+        deepseek_v_head_dim: 0,
+        deepseek_compress_ratio: 0,
+        deepseek_index_n_heads: 0,
+        deepseek_index_head_dim: 0,
     }
 }
 
