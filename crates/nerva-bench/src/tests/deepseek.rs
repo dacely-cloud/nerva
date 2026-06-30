@@ -22,6 +22,13 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("\"v4_hash_router_layers\":3"));
     assert!(json.contains("\"runtime_status\":\"unsupported\""));
     assert!(json.contains("\"claim_allowed\":false"));
+    assert!(json.contains("fp8_e4m3fn_decode_matches_torch"));
+    assert!(json.contains("e8m0_scale_upcast_matches_vllm_raw_exponent_path"));
+    assert!(json.contains("deepseek_mla_decode_mqa_reference"));
+    assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
+    assert!(json.contains("deepseek_v4_mhc_compressor_indexer_manifest"));
+    assert!(json.contains("mxfp4_e2m1_e8m0_block_dequant_reference"));
+    assert!(json.contains("deepseek_v4_sqrtsoftplus_hash_router_reference"));
     assert!(json.contains("deepseek_v4_mhc_pre_post_head"));
     assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/attention.py"));
 
@@ -46,6 +53,9 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("\"moe_layers\":1"));
     assert!(json.contains("\"dense_mlp_layers\":3"));
     assert!(json.contains("deepseek_v32_sparse_attention_indexer"));
+    assert!(json.contains("fp8_e4m3fn_e8m0_block_dequant_reference"));
+    assert!(json.contains("deepseek_mla_decode_mqa_reference"));
+    assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
     assert!(json.contains("\"runtime_status\":\"unsupported\""));
     assert!(json.contains("\"claim_allowed\":false"));
 

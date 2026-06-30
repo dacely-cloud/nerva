@@ -33,13 +33,14 @@ pub(crate) fn deepseek_runtime_plan_json(metadata: &HfModelMetadata) -> Result<S
             reason: format!("{err:?}"),
         },
     };
+    let implemented = implemented_primitives(metadata);
     let units = required_execution_units(metadata);
     let vllm_refs = vllm_reference_units(metadata.architecture);
     let layer_report = layer_report(metadata);
     let claim_allowed = runtime_contract.status == "supported";
 
     Ok(format!(
-        "{{\"status\":\"ok\",\"schema\":\"nerva-deepseek-runtime-plan-v1\",\"architecture\":\"{}\",\"layers\":{},\"hidden_size\":{},\"heads\":{},\"head_dim\":{},\"moe_layers\":{},\"dense_mlp_layers\":{},\"mla_layers\":{},\"v4_swa_layers\":{},\"v4_c4_layers\":{},\"v4_c128_layers\":{},\"v4_indexer_layers\":{},\"v4_hash_router_layers\":{},\"runtime_status\":\"{}\",\"runtime_reason\":\"{}\",\"required_execution_units\":{},\"vllm_reference_units\":{},\"claim_allowed\":{}}}",
+        "{{\"status\":\"ok\",\"schema\":\"nerva-deepseek-runtime-plan-v1\",\"architecture\":\"{}\",\"layers\":{},\"hidden_size\":{},\"heads\":{},\"head_dim\":{},\"moe_layers\":{},\"dense_mlp_layers\":{},\"mla_layers\":{},\"v4_swa_layers\":{},\"v4_c4_layers\":{},\"v4_c128_layers\":{},\"v4_indexer_layers\":{},\"v4_hash_router_layers\":{},\"runtime_status\":\"{}\",\"runtime_reason\":\"{}\",\"implemented_primitives\":{},\"required_execution_units\":{},\"vllm_reference_units\":{},\"claim_allowed\":{}}}",
         metadata.architecture.as_str(),
         metadata.num_hidden_layers,
         metadata.hidden_size,
@@ -55,6 +56,7 @@ pub(crate) fn deepseek_runtime_plan_json(metadata: &HfModelMetadata) -> Result<S
         layer_report.v4_hash_router_layers,
         runtime_contract.status,
         json_escape(&runtime_contract.reason),
+        json_string_array(&implemented),
         json_string_array(&units),
         json_string_array(&vllm_refs),
         claim_allowed,
@@ -138,6 +140,30 @@ fn required_execution_units(metadata: &HfModelMetadata) -> Vec<String> {
         ],
         _ => Vec::new(),
     }
+}
+
+fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
+    if !metadata.architecture.is_deepseek() {
+        return Vec::new();
+    }
+
+    let mut primitives = vec![
+        "deepseek_weight_manifest_v3_v32_v4".to_string(),
+        "fp8_e4m3fn_decode_matches_torch".to_string(),
+        "e8m0_scale_upcast_matches_vllm_raw_exponent_path".to_string(),
+        "fp8_e4m3fn_e8m0_block_dequant_reference".to_string(),
+        "deepseek_mla_decode_mqa_reference".to_string(),
+        "deepseek_v3_grouped_sigmoid_router_reference".to_string(),
+    ];
+
+    if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
+        primitives.push("deepseek_v4_mhc_compressor_indexer_manifest".to_string());
+        primitives.push("deepseek_v4_hash_router_manifest".to_string());
+        primitives.push("mxfp4_e2m1_e8m0_block_dequant_reference".to_string());
+        primitives.push("deepseek_v4_sqrtsoftplus_hash_router_reference".to_string());
+    }
+
+    primitives
 }
 
 fn vllm_reference_units(architecture: HfArchitectureKind) -> Vec<String> {
