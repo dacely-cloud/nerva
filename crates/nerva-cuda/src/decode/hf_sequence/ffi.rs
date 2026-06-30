@@ -129,6 +129,9 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) deepseek_indexer_kv_writes: u64,
     pub(crate) deepseek_compressed_kv_attention_reads: u64,
     pub(crate) deepseek_compressed_kv_attention_slots_scanned: u64,
+    pub(crate) deepseek_sparse_topk_selections: u64,
+    pub(crate) deepseek_sparse_topk_slots_selected: u64,
+    pub(crate) deepseek_sparse_topk_candidates_scored: u64,
 }
 
 #[repr(C)]

@@ -646,7 +646,7 @@ __device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
     uint32_t position, float rms_eps, float rope_theta, float *compressed) {
   const uint32_t compress_ratio = layout.deepseek_compress_ratio;
   const uint32_t head_dim = layout.deepseek_index_head_dim;
-  const uint32_t scale_dim = (head_dim / 128u) * sizeof(float);
+  const uint32_t scale_dim = deepseek_device_scale_dim(head_dim) * sizeof(float);
   if (state_cache == nullptr || kv_cache == nullptr || compress_ratio <= 1 ||
       (position + 1u) % compress_ratio != 0 || head_dim == 0 ||
       scale_dim < sizeof(float) ||
@@ -751,7 +751,7 @@ __device__ float deepseek_session_read_indexer_fp8_compressed_kv(
     uint32_t compressed_block_count, const SequenceLayerLayout &layout,
     uint32_t compressed_slot, uint32_t dim) {
   const uint32_t head_dim = layout.deepseek_index_head_dim;
-  const uint32_t scale_dim = (head_dim / 128u) * sizeof(float);
+  const uint32_t scale_dim = deepseek_device_scale_dim(head_dim) * sizeof(float);
   if (kv_cache == nullptr || head_dim == 0 || dim >= head_dim ||
       scale_dim < sizeof(float)) {
     return 0.0f;
@@ -1874,6 +1874,24 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
           deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
           compressed_attention_tokens, sparse_compressed_slots,
           sparse_compressed_scores, sparse_indexer_query);
+  if (sparse_compressed_attention_tokens != 0 &&
+      deepseek_runtime_counters != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelections),
+        1ull);
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
+        static_cast<unsigned long long>(sparse_compressed_attention_tokens));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
+        static_cast<unsigned long long>(compressed_attention_tokens));
+  }
 
   for (uint32_t row = 0; row < attention_hidden; ++row) {
     float sum = 0.0f;

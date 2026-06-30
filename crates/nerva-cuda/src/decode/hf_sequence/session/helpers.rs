@@ -123,6 +123,9 @@ pub(super) fn summary_from_run(
         deepseek_compressed_kv_attention_reads: out.deepseek_compressed_kv_attention_reads,
         deepseek_compressed_kv_attention_slots_scanned: out
             .deepseek_compressed_kv_attention_slots_scanned,
+        deepseek_sparse_topk_selections: out.deepseek_sparse_topk_selections,
+        deepseek_sparse_topk_slots_selected: out.deepseek_sparse_topk_slots_selected,
+        deepseek_sparse_topk_candidates_scored: out.deepseek_sparse_topk_candidates_scored,
         error: (return_code != 0 || out.status != 0).then(|| run_error(return_code, out)),
     }
 }

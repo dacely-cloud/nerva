@@ -281,7 +281,7 @@ uint64_t deepseek_v4_indexer_kv_token_bytes(
     return 0;
   }
   const uint64_t scale_dim =
-      (layout.deepseek_index_head_dim / 128u) * sizeof(float);
+      ((layout.deepseek_index_head_dim + 127u) / 128u) * sizeof(float);
   return layout.deepseek_index_head_dim + scale_dim;
 }
 

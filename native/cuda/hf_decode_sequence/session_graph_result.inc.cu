@@ -44,6 +44,12 @@ void fill_deepseek_runtime_counter_result(
       counters[kDeepSeekRuntimeCounterCompressedKvAttentionReads];
   out->deepseek_compressed_kv_attention_slots_scanned =
       counters[kDeepSeekRuntimeCounterCompressedKvAttentionSlotsScanned];
+  out->deepseek_sparse_topk_selections =
+      counters[kDeepSeekRuntimeCounterSparseTopkSelections];
+  out->deepseek_sparse_topk_slots_selected =
+      counters[kDeepSeekRuntimeCounterSparseTopkSlotsSelected];
+  out->deepseek_sparse_topk_candidates_scored =
+      counters[kDeepSeekRuntimeCounterSparseTopkCandidatesScored];
 }
 
 uint32_t observed_from_slot_range(uint32_t steps, uint32_t has_eos_token,

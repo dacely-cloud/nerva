@@ -122,6 +122,9 @@ pub(super) fn failed_run_summary(
         deepseek_indexer_kv_writes: 0,
         deepseek_compressed_kv_attention_reads: 0,
         deepseek_compressed_kv_attention_slots_scanned: 0,
+        deepseek_sparse_topk_selections: 0,
+        deepseek_sparse_topk_slots_selected: 0,
+        deepseek_sparse_topk_candidates_scored: 0,
         error: Some(error),
     }
 }
