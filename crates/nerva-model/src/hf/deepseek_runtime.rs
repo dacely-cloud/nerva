@@ -768,6 +768,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         metadata.architecture,
         HfArchitectureKind::DeepSeekV32 | HfArchitectureKind::DeepSeekV4
     ) {
+        primitives.push("deepseek_compressed_slot_mapping_reference".to_string());
         primitives.push("cuda_deepseek_compressed_slot_mapping_api".to_string());
         primitives.push("cuda_deepseek_compressed_slot_mapping_smoke".to_string());
     }
@@ -910,6 +911,7 @@ fn coverage_for_unit(
             "partial",
             &[
                 "deepseek_vllm_kv_cache_spec_planner",
+                "deepseek_compressed_slot_mapping_reference",
                 "cuda_deepseek_compressed_slot_mapping_api",
                 "cuda_deepseek_compressed_slot_mapping_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
@@ -1079,6 +1081,7 @@ fn coverage_for_unit(
                 "cuda_deepseek_compress_norm_rope_fp8_cache_smoke",
                 "cuda_deepseek_compress_norm_rope_mxfp4_cache_api",
                 "cuda_deepseek_compress_norm_rope_mxfp4_cache_smoke",
+                "deepseek_compressed_slot_mapping_reference",
                 "cuda_deepseek_compressed_slot_mapping_api",
                 "cuda_deepseek_compressed_slot_mapping_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
@@ -1095,6 +1098,7 @@ fn coverage_for_unit(
             &[
                 "deepseek_vllm_kv_cache_spec_planner",
                 "deepseek_v4_mhc_compressor_indexer_manifest",
+                "deepseek_compressed_slot_mapping_reference",
                 "cuda_deepseek_compressed_slot_mapping_api",
                 "cuda_deepseek_compressed_slot_mapping_smoke",
                 "cuda_deepseek_c128_topk_metadata_api",

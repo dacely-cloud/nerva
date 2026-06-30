@@ -6,7 +6,9 @@ use crate::deepseek_kv::compress_cache::{
 };
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use crate::deepseek_kv::partial_states::deepseek_save_partial_states;
-use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
+use crate::deepseek_kv::slot_mapping::{
+    deepseek_compressed_slot_mapping, deepseek_compressed_slot_mapping_reference,
+};
 use crate::deepseek_kv::summary::{
     CudaDeepSeekC4IndexerTopkSummary, CudaDeepSeekC128TopkMetadataSummary,
     CudaDeepSeekCompressNormRopeFp8CacheSummary, CudaDeepSeekCompressedSlotMappingSummary,
@@ -66,7 +68,31 @@ pub fn deepseek_compressed_slot_mapping_smoke() -> CudaDeepSeekCompressedSlotMap
         20, 21, 22, 23, // request 0
         30, 31, 32, 33, // request 1
     ];
-    let expected = [-1, -1, 81, -1, -1, 120, -1, -1, -1];
+    let expected = match deepseek_compressed_slot_mapping_reference(
+        &query_start_loc,
+        &seq_lens,
+        &block_table,
+        4,
+        4,
+        4,
+    ) {
+        Ok(slots) => slots,
+        Err(err) => {
+            let mut failed = deepseek_compressed_slot_mapping(
+                &query_start_loc,
+                &seq_lens,
+                &block_table,
+                4,
+                4,
+                4,
+            );
+            failed.status = SmokeStatus::Failed;
+            failed.error = Some(format!(
+                "DeepSeek compressed slot mapping reference failed: {err}"
+            ));
+            return failed;
+        }
+    };
 
     let summary =
         deepseek_compressed_slot_mapping(&query_start_loc, &seq_lens, &block_table, 4, 4, 4);

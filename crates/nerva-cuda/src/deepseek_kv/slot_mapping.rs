@@ -6,6 +6,56 @@ use crate::deepseek_kv::summary::CudaDeepSeekCompressedSlotMappingSummary;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;
 use crate::smoke::status::SmokeStatus;
 
+pub fn deepseek_compressed_slot_mapping_reference(
+    query_start_loc: &[i32],
+    seq_lens: &[i32],
+    block_table: &[i32],
+    block_table_stride: u32,
+    block_size: u32,
+    compress_ratio: u32,
+) -> Result<Vec<i64>, String> {
+    let num_reqs = seq_lens.len();
+    let num_tokens = validate_compressed_slot_mapping_shape(
+        query_start_loc,
+        seq_lens,
+        block_table,
+        block_table_stride,
+        block_size,
+        compress_ratio,
+    )?;
+    let block_table_stride = block_table_stride as usize;
+    let block_size_i64 = i64::from(block_size);
+    let compress_ratio = compress_ratio as i32;
+    let block_size = block_size as i32;
+    let mut output_slots = vec![-1i64; num_tokens];
+
+    for req_idx in 0..num_reqs {
+        let query_start = query_start_loc[req_idx];
+        let query_end = query_start_loc[req_idx + 1];
+        let query_len = query_end - query_start;
+        let start_pos = seq_lens[req_idx] - query_len;
+        for offset in 0..query_len {
+            let output_idx = (query_start + offset) as usize;
+            let pos = start_pos + offset;
+            if pos >= 0 && (pos + 1) % compress_ratio == 0 {
+                let compressed_pos = pos / compress_ratio;
+                let block_id = compressed_pos / block_size;
+                let block_offset = compressed_pos % block_size;
+                if block_id >= 0 && (block_id as usize) < block_table_stride {
+                    let block_number =
+                        block_table[req_idx * block_table_stride + block_id as usize];
+                    if block_number >= 0 {
+                        output_slots[output_idx] =
+                            i64::from(block_number) * block_size_i64 + i64::from(block_offset);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(output_slots)
+}
+
 pub fn deepseek_compressed_slot_mapping(
     query_start_loc: &[i32],
     seq_lens: &[i32],
@@ -15,28 +65,20 @@ pub fn deepseek_compressed_slot_mapping(
     compress_ratio: u32,
 ) -> CudaDeepSeekCompressedSlotMappingSummary {
     let num_reqs = seq_lens.len();
-    let num_tokens = query_start_loc
-        .last()
-        .copied()
-        .filter(|value| *value >= 0)
-        .unwrap_or(0) as usize;
-    if query_start_loc.len() != num_reqs + 1
-        || num_reqs == 0
-        || num_tokens == 0
-        || block_table_stride == 0
-        || block_size == 0
-        || compress_ratio == 0
-        || num_reqs > u32::MAX as usize
-        || num_tokens > u32::MAX as usize
-        || block_table.len()
-            < (num_reqs)
-                .checked_mul(block_table_stride as usize)
-                .unwrap_or(usize::MAX)
-        || !query_start_loc.windows(2).all(|pair| pair[0] <= pair[1])
-        || query_start_loc.iter().any(|value| *value < 0)
-    {
+    let Ok(num_tokens) = validate_compressed_slot_mapping_shape(
+        query_start_loc,
+        seq_lens,
+        block_table,
+        block_table_stride,
+        block_size,
+        compress_ratio,
+    ) else {
         return failed_summary(
-            num_tokens as u32,
+            query_start_loc
+                .last()
+                .copied()
+                .filter(|value| *value >= 0)
+                .unwrap_or(0) as u32,
             num_reqs as u32,
             block_table_stride,
             block_size,
@@ -44,7 +86,7 @@ pub fn deepseek_compressed_slot_mapping(
             Vec::new(),
             "invalid DeepSeek compressed slot mapping shape",
         );
-    }
+    };
 
     let mut output_slots = vec![-1i64; num_tokens];
     let request = NervaCudaDeepSeekCompressedSlotMappingRequest {
@@ -105,6 +147,55 @@ fn summarize(
         hot_path_allocations: out.hot_path_allocations,
         error,
     }
+}
+
+fn validate_compressed_slot_mapping_shape(
+    query_start_loc: &[i32],
+    seq_lens: &[i32],
+    block_table: &[i32],
+    block_table_stride: u32,
+    block_size: u32,
+    compress_ratio: u32,
+) -> Result<usize, String> {
+    let num_reqs = seq_lens.len();
+    let num_tokens = query_start_loc
+        .last()
+        .copied()
+        .filter(|value| *value >= 0)
+        .unwrap_or(0) as usize;
+    if query_start_loc.len() != num_reqs + 1 {
+        return Err("query_start_loc length must equal num_reqs + 1".to_string());
+    }
+    if num_reqs == 0 || num_tokens == 0 {
+        return Err("compressed slot mapping requires requests and tokens".to_string());
+    }
+    if block_table_stride == 0 || block_size == 0 || compress_ratio == 0 {
+        return Err(
+            "compressed slot mapping requires non-zero block stride, block size, and ratio"
+                .to_string(),
+        );
+    }
+    if block_table_stride > i32::MAX as u32
+        || block_size > i32::MAX as u32
+        || compress_ratio > i32::MAX as u32
+    {
+        return Err("compressed slot mapping parameters exceed i32 kernel limits".to_string());
+    }
+    if num_reqs > u32::MAX as usize || num_tokens > u32::MAX as usize {
+        return Err("compressed slot mapping shape exceeds CUDA u32 limits".to_string());
+    }
+    let required_block_table = num_reqs
+        .checked_mul(block_table_stride as usize)
+        .ok_or_else(|| "compressed slot mapping block table shape overflow".to_string())?;
+    if block_table.len() < required_block_table {
+        return Err("compressed slot mapping block table is too small".to_string());
+    }
+    if !query_start_loc.windows(2).all(|pair| pair[0] <= pair[1])
+        || query_start_loc.iter().any(|value| *value < 0)
+    {
+        return Err("compressed slot mapping query_start_loc must be monotonic".to_string());
+    }
+    Ok(num_tokens)
 }
 
 fn failed_summary(

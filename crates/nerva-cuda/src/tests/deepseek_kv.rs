@@ -13,7 +13,9 @@ use crate::deepseek_kv::probe::{
     deepseek_kv_smoke, deepseek_save_partial_states_smoke, mxfp4_compress_cache_fixture,
     reference_compress_norm_rope_fp8_cache, scores_close,
 };
-use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
+use crate::deepseek_kv::slot_mapping::{
+    deepseek_compressed_slot_mapping, deepseek_compressed_slot_mapping_reference,
+};
 use crate::deepseek_kv::summary::{
     CudaDeepSeekC4IndexerTopkSummary, CudaDeepSeekC128TopkMetadataSummary,
     CudaDeepSeekCompressNormRopeFp8CacheSummary, CudaDeepSeekCompressedSlotMappingSummary,
@@ -83,6 +85,32 @@ fn deepseek_compressed_slot_mapping_summary_serializes_vllm_metadata() {
     assert!(json.contains("\"compress_ratio\":4"));
     assert!(json.contains("\"valid_slots\":2"));
     assert!(json.contains("\"pad_slots\":7"));
+}
+
+#[test]
+fn deepseek_compressed_slot_mapping_reference_matches_vllm_formula() {
+    let query_start_loc = [0, 5, 9];
+    let seq_lens = [10, 7];
+    let block_table = [
+        20, 21, 22, 23, // request 0
+        30, 31, 32, 33, // request 1
+    ];
+
+    let slots = deepseek_compressed_slot_mapping_reference(
+        &query_start_loc,
+        &seq_lens,
+        &block_table,
+        4,
+        4,
+        4,
+    )
+    .unwrap();
+
+    assert_eq!(slots, vec![-1, -1, 81, -1, -1, 120, -1, -1, -1]);
+    assert!(
+        deepseek_compressed_slot_mapping_reference(&[0, 2, 1], &seq_lens, &block_table, 4, 4, 4,)
+            .is_err()
+    );
 }
 
 #[test]
@@ -298,16 +326,25 @@ fn deepseek_compressed_slot_mapping_smoke_is_repeatable_when_device_is_available
 
     let second = deepseek_compressed_slot_mapping_smoke();
     assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    let reference = deepseek_compressed_slot_mapping_reference(
+        &[0, 5, 9],
+        &[10, 7],
+        &[
+            20, 21, 22, 23, // request 0
+            30, 31, 32, 33, // request 1
+        ],
+        4,
+        4,
+        4,
+    )
+    .unwrap();
     assert_eq!(second.num_tokens, 9);
     assert_eq!(second.num_reqs, 2);
     assert_eq!(second.block_size, 4);
     assert_eq!(second.compress_ratio, 4);
     assert_eq!(second.valid_slots, 2);
     assert_eq!(second.pad_slots, 7);
-    assert_eq!(
-        second.output_slots,
-        vec![-1, -1, 81, -1, -1, 120, -1, -1, -1]
-    );
+    assert_eq!(second.output_slots, reference);
     assert_eq!(second.output_hash, first.output_hash);
     assert_eq!(second.kernel_launches, 1);
     assert_eq!(second.sync_calls, 1);
