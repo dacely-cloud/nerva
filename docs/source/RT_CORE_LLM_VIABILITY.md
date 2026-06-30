@@ -76,6 +76,29 @@ The real Qwen selected-page attention integration is wired into the existing
 decode pipeline. It does not replace decode, attention projection, MLP, sampling,
 or KV layout with a separate implementation.
 
+The current integration boundary matters. The OptiX sparse selector launches
+once per decode token before CUDA graph replay, so it can only use page/count
+metadata available before the layer stack runs. The CUDA Q/K selectors launch
+per layer after QKV prepare, because the live query for layer N does not exist
+until the previous layer has produced its activation. That is the main reason
+the current Qwen RT path is synthetic and the semantic Q/K path is CUDA-only.
+
+The 32k selector overhead check in
+`docs/source/perf/rt_semantic_integration_boundary_summary.json` shows that RT
+traversal overhead itself is not the blocker:
+
+| Shape | Selector + rerank | Interpretation |
+|---|---:|---|
+| 8 KV-head queries, 67 pages | 13.260 us | Current Qwen head count and fastest sparse page count. |
+| 8 KV-head queries, 80 pages | 13.155 us | Current reproduced sparse RT page count. |
+| 288 synthetic queries, 67 pages | 13.717 us | Lower bound if all 36 layers x 8 KV heads were known for one launch. |
+| 288 synthetic queries, 80 pages | 13.670 us | Lower bound if all layer queries were known for one launch. |
+
+If a real semantic RT selector had to launch once per layer, the measured 8-query
+selector plus rerank cost estimates to about 0.47-0.49 ms/token for 36 layers
+before descriptor-update cost. That cost is not fatal, but it has to buy more
+than that in attention savings and it has to fit the graph/layer schedule.
+
 On the 30,571-token Qwen3-8B prompt with 2,048 generated tokens and
 `NERVA_EXPERIMENTAL_PREFILL_LOCAL_WINDOW_TOKENS=4096`, the measured decode
 comparison was:

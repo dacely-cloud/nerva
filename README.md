@@ -506,6 +506,8 @@ The RT microbench also has a query-derived OptiX selector behind `NERVA_EXPERIME
 
 Important correction: current Qwen `--rt-mode sparse` is not semantic RT retrieval. The decode integration calls OptiX with page/count metadata only, so it selects sink pages, local pages, and synthetic far pages before handing those page ids back to the existing CUDA selected-page attention path. The detailed evidence and viability notes are in [docs/source/RT_CORE_LLM_VIABILITY.md](docs/source/RT_CORE_LLM_VIABILITY.md).
 
+The semantic integration boundary artifact at `docs/source/perf/rt_semantic_integration_boundary_summary.json` measures the 32k Qwen selector shape. OptiX selector plus CUDA rerank is about 13-14 us for 8 KV-head queries and also about 13-14 us for a synthetic 288-query lower bound covering 36 layers x 8 KV heads. If semantic RT has to launch once per layer, the selector/rerank estimate is about 0.47-0.49 ms/token before descriptor-update cost. That means RT traversal overhead is not the blocker; the missing piece is a real Qwen page-descriptor acceleration structure and a layer-aware launch path that feeds live queries into OptiX.
+
 The measured 512k-token synthetic selector point on an RTX 5090 is:
 
 | Field | Value |

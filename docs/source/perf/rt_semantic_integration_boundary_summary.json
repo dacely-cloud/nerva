@@ -1,0 +1,99 @@
+{
+  "artifact": "rt_semantic_integration_boundary_summary",
+  "date": "2026-06-30",
+  "device": {
+    "name": "RTX 5090",
+    "compute_capability_major": 12,
+    "compute_capability_minor": 0
+  },
+  "scope": "Qwen3-8B semantic RT integration boundary and selector overhead at 32k context",
+  "current_qwen_paths": {
+    "optix_sparse": {
+      "selector_policy": "optix_synthetic_sink_local_far_page_pattern",
+      "uses_rt_cores": true,
+      "uses_live_qk": false,
+      "launch_placement": "once per decode token before CUDA graph replay",
+      "candidate_output": "device_experimental_rt_candidate_pages",
+      "consumer": "existing CUDA selected-page attention"
+    },
+    "cuda_qk_representative": {
+      "selector_policy": "cuda_qk_representative_page_selector",
+      "uses_rt_cores": false,
+      "uses_live_qk": true,
+      "launch_placement": "per layer after QKV prepare",
+      "candidate_output": "device_experimental_rt_candidate_pages",
+      "consumer": "existing CUDA selected-page attention"
+    },
+    "cuda_qk_fused": {
+      "selector_policy": "cuda_qk_fused_attention_page_selector",
+      "uses_rt_cores": false,
+      "uses_live_qk": true,
+      "launch_placement": "inside shared-warp GQA selected-page attention",
+      "candidate_output": "implicit per selected slot",
+      "consumer": "existing CUDA selected-page attention"
+    }
+  },
+  "measured_selector_points": [
+    {
+      "command": "cargo run -p nerva-bench -- experimental-rt 32768 8 67 256 64 36",
+      "context_tokens": 32768,
+      "pages": 512,
+      "query_count": 8,
+      "candidates_per_query": 67,
+      "selector_avg_ns": 9156,
+      "rerank_avg_ns": 4104,
+      "selector_plus_rerank_avg_ns": 13260,
+      "estimated_36_layer_sequential_selector_plus_rerank_ns": 477360,
+      "estimated_36_layer_sequential_selector_plus_rerank_ms": 0.47736,
+      "rt_overlapped_vs_dense_selector_saved_ns_per_token": 147744,
+      "dense_full_vs_rt_overlapped_attention_saved_ns_per_token": 2890188
+    },
+    {
+      "command": "cargo run -p nerva-bench -- experimental-rt 32768 8 80 256 64 36",
+      "context_tokens": 32768,
+      "pages": 512,
+      "query_count": 8,
+      "candidates_per_query": 80,
+      "selector_avg_ns": 9051,
+      "rerank_avg_ns": 4104,
+      "selector_plus_rerank_avg_ns": 13155,
+      "estimated_36_layer_sequential_selector_plus_rerank_ns": 473580,
+      "estimated_36_layer_sequential_selector_plus_rerank_ms": 0.47358,
+      "rt_overlapped_vs_dense_selector_saved_ns_per_token": 148032,
+      "dense_full_vs_rt_overlapped_attention_saved_ns_per_token": 1920384
+    },
+    {
+      "command": "cargo run -p nerva-bench -- experimental-rt 32768 288 67 128 64 36",
+      "context_tokens": 32768,
+      "pages": 512,
+      "query_count": 288,
+      "candidates_per_query": 67,
+      "selector_avg_ns": 9605,
+      "rerank_avg_ns": 4112,
+      "selector_plus_rerank_avg_ns": 13717,
+      "lower_bound_all_layer_queries_known_ms": 0.013717,
+      "rt_overlapped_vs_dense_selector_saved_ns_per_token": 221760,
+      "dense_full_vs_rt_overlapped_attention_saved_ns_per_token": 9778320
+    },
+    {
+      "command": "cargo run -p nerva-bench -- experimental-rt 32768 288 80 128 64 36",
+      "context_tokens": 32768,
+      "pages": 512,
+      "query_count": 288,
+      "candidates_per_query": 80,
+      "selector_avg_ns": 9558,
+      "rerank_avg_ns": 4112,
+      "selector_plus_rerank_avg_ns": 13670,
+      "lower_bound_all_layer_queries_known_ms": 0.01367,
+      "rt_overlapped_vs_dense_selector_saved_ns_per_token": 221760,
+      "dense_full_vs_rt_overlapped_attention_saved_ns_per_token": 8522784
+    }
+  ],
+  "interpretation": {
+    "rt_traversal_overhead": "OptiX traversal overhead is not the blocker at the 32k Qwen shape. The selector plus CUDA rerank is about 13-14 us for 8 to 288 synthetic queries.",
+    "sequential_layer_cost": "If a semantic selector had to run once per Qwen layer, the selector plus rerank estimate is about 0.47-0.49 ms/token before descriptor update cost.",
+    "data_dependency": "Qwen layer queries are produced after each layer input is known, so true semantic RT retrieval cannot use the current one pre-graph OptiX launch unless it uses stale or non-semantic descriptors.",
+    "missing_piece": "The missing implementation is a real page-descriptor acceleration structure over Qwen KV/page summaries plus a layer-aware launch path that feeds live query descriptors into OptiX and returns candidate page ids to the existing selected-page attention."
+  },
+  "conclusion": "RT cores remain viable for candidate selection, but current Qwen sparse RT is still synthetic. The next proof must integrate real page descriptors and live layer queries; current evidence does not support claiming semantic RT retrieval yet."
+}
