@@ -491,9 +491,13 @@ cargo run -p nerva-bench -- experimental-rt-sweep 524288 8 1024 64 64 1 36
 cargo run -p nerva-bench -- experimental-rt-matrix 16 64 36
 cargo run -p nerva -- -m qwen3-8b -p "Tell me a story" -c 32768 -o 2048 \
   --rt-mode sparse --rt-far-pages 14 --rt-local-window 4096 --rt-sink-tokens 128
+NERVA_EXPERIMENTAL_RT_QK_SELECTOR=1 NERVA_EXPERIMENTAL_RT_QK_FUSED=1 \
+  cargo run -p nerva -- -m qwen3-8b -p @/tmp/nerva-long-prompt-32k-o2048.txt \
+  -c 32768 -o 2048 --raw --rt-mode sparse --rt-far-pages 14 \
+  --rt-local-window 4096 --rt-sink-tokens 128
 ```
 
-The current Qwen decode path has two selector policies. The default sparse RT policy uses OptiX traversal to produce a sink/local/far page pattern and then runs the normal CUDA selected-page attention path. For semantic experiments, `NERVA_EXPERIMENTAL_RT_QK_SELECTOR=1` switches the Qwen decode integration to a CUDA query/key-aware page selector that scores real KV keys with the live query and still reuses the existing decode, attention, KV, graph, and sampler machinery. That Q/K selector is semantic, but it is not using RT cores yet; it is intentionally labeled separately in JSON as `cuda_qk_representative_page_selector`.
+The current Qwen decode path has three selector policies. The default sparse RT policy uses OptiX traversal to produce a sink/local/far page pattern and then runs the normal CUDA selected-page attention path. For semantic experiments, `NERVA_EXPERIMENTAL_RT_QK_SELECTOR=1` switches the Qwen decode integration to a CUDA query/key-aware page selector that scores real KV keys with the live query and still reuses the existing decode, attention, KV, graph, and sampler machinery. `NERVA_EXPERIMENTAL_RT_QK_FUSED=1` folds that Q/K far-page choice into the shared-warp attention kernel, removing the extra selector kernel launches. Both Q/K policies are semantic CUDA experiments, not semantic RT-core retrieval; JSON labels them as `cuda_qk_representative_page_selector` and `cuda_qk_fused_attention_page_selector`.
 
 The measured 512k-token synthetic selector point on an RTX 5090 is:
 
@@ -513,6 +517,14 @@ The measured 512k-token synthetic selector point on an RTX 5090 is:
 
 The same run reports synthetic full dense attention at 5.238 ms/layer and the RT selected-page attention stage at 1.211 ms/layer, or 1.202 ms/layer with selector/local overlap modeled. That is a useful attention-stage result, but it is not yet a proven full Qwen decode win. Full decode still has projection, MLP, sampling, graph, and quality effects, and sparse selected-page decode can change outputs unless the candidate set preserves the relevant attention mass.
 
+On the 30,571-token Qwen3-8B prompt with 2,048 generated tokens, 80 selected pages, 4,096 local tokens, 128 sink tokens, and `NERVA_EXPERIMENTAL_PREFILL_LOCAL_WINDOW_TOKENS=4096`, the current decode comparison is:
+
+| Selector policy | Decode throughput | Decode wall | Attention per 256-token chunk | Notes |
+|---|---:|---:|---:|---|
+| `optix_synthetic_sink_local_far_page_pattern` | 86.66 tok/s | 23.65s | 532.89 ms | Fastest current RT path, but not semantic retrieval. |
+| `cuda_qk_representative_page_selector` | 80.74 tok/s | 25.39s | 777.78 ms | Semantic page choice, separate selector kernels. |
+| `cuda_qk_fused_attention_page_selector` | 81.65 tok/s | 25.11s | 723.46 ms | Semantic page choice with selector launch overhead removed. |
+
 The current real-model integration has three modes:
 
 | Mode | Purpose |
@@ -521,7 +533,7 @@ The current real-model integration has three modes:
 | `--rt-mode sparse` | Use selected pages in the sparse attention path when the selected page count is below dense page count. |
 | `--rt-mode auto` | Enable sparse mode only when the runtime can use it; otherwise fall back explicitly. |
 
-The open performance question is whether RT-selected far pages plus local/sink attention reduce full per-token latency at 32k and above without losing quality. The selector result is promising; full decode improvement remains under measurement. A real semantic RT selector still needs a page-descriptor BVH and CUDA rerank path; the current semantic Q/K selector is the correctness-facing step before that.
+The open performance question is whether RT-selected far pages plus local/sink attention reduce full per-token latency at 32k and above without losing quality. The selector result is promising; full decode improvement remains under measurement. A real semantic RT selector still needs a page-descriptor BVH and CUDA rerank path; the current semantic Q/K selectors are the correctness-facing CUDA baselines before that.
 
 ### MoE support
 
