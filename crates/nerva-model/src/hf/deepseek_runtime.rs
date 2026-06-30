@@ -573,6 +573,10 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         "precision_moe_deepseek_router_correction_bias_load".to_string(),
         "cuda_deepseek_router_route_api".to_string(),
         "cuda_deepseek_v3_grouped_sigmoid_router_smoke".to_string(),
+        "cuda_hf_sequence_deepseek_descriptor_abi".to_string(),
+        "cuda_hf_sequence_deepseek_footprint_accounting".to_string(),
+        "cuda_hf_sequence_deepseek_native_layout_pack".to_string(),
+        "cuda_hf_sequence_deepseek_execution_guard".to_string(),
     ];
 
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
@@ -661,223 +665,245 @@ fn coverage_for_unit(
     architecture: HfArchitectureKind,
     unit: String,
 ) -> DeepSeekExecutionUnitCoverage {
-    let (status, validated_primitives, remaining_gaps): (&'static str, &[&str], &[&str]) =
-        match (architecture, unit.as_str()) {
-            (
-                HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
-                "deepseek_v3_mla_prefill_decode",
-            ) => (
-                "partial",
-                &[
-                    "deepseek_vllm_kv_cache_spec_planner",
-                    "deepseek_mla_decode_mqa_reference",
-                    "cuda_deepseek_mla_decode_api",
-                    "cuda_deepseek_mla_decode_mqa_smoke",
-                ],
-                &[
-                    "integrate MLA prefill/decode into exact runtime",
-                    "commit vLLM-compatible MLA KV cache pages during decode",
-                    "match vLLM DeepseekV2MLAAttention output numerics",
-                ],
-            ),
-            (
-                HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
-                "deepseek_v3_block_fp8_projection_gemm",
-            ) => (
-                "partial",
-                &[
-                    "fp8_e4m3fn_decode_matches_torch",
-                    "e8m0_scale_upcast_matches_vllm_raw_exponent_path",
-                    "fp8_e4m3fn_e8m0_block_dequant_reference",
-                    "cuda_fp8_e4m3fn_e8m0_dequant_api",
-                    "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
-                ],
-                &[
-                    "fuse block-FP8 dequant with projection GEMM",
-                    "wire DeepSeek q_a/kv_a/q_b/kv_b/o projection scales into decode",
-                    "benchmark projection throughput against vLLM fused kernels",
-                ],
-            ),
-            (HfArchitectureKind::DeepSeekV32, "deepseek_v32_sparse_attention_indexer") => (
-                "partial",
-                &[
-                    "deepseek_vllm_kv_cache_spec_planner",
-                    "cuda_deepseek_compressed_slot_mapping_api",
-                    "cuda_deepseek_compressed_slot_mapping_smoke",
-                ],
-                &[
-                    "implement V3.2 sparse indexer query/key/weights runtime",
-                    "store vLLM-compatible indexer cache pages",
-                    "verify selected sparse blocks against vLLM",
-                ],
-            ),
-            (
-                HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
-                "deepseek_v3_grouped_moe_router_noaux_tc",
-            ) => (
-                "partial",
-                &[
-                    "deepseek_v3_grouped_sigmoid_router_reference",
-                    "precision_moe_deepseek_v3_grouped_router",
-                    "precision_moe_deepseek_router_correction_bias_load",
-                    "cuda_deepseek_router_route_api",
-                    "cuda_deepseek_v3_grouped_sigmoid_router_smoke",
-                ],
-                &[
-                    "integrate grouped sigmoid router into CUDA exact runtime decode layers",
-                    "verify full-layer routed outputs against vLLM",
-                ],
-            ),
-            (
-                HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
-                "deepseek_v3_split_fp8_expert_moe",
-            ) => (
-                "partial",
-                &[
-                    "deepseek_routed_moe_reference",
-                    "cuda_deepseek_routed_moe_api",
-                    "cuda_deepseek_routed_moe_smoke",
-                    "fp8_e4m3fn_e8m0_block_dequant_reference",
-                    "cuda_fp8_e4m3fn_e8m0_dequant_api",
-                    "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
-                ],
-                &[
-                    "run routed expert gate/up/down GEMMs with checkpoint FP8 scales",
-                    "integrate shared experts and routed output accumulation",
-                    "benchmark fused MoE against vLLM FusedMoE",
-                ],
-            ),
-            (HfArchitectureKind::DeepSeekV3, "deepseek_v3_mtp_optional") => (
-                "optional_missing",
-                &[],
-                &["optional MTP draft layers are not implemented"],
-            ),
-            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mhc_pre_post_head") => (
-                "partial",
-                &[
-                    "deepseek_v4_mhc_compressor_indexer_manifest",
-                    "cuda_deepseek_qkv_rmsnorm_api",
-                    "cuda_deepseek_qkv_rmsnorm_smoke",
-                    "cuda_deepseek_fused_inv_rope_fp8_quant_api",
-                    "cuda_deepseek_fused_inv_rope_fp8_quant_smoke",
-                ],
-                &[
-                    "integrate fused Q/KV RMSNorm into MHC pre-head runtime",
-                    "integrate fused inverse RoPE FP8 quant into O projection runtime",
-                    "implement remaining MHC pre/post-head transforms",
-                    "verify MHC head/attention/FFN scale handling against vLLM",
-                ],
-            ),
-            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mla_swa_cache") => (
-                "partial",
-                &[
-                    "deepseek_vllm_kv_cache_spec_planner",
-                    "deepseek_mla_decode_mqa_reference",
-                    "cuda_deepseek_mla_decode_api",
-                ],
-                &[
-                    "allocate and commit vLLM DeepseekV4 SWA cache pages",
-                    "enforce sliding-window sparse attention semantics",
-                ],
-            ),
-            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_fp8_ds_mla_cache") => (
-                "partial",
-                &[
-                    "deepseek_vllm_kv_cache_spec_planner",
-                    "deepseek_mla_decode_mqa_reference",
-                    "cuda_deepseek_mla_decode_api",
-                    "fp8_e4m3fn_e8m0_block_dequant_reference",
-                    "cuda_fp8_e4m3fn_e8m0_dequant_api",
-                    "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
-                    "cuda_deepseek_fp8_ds_mla_kv_pack_api",
-                    "cuda_deepseek_fp8_ds_mla_kv_pack_smoke",
-                ],
-                &[
-                    "integrate 584-byte/token fp8_ds_mla page writes into decode",
-                    "match vLLM DeepseekV4 FlashMLA cache alignment",
-                ],
-            ),
-            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_c4_c128_compressor") => (
-                "partial",
-                &[
-                    "deepseek_v4_mhc_compressor_indexer_manifest",
-                    "cuda_deepseek_qkv_rmsnorm_api",
-                    "cuda_deepseek_qkv_rmsnorm_smoke",
-                    "cuda_deepseek_save_partial_states_api",
-                    "cuda_deepseek_save_partial_states_smoke",
-                    "cuda_deepseek_compress_norm_rope_fp8_cache_api",
-                    "cuda_deepseek_compress_norm_rope_fp8_cache_smoke",
-                    "cuda_deepseek_compress_norm_rope_mxfp4_cache_api",
-                    "cuda_deepseek_compress_norm_rope_mxfp4_cache_smoke",
-                    "cuda_deepseek_compressed_slot_mapping_api",
-                    "cuda_deepseek_compressed_slot_mapping_smoke",
-                ],
-                &[
-                    "integrate C4/C128 compressor kernels into exact runtime",
-                    "verify compressor cache insert inside full DeepSeekV4 attention runtime",
-                ],
-            ),
-            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_sparse_indexer") => (
-                "partial",
-                &[
-                    "deepseek_vllm_kv_cache_spec_planner",
-                    "deepseek_v4_mhc_compressor_indexer_manifest",
-                    "cuda_deepseek_compressed_slot_mapping_api",
-                    "cuda_deepseek_compressed_slot_mapping_smoke",
-                    "cuda_deepseek_c128_topk_metadata_api",
-                    "cuda_deepseek_c128_topk_metadata_smoke",
-                ],
-                &[
-                    "implement DeepseekV4 indexer runtime",
-                    "verify C4 indexer page writes and sparse block choices",
-                ],
-            ),
-            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_parallel_attention_gemm_streams") => (
-                "missing",
-                &[],
-                &[
-                    "parallelize attention GEMM/compressor/indexer streams like vLLM",
-                    "measure stream overlap against vLLM DeepseekV4 attention",
-                ],
-            ),
-            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_hash_and_bias_router") => (
-                "partial",
-                &[
-                    "deepseek_v4_hash_router_manifest",
-                    "deepseek_v4_sqrtsoftplus_hash_router_reference",
-                    "precision_moe_deepseek_v4_sqrtsoftplus_router",
-                    "deepseek_v4_hash_route_table_i64_loader",
-                    "precision_moe_deepseek_v4_hash_route_table",
-                    "cuda_deepseek_router_route_api",
-                    "cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke",
-                ],
-                &[
-                    "integrate hash and bias routing into CUDA exact runtime decode layers",
-                    "verify full-layer routed outputs against vLLM",
-                ],
-            ),
-            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_megamoe_int8_fp4_experts") => (
-                "partial",
-                &[
-                    "mxfp4_e2m1_e8m0_block_dequant_reference",
-                    "cuda_mxfp4_e2m1_e8m0_dequant_api",
-                    "cuda_mxfp4_e2m1_e8m0_block_dequant_smoke",
-                    "deepseek_routed_moe_reference",
-                    "cuda_deepseek_routed_moe_api",
-                    "cuda_deepseek_routed_moe_smoke",
-                ],
-                &[
-                    "implement V4 MegaMoE int8/fp4 expert kernels",
-                    "support expert-parallel physical/logical expert mapping",
-                    "benchmark MegaMoE against vLLM deep_gemm_mega_moe/FusedMoE",
-                ],
-            ),
-            _ => (
-                "missing",
-                &[],
-                &["no DeepSeek coverage mapping exists for this unit"],
-            ),
-        };
+    let (status, validated_primitives, remaining_gaps): (&'static str, &[&str], &[&str]) = match (
+        architecture,
+        unit.as_str(),
+    ) {
+        (
+            HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
+            "deepseek_v3_mla_prefill_decode",
+        ) => (
+            "partial",
+            &[
+                "deepseek_vllm_kv_cache_spec_planner",
+                "deepseek_mla_decode_mqa_reference",
+                "cuda_deepseek_mla_decode_api",
+                "cuda_deepseek_mla_decode_mqa_smoke",
+                "cuda_hf_sequence_deepseek_descriptor_abi",
+                "cuda_hf_sequence_deepseek_footprint_accounting",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_execution_guard",
+            ],
+            &[
+                "integrate MLA prefill/decode into exact runtime",
+                "consume DeepSeek native sequence layout offsets in MLA kernels",
+                "commit vLLM-compatible MLA KV cache pages during decode",
+                "match vLLM DeepseekV2MLAAttention output numerics",
+            ],
+        ),
+        (
+            HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
+            "deepseek_v3_block_fp8_projection_gemm",
+        ) => (
+            "partial",
+            &[
+                "fp8_e4m3fn_decode_matches_torch",
+                "e8m0_scale_upcast_matches_vllm_raw_exponent_path",
+                "fp8_e4m3fn_e8m0_block_dequant_reference",
+                "cuda_fp8_e4m3fn_e8m0_dequant_api",
+                "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
+                "cuda_hf_sequence_deepseek_footprint_accounting",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "fuse block-FP8 dequant with projection GEMM",
+                "consume packed DeepSeek q_a/kv_a/q_b/kv_b/o projection scale offsets in decode",
+                "benchmark projection throughput against vLLM fused kernels",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV32, "deepseek_v32_sparse_attention_indexer") => (
+            "partial",
+            &[
+                "deepseek_vllm_kv_cache_spec_planner",
+                "cuda_deepseek_compressed_slot_mapping_api",
+                "cuda_deepseek_compressed_slot_mapping_smoke",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "consume packed V3.2 sparse indexer query/key/weights offsets in runtime",
+                "store vLLM-compatible indexer cache pages",
+                "verify selected sparse blocks against vLLM",
+            ],
+        ),
+        (
+            HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
+            "deepseek_v3_grouped_moe_router_noaux_tc",
+        ) => (
+            "partial",
+            &[
+                "deepseek_v3_grouped_sigmoid_router_reference",
+                "precision_moe_deepseek_v3_grouped_router",
+                "precision_moe_deepseek_router_correction_bias_load",
+                "cuda_deepseek_router_route_api",
+                "cuda_deepseek_v3_grouped_sigmoid_router_smoke",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "integrate grouped sigmoid router into CUDA exact runtime decode layers",
+                "verify full-layer routed outputs against vLLM",
+            ],
+        ),
+        (
+            HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
+            "deepseek_v3_split_fp8_expert_moe",
+        ) => (
+            "partial",
+            &[
+                "deepseek_routed_moe_reference",
+                "cuda_deepseek_routed_moe_api",
+                "cuda_deepseek_routed_moe_smoke",
+                "fp8_e4m3fn_e8m0_block_dequant_reference",
+                "cuda_fp8_e4m3fn_e8m0_dequant_api",
+                "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "run routed expert gate/up/down GEMMs with checkpoint FP8 scales",
+                "integrate shared experts and routed output accumulation",
+                "benchmark fused MoE against vLLM FusedMoE",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV3, "deepseek_v3_mtp_optional") => (
+            "optional_missing",
+            &[],
+            &["optional MTP draft layers are not implemented"],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mhc_pre_post_head") => (
+            "partial",
+            &[
+                "deepseek_v4_mhc_compressor_indexer_manifest",
+                "cuda_deepseek_qkv_rmsnorm_api",
+                "cuda_deepseek_qkv_rmsnorm_smoke",
+                "cuda_deepseek_fused_inv_rope_fp8_quant_api",
+                "cuda_deepseek_fused_inv_rope_fp8_quant_smoke",
+                "cuda_hf_sequence_deepseek_descriptor_abi",
+                "cuda_hf_sequence_deepseek_footprint_accounting",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_execution_guard",
+            ],
+            &[
+                "integrate fused Q/KV RMSNorm into MHC pre-head runtime",
+                "integrate fused inverse RoPE FP8 quant into O projection runtime",
+                "implement remaining MHC pre/post-head transforms",
+                "verify MHC head/attention/FFN scale handling against vLLM",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mla_swa_cache") => (
+            "partial",
+            &[
+                "deepseek_vllm_kv_cache_spec_planner",
+                "deepseek_mla_decode_mqa_reference",
+                "cuda_deepseek_mla_decode_api",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "allocate and commit vLLM DeepseekV4 SWA cache pages",
+                "enforce sliding-window sparse attention semantics",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_fp8_ds_mla_cache") => (
+            "partial",
+            &[
+                "deepseek_vllm_kv_cache_spec_planner",
+                "deepseek_mla_decode_mqa_reference",
+                "cuda_deepseek_mla_decode_api",
+                "fp8_e4m3fn_e8m0_block_dequant_reference",
+                "cuda_fp8_e4m3fn_e8m0_dequant_api",
+                "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
+                "cuda_deepseek_fp8_ds_mla_kv_pack_api",
+                "cuda_deepseek_fp8_ds_mla_kv_pack_smoke",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "integrate 584-byte/token fp8_ds_mla page writes into decode",
+                "match vLLM DeepseekV4 FlashMLA cache alignment",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_c4_c128_compressor") => (
+            "partial",
+            &[
+                "deepseek_v4_mhc_compressor_indexer_manifest",
+                "cuda_deepseek_qkv_rmsnorm_api",
+                "cuda_deepseek_qkv_rmsnorm_smoke",
+                "cuda_deepseek_save_partial_states_api",
+                "cuda_deepseek_save_partial_states_smoke",
+                "cuda_deepseek_compress_norm_rope_fp8_cache_api",
+                "cuda_deepseek_compress_norm_rope_fp8_cache_smoke",
+                "cuda_deepseek_compress_norm_rope_mxfp4_cache_api",
+                "cuda_deepseek_compress_norm_rope_mxfp4_cache_smoke",
+                "cuda_deepseek_compressed_slot_mapping_api",
+                "cuda_deepseek_compressed_slot_mapping_smoke",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "integrate C4/C128 compressor kernels into exact runtime",
+                "verify compressor cache insert inside full DeepSeekV4 attention runtime",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_sparse_indexer") => (
+            "partial",
+            &[
+                "deepseek_vllm_kv_cache_spec_planner",
+                "deepseek_v4_mhc_compressor_indexer_manifest",
+                "cuda_deepseek_compressed_slot_mapping_api",
+                "cuda_deepseek_compressed_slot_mapping_smoke",
+                "cuda_deepseek_c128_topk_metadata_api",
+                "cuda_deepseek_c128_topk_metadata_smoke",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "consume packed DeepseekV4 indexer offsets in runtime",
+                "verify C4 indexer page writes and sparse block choices",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_parallel_attention_gemm_streams") => (
+            "missing",
+            &[],
+            &[
+                "parallelize attention GEMM/compressor/indexer streams like vLLM",
+                "measure stream overlap against vLLM DeepseekV4 attention",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_hash_and_bias_router") => (
+            "partial",
+            &[
+                "deepseek_v4_hash_router_manifest",
+                "deepseek_v4_sqrtsoftplus_hash_router_reference",
+                "precision_moe_deepseek_v4_sqrtsoftplus_router",
+                "deepseek_v4_hash_route_table_i64_loader",
+                "precision_moe_deepseek_v4_hash_route_table",
+                "cuda_deepseek_router_route_api",
+                "cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "integrate hash and bias routing into CUDA exact runtime decode layers",
+                "verify full-layer routed outputs against vLLM",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_megamoe_int8_fp4_experts") => (
+            "partial",
+            &[
+                "mxfp4_e2m1_e8m0_block_dequant_reference",
+                "cuda_mxfp4_e2m1_e8m0_dequant_api",
+                "cuda_mxfp4_e2m1_e8m0_block_dequant_smoke",
+                "deepseek_routed_moe_reference",
+                "cuda_deepseek_routed_moe_api",
+                "cuda_deepseek_routed_moe_smoke",
+                "cuda_hf_sequence_deepseek_native_layout_pack",
+            ],
+            &[
+                "implement V4 MegaMoE int8/fp4 expert kernels",
+                "support expert-parallel physical/logical expert mapping",
+                "benchmark MegaMoE against vLLM deep_gemm_mega_moe/FusedMoE",
+            ],
+        ),
+        _ => (
+            "missing",
+            &[],
+            &["no DeepSeek coverage mapping exists for this unit"],
+        ),
+    };
 
     DeepSeekExecutionUnitCoverage {
         unit,

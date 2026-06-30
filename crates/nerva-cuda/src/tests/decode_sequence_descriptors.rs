@@ -10,7 +10,10 @@ use crate::decode::hf_sequence::request::{
     CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
-use crate::decode::hf_sequence::weight_plan::{CudaHfDecodeSequenceWeightPlan, hash_weight_blocks};
+use crate::decode::hf_sequence::weight_plan::{
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
+    CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
+};
 use crate::smoke::status::SmokeStatus;
 
 use super::decode_sequence_descriptor_blocks::{
@@ -357,7 +360,119 @@ fn declared_sparse_moe_descriptor_footprint_uses_router_and_experts() {
 
 #[test]
 fn declared_deepseek_v4_descriptor_footprint_counts_storage_widths_and_hc_blocks() {
-    let deepseek_layer = CudaHfDecodeChainLayer {
+    let deepseek_layer = tiny_deepseek_v4_descriptor_layer();
+    let layers = [deepseek_layer];
+    let request = CudaHfDecodeSequenceRequest {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        steps: 2,
+        seed_token: 0,
+        prompt_tokens: &[0],
+        eos_token: None,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: 1306,
+            gpu_resident_weight_bytes: 1306,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: 1,
+        }),
+        weight_blocks: &[],
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
+    };
+
+    let footprint = estimate_sequence_footprint(&request).unwrap();
+
+    assert_eq!(footprint.resident_weight_bytes, 1306);
+    assert_eq!(footprint.layout_bytes, 376);
+}
+
+#[test]
+fn declared_deepseek_v4_descriptor_run_reaches_native_execution_guard() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let deepseek_layer = tiny_deepseek_v4_descriptor_layer();
+    let layers = [deepseek_layer];
+    let weight_storage = vec![0u16; 1306 / 2];
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: 1306,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let request = CudaHfDecodeSequenceRequest {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        steps: 2,
+        seed_token: 0,
+        prompt_tokens: &[0],
+        eos_token: None,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: 1306,
+            gpu_resident_weight_bytes: 1306,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
+    };
+
+    let summary = request.run();
+    if summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+
+    assert_eq!(summary.status, SmokeStatus::Failed);
+    assert_eq!(summary.planned_footprint.resident_weight_bytes, 1306);
+    assert_eq!(summary.planned_weight_descriptor_count, 1);
+    assert_eq!(
+        summary.planned_weight_descriptor_hash,
+        hash_weight_blocks(&weight_blocks)
+    );
+    assert!(
+        summary
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("cuda_error=801")),
+        "expected cudaErrorNotSupported guard, got {:?}",
+        summary.error
+    );
+}
+
+fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
+    CudaHfDecodeChainLayer {
         rms_attn_weight: &[],
         rms_mlp_weight: &[],
         w_q: &[],
@@ -407,43 +522,7 @@ fn declared_deepseek_v4_descriptor_footprint_counts_storage_widths_and_hc_blocks
         experts_per_token: 1,
         norm_topk_prob: true,
         attention_kind: CUDA_HF_ATTENTION_DEEPSEEK_MLA,
-    };
-    let layers = [deepseek_layer];
-    let request = CudaHfDecodeSequenceRequest {
-        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
-        hidden: 4,
-        heads: 2,
-        kv_heads: 1,
-        head_dim: 2,
-        intermediate: 4,
-        vocab_size: 8,
-        steps: 2,
-        seed_token: 0,
-        prompt_tokens: &[0],
-        eos_token: None,
-        rms_eps: 1e-5,
-        rope_theta: None,
-        embeddings: &[],
-        layers: &layers,
-        final_norm_weight: &[],
-        lm_head: &[],
-        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
-            blocks: 1,
-            gpu_resident_blocks: 1,
-            gpu_staged_blocks: 0,
-            weight_bytes: 1306,
-            gpu_resident_weight_bytes: 1306,
-            gpu_staged_weight_bytes: 0,
-            descriptor_hash: 1,
-        }),
-        weight_blocks: &[],
-        sampler: CudaHfDecodeSamplerConfig::greedy(),
-    };
-
-    let footprint = estimate_sequence_footprint(&request).unwrap();
-
-    assert_eq!(footprint.resident_weight_bytes, 1306);
-    assert_eq!(footprint.layout_bytes, 376);
+    }
 }
 
 #[test]

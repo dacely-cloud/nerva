@@ -65,6 +65,10 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_smoke"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_mxfp4_cache_api"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_mxfp4_cache_smoke"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_descriptor_abi"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_footprint_accounting"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_execution_guard"));
     assert!(json.contains("deepseek_v4_mhc_pre_post_head"));
     assert!(json.contains("\"execution_unit_status\""));
     assert!(json.contains("\"unit\":\"deepseek_v4_megamoe_int8_fp4_experts\""));
@@ -102,8 +106,11 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_deepseek_router_route_api"));
     assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
     assert!(json.contains("\"unit\":\"deepseek_v32_sparse_attention_indexer\""));
-    assert!(json.contains("implement V3.2 sparse indexer query/key/weights runtime"));
+    assert!(
+        json.contains("consume packed V3.2 sparse indexer query/key/weights offsets in runtime")
+    );
     assert!(json.contains("\"runtime_status\":\"unsupported\""));
     assert!(json.contains("\"claim_allowed\":false"));
 
@@ -232,6 +239,10 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_api"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_mxfp4_cache_api"));
     assert!(json.contains("deepseek_v4_megamoe_int8_fp4_experts"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_descriptor_abi"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_footprint_accounting"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_execution_guard"));
     assert!(json.contains("\"runtime_parity_status\":\"not_verified\""));
     assert!(json.contains("\"performance_status\":\"not_benchmarked\""));
     assert!(json.contains("\"claim_allowed\":false"));
