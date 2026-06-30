@@ -43,7 +43,7 @@ use nerva_model::hf::parser::parse_hf_config_metadata;
 use crate::json::{json_escape, json_string_array};
 use crate::parity::compare::compare_token_slices;
 use crate::parity::hash::hash_tokens;
-use crate::parity::parser::parse_vllm_token_ids;
+use crate::parity::parser::{parse_token_ids_for_key, parse_vllm_token_ids};
 
 pub(crate) struct DeepSeekCudaPrimitiveReport<'a> {
     pub(crate) name: &'a str,
@@ -75,6 +75,44 @@ struct DeepSeekVllmReferenceUnit {
 struct DeepSeekArtifactMetric {
     value: f64,
     source: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DeepSeekSamplerArtifact {
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<f64>,
+    seed: Option<f64>,
+}
+
+impl DeepSeekSamplerArtifact {
+    fn comparable_with(&self, other: &Self) -> bool {
+        self.temperature.is_some()
+            && self.top_p.is_some()
+            && self.top_k.is_some()
+            && self.seed.is_some()
+            && other.temperature.is_some()
+            && other.top_p.is_some()
+            && other.top_k.is_some()
+            && other.seed.is_some()
+    }
+
+    fn matches(&self, other: &Self) -> bool {
+        same_json_number(self.temperature, other.temperature)
+            && same_json_number(self.top_p, other.top_p)
+            && same_json_number(self.top_k, other.top_k)
+            && same_json_number(self.seed, other.seed)
+    }
+
+    fn to_json(&self) -> String {
+        format!(
+            "{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}}",
+            json_opt_f64(self.temperature),
+            json_opt_f64(self.top_p),
+            json_opt_f64(self.top_k),
+            json_opt_f64(self.seed),
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -266,6 +304,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
         "nerva".to_string(),
         "--".to_string(),
         "--json".to_string(),
+        "--raw".to_string(),
         "-m".to_string(),
         checkpoint_dir.clone(),
         "-p".to_string(),
@@ -337,7 +376,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
     ];
 
     Ok(format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-plan-v1\",\"architecture\":{},\"checkpoint_dir\":\"{}\",\"checkpoint_exists\":{},\"config_path\":\"{}\",\"config_status\":\"{}\",\"config_error\":{},\"weights_present\":{},\"prompt_spec\":\"{}\",\"prompt_status\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_root\":\"{}\",\"vllm_reference_status\":\"{}\",\"vllm_reference_units_total\":{},\"vllm_reference_units_ok\":{},\"runtime_units_total\":{},\"runtime_blocking_units_total\":{},\"runtime_blocking_units\":{},\"commands\":{{\"nerva_generate\":{},\"nerva_bench_generate\":{},\"vllm_generate\":{},\"compare\":{}}},\"required_comparison\":[\"same checkpoint directory\",\"same prompt text\",\"same greedy sampler temperature=0 top_p=1 top_k=0 seed=0\",\"discard vLLM warmup run and keep prefix caching disabled unless explicitly requested\",\"compare generated token ids and generated text\",\"compare post-load/decode tokens_per_second and p99 latency\",\"run deepseek-vllm-compare on the two JSON artifacts\"],\"runtime_parity_status\":\"{}\",\"performance_status\":\"{}\",\"benchmark_allowed\":{},\"claim_allowed\":false}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-plan-v1\",\"architecture\":{},\"checkpoint_dir\":\"{}\",\"checkpoint_exists\":{},\"config_path\":\"{}\",\"config_status\":\"{}\",\"config_error\":{},\"weights_present\":{},\"prompt_spec\":\"{}\",\"prompt_status\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_root\":\"{}\",\"vllm_reference_status\":\"{}\",\"vllm_reference_units_total\":{},\"vllm_reference_units_ok\":{},\"runtime_units_total\":{},\"runtime_blocking_units_total\":{},\"runtime_blocking_units\":{},\"commands\":{{\"nerva_generate\":{},\"nerva_bench_generate\":{},\"vllm_generate\":{},\"compare\":{}}},\"required_comparison\":[\"same checkpoint directory\",\"same literal prompt text with NERVA --raw and vLLM tokenizer.encode(prompt)\",\"same prompt_token_ids in both JSON artifacts\",\"same greedy sampler temperature=0 top_p=1 top_k=0 seed=0\",\"discard vLLM warmup run and keep prefix caching disabled unless explicitly requested\",\"compare generated token ids and generated text\",\"compare post-load/decode tokens_per_second and p99 latency\",\"run deepseek-vllm-compare on the two JSON artifacts\"],\"runtime_parity_status\":\"{}\",\"performance_status\":\"{}\",\"benchmark_allowed\":{},\"claim_allowed\":false}}",
         status,
         json_opt_string(architecture.as_deref()),
         json_escape(&checkpoint_dir),
@@ -411,6 +450,31 @@ fn deepseek_vllm_compare_json(
         && comparison.extra_tokens == 0
         && vllm_token_hash == nerva_token_hash;
 
+    let vllm_prompt_tokens = parse_token_ids_for_key(vllm_json, "prompt_token_ids")?;
+    let nerva_prompt_tokens = parse_token_ids_for_key(nerva_json, "prompt_token_ids")?;
+    let prompt_comparison = match (&vllm_prompt_tokens, &nerva_prompt_tokens) {
+        (Some(vllm), Some(nerva)) => Some(compare_token_slices(vllm, nerva)),
+        _ => None,
+    };
+    let vllm_prompt_hash = vllm_prompt_tokens
+        .as_ref()
+        .map(|tokens| hash_tokens(tokens));
+    let nerva_prompt_hash = nerva_prompt_tokens
+        .as_ref()
+        .map(|tokens| hash_tokens(tokens));
+    let prompt_comparable = prompt_comparison.is_some();
+    let prompt_token_parity = prompt_comparison.as_ref().is_some_and(|comparison| {
+        comparison.mismatched_tokens == 0
+            && comparison.missing_tokens == 0
+            && comparison.extra_tokens == 0
+            && vllm_prompt_hash == nerva_prompt_hash
+    });
+
+    let vllm_sampler = find_deepseek_sampler_artifact(vllm_json)?;
+    let nerva_sampler = find_deepseek_sampler_artifact(nerva_json)?;
+    let sampler_comparable = vllm_sampler.comparable_with(&nerva_sampler);
+    let sampler_parity = sampler_comparable && vllm_sampler.matches(&nerva_sampler);
+
     let vllm_text = find_first_json_string_field(vllm_json, "generated_text")?;
     let nerva_text = find_first_json_string_field(nerva_json, "generated_text")?;
     let text_parity = match (&vllm_text, &nerva_text) {
@@ -436,7 +500,9 @@ fn deepseek_vllm_compare_json(
     let latency_comparable = p99_ratio.is_some();
     let latency_ok = p99_ratio.is_some_and(|ratio| ratio <= 1.0);
 
-    let status = if !token_parity || !text_parity {
+    let status = if !prompt_comparable || !sampler_comparable {
+        "not_comparable"
+    } else if !prompt_token_parity || !sampler_parity || !token_parity || !text_parity {
         "mismatch"
     } else if !throughput_comparable {
         "not_comparable"
@@ -450,15 +516,35 @@ fn deepseek_vllm_compare_json(
         "ok"
     };
     let claim_allowed = status == "ok";
-    let throughput_claim_allowed = token_parity && text_parity && throughput_ok;
+    let throughput_claim_allowed =
+        prompt_token_parity && sampler_parity && token_parity && text_parity && throughput_ok;
 
     Ok(format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-compare-v1\",\"vllm_artifact\":\"{}\",\"nerva_artifact\":\"{}\",\"source_formats\":{{\"vllm\":\"{}\",\"nerva\":\"{}\"}},\"token_parity\":{},\"text_parity\":{},\"matched_tokens\":{},\"mismatched_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"first_mismatch_index\":{},\"vllm_token_hash\":{},\"nerva_token_hash\":{},\"vllm_generated_tokens\":{},\"nerva_generated_tokens\":{},\"vllm_tokens_per_second\":{},\"vllm_throughput_source\":{},\"nerva_tokens_per_second\":{},\"nerva_throughput_source\":{},\"throughput_speedup_vs_vllm\":{},\"throughput_comparable\":{},\"throughput_ok\":{},\"vllm_p99_ms\":{},\"vllm_p99_source\":{},\"nerva_p99_ms\":{},\"nerva_p99_source\":{},\"p99_ratio_vs_vllm\":{},\"latency_comparable\":{},\"latency_ok\":{},\"throughput_claim_allowed\":{},\"claim_allowed\":{},\"blocking_reasons\":{}}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-compare-v1\",\"vllm_artifact\":\"{}\",\"nerva_artifact\":\"{}\",\"source_formats\":{{\"vllm\":\"{}\",\"nerva\":\"{}\"}},\"prompt_comparable\":{},\"prompt_token_parity\":{},\"matched_prompt_tokens\":{},\"mismatched_prompt_tokens\":{},\"missing_prompt_tokens\":{},\"extra_prompt_tokens\":{},\"first_prompt_mismatch_index\":{},\"vllm_prompt_hash\":{},\"nerva_prompt_hash\":{},\"vllm_prompt_tokens\":{},\"nerva_prompt_tokens\":{},\"sampler_comparable\":{},\"sampler_parity\":{},\"vllm_sampler\":{},\"nerva_sampler\":{},\"token_parity\":{},\"text_parity\":{},\"matched_tokens\":{},\"mismatched_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"first_mismatch_index\":{},\"vllm_token_hash\":{},\"nerva_token_hash\":{},\"vllm_generated_tokens\":{},\"nerva_generated_tokens\":{},\"vllm_tokens_per_second\":{},\"vllm_throughput_source\":{},\"nerva_tokens_per_second\":{},\"nerva_throughput_source\":{},\"throughput_speedup_vs_vllm\":{},\"throughput_comparable\":{},\"throughput_ok\":{},\"vllm_p99_ms\":{},\"vllm_p99_source\":{},\"nerva_p99_ms\":{},\"nerva_p99_source\":{},\"p99_ratio_vs_vllm\":{},\"latency_comparable\":{},\"latency_ok\":{},\"throughput_claim_allowed\":{},\"claim_allowed\":{},\"blocking_reasons\":{}}}",
         status,
         json_escape(vllm_artifact_path),
         json_escape(nerva_artifact_path),
         json_escape(vllm_source_format),
         json_escape(nerva_source_format),
+        prompt_comparable,
+        prompt_token_parity,
+        json_opt_usize(prompt_comparison.as_ref().map(|comparison| comparison.matched_tokens)),
+        json_opt_usize(prompt_comparison.as_ref().map(|comparison| comparison.mismatched_tokens)),
+        json_opt_usize(prompt_comparison.as_ref().map(|comparison| comparison.missing_tokens)),
+        json_opt_usize(prompt_comparison.as_ref().map(|comparison| comparison.extra_tokens)),
+        json_opt_usize(
+            prompt_comparison
+                .as_ref()
+                .and_then(|comparison| comparison.first_mismatch_index),
+        ),
+        json_opt_u64(vllm_prompt_hash),
+        json_opt_u64(nerva_prompt_hash),
+        json_opt_usize(vllm_prompt_tokens.as_ref().map(Vec::len)),
+        json_opt_usize(nerva_prompt_tokens.as_ref().map(Vec::len)),
+        sampler_comparable,
+        sampler_parity,
+        vllm_sampler.to_json(),
+        nerva_sampler.to_json(),
         token_parity,
         text_parity,
         comparison.matched_tokens,
@@ -487,6 +573,10 @@ fn deepseek_vllm_compare_json(
         throughput_claim_allowed,
         claim_allowed,
         json_string_array(&deepseek_compare_blocking_reasons(
+            prompt_comparable,
+            prompt_token_parity,
+            sampler_comparable,
+            sampler_parity,
             token_parity,
             text_parity,
             throughput_comparable,
@@ -2139,6 +2229,10 @@ fn json_opt_usize(value: Option<usize>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.to_string())
 }
 
+fn json_opt_u64(value: Option<u64>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
 fn json_opt_f64(value: Option<f64>) -> String {
     match value {
         Some(value) if value.is_finite() && value.fract() == 0.0 => format!("{value:.1}"),
@@ -2148,6 +2242,10 @@ fn json_opt_f64(value: Option<f64>) -> String {
 }
 
 fn deepseek_compare_blocking_reasons(
+    prompt_comparable: bool,
+    prompt_token_parity: bool,
+    sampler_comparable: bool,
+    sampler_parity: bool,
     token_parity: bool,
     text_parity: bool,
     throughput_comparable: bool,
@@ -2156,6 +2254,19 @@ fn deepseek_compare_blocking_reasons(
     latency_ok: bool,
 ) -> Vec<String> {
     let mut reasons = Vec::new();
+    if !prompt_comparable {
+        reasons.push("prompt_token_ids is missing from one or both artifacts".to_string());
+    } else if !prompt_token_parity {
+        reasons.push("prompt token IDs differ".to_string());
+    }
+    if !sampler_comparable {
+        reasons.push(
+            "sampler temperature/top_p/top_k/seed is missing from one or both artifacts"
+                .to_string(),
+        );
+    } else if !sampler_parity {
+        reasons.push("sampler temperature/top_p/top_k/seed differs".to_string());
+    }
     if !token_parity {
         reasons.push("generated token IDs differ".to_string());
     }
@@ -2173,6 +2284,23 @@ fn deepseek_compare_blocking_reasons(
         reasons.push("NERVA p99 latency is above vLLM p99 latency".to_string());
     }
     reasons
+}
+
+fn find_deepseek_sampler_artifact(source: &str) -> Result<DeepSeekSamplerArtifact, String> {
+    Ok(DeepSeekSamplerArtifact {
+        temperature: find_first_json_number_field(source, "temperature")?,
+        top_p: find_first_json_number_field(source, "top_p")?,
+        top_k: find_first_json_number_field(source, "top_k")?,
+        seed: find_first_json_number_field(source, "seed")?,
+    })
+}
+
+fn same_json_number(left: Option<f64>, right: Option<f64>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => (left - right).abs() <= 1e-9,
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 fn find_deepseek_throughput_metric(source: &str) -> Result<Option<DeepSeekArtifactMetric>, String> {

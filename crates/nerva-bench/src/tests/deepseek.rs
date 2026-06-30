@@ -553,6 +553,7 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("\"nerva_generate\""));
     assert!(json.contains("\"--json\""));
+    assert!(json.contains("\"--raw\""));
     assert!(json.contains("\"nerva_bench_generate\""));
     assert!(json.contains("\"hf-cuda-generate\""));
     assert!(json.contains("\"vllm_generate\""));
@@ -566,6 +567,9 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"--max-tokens\""));
     assert!(json.contains("\"--runs\""));
     assert!(json.contains("\"--warmup-runs\""));
+    assert!(json
+        .contains("same literal prompt text with NERVA --raw and vLLM tokenizer.encode(prompt)"));
+    assert!(json.contains("same prompt_token_ids in both JSON artifacts"));
     assert!(json.contains("same greedy sampler temperature=0 top_p=1 top_k=0 seed=0"));
     assert!(json.contains(
         "discard vLLM warmup run and keep prefix caching disabled unless explicitly requested"
@@ -586,12 +590,12 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
     let nerva_path = dir.join("nerva.json");
     std::fs::write(
         &vllm_path,
-        r#"{"status":"ok","schema":"nerva-vllm-generate-v1","tokens":[11,22,33],"generated_text":"same","tokens_per_second":100.0,"request_p99_ms":30.0,"p99_ms":10.0}"#,
+        r#"{"status":"ok","schema":"nerva-vllm-generate-v1","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,22,33],"generated_text":"same","tokens_per_second":100.0,"request_p99_ms":30.0,"p99_ms":10.0}"#,
     )
     .unwrap();
     std::fs::write(
         &nerva_path,
-        r#"{"status":"ok","schema":"nerva-hf-cuda-generate-v1","tokens":[11,22,33],"generated_text":"same","post_load_tokens_per_second":125.0,"critical_path_tokens_per_second":130.0,"chunks":[{"tokens_per_second":999.0}],"token_critical_paths":[{"wall_latency_ns":7000000},{"wall_latency_ns":8000000},{"wall_latency_ns":9000000}]}"#,
+        r#"{"status":"ok","schema":"nerva-hf-cuda-generate-v1","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,22,33],"generated_text":"same","post_load_tokens_per_second":125.0,"critical_path_tokens_per_second":130.0,"chunks":[{"tokens_per_second":999.0}],"token_critical_paths":[{"wall_latency_ns":7000000},{"wall_latency_ns":8000000},{"wall_latency_ns":9000000}]}"#,
     )
     .unwrap();
 
@@ -603,6 +607,12 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-compare-v1\""));
     assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"prompt_comparable\":true"));
+    assert!(json.contains("\"prompt_token_parity\":true"));
+    assert!(json.contains("\"vllm_prompt_tokens\":3"));
+    assert!(json.contains("\"nerva_prompt_tokens\":3"));
+    assert!(json.contains("\"sampler_comparable\":true"));
+    assert!(json.contains("\"sampler_parity\":true"));
     assert!(json.contains("\"token_parity\":true"));
     assert!(json.contains("\"text_parity\":true"));
     assert!(json.contains("\"throughput_speedup_vs_vllm\":1.25"));
@@ -620,7 +630,7 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
     let mismatch_path = dir.join("nerva-mismatch.json");
     std::fs::write(
         &mismatch_path,
-        r#"{"status":"ok","tokens":[11,99,33],"generated_text":"different","tokens_per_second":125.0}"#,
+        r#"{"status":"ok","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,99,33],"generated_text":"different","tokens_per_second":125.0}"#,
     )
     .unwrap();
     let mismatch = run_deepseek_vllm_compare(

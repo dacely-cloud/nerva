@@ -19,6 +19,16 @@ pub(crate) fn parse_vllm_token_ids(source: &str) -> Result<(&'static str, Vec<To
     ))
 }
 
+pub(crate) fn parse_token_ids_for_key(
+    source: &str,
+    key: &str,
+) -> Result<Option<Vec<TokenId>>, String> {
+    let Some(value_start) = find_json_array_for_key(source, key)? else {
+        return Ok(None);
+    };
+    parse_token_array(source, value_start).map(Some)
+}
+
 fn find_json_array_for_key(source: &str, key: &str) -> Result<Option<usize>, String> {
     let bytes = source.as_bytes();
     let mut index = 0usize;
