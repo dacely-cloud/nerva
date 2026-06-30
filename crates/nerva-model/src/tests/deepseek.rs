@@ -6,6 +6,7 @@ use crate::hf::deepseek::{
 };
 use crate::hf::deepseek_runtime::{
     DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS, DeepSeekAttentionExecutionKind,
+    deepseek_execution_unit_coverage, deepseek_implemented_primitives,
     deepseek_layer_execution_plan, deepseek_runtime_weight_contract, deepseek_v4_mhc_pre_num_split,
     deepseek_v4_mhc_warmup_token_sizes, plan_deepseek_v4_mhc_warmup,
 };
@@ -157,6 +158,46 @@ fn deepseek_v4_mhc_warmup_plan_matches_vllm_token_sizes_and_split_k() {
 
     let v3 = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
     assert!(plan_deepseek_v4_mhc_warmup(&v3, 1024, &[], 120).is_err());
+}
+
+#[test]
+fn deepseek_v4_coverage_reports_cuda_mhc_primitives_but_keeps_sequence_gap_open() {
+    let metadata = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
+
+    let primitives = deepseek_implemented_primitives(&metadata);
+    for primitive in [
+        "cuda_deepseek_mhc_pre_api",
+        "cuda_deepseek_mhc_pre_smoke",
+        "cuda_deepseek_mhc_post_api",
+        "cuda_deepseek_mhc_post_smoke",
+        "cuda_deepseek_mhc_fused_post_pre_api",
+        "cuda_deepseek_mhc_fused_post_pre_smoke",
+        "cuda_deepseek_mhc_head_api",
+        "cuda_deepseek_mhc_head_smoke",
+    ] {
+        assert!(
+            primitives.iter().any(|item| item == primitive),
+            "missing DeepSeek V4 mHC primitive coverage entry: {primitive}"
+        );
+    }
+
+    let coverage = deepseek_execution_unit_coverage(&metadata);
+    let mhc = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v4_mhc_pre_post_head")
+        .expect("DeepSeek V4 should report mHC coverage");
+    assert_eq!(mhc.status, "partial");
+    assert!(
+        mhc.validated_primitives
+            .iter()
+            .any(|item| item == "cuda_deepseek_mhc_fused_post_pre_api")
+    );
+    assert!(
+        mhc.remaining_gaps
+            .iter()
+            .any(|gap| gap.contains("full V4 sequence runtime"))
+    );
+    assert!(mhc.remaining_gaps.iter().any(|gap| gap.contains("vLLM")));
 }
 
 #[test]

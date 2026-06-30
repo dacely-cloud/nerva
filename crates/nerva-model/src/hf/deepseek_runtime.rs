@@ -709,6 +709,14 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("deepseek_v4_mhc_compressor_indexer_manifest".to_string());
         primitives.push("deepseek_v4_mhc_warmup_plan_matches_vllm".to_string());
         primitives.push("deepseek_v4_mhc_pre_post_head_reference_matches_vllm_torch".to_string());
+        primitives.push("cuda_deepseek_mhc_pre_api".to_string());
+        primitives.push("cuda_deepseek_mhc_pre_smoke".to_string());
+        primitives.push("cuda_deepseek_mhc_post_api".to_string());
+        primitives.push("cuda_deepseek_mhc_post_smoke".to_string());
+        primitives.push("cuda_deepseek_mhc_fused_post_pre_api".to_string());
+        primitives.push("cuda_deepseek_mhc_fused_post_pre_smoke".to_string());
+        primitives.push("cuda_deepseek_mhc_head_api".to_string());
+        primitives.push("cuda_deepseek_mhc_head_smoke".to_string());
         primitives.push("deepseek_v4_hash_router_manifest".to_string());
         primitives.push("mxfp4_e2m1_e8m0_block_dequant_reference".to_string());
         primitives.push("cuda_mxfp4_e2m1_e8m0_dequant_api".to_string());
@@ -949,6 +957,14 @@ fn coverage_for_unit(
                 "deepseek_v4_mhc_compressor_indexer_manifest",
                 "deepseek_v4_mhc_warmup_plan_matches_vllm",
                 "deepseek_v4_mhc_pre_post_head_reference_matches_vllm_torch",
+                "cuda_deepseek_mhc_pre_api",
+                "cuda_deepseek_mhc_pre_smoke",
+                "cuda_deepseek_mhc_post_api",
+                "cuda_deepseek_mhc_post_smoke",
+                "cuda_deepseek_mhc_fused_post_pre_api",
+                "cuda_deepseek_mhc_fused_post_pre_smoke",
+                "cuda_deepseek_mhc_head_api",
+                "cuda_deepseek_mhc_head_smoke",
                 "cuda_deepseek_qkv_rmsnorm_api",
                 "cuda_deepseek_qkv_rmsnorm_smoke",
                 "cuda_deepseek_fused_inv_rope_fp8_quant_api",
@@ -959,11 +975,12 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_execution_guard",
             ],
             &[
+                "wire MHC pre/fused-post-pre/post/head into the full V4 sequence runtime",
+                "keep V4 hidden states as hc_mult streams across attention and FFN",
                 "execute MHC TileLang-equivalent warmup before first V4 request",
-                "port MHC pre/post/head reference math into CUDA runtime",
-                "integrate fused Q/KV RMSNorm into MHC pre-head runtime",
-                "integrate fused inverse RoPE FP8 quant into O projection runtime",
-                "verify CUDA MHC head/attention/FFN scale handling against vLLM",
+                "integrate fused Q/KV RMSNorm into the active MHC attention runtime",
+                "integrate fused inverse RoPE FP8 quant into the active O projection runtime",
+                "benchmark end-to-end V4 MHC decode against vLLM on the same model and prompt",
             ],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mla_swa_cache") => (
