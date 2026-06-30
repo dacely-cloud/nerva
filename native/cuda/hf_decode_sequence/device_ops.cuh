@@ -30,6 +30,14 @@ static __device__ __forceinline__ uint16_t f32_to_encoded(float value, uint32_t 
   return __half_as_ushort(__float2half_rn(value));
 }
 
+static __device__ __forceinline__ float norm_weight_to_f32(
+    const uint16_t *weight, uint32_t index, uint32_t dtype) {
+  if (dtype == kDTypeF32) {
+    return reinterpret_cast<const float *>(weight)[index];
+  }
+  return encoded_to_f32(weight[index], dtype);
+}
+
 static __device__ __forceinline__ uint64_t kv_cache_token_offset(
     uint32_t layer_index, uint32_t kv_block_count,
     const uint32_t *kv_block_table, uint32_t token, uint32_t kv_hidden,
@@ -290,6 +298,24 @@ static __device__ void rms_norm_to_encoded(const float *input, const uint16_t *w
     output[index] =
         f32_to_encoded(input[index] * scale * encoded_to_f32(weight[index], dtype),
                        dtype);
+  }
+  __syncthreads();
+}
+
+static __device__ void rms_norm_to_encoded_with_weight_dtype(
+    const float *input, const uint16_t *weight, uint32_t hidden,
+    uint32_t weight_dtype, uint32_t output_dtype, float eps,
+    uint16_t *output) {
+  float mean_square = 0.0f;
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    mean_square += input[index] * input[index];
+  }
+  mean_square = block_sum(mean_square);
+  const float scale = rsqrtf(mean_square / static_cast<float>(hidden) + eps);
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    output[index] = f32_to_encoded(
+        input[index] * scale * norm_weight_to_f32(weight, index, weight_dtype),
+        output_dtype);
   }
   __syncthreads();
 }

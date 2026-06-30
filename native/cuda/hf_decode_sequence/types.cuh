@@ -8,6 +8,7 @@
 
 constexpr uint32_t kDTypeF16 = 0;
 constexpr uint32_t kDTypeBF16 = 1;
+constexpr uint32_t kDTypeF32 = 2;
 constexpr uint32_t kMlpKindDense = 0;
 constexpr uint32_t kMlpKindSparseMoe = 1;
 constexpr uint32_t kAttentionKindFull = 0;

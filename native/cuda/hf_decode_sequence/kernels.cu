@@ -146,6 +146,22 @@ __global__ void hf_layer_attn_norm_encode_kernel(
                       projection_input);
 }
 
+__global__ void hf_decode_rms_norm_f32_to_encoded_kernel(
+    uint16_t *arena, uint64_t weight_offset, const float *input,
+    uint32_t weight_dtype, uint32_t output_dtype, uint32_t hidden,
+    uint32_t *step_cursor, uint32_t max_steps, float rms_eps,
+    uint16_t *projection_input) {
+  if ((step_cursor != nullptr && *step_cursor >= max_steps) ||
+      arena == nullptr || input == nullptr || projection_input == nullptr ||
+      hidden == 0 || weight_dtype > kDTypeF32 || output_dtype > kDTypeBF16 ||
+      weight_offset == kMissingOffset) {
+    return;
+  }
+  rms_norm_to_encoded_with_weight_dtype(input, arena + weight_offset, hidden,
+                                        weight_dtype, output_dtype, rms_eps,
+                                        projection_input);
+}
+
 __global__ void hf_decode_prepare_first_attn_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout,
     SequenceLayerLayout first_layout, uint32_t dtype, uint32_t hidden,
