@@ -7,11 +7,14 @@ use crate::decode::hf_sequence::request::{
 };
 use crate::decode::hf_sequence::session::failures::{failed_create_summary, failed_run_summary};
 use crate::decode::hf_sequence::session::ffi::{
+    DEEPSEEK_V4_MHC_STATE_COMB_MIX, DEEPSEEK_V4_MHC_STATE_POST_MIX, DEEPSEEK_V4_MHC_STATE_RESIDUAL,
     NervaCudaHfDecodeSequenceBatchAdvanceRequest, NervaCudaHfDecodeSequenceBatchAdvanceResult,
     NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest,
     NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult,
     NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest,
     NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult,
+    NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotRequest,
+    NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotResult,
     NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotRequest,
     NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotResult,
     NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteRequest,
@@ -33,9 +36,9 @@ use crate::decode::hf_sequence::session::ffi::{
     destroy_hf_decode_sequence_session, execute_hf_decode_sequence_layer_projection_batch,
     execute_hf_decode_sequence_projection_batch, fork_shared_weights_hf_decode_sequence_session,
     plan_hf_decode_sequence_projection_batch, run_hf_decode_sequence_session,
-    snapshot_deepseek_v3_mla_kv, snapshot_deepseek_v4_compressed_kv, snapshot_deepseek_v4_swa_kv,
-    snapshot_deepseek_v32_indexer_kv, snapshot_deepseek_v32_indexer_query_state,
-    snapshot_deepseek_v32_mla_packed_kv,
+    snapshot_deepseek_v3_mla_kv, snapshot_deepseek_v4_compressed_kv, snapshot_deepseek_v4_mhc,
+    snapshot_deepseek_v4_swa_kv, snapshot_deepseek_v32_indexer_kv,
+    snapshot_deepseek_v32_indexer_query_state, snapshot_deepseek_v32_mla_packed_kv,
 };
 use crate::decode::hf_sequence::session::helpers::{
     descriptor_ptr, planned_ptr, summary_from_run, validate_run,
@@ -260,6 +263,26 @@ pub type CudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshot =
     CudaHfDecodeSequenceDeepSeekV4SwaKvSnapshot;
 
 pub type CudaHfDecodeSequenceDeepSeekV3MlaKvSnapshot = CudaHfDecodeSequenceDeepSeekV4SwaKvSnapshot;
+
+pub const CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL: u32 = DEEPSEEK_V4_MHC_STATE_RESIDUAL;
+pub const CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX: u32 = DEEPSEEK_V4_MHC_STATE_POST_MIX;
+pub const CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX: u32 = DEEPSEEK_V4_MHC_STATE_COMB_MIX;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CudaHfDecodeSequenceDeepSeekV4MhcSnapshot {
+    pub status: SmokeStatus,
+    pub cuda_error: i32,
+    pub state_kind: u32,
+    pub token_index: u32,
+    pub token_count: u32,
+    pub token_offset_bytes: u64,
+    pub token_bytes: u64,
+    pub total_bytes: u64,
+    pub copied_bytes: u64,
+    pub output_hash: u64,
+    pub bytes: Vec<u8>,
+    pub error: Option<String>,
+}
 
 impl<'a> CudaHfDecodeSequenceSessionConfig<'a> {
     pub fn create(&self) -> CudaHfDecodeSequenceSessionCreateOutput {
@@ -910,6 +933,67 @@ impl CudaHfDecodeSequenceSession {
             layer_offset_bytes: out.layer_offset_bytes,
             layer_bytes: out.layer_bytes,
             page_bytes: out.page_bytes,
+            copied_bytes: out.copied_bytes,
+            output_hash: out.output_hash,
+            bytes,
+            error,
+        }
+    }
+
+    pub fn deepseek_v4_mhc_snapshot(
+        &mut self,
+        state_kind: u32,
+        token_index: u32,
+        byte_capacity: usize,
+    ) -> CudaHfDecodeSequenceDeepSeekV4MhcSnapshot {
+        if byte_capacity == 0 {
+            return CudaHfDecodeSequenceDeepSeekV4MhcSnapshot {
+                status: SmokeStatus::Failed,
+                cuda_error: 0,
+                state_kind,
+                token_index,
+                token_count: 0,
+                token_offset_bytes: 0,
+                token_bytes: 0,
+                total_bytes: 0,
+                copied_bytes: 0,
+                output_hash: 0,
+                bytes: Vec::new(),
+                error: Some("DeepSeek V4 mHC snapshot requires a byte capacity".to_string()),
+            };
+        }
+        let mut bytes = vec![0u8; byte_capacity];
+        let request = NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotRequest {
+            session: self.handle,
+            state_kind,
+            token_index,
+            output_bytes: bytes.as_mut_ptr(),
+            output_byte_capacity: byte_capacity as u64,
+        };
+        let mut out = NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotResult::default();
+        let return_code = snapshot_deepseek_v4_mhc(&request, &mut out);
+        let copied = out.copied_bytes.min(byte_capacity as u64) as usize;
+        bytes.truncate(copied);
+        let status = if return_code == 0 && out.status == 0 {
+            SmokeStatus::Ok
+        } else {
+            SmokeStatus::Failed
+        };
+        let error = (status != SmokeStatus::Ok).then(|| {
+            format!(
+                "DeepSeek V4 mHC snapshot failed: return_code={return_code} status={} cuda_error={} state_kind={} token_index={}",
+                out.status, out.cuda_error, state_kind, token_index
+            )
+        });
+        CudaHfDecodeSequenceDeepSeekV4MhcSnapshot {
+            status,
+            cuda_error: out.cuda_error,
+            state_kind: out.state_kind,
+            token_index: out.token_index,
+            token_count: out.token_count,
+            token_offset_bytes: out.token_offset_bytes,
+            token_bytes: out.token_bytes,
+            total_bytes: out.total_bytes,
             copied_bytes: out.copied_bytes,
             output_hash: out.output_hash,
             bytes,

@@ -16,8 +16,9 @@ use crate::decode::hf_sequence::request::{
     CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::session::request::{
-    CudaHfDecodeSequenceExperimentalRtConfig, CudaHfDecodeSequenceSessionConfig,
-    CudaHfDecodeSequenceSessionCreateOutput,
+    CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX, CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX,
+    CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL, CudaHfDecodeSequenceExperimentalRtConfig,
+    CudaHfDecodeSequenceSessionConfig, CudaHfDecodeSequenceSessionCreateOutput,
 };
 use crate::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
@@ -52,6 +53,13 @@ fn f32_to_bf16_bits(value: f32) -> u16 {
 
 fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
+}
+
+fn f32_values_from_le_bytes(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
 }
 
 fn f32_to_f8_e4m3fn_bits_nearest(value: f32) -> u8 {
@@ -4091,6 +4099,160 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
             "V4 C128 compressed/indexer runtime caches must reserve two-token vLLM-aligned packed pages"
         );
     });
+}
+
+#[test]
+fn deepseek_v4_mhc_snapshot_publishes_runtime_state() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let layer = tiny_deepseek_v4_swa_dense_descriptor_layer();
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept tiny V4 mHC descriptor layer");
+    assert_eq!(plan.deepseek_hc_mult, 2);
+    assert_ne!(plan.deepseek_hc_attn_base, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.deepseek_hc_attn_fn, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.deepseek_hc_attn_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+
+    let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    for (dim, value) in [1.0f32, 2.0, 3.0, 4.0].iter().enumerate() {
+        weight_storage[dim] = f32_to_bf16_bits(*value);
+        weight_storage[plan.rms_attn as usize + dim] = f32_to_bf16_bits(1.0);
+        weight_storage[plan.rms_mlp as usize + dim] = f32_to_bf16_bits(1.0);
+    }
+    for dim in 0..2usize {
+        weight_storage[plan.q_norm as usize + dim] = f32_to_bf16_bits(1.0);
+        weight_storage[plan.k_norm as usize + dim] = f32_to_bf16_bits(1.0);
+    }
+    write_arena_f32(&mut weight_storage, plan.deepseek_hc_attn_scale, 0.0);
+    write_arena_f32(&mut weight_storage, plan.deepseek_hc_attn_scale + 2, 0.0);
+    write_arena_f32(&mut weight_storage, plan.deepseek_hc_attn_scale + 4, 0.0);
+
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: plan.resident_weight_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        max_context_tokens: 4,
+        rms_eps: 1e-5,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: CudaHfDecodeSequenceExperimentalRtConfig::default(),
+    };
+
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V4 mHC runtime session should create: {:?}",
+        created.summary.error
+    );
+    assert_eq!(created.summary.deepseek_mhc_residual_bytes, 128);
+    assert_eq!(created.summary.deepseek_mhc_post_mix_bytes, 32);
+    assert_eq!(created.summary.deepseek_mhc_comb_mix_bytes, 64);
+
+    let mut session = created.session.expect("V4 mHC session handle should exist");
+    let summary = session.run(&[0], 1, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V4 mHC runtime session should decode one token: {:?}",
+        summary.error
+    );
+
+    let residual = session.deepseek_v4_mhc_snapshot(CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL, 0, 32);
+    assert_eq!(
+        residual.status,
+        SmokeStatus::Ok,
+        "V4 mHC residual snapshot should copy device state: {:?}",
+        residual.error
+    );
+    assert_eq!(residual.token_count, 4);
+    assert_eq!(residual.token_offset_bytes, 0);
+    assert_eq!(residual.token_bytes, 32);
+    assert_eq!(residual.total_bytes, 128);
+    assert_eq!(residual.copied_bytes, 32);
+    assert_eq!(
+        f32_values_from_le_bytes(&residual.bytes),
+        vec![1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0]
+    );
+
+    let post = session.deepseek_v4_mhc_snapshot(CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX, 0, 8);
+    assert_eq!(
+        post.status,
+        SmokeStatus::Ok,
+        "V4 mHC post snapshot should copy device state: {:?}",
+        post.error
+    );
+    assert_eq!(post.token_bytes, 8);
+    let post_values = f32_values_from_le_bytes(&post.bytes);
+    assert_eq!(post_values.len(), 2);
+    for value in post_values {
+        assert!((value - 1.0).abs() < 1.0e-6, "unexpected post mix {value}");
+    }
+
+    let comb = session.deepseek_v4_mhc_snapshot(CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX, 0, 16);
+    assert_eq!(
+        comb.status,
+        SmokeStatus::Ok,
+        "V4 mHC comb snapshot should copy device state: {:?}",
+        comb.error
+    );
+    assert_eq!(comb.token_bytes, 16);
+    let comb_values = f32_values_from_le_bytes(&comb.bytes);
+    assert_eq!(comb_values.len(), 4);
+    assert!(
+        comb_values
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0),
+        "mHC comb mix must contain positive finite Sinkhorn weights: {:?}",
+        comb_values
+    );
+    assert_ne!(residual.output_hash, fnv_hash_bytes(&vec![0u8; 32]));
+    assert_ne!(post.output_hash, fnv_hash_bytes(&vec![0u8; 8]));
+    assert_ne!(comb.output_hash, fnv_hash_bytes(&vec![0u8; 16]));
 }
 
 #[test]

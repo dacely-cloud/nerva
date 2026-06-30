@@ -1461,6 +1461,97 @@ nerva_cuda_hf_decode_sequence_deepseek_v4_compressed_kv_snapshot(
   return 0;
 }
 
+extern "C" int nerva_cuda_hf_decode_sequence_deepseek_v4_mhc_snapshot(
+    const NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotRequest *request,
+    NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  if (request == nullptr || request->session == nullptr ||
+      request->output_bytes == nullptr || request->output_byte_capacity == 0) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorInvalidValue);
+    return -1;
+  }
+  NervaCudaHfDecodeSequenceSession *session = request->session;
+  out->state_kind = request->state_kind;
+  out->token_index = request->token_index;
+  if (request->token_index >= session->max_context_tokens) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorInvalidValue);
+    return -1;
+  }
+
+  uint32_t hc_mult = 0;
+  for (const SequenceLayerLayout &layout : session->host_layouts) {
+    if (layout_is_deepseek_v4_native(layout)) {
+      hc_mult = std::max(hc_mult, layout.deepseek_hc_mult);
+    }
+  }
+  if (hc_mult == 0 || session->hidden == 0) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorInvalidValue);
+    return -1;
+  }
+
+  const float *source = nullptr;
+  uint64_t total_bytes = 0;
+  uint64_t token_bytes = 0;
+  switch (request->state_kind) {
+    case NERVA_CUDA_DEEPSEEK_V4_MHC_STATE_RESIDUAL:
+      source = session->device_deepseek_mhc_residual;
+      total_bytes = session->deepseek_mhc_residual_bytes;
+      token_bytes = static_cast<uint64_t>(hc_mult) * session->hidden *
+                    sizeof(float);
+      break;
+    case NERVA_CUDA_DEEPSEEK_V4_MHC_STATE_POST_MIX:
+      source = session->device_deepseek_mhc_post_mix;
+      total_bytes = session->deepseek_mhc_post_mix_bytes;
+      token_bytes = static_cast<uint64_t>(hc_mult) * sizeof(float);
+      break;
+    case NERVA_CUDA_DEEPSEEK_V4_MHC_STATE_COMB_MIX:
+      source = session->device_deepseek_mhc_comb_mix;
+      total_bytes = session->deepseek_mhc_comb_mix_bytes;
+      token_bytes = static_cast<uint64_t>(hc_mult) * hc_mult * sizeof(float);
+      break;
+    default:
+      out->cuda_error = static_cast<int32_t>(cudaErrorInvalidValue);
+      return -1;
+  }
+
+  const uint64_t token_offset =
+      static_cast<uint64_t>(request->token_index) * token_bytes;
+  if (source == nullptr || total_bytes == 0 || token_bytes == 0 ||
+      token_offset > total_bytes || token_bytes > total_bytes - token_offset) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorInvalidValue);
+    return -1;
+  }
+  const uint64_t copy_bytes =
+      std::min(token_bytes, request->output_byte_capacity);
+  cudaError_t err =
+      cudaMemcpy(request->output_bytes,
+                 reinterpret_cast<const uint8_t *>(source) + token_offset,
+                 copy_bytes, cudaMemcpyDeviceToHost);
+  if (err != cudaSuccess) {
+    out->cuda_error = static_cast<int32_t>(err);
+    return -1;
+  }
+  uint64_t hash = kFnvOffset;
+  for (uint64_t index = 0; index < copy_bytes; ++index) {
+    hash ^= static_cast<uint64_t>(request->output_bytes[index]);
+    hash *= kFnvPrime;
+  }
+  out->status = 0;
+  out->state_kind = request->state_kind;
+  out->token_index = request->token_index;
+  out->token_count = session->max_context_tokens;
+  out->token_offset_bytes = token_offset;
+  out->token_bytes = token_bytes;
+  out->total_bytes = total_bytes;
+  out->copied_bytes = copy_bytes;
+  out->output_hash = hash;
+  return 0;
+}
+
 extern "C" int nerva_cuda_hf_decode_sequence_session_start(
     const NervaCudaHfDecodeSequenceSessionStartRequest *request,
     NervaCudaHfDecodeSequenceResult *out) {
