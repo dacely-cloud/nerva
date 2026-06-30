@@ -1729,6 +1729,11 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
             deepseek_runtime_counters +
             kDeepSeekRuntimeCounterCompressedKvAttentionReads),
         1ull);
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterCompressedKvAttentionSlotsScanned),
+        static_cast<unsigned long long>(compressed_attention_tokens));
   }
   for (uint32_t head = 0; head < heads; ++head) {
     const uint32_t head_start = head * head_dim;

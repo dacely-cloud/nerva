@@ -42,6 +42,8 @@ void fill_deepseek_runtime_counter_result(
       counters[kDeepSeekRuntimeCounterIndexerKvWrites];
   out->deepseek_compressed_kv_attention_reads =
       counters[kDeepSeekRuntimeCounterCompressedKvAttentionReads];
+  out->deepseek_compressed_kv_attention_slots_scanned =
+      counters[kDeepSeekRuntimeCounterCompressedKvAttentionSlotsScanned];
 }
 
 uint32_t observed_from_slot_range(uint32_t steps, uint32_t has_eos_token,

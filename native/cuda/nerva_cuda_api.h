@@ -308,6 +308,7 @@ typedef struct NervaCudaHfDecodeChainLayer {
   uint32_t deepseek_qk_rope_head_dim;
   uint32_t deepseek_v_head_dim;
   uint32_t deepseek_compress_ratio;
+  uint32_t deepseek_index_topk;
   uint32_t deepseek_index_n_heads;
   uint32_t deepseek_index_head_dim;
   uint32_t deepseek_router_num_groups;
@@ -481,6 +482,7 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t deepseek_indexer_state_writes;
   uint64_t deepseek_indexer_kv_writes;
   uint64_t deepseek_compressed_kv_attention_reads;
+  uint64_t deepseek_compressed_kv_attention_slots_scanned;
 } NervaCudaHfDecodeSequenceResult;
 
 typedef struct NervaCudaHfDecodeSequenceLayoutPlanRequest {

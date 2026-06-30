@@ -213,6 +213,8 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             deepseek_indexer_state_writes: out.deepseek_indexer_state_writes,
             deepseek_indexer_kv_writes: out.deepseek_indexer_kv_writes,
             deepseek_compressed_kv_attention_reads: out.deepseek_compressed_kv_attention_reads,
+            deepseek_compressed_kv_attention_slots_scanned: out
+                .deepseek_compressed_kv_attention_slots_scanned,
             error,
         }
     }

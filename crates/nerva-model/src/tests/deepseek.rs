@@ -259,6 +259,14 @@ fn deepseek_layer_execution_plan_matches_vllm_v3_v32_and_v4_modes() {
         v4_plan
             .layers
             .iter()
+            .map(|layer| layer.index_topk)
+            .collect::<Vec<_>>(),
+        vec![512, 512, 512, 512]
+    );
+    assert_eq!(
+        v4_plan
+            .layers
+            .iter()
             .map(|layer| layer.attention_kind)
             .collect::<Vec<_>>(),
         vec![

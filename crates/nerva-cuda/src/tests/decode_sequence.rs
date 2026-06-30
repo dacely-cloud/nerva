@@ -78,6 +78,7 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         deepseek_indexer_state_writes: 0,
         deepseek_indexer_kv_writes: 0,
         deepseek_compressed_kv_attention_reads: 0,
+        deepseek_compressed_kv_attention_slots_scanned: 0,
         error: None,
     };
     let json = summary.to_json();
@@ -89,6 +90,7 @@ fn hf_decode_sequence_summary_serializes_device_token_fields() {
         "\"lm_head_projection_ns\":110",
         "\"deepseek_compressor_state_writes\":0",
         "\"deepseek_compressed_kv_attention_reads\":0",
+        "\"deepseek_compressed_kv_attention_slots_scanned\":0",
     ] {
         assert!(json.contains(expected));
     }

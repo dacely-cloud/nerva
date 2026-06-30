@@ -38,7 +38,8 @@ constexpr uint32_t kDeepSeekRuntimeCounterCompressedKvWrites = 1;
 constexpr uint32_t kDeepSeekRuntimeCounterIndexerStateWrites = 2;
 constexpr uint32_t kDeepSeekRuntimeCounterIndexerKvWrites = 3;
 constexpr uint32_t kDeepSeekRuntimeCounterCompressedKvAttentionReads = 4;
-constexpr uint32_t kDeepSeekRuntimeCounterCount = 5;
+constexpr uint32_t kDeepSeekRuntimeCounterCompressedKvAttentionSlotsScanned = 5;
+constexpr uint32_t kDeepSeekRuntimeCounterCount = 6;
 constexpr uint32_t kDecodeNormThreads = 1024;
 constexpr uint32_t kHeadThreadsMax = 256;
 constexpr uint32_t kHeadThreadElements = 4;
@@ -135,6 +136,7 @@ struct SequenceLayerLayout {
   uint32_t deepseek_qk_rope_head_dim;
   uint32_t deepseek_v_head_dim;
   uint32_t deepseek_compress_ratio;
+  uint32_t deepseek_index_topk;
   uint32_t deepseek_index_n_heads;
   uint32_t deepseek_index_head_dim;
   uint32_t deepseek_router_num_groups;

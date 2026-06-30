@@ -70,6 +70,7 @@ pub struct CudaHfDeepSeekLayer {
     pub qk_rope_head_dim: usize,
     pub v_head_dim: usize,
     pub compress_ratio: usize,
+    pub index_topk: usize,
     pub index_n_heads: usize,
     pub index_head_dim: usize,
     pub router_num_groups: usize,
@@ -281,6 +282,7 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
                 .map_or(0, |layer| layer.qk_rope_head_dim as u32),
             deepseek_v_head_dim: self.deepseek.map_or(0, |layer| layer.v_head_dim as u32),
             deepseek_compress_ratio: self.deepseek.map_or(0, |layer| layer.compress_ratio as u32),
+            deepseek_index_topk: self.deepseek.map_or(0, |layer| layer.index_topk as u32),
             deepseek_index_n_heads: self.deepseek.map_or(0, |layer| layer.index_n_heads as u32),
             deepseek_index_head_dim: self.deepseek.map_or(0, |layer| layer.index_head_dim as u32),
             deepseek_router_num_groups: self
@@ -356,6 +358,7 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
                 .map_or(0, |layer| layer.qk_rope_head_dim as u32),
             deepseek_v_head_dim: self.deepseek.map_or(0, |layer| layer.v_head_dim as u32),
             deepseek_compress_ratio: self.deepseek.map_or(0, |layer| layer.compress_ratio as u32),
+            deepseek_index_topk: self.deepseek.map_or(0, |layer| layer.index_topk as u32),
             deepseek_index_n_heads: self.deepseek.map_or(0, |layer| layer.index_n_heads as u32),
             deepseek_index_head_dim: self.deepseek.map_or(0, |layer| layer.index_head_dim as u32),
             deepseek_router_num_groups: self

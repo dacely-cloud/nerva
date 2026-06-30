@@ -118,6 +118,7 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
         qk_rope_head_dim: 64,
         v_head_dim: 128,
         compress_ratio: 4,
+        index_topk: 2048,
         index_n_heads: 64,
         index_head_dim: 128,
         router_num_groups: 0,
@@ -180,6 +181,7 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     );
     assert_eq!(ffi.deepseek_v_head_dim, deepseek.v_head_dim as u32);
     assert_eq!(ffi.deepseek_compress_ratio, deepseek.compress_ratio as u32);
+    assert_eq!(ffi.deepseek_index_topk, deepseek.index_topk as u32);
     assert_eq!(ffi.deepseek_index_n_heads, deepseek.index_n_heads as u32);
     assert_eq!(ffi.deepseek_index_head_dim, deepseek.index_head_dim as u32);
     assert_eq!(
@@ -220,6 +222,7 @@ fn deepseek_v3_mla_shape_matches_vllm_contract() {
         qk_rope_head_dim: 64,
         v_head_dim: 128,
         compress_ratio: 1,
+        index_topk: 0,
         index_n_heads: 0,
         index_head_dim: 0,
         router_num_groups: 8,
@@ -427,7 +430,7 @@ fn declared_sparse_moe_descriptor_footprint_uses_router_and_experts() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 448);
-    assert_eq!(footprint.layout_bytes, 568);
+    assert_eq!(footprint.layout_bytes, 584);
 }
 
 #[test]
@@ -468,7 +471,7 @@ fn declared_deepseek_v4_descriptor_footprint_counts_storage_widths_and_hc_blocks
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 1306);
-    assert_eq!(footprint.layout_bytes, 568);
+    assert_eq!(footprint.layout_bytes, 584);
 }
 
 #[test]
@@ -593,7 +596,7 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
         plan.deepseek_compressor_ape,
         CUDA_HF_SEQUENCE_MISSING_OFFSET
     );
-    assert_eq!(plan.layout_bytes, 576);
+    assert_eq!(plan.layout_bytes, 584);
     assert!(plan.resident_weight_bytes > 0);
 
     let request = CudaHfDecodeSequenceRequest {
@@ -1180,6 +1183,7 @@ fn deepseek_v4_compressed_dense_short_session_runs_through_sampling() {
         assert_eq!(summary.deepseek_indexer_state_writes, 0);
         assert_eq!(summary.deepseek_indexer_kv_writes, 0);
         assert_eq!(summary.deepseek_compressed_kv_attention_reads, 0);
+        assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 0);
     });
 }
 
@@ -1222,6 +1226,7 @@ fn deepseek_v4_compressed_indexer_short_session_runs_through_sampling() {
         assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
         assert_eq!(summary.deepseek_indexer_kv_writes, 0);
         assert_eq!(summary.deepseek_compressed_kv_attention_reads, 0);
+        assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 0);
     });
 }
 
@@ -1263,6 +1268,7 @@ fn deepseek_v4_compressed_indexer_writes_first_boundary_cache() {
         assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
         assert_eq!(summary.deepseek_indexer_kv_writes, 0);
         assert_eq!(summary.deepseek_compressed_kv_attention_reads, 1);
+        assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 1);
     });
 }
 
@@ -1304,6 +1310,49 @@ fn deepseek_v4_compressed_indexer_runs_past_first_boundary_with_compressed_atten
         assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
         assert_eq!(summary.deepseek_indexer_kv_writes, 0);
         assert_eq!(summary.deepseek_compressed_kv_attention_reads, 2);
+        assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 2);
+    });
+}
+
+#[test]
+fn deepseek_v4_compressed_indexer_tracks_compressed_attention_scan_growth() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let layer = tiny_deepseek_v4_descriptor_layer();
+    with_tiny_deepseek_v4_descriptor_session(layer, 12, |created| {
+        if created.summary.status == SmokeStatus::Unavailable {
+            return;
+        }
+        assert_eq!(
+            created.summary.status,
+            SmokeStatus::Ok,
+            "V4 compressed-indexer DeepSeek should create before scan accounting: {:?}",
+            created.summary.error
+        );
+        let mut session = created
+            .session
+            .expect("V4 compressed-indexer session handle should exist");
+
+        let summary = session.run(&[0], 8, None);
+        assert_eq!(
+            summary.status,
+            SmokeStatus::Ok,
+            "context through the second compression boundary should scan compressed slots: {:?}",
+            summary.error
+        );
+        assert_eq!(summary.steps, 8);
+        assert_eq!(summary.tokens.len(), 8);
+        assert_eq!(summary.kv_tokens, 8);
+        assert_eq!(summary.graph_replays, 8);
+        assert_eq!(
+            summary.deepseek_compressor_state_writes,
+            summary.graph_replays
+        );
+        assert_eq!(summary.deepseek_compressed_kv_writes, 2);
+        assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
+        assert_eq!(summary.deepseek_indexer_kv_writes, 0);
+        assert_eq!(summary.deepseek_compressed_kv_attention_reads, 5);
+        assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 6);
     });
 }
 
@@ -1407,7 +1456,7 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     assert_eq!(plan.rms_mlp, 558);
     assert_eq!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_eq!(plan.deepseek_kv_b_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
-    assert_eq!(plan.layout_bytes, 576);
+    assert_eq!(plan.layout_bytes, 584);
 }
 
 fn with_tiny_deepseek_v4_descriptor_session(
@@ -1519,6 +1568,7 @@ fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             qk_rope_head_dim: 1,
             v_head_dim: 1,
             compress_ratio: 1,
+            index_topk: 0,
             index_n_heads: 2,
             index_head_dim: 2,
             router_num_groups: 1,
@@ -1576,6 +1626,7 @@ fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             qk_rope_head_dim: 1,
             v_head_dim: 2,
             compress_ratio: 4,
+            index_topk: 4,
             index_n_heads: 1,
             index_head_dim: 2,
             router_num_groups: 0,
@@ -1630,6 +1681,7 @@ fn tiny_deepseek_v4_swa_dense_descriptor_layer() -> CudaHfDecodeChainLayer<'stat
             qk_rope_head_dim: 1,
             v_head_dim: 2,
             compress_ratio: 1,
+            index_topk: 0,
             index_n_heads: 0,
             index_head_dim: 0,
             router_num_groups: 0,
@@ -1717,7 +1769,7 @@ fn query_gate_footprint_counts_optional_projection() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 504);
-    assert_eq!(footprint.layout_bytes, 568);
+    assert_eq!(footprint.layout_bytes, 584);
 }
 
 #[test]
@@ -1806,7 +1858,7 @@ fn linear_gdn_moe_footprint_counts_state_and_scratch() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 436);
-    assert_eq!(footprint.layout_bytes, 568);
+    assert_eq!(footprint.layout_bytes, 584);
     assert_eq!(footprint.scratch_bytes, 276);
     assert_eq!(footprint.resident_kv_bytes, 128);
     assert_eq!(footprint.device_arena_bytes, 1624);

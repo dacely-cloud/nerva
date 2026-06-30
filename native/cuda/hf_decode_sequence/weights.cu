@@ -850,6 +850,7 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.deepseek_qk_rope_head_dim = layer.deepseek_qk_rope_head_dim;
   layout.deepseek_v_head_dim = layer.deepseek_v_head_dim;
   layout.deepseek_compress_ratio = layer.deepseek_compress_ratio;
+  layout.deepseek_index_topk = layer.deepseek_index_topk;
   layout.deepseek_index_n_heads = layer.deepseek_index_n_heads;
   layout.deepseek_index_head_dim = layer.deepseek_index_head_dim;
   layout.deepseek_router_num_groups = layer.deepseek_router_num_groups;
