@@ -35,6 +35,7 @@ enum CreateFailureStage : int32_t {
   kCreateStageDecodeSdpaAlloc = 33,
   kCreateStageProjectionPlanAutotune = 34,
   kCreateStageExperimentalRtDecodeInit = 35,
+  kCreateStageDeepSeekCompressedKvAlloc = 36,
 };
 
 struct SessionSharedWeights {

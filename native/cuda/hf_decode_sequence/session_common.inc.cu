@@ -42,6 +42,10 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_slots);
   cudaFree(session->device_prompt_tokens);
   cudaFree(session->device_kv_block_table);
+  cudaFree(session->device_deepseek_indexer_kv);
+  cudaFree(session->device_deepseek_indexer_state);
+  cudaFree(session->device_deepseek_compressed_kv);
+  cudaFree(session->device_deepseek_compressor_state);
   cudaFree(session->device_kv_values);
   cudaFree(session->device_kv_keys);
   if (session->shared_weights == nullptr) {
@@ -129,6 +133,10 @@ uint64_t session_device_footprint(
          session->decode_seq_len_bytes + session->linear_gdn_conv_state_bytes +
          session->linear_gdn_recurrent_state_bytes +
          session->packed_qkv_bytes + session->packed_gate_up_bytes + session->kv_bytes +
+         session->deepseek_compressor_state_bytes +
+         session->deepseek_compressed_kv_bytes +
+         session->deepseek_indexer_state_bytes +
+         session->deepseek_indexer_kv_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
          session->experimental_rt_candidate_pages_bytes + sizeof(uint32_t) +
@@ -145,6 +153,10 @@ uint64_t session_fixed_footprint_without_prefill_chunk(
          session->decode_seq_len_bytes + session->linear_gdn_conv_state_bytes +
          session->linear_gdn_recurrent_state_bytes +
          session->packed_qkv_bytes + session->packed_gate_up_bytes + session->kv_bytes +
+         session->deepseek_compressor_state_bytes +
+         session->deepseek_compressed_kv_bytes +
+         session->deepseek_indexer_state_bytes +
+         session->deepseek_indexer_kv_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
          session->experimental_rt_candidate_pages_bytes + sizeof(uint32_t) +
@@ -159,6 +171,19 @@ uint64_t sat_add_u64(uint64_t lhs, uint64_t rhs) {
 uint64_t sat_mul_u64(uint64_t lhs, uint64_t rhs) {
   if (lhs != 0 && rhs > UINT64_MAX / lhs) return UINT64_MAX;
   return lhs * rhs;
+}
+
+uint64_t session_resident_kv_bytes(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr) {
+    return 0;
+  }
+  uint64_t bytes = session->kv_bytes;
+  bytes = sat_add_u64(bytes, session->deepseek_compressor_state_bytes);
+  bytes = sat_add_u64(bytes, session->deepseek_compressed_kv_bytes);
+  bytes = sat_add_u64(bytes, session->deepseek_indexer_state_bytes);
+  bytes = sat_add_u64(bytes, session->deepseek_indexer_kv_bytes);
+  return bytes;
 }
 
 uint64_t full_attention_scratch_elements(uint64_t hidden,
@@ -215,6 +240,95 @@ bool layout_is_deepseek_v4_compressed_native(const SequenceLayerLayout &layout) 
   }
   return layout.deepseek_compress_ratio > 1 &&
          layout_deepseek_v4_mlp_supported(layout);
+}
+
+uint32_t layout_deepseek_v4_compressor_coff(
+    const SequenceLayerLayout &layout) {
+  return layout.deepseek_compress_ratio == 4 ? 2u : 1u;
+}
+
+uint64_t deepseek_v4_compressed_token_capacity(uint32_t max_context_tokens,
+                                               uint32_t compress_ratio) {
+  if (max_context_tokens == 0 || compress_ratio == 0) {
+    return 0;
+  }
+  const uint64_t compressed_tokens =
+      (static_cast<uint64_t>(max_context_tokens) + compress_ratio - 1u) /
+      compress_ratio;
+  const uint64_t blocks =
+      (compressed_tokens + kKvCacheBlockTokens - 1u) / kKvCacheBlockTokens;
+  return blocks * kKvCacheBlockTokens;
+}
+
+uint64_t deepseek_v4_main_compressed_kv_token_bytes(
+    const SequenceLayerLayout &layout) {
+  const uint64_t nope = layout.deepseek_qk_nope_head_dim;
+  const uint64_t rope = layout.deepseek_qk_rope_head_dim;
+  if (nope == 0 && rope == 0) {
+    return 0;
+  }
+  const uint64_t token_stride = nope + rope * 2u;
+  const uint64_t scale_dim = nope / 64u + 1u;
+  return token_stride + scale_dim;
+}
+
+uint64_t deepseek_v4_indexer_kv_token_bytes(
+    const SequenceLayerLayout &layout) {
+  if (layout.deepseek_index_head_dim == 0) {
+    return 0;
+  }
+  const uint64_t scale_dim =
+      (layout.deepseek_index_head_dim / 128u) * sizeof(float);
+  return layout.deepseek_index_head_dim + scale_dim;
+}
+
+void accumulate_deepseek_v4_compressed_runtime_bytes(
+    const std::vector<SequenceLayerLayout> &layouts, uint32_t max_context_tokens,
+    uint32_t kv_token_capacity, uint64_t *compressor_state_bytes,
+    uint64_t *compressed_kv_bytes, uint64_t *indexer_state_bytes,
+    uint64_t *indexer_kv_bytes) {
+  uint64_t main_state = 0;
+  uint64_t main_kv = 0;
+  uint64_t idx_state = 0;
+  uint64_t idx_kv = 0;
+  for (const SequenceLayerLayout &layout : layouts) {
+    if (!layout_is_deepseek_v4_compressed_native(layout)) {
+      continue;
+    }
+    const uint64_t coff = layout_deepseek_v4_compressor_coff(layout);
+    const uint64_t compressed_capacity =
+        deepseek_v4_compressed_token_capacity(max_context_tokens,
+                                              layout.deepseek_compress_ratio);
+    const uint64_t state_width =
+        coff * (layout.deepseek_qk_nope_head_dim +
+                layout.deepseek_qk_rope_head_dim);
+    main_state = sat_add_u64(
+        main_state,
+        sat_mul_u64(sat_mul_u64(kv_token_capacity, state_width * 2u),
+                    sizeof(float)));
+    main_kv = sat_add_u64(
+        main_kv,
+        sat_mul_u64(compressed_capacity,
+                    deepseek_v4_main_compressed_kv_token_bytes(layout)));
+
+    if (layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer) {
+      const uint64_t index_state_width =
+          coff * layout.deepseek_index_head_dim;
+      idx_state = sat_add_u64(
+          idx_state,
+          sat_mul_u64(
+              sat_mul_u64(kv_token_capacity, index_state_width * 2u),
+              sizeof(float)));
+      idx_kv = sat_add_u64(
+          idx_kv,
+          sat_mul_u64(compressed_capacity,
+                      deepseek_v4_indexer_kv_token_bytes(layout)));
+    }
+  }
+  if (compressor_state_bytes != nullptr) *compressor_state_bytes = main_state;
+  if (compressed_kv_bytes != nullptr) *compressed_kv_bytes = main_kv;
+  if (indexer_state_bytes != nullptr) *indexer_state_bytes = idx_state;
+  if (indexer_kv_bytes != nullptr) *indexer_kv_bytes = idx_kv;
 }
 
 bool layout_is_deepseek_v4_native(const SequenceLayerLayout &layout) {

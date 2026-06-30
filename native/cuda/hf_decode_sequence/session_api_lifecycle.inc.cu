@@ -233,6 +233,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->kv_bytes =
       request->layer_count * static_cast<uint64_t>(session->kv_token_capacity) *
       kv_cache_width * sizeof(uint16_t) * 2;
+  accumulate_deepseek_v4_compressed_runtime_bytes(
+      layouts, request->max_context_tokens, session->kv_token_capacity,
+      &session->deepseek_compressor_state_bytes,
+      &session->deepseek_compressed_kv_bytes,
+      &session->deepseek_indexer_state_bytes,
+      &session->deepseek_indexer_kv_bytes);
   session->kv_block_table_bytes =
       static_cast<uint64_t>(session->kv_block_count) * sizeof(uint32_t);
   session->slots_bytes =
@@ -290,7 +296,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   out->prefill_chunk_tokens = session->prefill_chunk_tokens;
   out->head_threads = session->head_threads;
   out->resident_weight_bytes = session->resident_weight_bytes;
-  out->resident_kv_bytes = session->kv_bytes;
+  out->resident_kv_bytes = session_resident_kv_bytes(session);
   out->device_arena_bytes = session_device_footprint(session);
   out->pinned_host_bytes = session->slots_bytes + host_weight_bytes;
   uint64_t setup_sync_calls = 0;
@@ -438,6 +444,30 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_values),
                      session->kv_bytes / 2);
   }
+  if (err == cudaSuccess && session->deepseek_compressor_state_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_compressor_state),
+        session->deepseek_compressor_state_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_compressed_kv_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_compressed_kv),
+        session->deepseek_compressed_kv_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_state_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_indexer_state),
+        session->deepseek_indexer_state_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_kv_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_indexer_kv),
+        session->deepseek_indexer_kv_bytes);
+  }
   if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_block_table),
                      session->kv_block_table_bytes);
@@ -566,6 +596,26 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   if (err == cudaSuccess && session->linear_gdn_recurrent_state_bytes != 0) {
     err = cudaMemsetAsync(session->device_linear_gdn_recurrent_state, 0,
                           session->linear_gdn_recurrent_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_compressor_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_compressor_state, 0,
+                          session->deepseek_compressor_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_compressed_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_compressed_kv, 0,
+                          session->deepseek_compressed_kv_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_indexer_state, 0,
+                          session->deepseek_indexer_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_indexer_kv, 0,
+                          session->deepseek_indexer_kv_bytes,
                           session->stream);
   }
   if (err == cudaSuccess) {
@@ -699,6 +749,26 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
                           session->linear_gdn_recurrent_state_bytes,
                           session->stream);
   }
+  if (err == cudaSuccess && session->deepseek_compressor_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_compressor_state, 0,
+                          session->deepseek_compressor_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_compressed_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_compressed_kv, 0,
+                          session->deepseek_compressed_kv_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_indexer_state, 0,
+                          session->deepseek_indexer_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_indexer_kv, 0,
+                          session->deepseek_indexer_kv_bytes,
+                          session->stream);
+  }
   const uint64_t prompt_bytes =
       static_cast<uint64_t>(request->prompt_token_count) * sizeof(uint32_t);
   if (err == cudaSuccess) {
@@ -820,7 +890,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
                           : request->output_tokens[out->observed_tokens - 1];
     out->observed_token_hash =
         hash_tokens(request->output_tokens, out->observed_tokens);
-    out->resident_kv_bytes = session->kv_bytes;
+    out->resident_kv_bytes = session_resident_kv_bytes(session);
     out->kv_tokens = output_start + out->observed_tokens;
     out->device_arena_bytes = session_device_footprint(session);
     out->pinned_host_bytes = session->slots_bytes;
@@ -895,6 +965,26 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
                           session->linear_gdn_recurrent_state_bytes,
                           session->stream);
   }
+  if (err == cudaSuccess && session->deepseek_compressor_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_compressor_state, 0,
+                          session->deepseek_compressor_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_compressed_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_compressed_kv, 0,
+                          session->deepseek_compressed_kv_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_indexer_state, 0,
+                          session->deepseek_indexer_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_indexer_kv, 0,
+                          session->deepseek_indexer_kv_bytes,
+                          session->stream);
+  }
   const uint64_t prompt_bytes =
       static_cast<uint64_t>(request->prompt_token_count) * sizeof(uint32_t);
   if (err == cudaSuccess) {
@@ -922,7 +1012,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
     session->active_started = true;
     session->active_finished = false;
     session->projection_batch_own_stream_synchronized = 1;
-    out->resident_kv_bytes = session->kv_bytes;
+    out->resident_kv_bytes = session_resident_kv_bytes(session);
     out->kv_tokens = request->prompt_token_count;
     out->device_arena_bytes = session_device_footprint(session);
     out->pinned_host_bytes = session->slots_bytes;
@@ -1055,7 +1145,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
                           : request->output_tokens[out->observed_tokens - 1];
     out->observed_token_hash =
         hash_tokens(request->output_tokens, out->observed_tokens);
-    out->resident_kv_bytes = session->kv_bytes;
+    out->resident_kv_bytes = session_resident_kv_bytes(session);
     out->kv_tokens = slot_start + out->observed_tokens;
     out->device_arena_bytes = session_device_footprint(session);
     out->pinned_host_bytes = session->slots_bytes;

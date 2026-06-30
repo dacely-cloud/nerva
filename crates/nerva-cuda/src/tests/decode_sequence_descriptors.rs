@@ -1247,6 +1247,51 @@ fn deepseek_v4_compressed_indexer_rejects_compressed_context_until_cache_path() 
 }
 
 #[test]
+fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let mut swa_kv_bytes = None;
+    with_tiny_deepseek_v4_descriptor_session(
+        tiny_deepseek_v4_swa_dense_descriptor_layer(),
+        8,
+        |created| {
+            if created.summary.status == SmokeStatus::Unavailable {
+                return;
+            }
+            assert_eq!(
+                created.summary.status,
+                SmokeStatus::Ok,
+                "V4 SWA baseline session should create: {:?}",
+                created.summary.error
+            );
+            swa_kv_bytes = Some(created.summary.resident_kv_bytes);
+        },
+    );
+
+    let Some(swa_kv_bytes) = swa_kv_bytes else {
+        return;
+    };
+
+    with_tiny_deepseek_v4_descriptor_session(tiny_deepseek_v4_descriptor_layer(), 8, |created| {
+        if created.summary.status == SmokeStatus::Unavailable {
+            return;
+        }
+        assert_eq!(
+            created.summary.status,
+            SmokeStatus::Ok,
+            "V4 compressed-indexer session should create: {:?}",
+            created.summary.error
+        );
+        assert!(
+            created.summary.resident_kv_bytes > swa_kv_bytes,
+            "compressed-indexer V4 must reserve compressor/indexer runtime caches: {} <= {}",
+            created.summary.resident_kv_bytes,
+            swa_kv_bytes
+        );
+    });
+}
+
+#[test]
 fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     let layer = tiny_deepseek_v4_descriptor_layer();
     let layers = [layer];

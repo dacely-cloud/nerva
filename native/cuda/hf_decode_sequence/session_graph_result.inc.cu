@@ -200,7 +200,7 @@ void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
   out->experimental_rt_sink_tokens = session->experimental_rt_sink_tokens;
   out->descriptor_gpu_resident_h2d_bytes = session->descriptor_gpu_resident_h2d_bytes;
   out->descriptor_gpu_staged_h2d_bytes = session->descriptor_gpu_staged_h2d_bytes;
-  out->resident_kv_bytes = session->kv_bytes;
+  out->resident_kv_bytes = session_resident_kv_bytes(session);
   out->device_arena_bytes = session_device_footprint(session);
   out->pinned_host_bytes = session->slots_bytes + session->load_staging_bytes;
   out->h2d_bytes = session->h2d_bytes;

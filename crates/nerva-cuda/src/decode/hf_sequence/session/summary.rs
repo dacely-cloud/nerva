@@ -209,6 +209,7 @@ pub(crate) fn create_stage_label(stage: i32) -> &'static str {
         33 => "decode_sdpa_alloc",
         34 => "projection_plan_autotune",
         35 => "experimental_rt_decode_init",
+        36 => "deepseek_compressed_kv_alloc",
         _ => "unknown",
     }
 }
