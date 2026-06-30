@@ -1,4 +1,3 @@
-use crate::common::dtype::dtype_to_str;
 use crate::hf::hash::hash_metadata;
 use crate::weights::layout::plan::HfWeightLayoutPlan;
 use crate::weights::manifest::HfTensorManifest;
@@ -122,7 +121,7 @@ pub(crate) fn hash_safetensors_shard_plan(plan: &SafetensorsShardPlan) -> u64 {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }
-        for byte in dtype_to_str(entry.dtype).as_bytes() {
+        for byte in entry.dtype.name().as_bytes() {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }

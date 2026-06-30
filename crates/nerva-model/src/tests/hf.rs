@@ -127,7 +127,7 @@ fn rejects_invalid_hf_metadata_shapes_and_dtypes() {
                 "num_attention_heads": 32,
                 "num_key_value_heads": 8,
                 "vocab_size": 32000,
-                "torch_dtype": "int4"
+                "torch_dtype": "float128"
             }"#,
     );
     let bad_tie_word_embeddings = parse_hf_config_metadata(
@@ -172,6 +172,37 @@ fn rejects_invalid_hf_metadata_shapes_and_dtypes() {
     assert!(bad_tie_word_embeddings.is_err());
     assert!(bad_eos_array.is_err());
     assert!(unsupported_rope_scaling.is_err());
+}
+
+#[test]
+fn parses_quantized_and_compute_dtype_aliases() {
+    for (label, expected) in [
+        ("tf32", DType::TF32),
+        ("bf32", DType::TF32),
+        ("fp8", DType::F8E4M3),
+        ("float8_e5m2", DType::F8E5M2),
+        ("fp8_e8m0", DType::F8E8M0),
+        ("nvfp4", DType::F4E2M1),
+        ("mxfp4", DType::F4E2M1),
+        ("int4", DType::I4),
+        ("uint4", DType::U4),
+        ("int8", DType::I8),
+    ] {
+        let metadata = parse_hf_config_metadata(&format!(
+            r#"{{
+                "model_type": "llama",
+                "hidden_size": 4096,
+                "intermediate_size": 11008,
+                "num_hidden_layers": 32,
+                "num_attention_heads": 32,
+                "num_key_value_heads": 8,
+                "vocab_size": 32000,
+                "torch_dtype": "{label}"
+            }}"#
+        ))
+        .unwrap();
+        assert_eq!(metadata.torch_dtype, Some(expected), "{label}");
+    }
 }
 
 #[test]

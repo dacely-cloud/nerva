@@ -105,10 +105,12 @@ pub(crate) fn validate_multi_gpu_config(config: MultiGpuNodeConfig) -> Result<()
 }
 
 fn dtype_bytes(dtype: DType) -> Result<usize> {
-    match dtype {
-        DType::F16 | DType::BF16 | DType::U16 => Ok(2),
-        DType::F32 | DType::U32 | DType::I32 => Ok(4),
-        DType::I64 => Ok(8),
-        DType::U8 | DType::I8 | DType::F8E4M3 | DType::F8E8M0 => Ok(1),
-    }
+    dtype
+        .whole_bytes_per_element()
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: format!(
+                "multi-GPU activation dtype {} is packed below one byte",
+                dtype.name()
+            ),
+        })
 }

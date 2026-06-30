@@ -1,7 +1,7 @@
 use nerva_core::types::dtype::DType;
 
 use crate::registry::bootstrap::bootstrap_registry;
-use crate::registry::probe::{kernel_registry_probe, KernelRegistryProbeStatus};
+use crate::registry::probe::{KernelRegistryProbeStatus, kernel_registry_probe};
 use crate::registry::types::backend::KernelBackend;
 use crate::registry::types::exactness::KernelExactness;
 use crate::registry::types::fallback::{KernelFallback, KernelFallbackClass};
@@ -58,6 +58,52 @@ fn registry_resolves_direct_cuda_fp8_e4m3_dense_matvec_contract() {
 }
 
 #[test]
+fn registry_resolves_direct_cuda_quantized_dequant_and_moe_contracts() {
+    let registry = bootstrap_registry();
+    for (operation, dtype, name) in [
+        (
+            KernelOperation::BlockDequant,
+            DType::F8E4M3,
+            "cuda_deepseek_fp8_e4m3_e8m0_block_dequant",
+        ),
+        (
+            KernelOperation::BlockDequant,
+            DType::F4E2M1,
+            "cuda_deepseek_mxfp4_e2m1_e8m0_block_dequant",
+        ),
+        (
+            KernelOperation::SparseMoeExpert,
+            DType::F4E2M1,
+            "cuda_deepseek_megamoe_fp8_fp4_experts",
+        ),
+        (
+            KernelOperation::KvAppend,
+            DType::F8E4M3,
+            "cuda_deepseek_fp8_ds_mla_kv_append",
+        ),
+    ] {
+        let plan = registry
+            .resolve(KernelQuery::new(
+                operation,
+                KernelBackend::Cuda,
+                dtype,
+                Some(120),
+            ))
+            .unwrap();
+
+        let KernelPlan::Direct { implementation } = plan else {
+            panic!("expected direct kernel implementation");
+        };
+        assert_eq!(implementation.name, name);
+        assert!(implementation.graph_safe);
+        assert_eq!(
+            implementation.exactness,
+            KernelExactness::ReferenceEquivalentWithinDeclaredFpTolerance
+        );
+    }
+}
+
+#[test]
 fn registry_selects_only_named_exact_fallbacks() {
     let registry = bootstrap_registry();
     let plan = registry
@@ -86,22 +132,26 @@ fn registry_selects_only_named_exact_fallbacks() {
 #[test]
 fn registry_rejects_missing_contracts_without_silent_fallback() {
     let registry = bootstrap_registry();
-    assert!(registry
-        .resolve(KernelQuery::new(
-            KernelOperation::DenseMatVec,
-            KernelBackend::Hip,
-            DType::BF16,
-            Some(1100),
-        ))
-        .is_err());
-    assert!(registry
-        .resolve(KernelQuery::new(
-            KernelOperation::GreedySample,
-            KernelBackend::Cuda,
-            DType::U32,
-            Some(70),
-        ))
-        .is_err());
+    assert!(
+        registry
+            .resolve(KernelQuery::new(
+                KernelOperation::DenseMatVec,
+                KernelBackend::Hip,
+                DType::BF16,
+                Some(1100),
+            ))
+            .is_err()
+    );
+    assert!(
+        registry
+            .resolve(KernelQuery::new(
+                KernelOperation::GreedySample,
+                KernelBackend::Cuda,
+                DType::U32,
+                Some(70),
+            ))
+            .is_err()
+    );
 }
 
 #[test]
@@ -127,21 +177,23 @@ fn registry_rejects_declared_approximate_fallback_for_exact_runtime() {
             class: KernelFallbackClass::ApproximateNamed,
         });
 
-    assert!(registry
-        .resolve(KernelQuery::new(
-            KernelOperation::DenseMatVec,
-            KernelBackend::Cuda,
-            DType::F32,
-            Some(89),
-        ))
-        .is_err());
+    assert!(
+        registry
+            .resolve(KernelQuery::new(
+                KernelOperation::DenseMatVec,
+                KernelBackend::Cuda,
+                DType::F32,
+                Some(89),
+            ))
+            .is_err()
+    );
 }
 
 #[test]
 fn registry_probe_reports_direct_fallback_and_rejection_counts() {
     let summary = kernel_registry_probe().unwrap();
     assert_eq!(summary.status, KernelRegistryProbeStatus::Ok);
-    assert_eq!(summary.implementations, 5);
+    assert_eq!(summary.implementations, 9);
     assert_eq!(summary.fallbacks, 1);
     assert_eq!(summary.direct_plans, 1);
     assert_eq!(summary.fallback_plans, 1);

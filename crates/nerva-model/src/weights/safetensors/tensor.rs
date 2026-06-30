@@ -1,7 +1,6 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 
-use crate::common::dtype::dtype_to_str;
 use crate::common::json::fields::optional_string;
 use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::manifest::HfTensorManifestEntry;
@@ -83,12 +82,13 @@ pub(crate) fn safetensors_dtype(dtype: DType) -> Result<&'static str> {
         DType::F16 => Ok("F16"),
         DType::BF16 => Ok("BF16"),
         DType::F8E4M3 => Ok("F8_E4M3"),
+        DType::F8E5M2 => Ok("F8_E5M2"),
         DType::F8E8M0 => Ok("F8_E8M0"),
         DType::F32 => Ok("F32"),
         _ => Err(NervaError::InvalidArgument {
             reason: format!(
                 "dtype {} is not supported in exact safetensors manifest validation",
-                dtype_to_str(dtype)
+                dtype.name()
             ),
         }),
     }
@@ -159,6 +159,7 @@ mod tests {
             (DType::I8, "I8"),
             (DType::I64, "I64"),
             (DType::F8E4M3, "F8_E4M3"),
+            (DType::F8E5M2, "F8_E5M2"),
             (DType::F8E8M0, "F8_E8M0"),
         ] {
             assert_eq!(safetensors_dtype(dtype).unwrap(), header_dtype);

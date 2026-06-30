@@ -25,6 +25,23 @@ use crate::types::ownership::owner::ExecutionOwner;
 use crate::types::shape::BlockShape;
 
 #[test]
+fn dtype_storage_modes_distinguish_packed_and_whole_byte_formats() {
+    assert_eq!(DType::F16.name(), "float16");
+    assert_eq!(DType::BF16.whole_bytes_per_element(), Some(2));
+    assert_eq!(DType::TF32.name(), "tensorfloat32");
+    assert_eq!(DType::TF32.whole_bytes_per_element(), Some(4));
+    assert_eq!(DType::F8E4M3.storage_bits(), 8);
+    assert_eq!(DType::F8E5M2.whole_bytes_per_element(), Some(1));
+    assert_eq!(DType::F4E2M1.storage_bits(), 4);
+    assert_eq!(DType::I4.storage_bits(), 4);
+    assert!(DType::F4E2M1.is_subbyte_packed());
+    assert_eq!(DType::F4E2M1.whole_bytes_per_element(), None);
+    assert_eq!(DType::F4E2M1.packed_storage_bytes(1).unwrap(), 1);
+    assert_eq!(DType::F4E2M1.packed_storage_bytes(2).unwrap(), 1);
+    assert_eq!(DType::I4.packed_storage_bytes(3).unwrap(), 2);
+}
+
+#[test]
 fn linux_host_gate_accepts_build_host_or_reports_other() {
     let result = ensure_supported_linux_host();
     if matches!(host_arch(), HostArch::Other) {

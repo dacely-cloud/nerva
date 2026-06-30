@@ -1,4 +1,3 @@
-use crate::common::dtype::dtype_to_str;
 use crate::hf::metadata::HfModelMetadata;
 
 pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
@@ -70,7 +69,7 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         }
     }
     if let Some(dtype) = metadata.torch_dtype {
-        for byte in dtype_to_str(dtype).as_bytes() {
+        for byte in dtype.name().as_bytes() {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }

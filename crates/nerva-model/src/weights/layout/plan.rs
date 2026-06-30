@@ -2,7 +2,6 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::memory::tier::MemoryTier;
 
-use crate::common::dtype::dtype_to_str;
 use crate::hf::architecture::HfArchitectureKind;
 use crate::hf::contract::validate_weight_layout_contract;
 use crate::hf::metadata::{HfMlpLayerKind, HfModelMetadata};
@@ -33,7 +32,7 @@ impl HfWeightLayoutPlan {
         format!(
             "{{\"architecture\":\"{}\",\"dtype\":\"{}\",\"blocks\":{},\"layers\":{},\"moe_layers\":{},\"total_weight_bytes\":{},\"per_layer_weight_bytes\":{},\"static_weight_bytes\":{},\"hidden_size\":{},\"attention_hidden_size\":{},\"head_dim\":{},\"kv_hidden_size\":{},\"tie_word_embeddings\":{}}}",
             self.metadata.architecture.as_str(),
-            dtype_to_str(self.dtype),
+            self.dtype.name(),
             self.blocks.len(),
             self.metadata.num_hidden_layers,
             moe_layers,

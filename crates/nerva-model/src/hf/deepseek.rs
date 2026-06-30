@@ -1,7 +1,7 @@
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 
-use crate::common::dtype::dtype_to_str;
+use crate::common::dtype::dtype_size_bytes;
 use crate::common::json::format::{json_escape, json_opt_str, json_opt_usize};
 use crate::hf::architecture::HfArchitectureKind;
 use crate::hf::metadata::HfModelMetadata;
@@ -69,7 +69,7 @@ impl DeepSeekVllmKvCacheSpec {
             self.storage_block_size,
             self.num_kv_heads,
             self.head_size,
-            dtype_to_str(self.dtype),
+            self.dtype.name(),
             self.kv_quant_mode,
             json_escape(&self.cache_dtype_str),
             self.compress_ratio,
@@ -489,7 +489,7 @@ fn mla_spec(
                 storage_block_size,
                 1,
                 head_size,
-                dtype_size_bytes(dtype),
+                dtype_size_bytes(dtype)?,
                 "DeepSeek MLA page bytes",
             )?,
         }
@@ -498,7 +498,7 @@ fn mla_spec(
             storage_block_size,
             1,
             head_size,
-            dtype_size_bytes(dtype),
+            dtype_size_bytes(dtype)?,
             "DeepSeek MLA page bytes",
         )?
     };
@@ -565,7 +565,7 @@ fn v4_compressor_state_spec(
         block_size,
         1,
         state_dim,
-        dtype_size_bytes(DType::F32),
+        dtype_size_bytes(DType::F32)?,
         "DeepSeek V4 compressor state page bytes",
     )?;
     spec_from_parts(
@@ -1065,15 +1065,6 @@ fn storage_block_size(block_size: usize, compress_ratio: usize) -> Result<usize>
         });
     }
     Ok(block_size / compress_ratio)
-}
-
-fn dtype_size_bytes(dtype: DType) -> usize {
-    match dtype {
-        DType::U8 | DType::I8 | DType::F8E4M3 | DType::F8E8M0 => 1,
-        DType::U16 | DType::F16 | DType::BF16 => 2,
-        DType::U32 | DType::I32 | DType::F32 => 4,
-        DType::I64 => 8,
-    }
 }
 
 fn round_up(value: usize, alignment: usize) -> Result<usize> {

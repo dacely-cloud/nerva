@@ -5,7 +5,7 @@ use crate::common::json::fields::{
     optional_bool, optional_f32, optional_first_string, optional_object_f32, optional_object_json,
     optional_object_string, optional_string, optional_u32_or_first, optional_usize,
 };
-use crate::hf::architecture::{architecture_kind_from_str, HfArchitectureKind};
+use crate::hf::architecture::{HfArchitectureKind, architecture_kind_from_str};
 use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 use crate::hf::validate::validate_hf_metadata;
 
@@ -871,6 +871,19 @@ pub(crate) fn dtype_from_hf_string(value: &str) -> Result<DType> {
         "float16" | "fp16" | "f16" => Ok(DType::F16),
         "bfloat16" | "bf16" => Ok(DType::BF16),
         "float32" | "fp32" | "f32" => Ok(DType::F32),
+        "tensorfloat32" | "tf32" | "bf32" => Ok(DType::TF32),
+        "float8" | "float8_e4m3" | "float8_e4m3fn" | "fp8" | "fp8_e4m3" | "f8" | "f8_e4m3" => {
+            Ok(DType::F8E4M3)
+        }
+        "float8_e5m2" | "fp8_e5m2" | "f8_e5m2" => Ok(DType::F8E5M2),
+        "float8_e8m0" | "fp8_e8m0" | "f8_e8m0" => Ok(DType::F8E8M0),
+        "float4" | "float4_e2m1" | "fp4" | "f4" | "f4_e2m1" | "mxfp4" | "nvfp4" => {
+            Ok(DType::F4E2M1)
+        }
+        "int4" | "i4" => Ok(DType::I4),
+        "uint4" | "u4" => Ok(DType::U4),
+        "int8" | "i8" => Ok(DType::I8),
+        "uint8" | "u8" => Ok(DType::U8),
         other => Err(NervaError::InvalidArgument {
             reason: format!("unsupported HF torch_dtype {other}"),
         }),
