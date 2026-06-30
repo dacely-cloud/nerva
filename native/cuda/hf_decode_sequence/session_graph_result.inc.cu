@@ -50,6 +50,8 @@ void fill_deepseek_runtime_counter_result(
       counters[kDeepSeekRuntimeCounterSparseTopkSlotsSelected];
   out->deepseek_sparse_topk_candidates_scored =
       counters[kDeepSeekRuntimeCounterSparseTopkCandidatesScored];
+  out->deepseek_sparse_topk_selection_hash =
+      counters[kDeepSeekRuntimeCounterSparseTopkSelectionHash];
   out->deepseek_v3_grouped_router_selections =
       counters[kDeepSeekRuntimeCounterV3GroupedRouterSelections];
   out->deepseek_v4_bias_router_selections =

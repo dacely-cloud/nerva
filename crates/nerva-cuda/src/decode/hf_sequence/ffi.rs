@@ -132,6 +132,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) deepseek_sparse_topk_selections: u64,
     pub(crate) deepseek_sparse_topk_slots_selected: u64,
     pub(crate) deepseek_sparse_topk_candidates_scored: u64,
+    pub(crate) deepseek_sparse_topk_selection_hash: u64,
     pub(crate) deepseek_v3_grouped_router_selections: u64,
     pub(crate) deepseek_v4_bias_router_selections: u64,
     pub(crate) deepseek_v4_hash_router_selections: u64,

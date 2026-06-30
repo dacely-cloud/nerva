@@ -486,6 +486,7 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t deepseek_sparse_topk_selections;
   uint64_t deepseek_sparse_topk_slots_selected;
   uint64_t deepseek_sparse_topk_candidates_scored;
+  uint64_t deepseek_sparse_topk_selection_hash;
   uint64_t deepseek_v3_grouped_router_selections;
   uint64_t deepseek_v4_bias_router_selections;
   uint64_t deepseek_v4_hash_router_selections;
