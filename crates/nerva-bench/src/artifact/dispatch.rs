@@ -78,6 +78,10 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "cuda-deepseek-compress-cache" => Ok(
             nerva_cuda::deepseek_kv::probe::deepseek_compress_norm_rope_fp8_cache_smoke().to_json(),
         ),
+        "cuda-deepseek-compress-cache-mxfp4" => Ok(
+            nerva_cuda::deepseek_kv::probe::deepseek_compress_norm_rope_mxfp4_cache_smoke()
+                .to_json(),
+        ),
         "cuda-sampler" => Ok(nerva_cuda::sampler::probe::greedy_sampler_smoke().to_json()),
         "cuda-tiny-decode" => {
             let steps = parse_optional_u32(args.first().cloned(), 8, "steps")?;

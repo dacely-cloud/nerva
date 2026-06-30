@@ -1,7 +1,7 @@
 use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use crate::deepseek_kv::compress_cache::{
     CudaDeepSeekCompressNormRopeFp8CacheInput, DEEPSEEK_COMPRESS_SCALE_E8M0,
-    deepseek_compress_norm_rope_fp8_cache,
+    DEEPSEEK_COMPRESS_SCALE_MXFP4, deepseek_compress_norm_rope_fp8_cache,
 };
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use crate::deepseek_kv::partial_states::deepseek_save_partial_states;
@@ -208,6 +208,32 @@ pub fn deepseek_compress_norm_rope_fp8_cache_smoke() -> CudaDeepSeekCompressNorm
     failed
 }
 
+pub fn deepseek_compress_norm_rope_mxfp4_cache_smoke() -> CudaDeepSeekCompressNormRopeFp8CacheSummary
+{
+    let fixture = mxfp4_compress_cache_fixture();
+    let summary = deepseek_compress_norm_rope_fp8_cache(fixture.input.clone());
+    if summary.status != SmokeStatus::Ok {
+        return summary;
+    }
+
+    let expected = reference_compress_norm_rope_fp8_cache(&fixture);
+    if summary.kv_cache == expected
+        && summary.written_tokens == 2
+        && summary.skipped_tokens == 0
+        && summary.kernel_launches == 1
+        && summary.sync_calls == 1
+        && summary.hot_path_allocations == 0
+        && summary.output_hash != 0
+    {
+        return summary;
+    }
+
+    let mut failed = summary;
+    failed.status = SmokeStatus::Failed;
+    failed.error = Some("DeepSeek fused compress/norm/RoPE MXFP4 cache smoke mismatch".to_string());
+    failed
+}
+
 #[derive(Clone)]
 pub(crate) struct CompressCacheFixture {
     pub(crate) input: CudaDeepSeekCompressNormRopeFp8CacheInput<'static>,
@@ -267,6 +293,79 @@ pub(crate) fn compress_cache_fixture(scale_format: u32) -> CompressCacheFixture 
     }
 }
 
+pub(crate) fn mxfp4_compress_cache_fixture() -> CompressCacheFixture {
+    let head_size = 128;
+    let rope_head_dim = 64;
+    let quant_block = 32;
+    let token_stride = head_size / 2;
+    let scale_dim = head_size / quant_block;
+    let kv_cache_block_size = 4;
+    let kv_cache_block_stride = kv_cache_block_size * (token_stride + scale_dim);
+    let state_cache = leak_f32(
+        (0..(4 * head_size * 2))
+            .map(|idx| {
+                let row = idx / (head_size * 2);
+                let dim = idx % (head_size * 2);
+                let base = ((idx * 17 + row * 11 + dim * 5) % 127) as f32 / 19.0 - 3.1;
+                if dim < head_size {
+                    base
+                } else {
+                    base * 0.31 + row as f32 * 0.17
+                }
+            })
+            .collect(),
+    );
+    let rms_norm_weight = leak_f32(
+        (0..head_size)
+            .map(|idx| 0.75 + (idx % 13) as f32 * 0.031)
+            .collect(),
+    );
+    let mut cos_sin = vec![0.0f32; 3 * rope_head_dim];
+    for pos in 0..3 {
+        for pair in 0..(rope_head_dim / 2) {
+            let angle = (pos as f32 + 1.0) * (pair as f32 + 1.0) * 0.003;
+            cos_sin[pos * rope_head_dim + pair] = angle.cos();
+            cos_sin[pos * rope_head_dim + rope_head_dim / 2 + pair] = angle.sin();
+        }
+    }
+    let cos_sin_cache = leak_f32(cos_sin);
+    CompressCacheFixture {
+        input: CudaDeepSeekCompressNormRopeFp8CacheInput {
+            state_cache,
+            token_to_req_indices: &[0, 0],
+            positions: &[1, 3],
+            slot_mapping: &[0, 1],
+            block_table: &[0],
+            kv_slot_mapping: &[0, 1],
+            rms_norm_weight,
+            cos_sin_cache,
+            num_reqs: 1,
+            block_table_stride: 1,
+            state_block_size: 4,
+            kv_cache_block_size,
+            head_size: head_size as u32,
+            state_width: head_size as u32,
+            rope_head_dim: rope_head_dim as u32,
+            compress_ratio: 2,
+            overlap: 0,
+            quant_block: quant_block as u32,
+            token_stride: token_stride as u32,
+            scale_dim: scale_dim as u32,
+            scale_format: DEEPSEEK_COMPRESS_SCALE_MXFP4,
+            num_state_blocks: 1,
+            num_kv_blocks: 1,
+            kv_cache_block_stride: kv_cache_block_stride as u32,
+            cos_sin_stride: rope_head_dim as u32,
+            rms_norm_eps: 1.0e-5,
+            fp8_max: 448.0,
+        },
+    }
+}
+
+fn leak_f32(values: Vec<f32>) -> &'static [f32] {
+    Box::leak(values.into_boxed_slice())
+}
+
 pub(crate) fn reference_compress_norm_rope_fp8_cache(fixture: &CompressCacheFixture) -> Vec<u8> {
     let input = &fixture.input;
     let mut kv_cache =
@@ -322,7 +421,9 @@ pub(crate) fn reference_compress_norm_rope_fp8_cache(fixture: &CompressCacheFixt
                 kv_cache[offset] = (bits & 0xff) as u8;
                 kv_cache[offset + 1] = (bits >> 8) as u8;
             }
-        } else {
+        } else if input.scale_format
+            == crate::deepseek_kv::compress_cache::DEEPSEEK_COMPRESS_SCALE_F32
+        {
             let bf16_rotated = rotated
                 .iter()
                 .copied()
@@ -339,6 +440,30 @@ pub(crate) fn reference_compress_norm_rope_fp8_cache(fixture: &CompressCacheFixt
             for (dim, value) in bf16_rotated.iter().copied().enumerate() {
                 let scaled = (value / scale).clamp(-input.fp8_max, input.fp8_max);
                 kv_cache[data_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+            }
+        } else {
+            let half_block = input.quant_block as usize / 2;
+            for block in 0..(input.head_size / input.quant_block) as usize {
+                let pair_start = block * half_block;
+                let mut amax = 0.0f32;
+                for pair in 0..half_block {
+                    let base = (pair_start + pair) * 2;
+                    let even = bf16_to_f32(f32_to_bf16_bits(rotated[base]));
+                    let odd = bf16_to_f32(f32_to_bf16_bits(rotated[base + 1]));
+                    amax = amax.max(even.abs()).max(odd.abs());
+                }
+                let exponent =
+                    ((amax.max(6.0 * f32::MIN_POSITIVE) / 6.0).log2().ceil()).clamp(-127.0, 127.0);
+                let inv_scale = 2.0f32.powf(-exponent);
+                kv_cache[scale_base + block] = (exponent as i32 + 127) as u8;
+                for pair in 0..half_block {
+                    let base = (pair_start + pair) * 2;
+                    let even = bf16_to_f32(f32_to_bf16_bits(rotated[base]));
+                    let odd = bf16_to_f32(f32_to_bf16_bits(rotated[base + 1]));
+                    let lo = f32_to_mxfp4_e2m1_nibble_nearest(even * inv_scale);
+                    let hi = f32_to_mxfp4_e2m1_nibble_nearest(odd * inv_scale);
+                    kv_cache[data_base + block * half_block + pair] = (hi << 4) | (lo & 0x0f);
+                }
             }
         }
     }
@@ -533,4 +658,25 @@ fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
         return f32::NAN;
     }
     sign * (1.0 + (frac as f32) * 0.125) * 2.0f32.powi(exp as i32 - 7)
+}
+
+fn f32_to_mxfp4_e2m1_nibble_nearest(value: f32) -> u8 {
+    let mut best_bits = 0u8;
+    let mut best_error = f32::INFINITY;
+    for bits in 0u8..16 {
+        let candidate = mxfp4_e2m1_nibble_to_f32(bits);
+        let error = (candidate - value).abs();
+        if error < best_error || (error == best_error && bits < best_bits) {
+            best_error = error;
+            best_bits = bits;
+        }
+    }
+    best_bits
+}
+
+fn mxfp4_e2m1_nibble_to_f32(bits: u8) -> f32 {
+    const TABLE: [f32; 16] = [
+        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+    ];
+    TABLE[(bits & 0x0f) as usize]
 }

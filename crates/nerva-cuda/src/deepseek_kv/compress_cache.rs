@@ -8,6 +8,7 @@ use crate::smoke::status::SmokeStatus;
 
 pub const DEEPSEEK_COMPRESS_SCALE_E8M0: u32 = 0;
 pub const DEEPSEEK_COMPRESS_SCALE_F32: u32 = 1;
+pub const DEEPSEEK_COMPRESS_SCALE_MXFP4: u32 = 2;
 
 #[derive(Clone, Debug)]
 pub struct CudaDeepSeekCompressNormRopeFp8CacheInput<'a> {
@@ -78,6 +79,13 @@ pub fn deepseek_compress_norm_rope_fp8_cache(
         }
         DEEPSEEK_COMPRESS_SCALE_F32 => {
             input.token_stride == input.head_size && input.scale_dim == size_of::<f32>() as u32
+        }
+        DEEPSEEK_COMPRESS_SCALE_MXFP4 => {
+            input.head_size == 128
+                && input.rope_head_dim > 0
+                && input.quant_block == 32
+                && input.token_stride == input.head_size / 2
+                && input.scale_dim == input.head_size / input.quant_block
         }
         _ => false,
     };

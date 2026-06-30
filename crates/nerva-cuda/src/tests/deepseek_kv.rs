@@ -1,14 +1,15 @@
 use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use crate::deepseek_kv::compress_cache::{
-    DEEPSEEK_COMPRESS_SCALE_E8M0, DEEPSEEK_COMPRESS_SCALE_F32,
+    DEEPSEEK_COMPRESS_SCALE_E8M0, DEEPSEEK_COMPRESS_SCALE_F32, DEEPSEEK_COMPRESS_SCALE_MXFP4,
     deepseek_compress_norm_rope_fp8_cache,
 };
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use crate::deepseek_kv::partial_states::deepseek_save_partial_states;
 use crate::deepseek_kv::probe::{
     compress_cache_fixture, deepseek_c128_topk_metadata_smoke,
-    deepseek_compress_norm_rope_fp8_cache_smoke, deepseek_compressed_slot_mapping_smoke,
-    deepseek_kv_smoke, deepseek_save_partial_states_smoke, reference_compress_norm_rope_fp8_cache,
+    deepseek_compress_norm_rope_fp8_cache_smoke, deepseek_compress_norm_rope_mxfp4_cache_smoke,
+    deepseek_compressed_slot_mapping_smoke, deepseek_kv_smoke, deepseek_save_partial_states_smoke,
+    mxfp4_compress_cache_fixture, reference_compress_norm_rope_fp8_cache,
 };
 use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use crate::deepseek_kv::summary::{
@@ -193,6 +194,42 @@ fn deepseek_compress_norm_rope_fp8_cache_summary_serializes_vllm_metadata() {
 }
 
 #[test]
+fn deepseek_compress_norm_rope_mxfp4_cache_summary_serializes_vllm_metadata() {
+    let summary = CudaDeepSeekCompressNormRopeFp8CacheSummary {
+        status: SmokeStatus::Ok,
+        return_code: 0,
+        cuda_error: 0,
+        num_tokens: 2,
+        head_size: 128,
+        rope_head_dim: 64,
+        compress_ratio: 128,
+        quant_block: 32,
+        token_stride: 64,
+        scale_dim: 4,
+        scale_format: DEEPSEEK_COMPRESS_SCALE_MXFP4,
+        written_tokens: 1,
+        skipped_tokens: 1,
+        kv_cache_bytes: 272,
+        output_hash: 99,
+        kv_cache: vec![0; 272],
+        device_arena_bytes: 2048,
+        pinned_host_bytes: 272,
+        h2d_bytes: 1024,
+        d2h_bytes: 272,
+        kernel_launches: 1,
+        sync_calls: 1,
+        hot_path_allocations: 0,
+        error: None,
+    };
+
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"token_stride\":64"));
+    assert!(json.contains("\"scale_dim\":4"));
+    assert!(json.contains("\"scale_format\":2"));
+}
+
+#[test]
 fn deepseek_kv_smoke_is_repeatable_when_device_is_available() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
@@ -309,6 +346,33 @@ fn deepseek_compress_norm_rope_fp8_cache_smoke_is_repeatable_when_device_is_avai
     assert_eq!(second.rope_head_dim, 2);
     assert_eq!(second.compress_ratio, 2);
     assert_eq!(second.scale_format, DEEPSEEK_COMPRESS_SCALE_E8M0);
+    assert_eq!(second.written_tokens, 2);
+    assert_eq!(second.skipped_tokens, 0);
+    assert_eq!(second.output_hash, first.output_hash);
+    assert_eq!(second.kernel_launches, 1);
+    assert_eq!(second.sync_calls, 1);
+    assert_eq!(second.hot_path_allocations, 0);
+}
+
+#[test]
+fn deepseek_compress_norm_rope_mxfp4_cache_smoke_is_repeatable_when_device_is_available() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let first = deepseek_compress_norm_rope_mxfp4_cache_smoke();
+    if first.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let second = deepseek_compress_norm_rope_mxfp4_cache_smoke();
+    assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    assert_eq!(second.num_tokens, 2);
+    assert_eq!(second.head_size, 128);
+    assert_eq!(second.rope_head_dim, 64);
+    assert_eq!(second.compress_ratio, 2);
+    assert_eq!(second.quant_block, 32);
+    assert_eq!(second.token_stride, 64);
+    assert_eq!(second.scale_dim, 4);
+    assert_eq!(second.scale_format, DEEPSEEK_COMPRESS_SCALE_MXFP4);
     assert_eq!(second.written_tokens, 2);
     assert_eq!(second.skipped_tokens, 0);
     assert_eq!(second.output_hash, first.output_hash);
@@ -521,6 +585,29 @@ fn deepseek_compress_norm_rope_fp8_cache_matches_vllm_indexer_cache_math() {
     assert_eq!(summary.token_stride, 4);
     assert_eq!(summary.scale_dim, size_of::<f32>() as u32);
     assert_eq!(summary.scale_format, DEEPSEEK_COMPRESS_SCALE_F32);
+    assert_eq!(summary.written_tokens, 2);
+    assert_eq!(summary.skipped_tokens, 0);
+    assert!(summary.output_hash != 0);
+}
+
+#[test]
+fn deepseek_compress_norm_rope_mxfp4_cache_matches_vllm_indexer_cache_math() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let fixture = mxfp4_compress_cache_fixture();
+    let summary = deepseek_compress_norm_rope_fp8_cache(fixture.input.clone());
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let expected = reference_compress_norm_rope_fp8_cache(&fixture);
+    assert_eq!(summary.kv_cache, expected);
+    assert_eq!(summary.head_size, 128);
+    assert_eq!(summary.rope_head_dim, 64);
+    assert_eq!(summary.quant_block, 32);
+    assert_eq!(summary.token_stride, 64);
+    assert_eq!(summary.scale_dim, 4);
+    assert_eq!(summary.scale_format, DEEPSEEK_COMPRESS_SCALE_MXFP4);
     assert_eq!(summary.written_tokens, 2);
     assert_eq!(summary.skipped_tokens, 0);
     assert!(summary.output_hash != 0);

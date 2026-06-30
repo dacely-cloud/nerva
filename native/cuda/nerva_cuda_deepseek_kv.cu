@@ -10,6 +10,7 @@ namespace {
 
 constexpr uint32_t kDeepSeekScaleFormatE8M0 = 0;
 constexpr uint32_t kDeepSeekScaleFormatF32 = 1;
+constexpr uint32_t kDeepSeekScaleFormatMxfp4 = 2;
 constexpr uint32_t kDeepSeekMaxCompressHeadSize = 512;
 
 __device__ __forceinline__ uint16_t f32_to_bf16_bits(float value) {
@@ -55,6 +56,22 @@ __device__ __forceinline__ uint8_t encode_e8m0_scale(float scale) {
     exponent = 255;
   }
   return static_cast<uint8_t>(exponent);
+}
+
+__device__ uint8_t f32_to_mxfp4_e2m1_nibble_nearest(float value) {
+  uint8_t best_bits = 0;
+  float best_error = INFINITY;
+  for (uint32_t bits = 0; bits < 16u; ++bits) {
+    const float candidate =
+        nerva::deepseek::mxfp4_e2m1_nibble_to_f32(static_cast<uint8_t>(bits));
+    const float error = fabsf(candidate - value);
+    if (error < best_error ||
+        (error == best_error && bits < static_cast<uint32_t>(best_bits))) {
+      best_error = error;
+      best_bits = static_cast<uint8_t>(bits);
+    }
+  }
+  return best_bits;
 }
 
 __global__ void fp8_ds_mla_pack_kernel(const uint8_t *nope_fp8,
@@ -502,7 +519,7 @@ __global__ void compress_norm_rope_fp8_cache_kernel(
       const uint32_t nope_blocks = nope_head_dim / quant_block;
       scale_ptr[tid] = tid < nope_blocks ? encode_e8m0_scale(scales[tid]) : 0u;
     }
-  } else {
+  } else if (scale_format == kDeepSeekScaleFormatF32) {
     float absmax = 0.0f;
     if (tid < head_size) {
       reduce[tid] = fabsf(bf16_bits_to_f32(f32_to_bf16_bits(rotated[tid])));
@@ -527,6 +544,33 @@ __global__ void compress_norm_rope_fp8_cache_kernel(
       const float quant_input = bf16_bits_to_f32(f32_to_bf16_bits(rotated[tid]));
       const float scaled = fminf(fmaxf(quant_input / scale, -fp8_max), fp8_max);
       data_ptr[tid] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+    }
+  } else if (scale_format == kDeepSeekScaleFormatMxfp4) {
+    const uint32_t num_blocks = head_size / quant_block;
+    const uint32_t half_block = quant_block / 2u;
+    for (uint32_t block = tid; block < num_blocks; block += blockDim.x) {
+      float absmax = 0.0f;
+      const uint32_t pair_start = block * half_block;
+      for (uint32_t pair = 0; pair < half_block; ++pair) {
+        const uint32_t base = (pair_start + pair) * 2u;
+        const float even = bf16_bits_to_f32(f32_to_bf16_bits(rotated[base]));
+        const float odd = bf16_bits_to_f32(f32_to_bf16_bits(rotated[base + 1u]));
+        absmax = fmaxf(absmax, fabsf(even));
+        absmax = fmaxf(absmax, fabsf(odd));
+      }
+      const float raw = fmaxf(absmax, 6.0f * 1.1754943508222875e-38f) / 6.0f;
+      const float exponent = fminf(fmaxf(ceilf(log2f(raw)), -127.0f), 127.0f);
+      const float inv_scale = exp2f(-exponent);
+      scale_ptr[block] = static_cast<uint8_t>(static_cast<int>(exponent) + 127);
+      for (uint32_t pair = 0; pair < half_block; ++pair) {
+        const uint32_t base = (pair_start + pair) * 2u;
+        const float even = bf16_bits_to_f32(f32_to_bf16_bits(rotated[base]));
+        const float odd = bf16_bits_to_f32(f32_to_bf16_bits(rotated[base + 1u]));
+        const uint8_t lo = f32_to_mxfp4_e2m1_nibble_nearest(even * inv_scale);
+        const uint8_t hi = f32_to_mxfp4_e2m1_nibble_nearest(odd * inv_scale);
+        data_ptr[block * half_block + pair] =
+            static_cast<uint8_t>((hi << 4u) | (lo & 0x0fu));
+      }
     }
   }
 
@@ -679,6 +723,16 @@ bool validate_request(
   if (request->scale_format == kDeepSeekScaleFormatF32) {
     return request->token_stride == request->head_size &&
            request->scale_dim == sizeof(float) &&
+           request->kv_cache_block_stride >=
+               request->kv_cache_block_size * request->token_stride +
+                   request->kv_cache_block_size * request->scale_dim &&
+           request->cos_sin_stride >= request->rope_head_dim;
+  }
+  if (request->scale_format == kDeepSeekScaleFormatMxfp4) {
+    return request->head_size == 128u && request->quant_block == 32u &&
+           request->rope_head_dim > 0 && (request->quant_block & 1u) == 0 &&
+           request->token_stride == request->head_size / 2u &&
+           request->scale_dim == request->head_size / request->quant_block &&
            request->kv_cache_block_stride >=
                request->kv_cache_block_size * request->token_stride +
                    request->kv_cache_block_size * request->scale_dim &&
