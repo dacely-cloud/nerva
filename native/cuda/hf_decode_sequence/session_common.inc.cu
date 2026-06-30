@@ -188,11 +188,95 @@ uint64_t layout_linear_gdn_conv_dim(const SequenceLayerLayout &layout) {
                      layout_linear_gdn_value_dim(layout));
 }
 
+bool layout_is_deepseek_v3_mla(const SequenceLayerLayout &layout) {
+  return layout.attention_kind == kAttentionKindDeepSeekMla &&
+         (layout.deepseek_mode == kDeepSeekModeV3Mla ||
+          layout.deepseek_mode == kDeepSeekModeV32MlaIndexer);
+}
+
+uint64_t layout_deepseek_v3_qk_head_dim(const SequenceLayerLayout &layout) {
+  return sat_add_u64(layout.deepseek_qk_nope_head_dim,
+                     layout.deepseek_qk_rope_head_dim);
+}
+
+uint64_t layout_deepseek_v3_q_rows(const SequenceLayerLayout &layout,
+                                   uint64_t fallback_attention_hidden) {
+  if (!layout_is_deepseek_v3_mla(layout)) return fallback_attention_hidden;
+  const uint64_t qk_head_dim = layout_deepseek_v3_qk_head_dim(layout);
+  if (qk_head_dim == 0) return fallback_attention_hidden;
+  const uint64_t heads = fallback_attention_hidden / qk_head_dim;
+  const uint64_t rows = sat_mul_u64(heads, qk_head_dim);
+  return rows == 0 ? fallback_attention_hidden : rows;
+}
+
+uint64_t layout_deepseek_v3_kv_cache_width(const SequenceLayerLayout &layout,
+                                           uint64_t fallback_kv_hidden) {
+  if (!layout_is_deepseek_v3_mla(layout)) return fallback_kv_hidden;
+  const uint64_t width = sat_add_u64(layout.deepseek_kv_lora_rank,
+                                     layout.deepseek_qk_rope_head_dim);
+  return width == 0 ? fallback_kv_hidden : width;
+}
+
+uint64_t layout_deepseek_v3_kv_b_rows(const SequenceLayerLayout &layout,
+                                      uint64_t fallback_attention_hidden) {
+  if (!layout_is_deepseek_v3_mla(layout)) return fallback_attention_hidden;
+  const uint64_t qk_head_dim = layout_deepseek_v3_qk_head_dim(layout);
+  if (qk_head_dim == 0) return fallback_attention_hidden;
+  const uint64_t heads = fallback_attention_hidden / qk_head_dim;
+  const uint64_t per_head = sat_add_u64(layout.deepseek_qk_nope_head_dim,
+                                        layout.deepseek_v_head_dim);
+  const uint64_t rows = sat_mul_u64(heads, per_head);
+  return rows == 0 ? fallback_attention_hidden : rows;
+}
+
+uint64_t layout_deepseek_v3_value_rows(const SequenceLayerLayout &layout,
+                                       uint64_t fallback_attention_hidden) {
+  if (!layout_is_deepseek_v3_mla(layout)) return fallback_attention_hidden;
+  const uint64_t qk_head_dim = layout_deepseek_v3_qk_head_dim(layout);
+  if (qk_head_dim == 0) return fallback_attention_hidden;
+  const uint64_t heads = fallback_attention_hidden / qk_head_dim;
+  const uint64_t rows = sat_mul_u64(heads, layout.deepseek_v_head_dim);
+  return rows == 0 ? fallback_attention_hidden : rows;
+}
+
+uint64_t layer_attention_workspace_rows(const SequenceLayerLayout &layout,
+                                        uint64_t attention_hidden) {
+  if (!layout_is_deepseek_v3_mla(layout)) return attention_hidden;
+  uint64_t rows = layout_deepseek_v3_q_rows(layout, attention_hidden);
+  rows = std::max(rows, layout_deepseek_v3_kv_b_rows(layout, attention_hidden));
+  rows = std::max(rows, layout_deepseek_v3_value_rows(layout, attention_hidden));
+  return std::max(rows, attention_hidden);
+}
+
+uint64_t max_attention_workspace_rows(
+    const std::vector<SequenceLayerLayout> &layouts, uint64_t attention_hidden) {
+  uint64_t rows = attention_hidden;
+  for (const SequenceLayerLayout &layout : layouts) {
+    rows = std::max(rows, layer_attention_workspace_rows(layout, attention_hidden));
+  }
+  return rows;
+}
+
+uint64_t max_kv_cache_width(const std::vector<SequenceLayerLayout> &layouts,
+                            uint64_t kv_hidden) {
+  uint64_t width = kv_hidden;
+  for (const SequenceLayerLayout &layout : layouts) {
+    width = std::max(width,
+                     layout_deepseek_v3_kv_cache_width(layout, kv_hidden));
+  }
+  return width;
+}
+
 uint64_t layer_scratch_elements(const SequenceLayerLayout &layout,
                                 uint64_t hidden,
                                 uint64_t attention_hidden,
                                 uint64_t kv_hidden,
                                 uint64_t intermediate) {
+  if (layout_is_deepseek_v3_mla(layout)) {
+    return full_attention_scratch_elements(
+        hidden, layer_attention_workspace_rows(layout, attention_hidden),
+        layout_deepseek_v3_kv_cache_width(layout, kv_hidden), intermediate);
+  }
   if (layout.attention_kind != kAttentionKindLinearGdn) {
     return full_attention_scratch_elements(hidden, attention_hidden, kv_hidden,
                                            intermediate);
@@ -764,11 +848,26 @@ bool session_has_linear_gdn_layers(
   return false;
 }
 
+bool session_has_deepseek_layers(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr ||
+      session->host_layouts.size() != session->layer_count) {
+    return false;
+  }
+  for (const SequenceLayerLayout &layout : session->host_layouts) {
+    if (layout.attention_kind == kAttentionKindDeepSeekMla) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool use_cublas_layer_path(const NervaCudaHfDecodeSequenceSession *session) {
   const uint32_t attention_hidden = session->heads * session->head_dim;
   return session->hidden >= 128 && attention_hidden == session->hidden &&
          session->host_layouts.size() == session->layer_count &&
          !session_has_linear_gdn_layers(session) &&
+         !session_has_deepseek_layers(session) &&
          session->device_projection_input != nullptr &&
          session->device_qkv_packed != nullptr &&
          (!session_has_dense_mlp_layers(session) ||
@@ -786,6 +885,7 @@ bool projection_batch_session_ready(
   return session->hidden >= 128 && attention_hidden == session->hidden &&
          session->host_layouts.size() == session->layer_count &&
          !session_has_linear_gdn_layers(session) &&
+         !session_has_deepseek_layers(session) &&
          !session_has_sparse_moe_layers(session) &&
          !session_has_query_gate_layers(session) &&
          session->device_projection_input != nullptr &&

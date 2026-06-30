@@ -93,6 +93,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   const uint64_t kv_hidden = request->kv_heads * request->head_dim;
   const uint64_t intermediate = request->intermediate;
   const uint64_t vocab_size = request->vocab_size;
+  const bool request_has_deepseek_layers =
+      has_deepseek_layers(request->layers, request->layer_count);
   std::vector<SequenceLayerLayout> layouts(request->layer_count);
   uint64_t elements = 0;
   session->arena_layout.embeddings = push(elements, vocab_size * hidden);
@@ -123,25 +125,29 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     delete session;
     return -1;
   }
-  if (has_deepseek_layers(request->layers, request->layer_count)) {
+  if (request_has_deepseek_layers) {
     out->cuda_error = static_cast<int32_t>(cudaErrorNotSupported);
     out->failure_stage = kCreateStageInvalidRequest;
     delete session;
     return -1;
   }
 
+  const uint64_t attention_workspace_rows =
+      max_attention_workspace_rows(layouts, attention_hidden);
+  const uint64_t kv_cache_width = max_kv_cache_width(layouts, kv_hidden);
   const uint64_t block_scratch = max_layer_scratch_elements(
       layouts, hidden, attention_hidden, kv_hidden, intermediate);
   const uint64_t final_scratch = hidden * 2 + vocab_size;
   const uint64_t scratch_elements =
       block_scratch > final_scratch ? block_scratch : final_scratch;
   const uint64_t projection_input_elements =
-      intermediate > attention_hidden
-          ? (intermediate > hidden ? intermediate : hidden)
-          : (attention_hidden > hidden ? attention_hidden : hidden);
+      std::max<uint64_t>(hidden,
+                         std::max<uint64_t>(intermediate,
+                                            attention_workspace_rows));
   const uint64_t prefill_qkv_rows = attention_hidden + kv_hidden * 2;
   const uint64_t prefill_gate_up_rows = intermediate * 2;
   const bool pack_cublas =
+      !request_has_deepseek_layers &&
       should_pack_cublas_weights(request->hidden, attention_hidden);
   const uint64_t prefill_q_gate_rows =
       (has_query_gate_layers && pack_cublas) ? attention_hidden : 0;
@@ -203,13 +209,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->decode_attention_max_chunks =
       ceil_div_u32(request->max_context_tokens, kDecodeAttentionChunkTokens);
   session->decode_attention_values_bytes =
-      static_cast<uint64_t>(request->heads) *
-      session->decode_attention_max_chunks * request->head_dim * sizeof(float);
+      attention_workspace_rows * session->decode_attention_max_chunks *
+      sizeof(float);
   session->decode_attention_stats_bytes =
       static_cast<uint64_t>(request->heads) *
       session->decode_attention_max_chunks * sizeof(float);
-  session->decode_q_bytes =
-      static_cast<uint64_t>(attention_hidden) * sizeof(uint16_t);
+  session->decode_q_bytes = attention_workspace_rows * sizeof(uint16_t);
   session->decode_seq_len_bytes = sizeof(int32_t) * 2u;
   session->linear_gdn_conv_state_bytes =
       linear_gdn_conv_state_elements * sizeof(float);
@@ -227,7 +232,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   }
   session->kv_bytes =
       request->layer_count * static_cast<uint64_t>(session->kv_token_capacity) *
-      kv_hidden * sizeof(uint16_t) * 2;
+      kv_cache_width * sizeof(uint16_t) * 2;
   session->kv_block_table_bytes =
       static_cast<uint64_t>(session->kv_block_count) * sizeof(uint32_t);
   session->slots_bytes =

@@ -571,6 +571,42 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
     );
     assert_eq!(plan.layout_bytes, 568);
     assert!(plan.resident_weight_bytes > 0);
+
+    let request = CudaHfDecodeSequenceRequest {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        steps: 2,
+        seed_token: 0,
+        prompt_tokens: &[0],
+        eos_token: None,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: 1,
+        }),
+        weight_blocks: &[],
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
+    };
+    let footprint = estimate_sequence_footprint(&request).unwrap();
+
+    assert_eq!(footprint.resident_weight_bytes, plan.resident_weight_bytes);
+    assert_eq!(footprint.resident_kv_bytes, 192);
+    assert_eq!(footprint.scratch_bytes, 200);
 }
 
 #[test]

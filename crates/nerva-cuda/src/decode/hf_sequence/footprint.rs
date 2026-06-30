@@ -1,3 +1,6 @@
+use crate::decode::hf_chain::layer::{
+    CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN, CudaHfDecodeChainLayer,
+};
 use crate::decode::hf_sequence::request::CudaHfDecodeSequenceRequest;
 use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 
@@ -75,11 +78,13 @@ pub fn estimate_sequence_footprint(
         return Err("CUDA HF decode declared weight bytes do not match packed layout".to_string());
     }
     let layout_bytes = checked_mul(layer_count, LAYER_LAYOUT_BYTES, "layout bytes")?;
+    let kv_cache_width = max_kv_cache_width(request.layers, kv_hidden)?;
     let scratch_bytes = scratch_bytes(
         request.layers,
         hidden,
         attention_hidden,
         kv_hidden,
+        head_dim,
         intermediate,
         vocab_size,
     )?;
@@ -89,7 +94,7 @@ pub fn estimate_sequence_footprint(
         checked_mul(kv_block_count, KV_CACHE_BLOCK_TOKENS, "KV token capacity")?;
     let resident_kv_bytes = checked_mul(
         checked_mul(layer_count, kv_token_capacity, "KV layer tokens")?,
-        checked_mul(kv_hidden, U16_BYTES * 2, "KV token bytes")?,
+        checked_mul(kv_cache_width, U16_BYTES * 2, "KV token bytes")?,
         "resident KV bytes",
     )?;
     let kv_block_table_bytes = checked_mul(kv_block_count, 4, "KV block table bytes")?;
@@ -186,10 +191,11 @@ fn arena_elements(
 }
 
 fn scratch_bytes(
-    layers: &[crate::decode::hf_chain::layer::CudaHfDecodeChainLayer<'_>],
+    layers: &[CudaHfDecodeChainLayer<'_>],
     hidden: u64,
     attention_hidden: u64,
     kv_hidden: u64,
+    head_dim: u64,
     intermediate: u64,
     vocab_size: u64,
 ) -> Result<u64, String> {
@@ -201,6 +207,7 @@ fn scratch_bytes(
                 hidden,
                 attention_hidden,
                 kv_hidden,
+                head_dim,
                 intermediate,
             )?))
         },
@@ -210,13 +217,31 @@ fn scratch_bytes(
 }
 
 fn layer_scratch_elements(
-    layer: &crate::decode::hf_chain::layer::CudaHfDecodeChainLayer<'_>,
+    layer: &CudaHfDecodeChainLayer<'_>,
     hidden: u64,
     attention_hidden: u64,
     kv_hidden: u64,
+    head_dim: u64,
     intermediate: u64,
 ) -> Result<u64, String> {
-    if layer.attention_kind != crate::decode::hf_chain::layer::CUDA_HF_ATTENTION_LINEAR_GDN {
+    if let Some(deepseek) = layer
+        .deepseek
+        .filter(|_| layer.attention_kind == CUDA_HF_ATTENTION_DEEPSEEK_MLA)
+        .and_then(|deepseek| deepseek.v3_mla_shape((attention_hidden / head_dim) as usize))
+    {
+        let attention_rows = deepseek
+            .q_rows
+            .max(deepseek.kv_b_rows)
+            .max(deepseek.value_rows)
+            .max(attention_hidden as usize) as u64;
+        return full_attention_scratch_elements(
+            hidden,
+            attention_rows,
+            deepseek.kv_cache_width as u64,
+            intermediate,
+        );
+    }
+    if layer.attention_kind != CUDA_HF_ATTENTION_LINEAR_GDN {
         return full_attention_scratch_elements(hidden, attention_hidden, kv_hidden, intermediate);
     }
     let Some(gdn) = layer.linear_gdn else {
@@ -260,11 +285,9 @@ fn full_attention_scratch_elements(
     ])
 }
 
-fn linear_gdn_state_bytes(
-    layers: &[crate::decode::hf_chain::layer::CudaHfDecodeChainLayer<'_>],
-) -> Result<u64, String> {
+fn linear_gdn_state_bytes(layers: &[CudaHfDecodeChainLayer<'_>]) -> Result<u64, String> {
     layers.iter().try_fold(0, |total, layer| {
-        if layer.attention_kind != crate::decode::hf_chain::layer::CUDA_HF_ATTENTION_LINEAR_GDN {
+        if layer.attention_kind != CUDA_HF_ATTENTION_LINEAR_GDN {
             return Ok(total);
         }
         let Some(gdn) = layer.linear_gdn else {
@@ -301,6 +324,26 @@ fn linear_gdn_state_bytes(
             )?,
             "GDN state total bytes",
         )
+    })
+}
+
+fn max_kv_cache_width(
+    layers: &[CudaHfDecodeChainLayer<'_>],
+    kv_hidden: u64,
+) -> Result<u64, String> {
+    layers.iter().try_fold(kv_hidden, |width, layer| {
+        let Some(deepseek) = layer.deepseek else {
+            return Ok(width);
+        };
+        if layer.attention_kind != CUDA_HF_ATTENTION_DEEPSEEK_MLA || !deepseek.is_v3_mla() {
+            return Ok(width);
+        }
+        let kv_cache_width = checked_add(
+            deepseek.kv_lora_rank as u64,
+            deepseek.qk_rope_head_dim as u64,
+            "DeepSeek V3 MLA KV cache width",
+        )?;
+        Ok(width.max(kv_cache_width))
     })
 }
 
