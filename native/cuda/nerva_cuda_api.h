@@ -1513,6 +1513,41 @@ typedef struct NervaCudaDeepSeekC128TopkMetadataResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekC128TopkMetadataResult;
 
+typedef struct NervaCudaDeepSeekC4IndexerTopkRequest {
+  uint32_t num_tokens;
+  uint32_t num_heads;
+  uint32_t head_dim;
+  uint32_t max_compressed_tokens;
+  uint32_t topk_tokens;
+  const float *query;
+  const float *key_cache;
+  const float *weights;
+  const int32_t *context_lens;
+  int32_t *topk_indices;
+  float *topk_scores;
+} NervaCudaDeepSeekC4IndexerTopkRequest;
+
+typedef struct NervaCudaDeepSeekC4IndexerTopkResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t num_tokens;
+  uint32_t num_heads;
+  uint32_t head_dim;
+  uint32_t max_compressed_tokens;
+  uint32_t topk_tokens;
+  uint32_t valid_tokens;
+  uint32_t selected_entries;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekC4IndexerTopkResult;
+
 typedef struct NervaCudaDeepSeekSavePartialStatesRequest {
   uint32_t num_tokens;
   uint32_t block_size;
@@ -1771,6 +1806,9 @@ int nerva_cuda_deepseek_compressed_slot_mapping(
 int nerva_cuda_deepseek_c128_topk_metadata(
     const NervaCudaDeepSeekC128TopkMetadataRequest *request,
     NervaCudaDeepSeekC128TopkMetadataResult *out);
+int nerva_cuda_deepseek_c4_indexer_topk(
+    const NervaCudaDeepSeekC4IndexerTopkRequest *request,
+    NervaCudaDeepSeekC4IndexerTopkResult *out);
 int nerva_cuda_deepseek_save_partial_states(
     const NervaCudaDeepSeekSavePartialStatesRequest *request,
     NervaCudaDeepSeekSavePartialStatesResult *out);

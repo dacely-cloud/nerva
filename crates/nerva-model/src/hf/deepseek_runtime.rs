@@ -609,6 +609,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
         primitives.push("cuda_deepseek_c128_topk_metadata_api".to_string());
         primitives.push("cuda_deepseek_c128_topk_metadata_smoke".to_string());
+        primitives.push("cuda_deepseek_c4_indexer_topk_api".to_string());
+        primitives.push("cuda_deepseek_c4_indexer_topk_smoke".to_string());
         primitives.push("cuda_deepseek_save_partial_states_api".to_string());
         primitives.push("cuda_deepseek_save_partial_states_smoke".to_string());
         primitives.push("cuda_deepseek_compress_norm_rope_fp8_cache_api".to_string());
@@ -853,13 +855,14 @@ fn coverage_for_unit(
                 "cuda_deepseek_compressed_slot_mapping_smoke",
                 "cuda_deepseek_c128_topk_metadata_api",
                 "cuda_deepseek_c128_topk_metadata_smoke",
+                "cuda_deepseek_c4_indexer_topk_api",
+                "cuda_deepseek_c4_indexer_topk_smoke",
                 "cuda_hf_sequence_deepseek_v4_index_topk_descriptor",
                 "cuda_hf_sequence_deepseek_v4_compressed_scan_metrics",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
             &[
-                "compute vLLM C4 indexer query/weight scores in runtime",
-                "select C4 compressed top-k slots with vLLM-compatible local indices",
+                "integrate C4 indexer top-k selection into exact runtime",
                 "consume selected sparse compressed slots in DeepSeekV4 attention",
             ],
         ),

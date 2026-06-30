@@ -176,6 +176,63 @@ impl CudaDeepSeekC128TopkMetadataSummary {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct CudaDeepSeekC4IndexerTopkSummary {
+    pub status: SmokeStatus,
+    pub return_code: i32,
+    pub cuda_error: i32,
+    pub num_tokens: u32,
+    pub num_heads: u32,
+    pub head_dim: u32,
+    pub max_compressed_tokens: u32,
+    pub topk_tokens: u32,
+    pub valid_tokens: u32,
+    pub selected_entries: u32,
+    pub output_hash: u64,
+    pub topk_indices: Vec<i32>,
+    pub topk_scores: Vec<f32>,
+    pub device_arena_bytes: u64,
+    pub pinned_host_bytes: u64,
+    pub h2d_bytes: u64,
+    pub d2h_bytes: u64,
+    pub kernel_launches: u64,
+    pub sync_calls: u64,
+    pub hot_path_allocations: u64,
+    pub error: Option<String>,
+}
+
+impl CudaDeepSeekC4IndexerTopkSummary {
+    pub fn to_json(&self) -> String {
+        let status = match self.status {
+            SmokeStatus::Ok => "ok",
+            SmokeStatus::Unavailable => "unavailable",
+            SmokeStatus::Failed => "failed",
+        };
+        format!(
+            "{{\"status\":\"{}\",\"return_code\":{},\"cuda_error\":{},\"num_tokens\":{},\"num_heads\":{},\"head_dim\":{},\"max_compressed_tokens\":{},\"topk_tokens\":{},\"valid_tokens\":{},\"selected_entries\":{},\"output_hash\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            status,
+            self.return_code,
+            self.cuda_error,
+            self.num_tokens,
+            self.num_heads,
+            self.head_dim,
+            self.max_compressed_tokens,
+            self.topk_tokens,
+            self.valid_tokens,
+            self.selected_entries,
+            self.output_hash,
+            self.device_arena_bytes,
+            self.pinned_host_bytes,
+            self.h2d_bytes,
+            self.d2h_bytes,
+            self.kernel_launches,
+            self.sync_calls,
+            self.hot_path_allocations,
+            json_opt_str(self.error.as_deref()),
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct CudaDeepSeekSavePartialStatesSummary {
     pub status: SmokeStatus,
     pub return_code: i32,

@@ -1,3 +1,4 @@
+use crate::deepseek_kv::c4_indexer_topk::deepseek_c4_indexer_topk;
 use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use crate::deepseek_kv::compress_cache::{
     CudaDeepSeekCompressNormRopeFp8CacheInput, DEEPSEEK_COMPRESS_SCALE_E8M0,
@@ -7,9 +8,9 @@ use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use crate::deepseek_kv::partial_states::deepseek_save_partial_states;
 use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use crate::deepseek_kv::summary::{
-    CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekCompressNormRopeFp8CacheSummary,
-    CudaDeepSeekCompressedSlotMappingSummary, CudaDeepSeekKvSummary,
-    CudaDeepSeekSavePartialStatesSummary,
+    CudaDeepSeekC4IndexerTopkSummary, CudaDeepSeekC128TopkMetadataSummary,
+    CudaDeepSeekCompressNormRopeFp8CacheSummary, CudaDeepSeekCompressedSlotMappingSummary,
+    CudaDeepSeekKvSummary, CudaDeepSeekSavePartialStatesSummary,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -135,6 +136,30 @@ pub fn deepseek_c128_topk_metadata_smoke() -> CudaDeepSeekC128TopkMetadataSummar
         let mut failed = summary;
         failed.status = SmokeStatus::Failed;
         failed.error = Some("DeepSeek C128A top-k metadata smoke mismatch".to_string());
+        return failed;
+    }
+
+    summary
+}
+
+pub fn deepseek_c4_indexer_topk_smoke() -> CudaDeepSeekC4IndexerTopkSummary {
+    let (query, key_cache, weights, context_lens) = c4_indexer_topk_fixture();
+    let summary = deepseek_c4_indexer_topk(&query, &key_cache, &weights, &context_lens, 2, 2, 2, 2);
+    if summary.status != SmokeStatus::Ok {
+        return summary;
+    }
+
+    if summary.topk_indices != vec![2, 0, 0, 1]
+        || !scores_close(&summary.topk_scores, &[1.5, 1.0, 2.0, 0.5])
+        || summary.valid_tokens != 2
+        || summary.selected_entries != 4
+        || summary.kernel_launches != 1
+        || summary.sync_calls != 1
+        || summary.hot_path_allocations != 0
+    {
+        let mut failed = summary;
+        failed.status = SmokeStatus::Failed;
+        failed.error = Some("DeepSeek C4 indexer top-k smoke mismatch".to_string());
         return failed;
     }
 
@@ -485,6 +510,35 @@ fn save_partial_state_matches(state_cache: &[f32]) -> bool {
             .iter()
             .zip(expected.iter())
             .all(|(actual, expected)| (*actual - *expected).abs() < 1e-4)
+}
+
+pub fn c4_indexer_topk_fixture() -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<i32>) {
+    let query = vec![
+        1.0, 0.0, // token 0, head 0
+        0.0, 1.0, // token 0, head 1
+        0.0, 2.0, // token 1, head 0
+        1.0, 0.0, // token 1, head 1
+    ];
+    let key_cache = vec![
+        1.0, 0.0, // slot 0
+        0.0, 1.0, // slot 1
+        1.0, 1.0, // slot 2
+        -1.0, 0.5, // slot 3
+    ];
+    let weights = vec![
+        1.0, 0.5, // token 0
+        0.25, 2.0, // token 1
+    ];
+    let context_lens = vec![4, 2];
+    (query, key_cache, weights, context_lens)
+}
+
+pub fn scores_close(actual: &[f32], expected: &[f32]) -> bool {
+    actual.len() == expected.len()
+        && actual
+            .iter()
+            .zip(expected.iter())
+            .all(|(actual, expected)| (*actual - *expected).abs() < 1e-5)
 }
 
 fn v4_layout_matches(

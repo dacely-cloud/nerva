@@ -1,3 +1,4 @@
+use crate::deepseek_kv::c4_indexer_topk::deepseek_c4_indexer_topk;
 use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use crate::deepseek_kv::compress_cache::{
     DEEPSEEK_COMPRESS_SCALE_E8M0, DEEPSEEK_COMPRESS_SCALE_F32, DEEPSEEK_COMPRESS_SCALE_MXFP4,
@@ -6,16 +7,17 @@ use crate::deepseek_kv::compress_cache::{
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use crate::deepseek_kv::partial_states::deepseek_save_partial_states;
 use crate::deepseek_kv::probe::{
-    compress_cache_fixture, deepseek_c128_topk_metadata_smoke,
-    deepseek_compress_norm_rope_fp8_cache_smoke, deepseek_compress_norm_rope_mxfp4_cache_smoke,
-    deepseek_compressed_slot_mapping_smoke, deepseek_kv_smoke, deepseek_save_partial_states_smoke,
-    mxfp4_compress_cache_fixture, reference_compress_norm_rope_fp8_cache,
+    c4_indexer_topk_fixture, compress_cache_fixture, deepseek_c4_indexer_topk_smoke,
+    deepseek_c128_topk_metadata_smoke, deepseek_compress_norm_rope_fp8_cache_smoke,
+    deepseek_compress_norm_rope_mxfp4_cache_smoke, deepseek_compressed_slot_mapping_smoke,
+    deepseek_kv_smoke, deepseek_save_partial_states_smoke, mxfp4_compress_cache_fixture,
+    reference_compress_norm_rope_fp8_cache, scores_close,
 };
 use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use crate::deepseek_kv::summary::{
-    CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekCompressNormRopeFp8CacheSummary,
-    CudaDeepSeekCompressedSlotMappingSummary, CudaDeepSeekKvSummary,
-    CudaDeepSeekSavePartialStatesSummary,
+    CudaDeepSeekC4IndexerTopkSummary, CudaDeepSeekC128TopkMetadataSummary,
+    CudaDeepSeekCompressNormRopeFp8CacheSummary, CudaDeepSeekCompressedSlotMappingSummary,
+    CudaDeepSeekKvSummary, CudaDeepSeekSavePartialStatesSummary,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -120,6 +122,40 @@ fn deepseek_c128_topk_metadata_summary_serializes_vllm_metadata() {
     assert!(json.contains("\"num_prefill_tokens\":2"));
     assert!(json.contains("\"compress_ratio\":128"));
     assert!(json.contains("\"prefill_entries\":7"));
+}
+
+#[test]
+fn deepseek_c4_indexer_topk_summary_serializes_vllm_metadata() {
+    let summary = CudaDeepSeekC4IndexerTopkSummary {
+        status: SmokeStatus::Ok,
+        return_code: 0,
+        cuda_error: 0,
+        num_tokens: 2,
+        num_heads: 2,
+        head_dim: 2,
+        max_compressed_tokens: 4,
+        topk_tokens: 2,
+        valid_tokens: 2,
+        selected_entries: 4,
+        output_hash: 77,
+        topk_indices: vec![2, 0, 0, 1],
+        topk_scores: vec![1.5, 1.0, 2.0, 0.5],
+        device_arena_bytes: 300,
+        pinned_host_bytes: 32,
+        h2d_bytes: 96,
+        d2h_bytes: 32,
+        kernel_launches: 1,
+        sync_calls: 1,
+        hot_path_allocations: 0,
+        error: None,
+    };
+
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"num_heads\":2"));
+    assert!(json.contains("\"head_dim\":2"));
+    assert!(json.contains("\"topk_tokens\":2"));
+    assert!(json.contains("\"selected_entries\":4"));
 }
 
 #[test]
@@ -299,6 +335,32 @@ fn deepseek_c128_topk_metadata_smoke_is_repeatable_when_device_is_available() {
     assert_eq!(second.valid_decode_tokens, 1);
     assert_eq!(second.decode_entries, 1);
     assert_eq!(second.prefill_entries, 7);
+    assert_eq!(second.output_hash, first.output_hash);
+    assert_eq!(second.kernel_launches, 1);
+    assert_eq!(second.sync_calls, 1);
+    assert_eq!(second.hot_path_allocations, 0);
+}
+
+#[test]
+fn deepseek_c4_indexer_topk_smoke_is_repeatable_when_device_is_available() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let first = deepseek_c4_indexer_topk_smoke();
+    if first.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let second = deepseek_c4_indexer_topk_smoke();
+    assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    assert_eq!(second.num_tokens, 2);
+    assert_eq!(second.num_heads, 2);
+    assert_eq!(second.head_dim, 2);
+    assert_eq!(second.max_compressed_tokens, 4);
+    assert_eq!(second.topk_tokens, 2);
+    assert_eq!(second.topk_indices, vec![2, 0, 0, 1]);
+    assert!(scores_close(&second.topk_scores, &[1.5, 1.0, 2.0, 0.5]));
+    assert_eq!(second.valid_tokens, 2);
+    assert_eq!(second.selected_entries, 4);
     assert_eq!(second.output_hash, first.output_hash);
     assert_eq!(second.kernel_launches, 1);
     assert_eq!(second.sync_calls, 1);
@@ -522,6 +584,23 @@ fn deepseek_c128_topk_metadata_matches_vllm_decode_and_prefill_math() {
     assert_eq!(summary.valid_decode_tokens, 1);
     assert_eq!(summary.decode_entries, 1);
     assert_eq!(summary.prefill_entries, 7);
+    assert!(summary.output_hash != 0);
+}
+
+#[test]
+fn deepseek_c4_indexer_topk_matches_vllm_local_weighted_score_math() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let (query, key_cache, weights, context_lens) = c4_indexer_topk_fixture();
+    let summary = deepseek_c4_indexer_topk(&query, &key_cache, &weights, &context_lens, 2, 2, 2, 2);
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(summary.topk_indices, vec![2, 0, 0, 1]);
+    assert!(scores_close(&summary.topk_scores, &[1.5, 1.0, 2.0, 0.5]));
+    assert_eq!(summary.valid_tokens, 2);
+    assert_eq!(summary.selected_entries, 4);
     assert!(summary.output_hash != 0);
 }
 

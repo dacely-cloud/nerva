@@ -72,6 +72,9 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "cuda-deepseek-c128-topk" => {
             Ok(nerva_cuda::deepseek_kv::probe::deepseek_c128_topk_metadata_smoke().to_json())
         }
+        "cuda-deepseek-c4-indexer-topk" => {
+            Ok(nerva_cuda::deepseek_kv::probe::deepseek_c4_indexer_topk_smoke().to_json())
+        }
         "cuda-deepseek-save-partial-states" => {
             Ok(nerva_cuda::deepseek_kv::probe::deepseek_save_partial_states_smoke().to_json())
         }

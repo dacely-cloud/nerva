@@ -59,6 +59,8 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_smoke"));
     assert!(json.contains("cuda_deepseek_c128_topk_metadata_api"));
     assert!(json.contains("cuda_deepseek_c128_topk_metadata_smoke"));
+    assert!(json.contains("cuda_deepseek_c4_indexer_topk_api"));
+    assert!(json.contains("cuda_deepseek_c4_indexer_topk_smoke"));
     assert!(json.contains("cuda_deepseek_save_partial_states_api"));
     assert!(json.contains("cuda_deepseek_save_partial_states_smoke"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_api"));
@@ -176,6 +178,11 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
             summary_json: "{\"status\":\"ok\",\"decode_entries\":1,\"prefill_entries\":7}",
         },
         DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_c4_indexer_topk_smoke",
+            status: "ok",
+            summary_json: "{\"status\":\"ok\",\"selected_entries\":4}",
+        },
+        DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_save_partial_states_smoke",
             status: "ok",
             summary_json: "{\"status\":\"ok\",\"written_tokens\":2,\"skipped_tokens\":1}",
@@ -202,8 +209,8 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"status\":\"primitive_smokes_ok\""));
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
     assert!(json.contains("\"primitive_status\":\"ok\""));
-    assert!(json.contains("\"primitive_smokes_passed\":12"));
-    assert!(json.contains("\"primitive_smokes_total\":12"));
+    assert!(json.contains("\"primitive_smokes_passed\":13"));
+    assert!(json.contains("\"primitive_smokes_total\":13"));
     assert!(json.contains("\"cuda_deepseek_mla_decode_mqa_smoke\""));
     assert!(json.contains("\"cuda_deepseek_quant_block_dequant_smoke\""));
     assert!(json.contains("\"cuda_deepseek_fused_inv_rope_fp8_quant_smoke\""));
@@ -213,6 +220,7 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"cuda_deepseek_fp8_ds_mla_kv_pack_smoke\""));
     assert!(json.contains("\"cuda_deepseek_compressed_slot_mapping_smoke\""));
     assert!(json.contains("\"cuda_deepseek_c128_topk_metadata_smoke\""));
+    assert!(json.contains("\"cuda_deepseek_c4_indexer_topk_smoke\""));
     assert!(json.contains("\"cuda_deepseek_save_partial_states_smoke\""));
     assert!(json.contains("\"cuda_deepseek_compress_norm_rope_fp8_cache_smoke\""));
     assert!(json.contains("\"cuda_deepseek_compress_norm_rope_mxfp4_cache_smoke\""));
@@ -237,6 +245,7 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_api"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
     assert!(json.contains("cuda_deepseek_c128_topk_metadata_api"));
+    assert!(json.contains("cuda_deepseek_c4_indexer_topk_api"));
     assert!(json.contains("cuda_deepseek_save_partial_states_api"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_api"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_mxfp4_cache_api"));

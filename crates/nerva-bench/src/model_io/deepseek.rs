@@ -3,6 +3,7 @@ use std::{
     time::Instant,
 };
 
+use nerva_cuda::deepseek_kv::c4_indexer_topk::deepseek_c4_indexer_topk;
 use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use nerva_cuda::deepseek_kv::partial_states::deepseek_save_partial_states;
@@ -348,6 +349,7 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
             bench_compressed_slot_mapping,
         ),
         bench_primitive("c128_topk_metadata", iterations, bench_c128_topk_metadata),
+        bench_primitive("c4_indexer_topk", iterations, bench_c4_indexer_topk),
         bench_primitive("save_partial_states", iterations, bench_save_partial_states),
         bench_primitive(
             "compress_norm_rope_fp8_cache",
@@ -417,6 +419,7 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let kv = nerva_cuda::deepseek_kv::probe::deepseek_kv_smoke();
     let compressed_slots = nerva_cuda::deepseek_kv::probe::deepseek_compressed_slot_mapping_smoke();
     let c128_topk = nerva_cuda::deepseek_kv::probe::deepseek_c128_topk_metadata_smoke();
+    let c4_indexer_topk = nerva_cuda::deepseek_kv::probe::deepseek_c4_indexer_topk_smoke();
     let partial_states = nerva_cuda::deepseek_kv::probe::deepseek_save_partial_states_smoke();
     let compress_cache =
         nerva_cuda::deepseek_kv::probe::deepseek_compress_norm_rope_fp8_cache_smoke();
@@ -431,6 +434,7 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let kv_json = kv.to_json();
     let compressed_slots_json = compressed_slots.to_json();
     let c128_topk_json = c128_topk.to_json();
+    let c4_indexer_topk_json = c4_indexer_topk.to_json();
     let partial_states_json = partial_states.to_json();
     let compress_cache_json = compress_cache.to_json();
     let mxfp4_compress_cache_json = mxfp4_compress_cache.to_json();
@@ -479,6 +483,11 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
             name: "cuda_deepseek_c128_topk_metadata_smoke",
             status: smoke_status_label(&c128_topk.status),
             summary_json: &c128_topk_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_c4_indexer_topk_smoke",
+            status: smoke_status_label(&c4_indexer_topk.status),
+            summary_json: &c4_indexer_topk_json,
         },
         DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_save_partial_states_smoke",
@@ -1236,6 +1245,39 @@ fn bench_c128_topk_metadata() -> DeepSeekPrimitiveMetrics {
         128,
         4,
     );
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_c4_indexer_topk() -> DeepSeekPrimitiveMetrics {
+    let query = [
+        1.0, 0.0, // token 0, head 0
+        0.0, 1.0, // token 0, head 1
+        0.0, 2.0, // token 1, head 0
+        1.0, 0.0, // token 1, head 1
+    ];
+    let key_cache = [
+        1.0, 0.0, // slot 0
+        0.0, 1.0, // slot 1
+        1.0, 1.0, // slot 2
+        -1.0, 0.5, // slot 3
+    ];
+    let weights = [
+        1.0, 0.5, // token 0
+        0.25, 2.0, // token 1
+    ];
+    let context_lens = [4, 2];
+    let summary = deepseek_c4_indexer_topk(&query, &key_cache, &weights, &context_lens, 2, 2, 2, 2);
     DeepSeekPrimitiveMetrics {
         status: summary.status,
         output_hash: summary.output_hash,

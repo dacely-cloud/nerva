@@ -243,6 +243,88 @@ __global__ void c128_topk_metadata_kernel(
   }
 }
 
+__device__ __forceinline__ bool c4_indexer_score_is_better(float candidate,
+                                                           int32_t slot,
+                                                           float current,
+                                                           int32_t current_slot) {
+  if (!isfinite(candidate)) {
+    return false;
+  }
+  if (current_slot < 0) {
+    return true;
+  }
+  return candidate > current ||
+         (candidate == current && slot >= 0 && slot < current_slot);
+}
+
+__global__ void c4_indexer_topk_kernel(int32_t *topk_indices,
+                                       float *topk_scores,
+                                       const float *query,
+                                       const float *key_cache,
+                                       const float *weights,
+                                       const int32_t *context_lens,
+                                       uint32_t num_tokens,
+                                       uint32_t num_heads,
+                                       uint32_t head_dim,
+                                       uint32_t max_compressed_tokens,
+                                       uint32_t topk_tokens) {
+  const uint32_t token_idx = blockIdx.x;
+  if (token_idx >= num_tokens || threadIdx.x != 0) {
+    return;
+  }
+
+  const uint64_t output_base =
+      static_cast<uint64_t>(token_idx) * topk_tokens;
+  for (uint32_t rank = 0; rank < topk_tokens; ++rank) {
+    topk_indices[output_base + rank] = -1;
+    topk_scores[output_base + rank] = -INFINITY;
+  }
+
+  const int32_t raw_context_len = context_lens[token_idx];
+  if (raw_context_len <= 0) {
+    return;
+  }
+  const uint32_t context_len =
+      static_cast<uint32_t>(raw_context_len) > max_compressed_tokens
+          ? max_compressed_tokens
+          : static_cast<uint32_t>(raw_context_len);
+
+  for (uint32_t slot = 0; slot < context_len; ++slot) {
+    float score = 0.0f;
+    for (uint32_t head = 0; head < num_heads; ++head) {
+      const float head_weight = weights[token_idx * num_heads + head];
+      float dot = 0.0f;
+      const uint64_t query_base =
+          (static_cast<uint64_t>(token_idx) * num_heads + head) * head_dim;
+      const uint64_t key_base = static_cast<uint64_t>(slot) * head_dim;
+      for (uint32_t dim = 0; dim < head_dim; ++dim) {
+        dot += query[query_base + dim] * key_cache[key_base + dim];
+      }
+      score += head_weight * dot;
+    }
+
+    const int32_t slot_i32 = static_cast<int32_t>(slot);
+    for (uint32_t rank = 0; rank < topk_tokens; ++rank) {
+      const uint64_t output_idx = output_base + rank;
+      if (!c4_indexer_score_is_better(score,
+                                      slot_i32,
+                                      topk_scores[output_idx],
+                                      topk_indices[output_idx])) {
+        continue;
+      }
+      for (uint32_t shift = topk_tokens - 1; shift > rank; --shift) {
+        topk_indices[output_base + shift] =
+            topk_indices[output_base + shift - 1];
+        topk_scores[output_base + shift] =
+            topk_scores[output_base + shift - 1];
+      }
+      topk_indices[output_idx] = slot_i32;
+      topk_scores[output_idx] = score;
+      break;
+    }
+  }
+}
+
 __global__ void save_partial_states_kernel(float *state_cache,
                                            const float *kv,
                                            const float *score,
@@ -603,6 +685,11 @@ void clear_result(NervaCudaDeepSeekC128TopkMetadataResult *out) {
   out->status = -1;
 }
 
+void clear_result(NervaCudaDeepSeekC4IndexerTopkResult *out) {
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+}
+
 void clear_result(NervaCudaDeepSeekSavePartialStatesResult *out) {
   memset(out, 0, sizeof(*out));
   out->status = -1;
@@ -626,6 +713,12 @@ int fail(NervaCudaDeepSeekCompressedSlotMappingResult *out, cudaError_t err) {
 }
 
 int fail(NervaCudaDeepSeekC128TopkMetadataResult *out, cudaError_t err) {
+  out->cuda_error = static_cast<int32_t>(err);
+  out->status = -1;
+  return -1;
+}
+
+int fail(NervaCudaDeepSeekC4IndexerTopkResult *out, cudaError_t err) {
   out->cuda_error = static_cast<int32_t>(err);
   out->status = -1;
   return -1;
@@ -671,6 +764,15 @@ bool validate_request(const NervaCudaDeepSeekC128TopkMetadataRequest *request) {
          request->num_reqs > 0 && request->block_table_stride > 0 &&
          request->block_size > 0 && request->compress_ratio > 0 &&
          request->max_compressed_tokens > 0;
+}
+
+bool validate_request(const NervaCudaDeepSeekC4IndexerTopkRequest *request) {
+  return request != nullptr && request->query != nullptr &&
+         request->key_cache != nullptr && request->weights != nullptr &&
+         request->context_lens != nullptr && request->topk_indices != nullptr &&
+         request->topk_scores != nullptr && request->num_tokens > 0 &&
+         request->num_heads > 0 && request->head_dim > 0 &&
+         request->max_compressed_tokens > 0 && request->topk_tokens > 0;
 }
 
 bool validate_request(const NervaCudaDeepSeekSavePartialStatesRequest *request) {
@@ -1242,6 +1344,185 @@ cleanup:
   if (d_block_table != nullptr) cudaFree(d_block_table);
   if (d_token_to_req != nullptr) cudaFree(d_token_to_req);
   if (d_positions != nullptr) cudaFree(d_positions);
+  if (err != cudaSuccess) {
+    return fail(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_deepseek_c4_indexer_topk(
+    const NervaCudaDeepSeekC4IndexerTopkRequest *request,
+    NervaCudaDeepSeekC4IndexerTopkResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_result(out);
+  if (!validate_request(request)) {
+    return -1;
+  }
+
+  out->num_tokens = request->num_tokens;
+  out->num_heads = request->num_heads;
+  out->head_dim = request->head_dim;
+  out->max_compressed_tokens = request->max_compressed_tokens;
+  out->topk_tokens = request->topk_tokens;
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail(out, cudaErrorNoDevice);
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail(out, err);
+  }
+
+  float *d_query = nullptr;
+  float *d_key_cache = nullptr;
+  float *d_weights = nullptr;
+  int32_t *d_context_lens = nullptr;
+  int32_t *d_topk_indices = nullptr;
+  float *d_topk_scores = nullptr;
+  int32_t *h_topk_indices = nullptr;
+  float *h_topk_scores = nullptr;
+  cudaStream_t stream = nullptr;
+
+  const uint64_t query_values =
+      static_cast<uint64_t>(request->num_tokens) * request->num_heads *
+      request->head_dim;
+  const uint64_t key_values =
+      static_cast<uint64_t>(request->max_compressed_tokens) * request->head_dim;
+  const uint64_t weight_values =
+      static_cast<uint64_t>(request->num_tokens) * request->num_heads;
+  const uint64_t output_values =
+      static_cast<uint64_t>(request->num_tokens) * request->topk_tokens;
+  const uint64_t query_bytes = query_values * sizeof(float);
+  const uint64_t key_bytes = key_values * sizeof(float);
+  const uint64_t weight_bytes = weight_values * sizeof(float);
+  const uint64_t context_bytes =
+      static_cast<uint64_t>(request->num_tokens) * sizeof(int32_t);
+  const uint64_t output_index_bytes = output_values * sizeof(int32_t);
+  const uint64_t output_score_bytes = output_values * sizeof(float);
+
+  err = cudaMalloc(reinterpret_cast<void **>(&d_query), query_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_key_cache), key_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_weights), weight_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_context_lens), context_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_topk_indices),
+                   output_index_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_topk_scores),
+                   output_score_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  out->device_arena_bytes = query_bytes + key_bytes + weight_bytes +
+                            context_bytes + output_index_bytes +
+                            output_score_bytes;
+
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_topk_indices),
+                      output_index_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_topk_scores),
+                      output_score_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  out->pinned_host_bytes = output_index_bytes + output_score_bytes;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(
+      d_query, request->query, query_bytes, cudaMemcpyHostToDevice, stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_key_cache,
+                        request->key_cache,
+                        key_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(
+      d_weights, request->weights, weight_bytes, cudaMemcpyHostToDevice, stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_context_lens,
+                        request->context_lens,
+                        context_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes = query_bytes + key_bytes + weight_bytes + context_bytes;
+
+  {
+    c4_indexer_topk_kernel<<<request->num_tokens, 1, 0, stream>>>(
+        d_topk_indices,
+        d_topk_scores,
+        d_query,
+        d_key_cache,
+        d_weights,
+        d_context_lens,
+        request->num_tokens,
+        request->num_heads,
+        request->head_dim,
+        request->max_compressed_tokens,
+        request->topk_tokens);
+    out->kernel_launches += 1;
+  }
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(h_topk_indices,
+                        d_topk_indices,
+                        output_index_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(h_topk_scores,
+                        d_topk_scores,
+                        output_score_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->d2h_bytes = output_index_bytes + output_score_bytes;
+
+  err = cudaStreamSynchronize(stream);
+  out->sync_calls += 1;
+  if (err != cudaSuccess) goto cleanup;
+
+  memcpy(request->topk_indices, h_topk_indices, output_index_bytes);
+  memcpy(request->topk_scores, h_topk_scores, output_score_bytes);
+  for (uint32_t token_idx = 0; token_idx < request->num_tokens; ++token_idx) {
+    if (request->context_lens[token_idx] > 0) {
+      out->valid_tokens += 1;
+    }
+  }
+  for (uint64_t idx = 0; idx < output_values; ++idx) {
+    if (request->topk_indices[idx] >= 0) {
+      out->selected_entries += 1;
+    }
+  }
+  out->output_hash = hash_bytes(
+      reinterpret_cast<const uint8_t *>(request->topk_indices),
+      output_index_bytes);
+  out->output_hash ^= hash_bytes(
+      reinterpret_cast<const uint8_t *>(request->topk_scores),
+      output_score_bytes);
+  out->status = 0;
+
+cleanup:
+  if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_topk_scores != nullptr) cudaFreeHost(h_topk_scores);
+  if (h_topk_indices != nullptr) cudaFreeHost(h_topk_indices);
+  if (d_topk_scores != nullptr) cudaFree(d_topk_scores);
+  if (d_topk_indices != nullptr) cudaFree(d_topk_indices);
+  if (d_context_lens != nullptr) cudaFree(d_context_lens);
+  if (d_weights != nullptr) cudaFree(d_weights);
+  if (d_key_cache != nullptr) cudaFree(d_key_cache);
+  if (d_query != nullptr) cudaFree(d_query);
   if (err != cudaSuccess) {
     return fail(out, err);
   }
