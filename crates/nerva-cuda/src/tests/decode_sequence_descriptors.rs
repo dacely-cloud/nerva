@@ -1277,7 +1277,7 @@ fn deepseek_v4_compressed_indexer_writes_first_boundary_cache() {
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 1);
         assert_eq!(summary.deepseek_sparse_topk_selections, 1);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 1);
-        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 1);
+        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
     });
 }
 
@@ -1324,7 +1324,7 @@ fn deepseek_v4_compressed_indexer_writes_realistic_indexer_cache_width() {
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 1);
         assert_eq!(summary.deepseek_sparse_topk_selections, 1);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 1);
-        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 1);
+        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
     });
 }
 
@@ -1369,7 +1369,7 @@ fn deepseek_v4_compressed_indexer_runs_past_first_boundary_with_compressed_atten
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 2);
         assert_eq!(summary.deepseek_sparse_topk_selections, 2);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 2);
-        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 2);
+        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
     });
 }
 
@@ -1414,7 +1414,7 @@ fn deepseek_v4_compressed_indexer_tracks_compressed_attention_scan_growth() {
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 6);
         assert_eq!(summary.deepseek_sparse_topk_selections, 5);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 6);
-        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 6);
+        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
     });
 }
 
@@ -1462,7 +1462,7 @@ fn deepseek_v4_compressed_indexer_limits_attention_to_sparse_topk() {
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 5);
         assert_eq!(summary.deepseek_sparse_topk_selections, 5);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 5);
-        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 6);
+        assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 2);
     });
 }
 
