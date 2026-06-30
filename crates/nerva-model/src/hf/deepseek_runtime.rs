@@ -622,6 +622,9 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v32_sparse_topk_selection_hash".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v32_sparse_attention_consumes_topk".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v32_sparse_attention_output_hash".to_string());
+        primitives.push(
+            "cuda_hf_sequence_deepseek_v32_sparse_attention_topk2_output_differential".to_string(),
+        );
     }
     if matches!(
         metadata.architecture,
@@ -773,8 +776,12 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v32_sparse_topk_selection_hash",
                 "cuda_hf_sequence_deepseek_v32_sparse_attention_consumes_topk",
                 "cuda_hf_sequence_deepseek_v32_sparse_attention_output_hash",
+                "cuda_hf_sequence_deepseek_v32_sparse_attention_topk2_output_differential",
             ],
-            &["run V3.2 sparse MLA attention output differential against vLLM"],
+            &[
+                "run full-size V3.2 sparse MLA attention differential against vLLM runtime",
+                "benchmark V3.2 sparse MLA decode against vLLM FlashMLA sparse decode",
+            ],
         ),
         (
             HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,

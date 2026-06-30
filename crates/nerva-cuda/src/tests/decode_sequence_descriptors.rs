@@ -90,6 +90,21 @@ fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
     sign * (1.0 + (frac as f32) * 0.125) * 2.0f32.powi(exp as i32 - 7)
 }
 
+fn deepseek_sparse_attention_output_hash_head0(values: &[f32]) -> u64 {
+    values
+        .iter()
+        .enumerate()
+        .fold(0u64, |acc, (position, value)| {
+            let active_head = ((position as u64) + 1) * 1_315_423_911u64
+                ^ 2_654_435_761u64
+                ^ 97_531u64
+                ^ f32_to_bf16_bits(*value) as u64;
+            let zero_head =
+                ((position as u64) + 1) * 1_315_423_911u64 ^ (2u64 * 2_654_435_761u64) ^ 97_531u64;
+            acc + active_head + zero_head
+        })
+}
+
 fn deepseek_rope_value_reference(
     left: f32,
     right: f32,
@@ -1517,23 +1532,195 @@ fn deepseek_v32_sparse_topk_selects_same_slots_as_vllm_decode_scorer() {
         summary.deepseek_sparse_topk_selection_hash, expected_hash,
         "V3.2 sparse top-k should select slots 0, 1, 2 like the vLLM decode scorer"
     );
-    let expected_attention_hash =
-        [2.0f32, 4.0, 6.0]
-            .into_iter()
-            .enumerate()
-            .fold(0u64, |acc, (position, value)| {
-                let active_head = ((position as u64) + 1) * 1_315_423_911u64
-                    ^ 2_654_435_761u64
-                    ^ 97_531u64
-                    ^ f32_to_bf16_bits(value) as u64;
-                let zero_head = ((position as u64) + 1) * 1_315_423_911u64
-                    ^ (2u64 * 2_654_435_761u64)
-                    ^ 97_531u64;
-                acc + active_head + zero_head
-            });
+    let expected_attention_hash = deepseek_sparse_attention_output_hash_head0(&[2.0, 4.0, 6.0]);
     assert_eq!(
         summary.deepseek_sparse_attention_output_hash, expected_attention_hash,
         "V3.2 sparse MLA attention output should match the selected-token value projection"
+    );
+}
+
+#[test]
+fn deepseek_v32_sparse_mla_output_matches_vllm_flashmla_topk2_reference() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let hidden = 4usize;
+    let heads = 2usize;
+    let kv_heads = 1usize;
+    let head_dim = 2usize;
+    let intermediate = 4usize;
+    let vocab_size = 8usize;
+    let mut layer = tiny_deepseek_v32_descriptor_layer();
+    let deepseek = layer
+        .deepseek
+        .as_mut()
+        .expect("tiny DeepSeek V3.2 layer should carry DeepSeek metadata");
+    deepseek.q_lora_rank = 4;
+    deepseek.kv_lora_rank = 4;
+    deepseek.index_topk = 2;
+    deepseek.index_n_heads = 1;
+    deepseek.index_head_dim = 4;
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: hidden as u32,
+        heads: heads as u32,
+        kv_heads: kv_heads as u32,
+        head_dim: head_dim as u32,
+        intermediate: intermediate as u32,
+        vocab_size: vocab_size as u32,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept V3.2 top-k=2 sparse MLA dimensions");
+
+    let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    for token in 0..3usize {
+        weight_storage[token * hidden + token] = f32_to_bf16_bits(1.0);
+    }
+    for dim in 0..hidden {
+        write_arena_f32(&mut weight_storage, plan.rms_attn + (dim * 2) as u64, 1.0);
+        write_arena_f32(&mut weight_storage, plan.q_norm + (dim * 2) as u64, 1.0);
+        write_arena_f32(
+            &mut weight_storage,
+            plan.deepseek_indexer_k_norm + (dim * 2) as u64,
+            1.0,
+        );
+    }
+    for dim in 0..4usize {
+        write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
+    }
+
+    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    for row in 0..4usize {
+        write_arena_byte(&mut weight_storage, plan.w_q, row * hidden + row, one_fp8);
+    }
+    write_arena_f32(&mut weight_storage, plan.deepseek_q_a_scale, 1.0);
+
+    for row in 0..4usize {
+        write_arena_byte(&mut weight_storage, plan.w_k, row * hidden + row, one_fp8);
+    }
+    write_arena_f32(&mut weight_storage, plan.deepseek_kv_a_scale, 1.0);
+
+    for (col, weight) in [1.0f32, 2.0, 3.0, 4.0].into_iter().enumerate() {
+        write_arena_byte(
+            &mut weight_storage,
+            plan.w_v,
+            4 + col,
+            f32_to_f8_e4m3fn_bits_nearest(weight),
+        );
+    }
+    write_arena_f32(&mut weight_storage, plan.deepseek_kv_b_scale, 1.0);
+
+    for row in 0..4usize {
+        write_arena_byte(
+            &mut weight_storage,
+            plan.deepseek_indexer_q,
+            row * 4 + row,
+            one_fp8,
+        );
+        write_arena_byte(
+            &mut weight_storage,
+            plan.deepseek_indexer_k,
+            row * hidden + row,
+            one_fp8,
+        );
+        weight_storage[plan.deepseek_indexer_weights as usize + row] = f32_to_bf16_bits(1.0);
+    }
+    write_arena_f32(&mut weight_storage, plan.deepseek_indexer_q_scale, 1.0);
+    write_arena_f32(&mut weight_storage, plan.deepseek_indexer_k_scale, 1.0);
+
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: plan.resident_weight_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+        hidden,
+        heads,
+        kv_heads,
+        head_dim,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 8,
+        rms_eps: 0.0,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: CudaHfDecodeSequenceExperimentalRtConfig::default(),
+    };
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V3.2 top-k=2 sparse MLA session should create: {:?}",
+        created.summary.error
+    );
+    let mut session = created
+        .session
+        .expect("V3.2 top-k=2 sparse MLA session handle should exist");
+    let summary = session.run(&[0, 1, 2], 1, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V3.2 top-k=2 sparse MLA run should complete: {:?}",
+        summary.error
+    );
+    assert_eq!(summary.deepseek_indexer_state_writes, 3);
+    assert_eq!(summary.deepseek_indexer_kv_writes, 3);
+    assert_eq!(summary.deepseek_sparse_topk_selections, 3);
+    assert_eq!(summary.deepseek_sparse_topk_slots_selected, 5);
+    assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 3);
+    assert_eq!(
+        summary.deepseek_raw_attention_tokens_scanned, 5,
+        "V3.2 top-k=2 sparse MLA should scan the vLLM-selected sparse slots"
+    );
+
+    let selected_slots: &[&[u64]] = &[&[0], &[0, 1], &[2, 0]];
+    let expected_selection_hash =
+        selected_slots
+            .iter()
+            .enumerate()
+            .fold(0u64, |acc, (position, slots)| {
+                acc + slots.iter().enumerate().fold(0u64, |inner, (rank, slot)| {
+                    inner
+                        + (((position as u64) + 1) * 1_315_423_911u64
+                            ^ ((rank as u64) + 1) * 2_654_435_761u64
+                            ^ (*slot + 1))
+                })
+            });
+    assert_eq!(
+        summary.deepseek_sparse_topk_selection_hash, expected_selection_hash,
+        "V3.2 sparse top-k should select [0], [0,1], [2,0] like the vLLM decode scorer"
+    );
+
+    let expected_attention_hash = deepseek_sparse_attention_output_hash_head0(&[2.0, 3.0, 4.0]);
+    assert_eq!(
+        summary.deepseek_sparse_attention_output_hash, expected_attention_hash,
+        "V3.2 sparse MLA output should match the vLLM/FlashMLA sparse decode reference"
     );
 }
 
