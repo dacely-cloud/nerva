@@ -590,12 +590,12 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
     let nerva_path = dir.join("nerva.json");
     std::fs::write(
         &vllm_path,
-        r#"{"status":"ok","schema":"nerva-vllm-generate-v1","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,22,33],"generated_text":"same","tokens_per_second":100.0,"request_p99_ms":30.0,"p99_ms":10.0}"#,
+        r#"{"status":"ok","schema":"nerva-vllm-generate-v1","model":"/tmp/deepseek-checkpoint","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,22,33],"generated_text":"same","tokens_per_second":100.0,"request_p99_ms":30.0,"p99_ms":10.0}"#,
     )
     .unwrap();
     std::fs::write(
         &nerva_path,
-        r#"{"status":"ok","schema":"nerva-hf-cuda-generate-v1","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,22,33],"generated_text":"same","post_load_tokens_per_second":125.0,"critical_path_tokens_per_second":130.0,"chunks":[{"tokens_per_second":999.0}],"token_critical_paths":[{"wall_latency_ns":7000000},{"wall_latency_ns":8000000},{"wall_latency_ns":9000000}]}"#,
+        r#"{"status":"ok","schema":"nerva-hf-cuda-generate-v1","path":"/tmp/deepseek-checkpoint","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,22,33],"generated_text":"same","post_load_tokens_per_second":125.0,"critical_path_tokens_per_second":130.0,"chunks":[{"tokens_per_second":999.0}],"token_critical_paths":[{"wall_latency_ns":7000000},{"wall_latency_ns":8000000},{"wall_latency_ns":9000000}]}"#,
     )
     .unwrap();
 
@@ -607,6 +607,10 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-compare-v1\""));
     assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"model_comparable\":true"));
+    assert!(json.contains("\"model_parity\":true"));
+    assert!(json.contains("\"vllm_model\":\"/tmp/deepseek-checkpoint\""));
+    assert!(json.contains("\"nerva_model\":\"/tmp/deepseek-checkpoint\""));
     assert!(json.contains("\"prompt_comparable\":true"));
     assert!(json.contains("\"prompt_token_parity\":true"));
     assert!(json.contains("\"vllm_prompt_tokens\":3"));
@@ -630,7 +634,7 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
     let mismatch_path = dir.join("nerva-mismatch.json");
     std::fs::write(
         &mismatch_path,
-        r#"{"status":"ok","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,99,33],"generated_text":"different","tokens_per_second":125.0}"#,
+        r#"{"status":"ok","path":"/tmp/deepseek-checkpoint","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,99,33],"generated_text":"different","tokens_per_second":125.0}"#,
     )
     .unwrap();
     let mismatch = run_deepseek_vllm_compare(
@@ -642,6 +646,22 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
     assert!(mismatch.contains("\"token_parity\":false"));
     assert!(mismatch.contains("\"text_parity\":false"));
     assert!(mismatch.contains("\"first_mismatch_index\":1"));
+
+    let model_mismatch_path = dir.join("nerva-model-mismatch.json");
+    std::fs::write(
+        &model_mismatch_path,
+        r#"{"status":"ok","path":"/tmp/other-deepseek-checkpoint","prompt_token_ids":[7,8,9],"sampler":{"temperature":0.0,"top_p":1.0,"top_k":0,"seed":0},"tokens":[11,22,33],"generated_text":"same","tokens_per_second":125.0,"p99_ms":9.0}"#,
+    )
+    .unwrap();
+    let model_mismatch = run_deepseek_vllm_compare(
+        Some(vllm_path.to_string_lossy().into_owned()),
+        Some(model_mismatch_path.to_string_lossy().into_owned()),
+    )
+    .expect("DeepSeek vLLM model mismatch comparison should parse generated artifacts");
+    assert!(model_mismatch.contains("\"status\":\"mismatch\""));
+    assert!(model_mismatch.contains("\"model_comparable\":true"));
+    assert!(model_mismatch.contains("\"model_parity\":false"));
+    assert!(model_mismatch.contains("model/path identity differs"));
 
     let _ = std::fs::remove_dir_all(dir);
 }

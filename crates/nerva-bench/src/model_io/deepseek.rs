@@ -442,6 +442,15 @@ fn deepseek_vllm_compare_json(
 ) -> Result<String, String> {
     let (vllm_source_format, vllm_tokens) = parse_vllm_token_ids(vllm_json)?;
     let (nerva_source_format, nerva_tokens) = parse_vllm_token_ids(nerva_json)?;
+    let vllm_model = find_deepseek_artifact_identity(vllm_json, &["model", "path"])?;
+    let nerva_model = find_deepseek_artifact_identity(nerva_json, &["path", "model"])?;
+    let model_comparable = vllm_model.is_some() && nerva_model.is_some();
+    let model_parity = match (&vllm_model, &nerva_model) {
+        (Some(vllm), Some(nerva)) => {
+            normalized_artifact_identity(vllm) == normalized_artifact_identity(nerva)
+        }
+        _ => false,
+    };
     let comparison = compare_token_slices(&vllm_tokens, &nerva_tokens);
     let vllm_token_hash = hash_tokens(&vllm_tokens);
     let nerva_token_hash = hash_tokens(&nerva_tokens);
@@ -500,9 +509,14 @@ fn deepseek_vllm_compare_json(
     let latency_comparable = p99_ratio.is_some();
     let latency_ok = p99_ratio.is_some_and(|ratio| ratio <= 1.0);
 
-    let status = if !prompt_comparable || !sampler_comparable {
+    let status = if !model_comparable || !prompt_comparable || !sampler_comparable {
         "not_comparable"
-    } else if !prompt_token_parity || !sampler_parity || !token_parity || !text_parity {
+    } else if !model_parity
+        || !prompt_token_parity
+        || !sampler_parity
+        || !token_parity
+        || !text_parity
+    {
         "mismatch"
     } else if !throughput_comparable {
         "not_comparable"
@@ -516,16 +530,24 @@ fn deepseek_vllm_compare_json(
         "ok"
     };
     let claim_allowed = status == "ok";
-    let throughput_claim_allowed =
-        prompt_token_parity && sampler_parity && token_parity && text_parity && throughput_ok;
+    let throughput_claim_allowed = model_parity
+        && prompt_token_parity
+        && sampler_parity
+        && token_parity
+        && text_parity
+        && throughput_ok;
 
     Ok(format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-compare-v1\",\"vllm_artifact\":\"{}\",\"nerva_artifact\":\"{}\",\"source_formats\":{{\"vllm\":\"{}\",\"nerva\":\"{}\"}},\"prompt_comparable\":{},\"prompt_token_parity\":{},\"matched_prompt_tokens\":{},\"mismatched_prompt_tokens\":{},\"missing_prompt_tokens\":{},\"extra_prompt_tokens\":{},\"first_prompt_mismatch_index\":{},\"vllm_prompt_hash\":{},\"nerva_prompt_hash\":{},\"vllm_prompt_tokens\":{},\"nerva_prompt_tokens\":{},\"sampler_comparable\":{},\"sampler_parity\":{},\"vllm_sampler\":{},\"nerva_sampler\":{},\"token_parity\":{},\"text_parity\":{},\"matched_tokens\":{},\"mismatched_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"first_mismatch_index\":{},\"vllm_token_hash\":{},\"nerva_token_hash\":{},\"vllm_generated_tokens\":{},\"nerva_generated_tokens\":{},\"vllm_tokens_per_second\":{},\"vllm_throughput_source\":{},\"nerva_tokens_per_second\":{},\"nerva_throughput_source\":{},\"throughput_speedup_vs_vllm\":{},\"throughput_comparable\":{},\"throughput_ok\":{},\"vllm_p99_ms\":{},\"vllm_p99_source\":{},\"nerva_p99_ms\":{},\"nerva_p99_source\":{},\"p99_ratio_vs_vllm\":{},\"latency_comparable\":{},\"latency_ok\":{},\"throughput_claim_allowed\":{},\"claim_allowed\":{},\"blocking_reasons\":{}}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-compare-v1\",\"vllm_artifact\":\"{}\",\"nerva_artifact\":\"{}\",\"source_formats\":{{\"vllm\":\"{}\",\"nerva\":\"{}\"}},\"model_comparable\":{},\"model_parity\":{},\"vllm_model\":{},\"nerva_model\":{},\"prompt_comparable\":{},\"prompt_token_parity\":{},\"matched_prompt_tokens\":{},\"mismatched_prompt_tokens\":{},\"missing_prompt_tokens\":{},\"extra_prompt_tokens\":{},\"first_prompt_mismatch_index\":{},\"vllm_prompt_hash\":{},\"nerva_prompt_hash\":{},\"vllm_prompt_tokens\":{},\"nerva_prompt_tokens\":{},\"sampler_comparable\":{},\"sampler_parity\":{},\"vllm_sampler\":{},\"nerva_sampler\":{},\"token_parity\":{},\"text_parity\":{},\"matched_tokens\":{},\"mismatched_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"first_mismatch_index\":{},\"vllm_token_hash\":{},\"nerva_token_hash\":{},\"vllm_generated_tokens\":{},\"nerva_generated_tokens\":{},\"vllm_tokens_per_second\":{},\"vllm_throughput_source\":{},\"nerva_tokens_per_second\":{},\"nerva_throughput_source\":{},\"throughput_speedup_vs_vllm\":{},\"throughput_comparable\":{},\"throughput_ok\":{},\"vllm_p99_ms\":{},\"vllm_p99_source\":{},\"nerva_p99_ms\":{},\"nerva_p99_source\":{},\"p99_ratio_vs_vllm\":{},\"latency_comparable\":{},\"latency_ok\":{},\"throughput_claim_allowed\":{},\"claim_allowed\":{},\"blocking_reasons\":{}}}",
         status,
         json_escape(vllm_artifact_path),
         json_escape(nerva_artifact_path),
         json_escape(vllm_source_format),
         json_escape(nerva_source_format),
+        model_comparable,
+        model_parity,
+        json_opt_string(vllm_model.as_deref()),
+        json_opt_string(nerva_model.as_deref()),
         prompt_comparable,
         prompt_token_parity,
         json_opt_usize(prompt_comparison.as_ref().map(|comparison| comparison.matched_tokens)),
@@ -573,6 +595,8 @@ fn deepseek_vllm_compare_json(
         throughput_claim_allowed,
         claim_allowed,
         json_string_array(&deepseek_compare_blocking_reasons(
+            model_comparable,
+            model_parity,
             prompt_comparable,
             prompt_token_parity,
             sampler_comparable,
@@ -2242,6 +2266,8 @@ fn json_opt_f64(value: Option<f64>) -> String {
 }
 
 fn deepseek_compare_blocking_reasons(
+    model_comparable: bool,
+    model_parity: bool,
     prompt_comparable: bool,
     prompt_token_parity: bool,
     sampler_comparable: bool,
@@ -2254,6 +2280,11 @@ fn deepseek_compare_blocking_reasons(
     latency_ok: bool,
 ) -> Vec<String> {
     let mut reasons = Vec::new();
+    if !model_comparable {
+        reasons.push("model/path identity is missing from one or both artifacts".to_string());
+    } else if !model_parity {
+        reasons.push("model/path identity differs".to_string());
+    }
     if !prompt_comparable {
         reasons.push("prompt_token_ids is missing from one or both artifacts".to_string());
     } else if !prompt_token_parity {
@@ -2284,6 +2315,30 @@ fn deepseek_compare_blocking_reasons(
         reasons.push("NERVA p99 latency is above vLLM p99 latency".to_string());
     }
     reasons
+}
+
+fn find_deepseek_artifact_identity(
+    source: &str,
+    keys: &[&'static str],
+) -> Result<Option<String>, String> {
+    for key in keys {
+        if let Some(value) = find_first_json_string_field(source, key)? {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+fn normalized_artifact_identity(value: &str) -> String {
+    let trimmed = value.trim();
+    if let Ok(canonical) = std::fs::canonicalize(trimmed) {
+        return canonical.display().to_string();
+    }
+    if trimmed.len() > 1 {
+        trimmed.trim_end_matches('/').to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn find_deepseek_sampler_artifact(source: &str) -> Result<DeepSeekSamplerArtifact, String> {
