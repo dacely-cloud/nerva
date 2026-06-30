@@ -1401,6 +1401,51 @@ fn deepseek_v4_compressed_indexer_tracks_compressed_attention_scan_growth() {
 }
 
 #[test]
+fn deepseek_v4_compressed_indexer_limits_attention_to_sparse_topk() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let mut layer = tiny_deepseek_v4_descriptor_layer();
+    layer.deepseek = layer.deepseek.map(|mut deepseek| {
+        deepseek.index_topk = 1;
+        deepseek.index_head_dim = 128;
+        deepseek
+    });
+    with_tiny_deepseek_v4_descriptor_session(layer, 12, |created| {
+        if created.summary.status == SmokeStatus::Unavailable {
+            return;
+        }
+        assert_eq!(
+            created.summary.status,
+            SmokeStatus::Ok,
+            "V4 compressed-indexer sparse top-k session should create: {:?}",
+            created.summary.error
+        );
+        let mut session = created
+            .session
+            .expect("V4 compressed-indexer session handle should exist");
+
+        let summary = session.run(&[0], 8, None);
+        assert_eq!(
+            summary.status,
+            SmokeStatus::Ok,
+            "C4 sparse indexer should cap compressed attention slots: {:?}",
+            summary.error
+        );
+        assert_eq!(summary.steps, 8);
+        assert_eq!(summary.kv_tokens, 8);
+        assert_eq!(
+            summary.deepseek_compressor_state_writes,
+            summary.graph_replays
+        );
+        assert_eq!(summary.deepseek_compressed_kv_writes, 2);
+        assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
+        assert_eq!(summary.deepseek_indexer_kv_writes, 2);
+        assert_eq!(summary.deepseek_compressed_kv_attention_reads, 5);
+        assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 5);
+    });
+}
+
+#[test]
 fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
