@@ -548,24 +548,31 @@ __device__ float deepseek_session_read_v32_indexer_kv_raw(
   return nerva::deepseek::f8_e4m3fn_bits_to_f32(block_ptr[value_offset]);
 }
 
-__global__ void hf_deepseek_v32_sparse_topk_select_kernel(
+__device__ uint32_t deepseek_session_select_v32_sparse_slots(
     SequenceLayerLayout layout, uint32_t *step_cursor, uint32_t max_steps,
     const uint8_t *deepseek_indexer_state,
     uint64_t deepseek_indexer_state_offset_bytes,
     const uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
-    uint64_t *deepseek_runtime_counters) {
-  if (blockIdx.x != 0 || threadIdx.x != 0 ||
-      (step_cursor != nullptr && *step_cursor >= max_steps)) {
-    return;
+    int32_t *topk_slots, float *topk_scores,
+    uint32_t *candidates_scored,
+    unsigned long long *selection_hash_out) {
+  if (candidates_scored != nullptr) {
+    *candidates_scored = 0;
   }
-  if (deepseek_indexer_state == nullptr || deepseek_indexer_kv == nullptr ||
-      deepseek_runtime_counters == nullptr ||
+  if (selection_hash_out != nullptr) {
+    *selection_hash_out = 0ull;
+  }
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return 0;
+  }
+  if (topk_slots == nullptr || topk_scores == nullptr ||
+      deepseek_indexer_state == nullptr || deepseek_indexer_kv == nullptr ||
       !deepseek_v32_indexer_query_state_supported(layout) ||
       layout.deepseek_index_topk == 0 ||
       deepseek_indexer_kv_block_count == 0) {
-    return;
+    return 0;
   }
 
   const uint32_t position = step_cursor == nullptr ? 0 : *step_cursor;
@@ -579,7 +586,7 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
       min(min(layout.deepseek_index_topk, candidate_tokens),
           kDeepSeekSessionMaxSparseTopK);
   if (candidate_tokens == 0 || topk_limit == 0) {
-    return;
+    return 0;
   }
 
   const uint64_t token_bytes =
@@ -592,21 +599,20 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
       token_ptr +
       deepseek_v32_indexer_query_state_weights_offset_bytes(layout));
 
-  int32_t topk_slots[kDeepSeekSessionMaxSparseTopK];
-  float topk_scores[kDeepSeekSessionMaxSparseTopK];
   for (uint32_t rank = 0; rank < topk_limit; ++rank) {
     topk_slots[rank] = -1;
     topk_scores[rank] = -INFINITY;
   }
 
-  uint32_t candidates_scored = 0;
   if (topk_limit >= candidate_tokens) {
     for (uint32_t slot = 0; slot < candidate_tokens; ++slot) {
       topk_slots[slot] = static_cast<int32_t>(slot);
       topk_scores[slot] = INFINITY;
     }
   } else {
-    candidates_scored = candidate_tokens;
+    if (candidates_scored != nullptr) {
+      *candidates_scored = candidate_tokens;
+    }
     for (uint32_t slot = 0; slot < candidate_tokens; ++slot) {
       float slot_scale = 0.0f;
       float score = 0.0f;
@@ -657,6 +663,36 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
         (static_cast<unsigned long long>(topk_slots[rank]) + 1ull);
     selection_hash += term;
   }
+  if (selection_hash_out != nullptr) {
+    *selection_hash_out = selection_hash;
+  }
+  return selected;
+}
+
+__global__ void hf_deepseek_v32_sparse_topk_select_kernel(
+    SequenceLayerLayout layout, uint32_t *step_cursor, uint32_t max_steps,
+    const uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    const uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint64_t *deepseek_runtime_counters) {
+  if (blockIdx.x != 0 || threadIdx.x != 0 ||
+      (step_cursor != nullptr && *step_cursor >= max_steps)) {
+    return;
+  }
+  if (deepseek_runtime_counters == nullptr) {
+    return;
+  }
+  int32_t topk_slots[kDeepSeekSessionMaxSparseTopK];
+  float topk_scores[kDeepSeekSessionMaxSparseTopK];
+  uint32_t candidates_scored = 0;
+  unsigned long long selection_hash = 0ull;
+  const uint32_t selected = deepseek_session_select_v32_sparse_slots(
+      layout, step_cursor, max_steps, deepseek_indexer_state,
+      deepseek_indexer_state_offset_bytes, deepseek_indexer_kv,
+      deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
+      topk_slots, topk_scores, &candidates_scored, &selection_hash);
   if (selected == 0) {
     return;
   }
@@ -1702,7 +1738,13 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     uint32_t kv_block_count, const uint32_t *kv_block_table,
     uint16_t *projection_input, uint8_t *deepseek_v32_mla_kv,
     uint64_t deepseek_v32_mla_kv_offset_bytes,
-    uint32_t deepseek_v32_mla_kv_block_count) {
+    uint32_t deepseek_v32_mla_kv_block_count,
+    const uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    const uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint64_t *deepseek_runtime_counters) {
   if (blockIdx.x != 0 || threadIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
     return;
@@ -1747,6 +1789,50 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
       deepseek_v32_mla_kv_block_count, layout, position, dtype,
       kv_latent_norm, kv_a, rope_theta);
 
+  int32_t sparse_slots[kDeepSeekSessionMaxSparseTopK];
+  float sparse_scores[kDeepSeekSessionMaxSparseTopK];
+  uint32_t sparse_candidates_scored = 0;
+  unsigned long long sparse_selection_hash = 0ull;
+  const uint32_t sparse_attention_tokens =
+      deepseek_session_select_v32_sparse_slots(
+          layout, step_cursor, max_steps, deepseek_indexer_state,
+          deepseek_indexer_state_offset_bytes, deepseek_indexer_kv,
+          deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
+          sparse_slots, sparse_scores, &sparse_candidates_scored,
+          &sparse_selection_hash);
+  const bool use_sparse_attention = sparse_attention_tokens != 0;
+  const uint32_t attention_tokens =
+      use_sparse_attention ? sparse_attention_tokens : position + 1u;
+  if (deepseek_runtime_counters != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterRawAttentionTokensScanned),
+        static_cast<unsigned long long>(attention_tokens));
+    if (use_sparse_attention) {
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterSparseTopkSelections),
+          1ull);
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
+          static_cast<unsigned long long>(sparse_attention_tokens));
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
+          static_cast<unsigned long long>(sparse_candidates_scored));
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterSparseTopkSelectionHash),
+          sparse_selection_hash);
+    }
+  }
+
   const float softmax_scale = rsqrtf(static_cast<float>(qk_head_dim));
   const uint32_t kv_b_cols = kv_lora_rank;
   const uint32_t kv_b_rows = heads * (qk_nope + v_head);
@@ -1757,7 +1843,15 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
 
     float local_m = -INFINITY;
     float local_l = 0.0f;
-    for (uint32_t token = 0; token <= position; ++token) {
+    for (uint32_t attention_index = 0; attention_index < attention_tokens;
+         ++attention_index) {
+      const uint32_t token =
+          use_sparse_attention
+              ? static_cast<uint32_t>(sparse_slots[attention_index])
+              : attention_index;
+      if (token > position) {
+        continue;
+      }
       const uint64_t token_base =
           kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
                               token, kv_cache_width, 0);

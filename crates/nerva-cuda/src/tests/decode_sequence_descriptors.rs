@@ -1493,6 +1493,10 @@ fn deepseek_v32_sparse_topk_selects_same_slots_as_vllm_decode_scorer() {
     assert_eq!(summary.deepseek_sparse_topk_selections, 3);
     assert_eq!(summary.deepseek_sparse_topk_slots_selected, 3);
     assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 5);
+    assert_eq!(
+        summary.deepseek_raw_attention_tokens_scanned, 3,
+        "V3.2 sparse MLA should scan one selected sparse slot per token"
+    );
 
     let expected_hash = (0..3u64).fold(0u64, |acc, position| {
         let selected_slot = position;

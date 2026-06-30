@@ -195,18 +195,6 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
 
-  hf_deepseek_v32_sparse_topk_select_kernel<<<1, 1, 0, session->stream>>>(
-      layout, session->device_step, max_steps,
-      reinterpret_cast<const uint8_t *>(session->device_deepseek_indexer_state),
-      deepseek_v32_indexer_query_state_layer_offset_bytes(session,
-                                                          layer_index),
-      session->device_deepseek_indexer_kv,
-      deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
-      deepseek_v32_indexer_kv_block_count(session, layout),
-      session->device_deepseek_runtime_counters);
-  err = cudaGetLastError();
-  if (err != cudaSuccess) return err;
-
   err = launch_deepseek_fp8_f32_scale_encoded_matvec(
       session->stream,
       deepseek_fp8_ptr(session->device_arena, layout.deepseek_q_b),
@@ -233,7 +221,14 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
       session->device_kv_block_table, session->device_projection_input,
       session->device_deepseek_v32_mla_kv,
       deepseek_v32_mla_kv_layer_offset_bytes(session, layer_index),
-      deepseek_v32_mla_kv_block_count(session, layout));
+      deepseek_v32_mla_kv_block_count(session, layout),
+      reinterpret_cast<const uint8_t *>(session->device_deepseek_indexer_state),
+      deepseek_v32_indexer_query_state_layer_offset_bytes(session,
+                                                          layer_index),
+      session->device_deepseek_indexer_kv,
+      deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
+      deepseek_v32_indexer_kv_block_count(session, layout),
+      session->device_deepseek_runtime_counters);
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
 
