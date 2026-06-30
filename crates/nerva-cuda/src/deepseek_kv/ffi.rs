@@ -118,6 +118,47 @@ pub(crate) struct NervaCudaDeepSeekC128TopkMetadataResult {
     pub(crate) hot_path_allocations: u64,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaDeepSeekSavePartialStatesRequest {
+    pub(crate) num_tokens: u32,
+    pub(crate) block_size: u32,
+    pub(crate) head_size: u32,
+    pub(crate) state_width: u32,
+    pub(crate) compress_ratio: u32,
+    pub(crate) num_blocks: u32,
+    pub(crate) kv: *const f32,
+    pub(crate) score: *const f32,
+    pub(crate) ape: *const f32,
+    pub(crate) positions: *const i64,
+    pub(crate) slot_mapping: *const i64,
+    pub(crate) state_cache: *mut f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NervaCudaDeepSeekSavePartialStatesResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) device_count: i32,
+    pub(crate) num_tokens: u32,
+    pub(crate) block_size: u32,
+    pub(crate) head_size: u32,
+    pub(crate) state_width: u32,
+    pub(crate) compress_ratio: u32,
+    pub(crate) num_blocks: u32,
+    pub(crate) written_tokens: u32,
+    pub(crate) skipped_tokens: u32,
+    pub(crate) output_hash: u64,
+    pub(crate) device_arena_bytes: u64,
+    pub(crate) pinned_host_bytes: u64,
+    pub(crate) h2d_bytes: u64,
+    pub(crate) d2h_bytes: u64,
+    pub(crate) kernel_launches: u64,
+    pub(crate) sync_calls: u64,
+    pub(crate) hot_path_allocations: u64,
+}
+
 unsafe extern "C" {
     fn nerva_cuda_deepseek_kv_fp8_ds_mla_pack(
         request: *const NervaCudaDeepSeekKvFp8DsMlaPackRequest,
@@ -130,6 +171,10 @@ unsafe extern "C" {
     fn nerva_cuda_deepseek_c128_topk_metadata(
         request: *const NervaCudaDeepSeekC128TopkMetadataRequest,
         out: *mut NervaCudaDeepSeekC128TopkMetadataResult,
+    ) -> c_int;
+    fn nerva_cuda_deepseek_save_partial_states(
+        request: *const NervaCudaDeepSeekSavePartialStatesRequest,
+        out: *mut NervaCudaDeepSeekSavePartialStatesResult,
     ) -> c_int;
 }
 
@@ -152,4 +197,11 @@ pub(crate) fn run_deepseek_c128_topk_metadata(
     out: &mut NervaCudaDeepSeekC128TopkMetadataResult,
 ) -> c_int {
     unsafe { nerva_cuda_deepseek_c128_topk_metadata(request, out) }
+}
+
+pub(crate) fn run_deepseek_save_partial_states(
+    request: &NervaCudaDeepSeekSavePartialStatesRequest,
+    out: &mut NervaCudaDeepSeekSavePartialStatesResult,
+) -> c_int {
+    unsafe { nerva_cuda_deepseek_save_partial_states(request, out) }
 }

@@ -1326,6 +1326,43 @@ typedef struct NervaCudaDeepSeekC128TopkMetadataResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekC128TopkMetadataResult;
 
+typedef struct NervaCudaDeepSeekSavePartialStatesRequest {
+  uint32_t num_tokens;
+  uint32_t block_size;
+  uint32_t head_size;
+  uint32_t state_width;
+  uint32_t compress_ratio;
+  uint32_t num_blocks;
+  const float *kv;
+  const float *score;
+  const float *ape;
+  const int64_t *positions;
+  const int64_t *slot_mapping;
+  float *state_cache;
+} NervaCudaDeepSeekSavePartialStatesRequest;
+
+typedef struct NervaCudaDeepSeekSavePartialStatesResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t num_tokens;
+  uint32_t block_size;
+  uint32_t head_size;
+  uint32_t state_width;
+  uint32_t compress_ratio;
+  uint32_t num_blocks;
+  uint32_t written_tokens;
+  uint32_t skipped_tokens;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekSavePartialStatesResult;
+
 typedef struct NervaCudaDeepSeekMoeSmokeResult {
   int32_t status;
   int32_t cuda_error;
@@ -1474,6 +1511,9 @@ int nerva_cuda_deepseek_compressed_slot_mapping(
 int nerva_cuda_deepseek_c128_topk_metadata(
     const NervaCudaDeepSeekC128TopkMetadataRequest *request,
     NervaCudaDeepSeekC128TopkMetadataResult *out);
+int nerva_cuda_deepseek_save_partial_states(
+    const NervaCudaDeepSeekSavePartialStatesRequest *request,
+    NervaCudaDeepSeekSavePartialStatesResult *out);
 int nerva_cuda_deepseek_moe_smoke(NervaCudaDeepSeekMoeSmokeResult *out);
 int nerva_cuda_deepseek_moe_forward(
     const NervaCudaDeepSeekMoeForwardRequest *request,

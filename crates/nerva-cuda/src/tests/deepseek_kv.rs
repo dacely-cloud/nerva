@@ -1,12 +1,14 @@
 use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
+use crate::deepseek_kv::partial_states::deepseek_save_partial_states;
 use crate::deepseek_kv::probe::{
     deepseek_c128_topk_metadata_smoke, deepseek_compressed_slot_mapping_smoke, deepseek_kv_smoke,
+    deepseek_save_partial_states_smoke,
 };
 use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use crate::deepseek_kv::summary::{
     CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekCompressedSlotMappingSummary,
-    CudaDeepSeekKvSummary,
+    CudaDeepSeekKvSummary, CudaDeepSeekSavePartialStatesSummary,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -114,6 +116,40 @@ fn deepseek_c128_topk_metadata_summary_serializes_vllm_metadata() {
 }
 
 #[test]
+fn deepseek_save_partial_states_summary_serializes_vllm_metadata() {
+    let summary = CudaDeepSeekSavePartialStatesSummary {
+        status: SmokeStatus::Ok,
+        return_code: 0,
+        cuda_error: 0,
+        num_tokens: 3,
+        block_size: 4,
+        head_size: 3,
+        state_width: 4,
+        compress_ratio: 4,
+        num_blocks: 2,
+        written_tokens: 2,
+        skipped_tokens: 1,
+        output_hash: 123,
+        state_cache: vec![0.0; 64],
+        device_arena_bytes: 512,
+        pinned_host_bytes: 256,
+        h2d_bytes: 128,
+        d2h_bytes: 256,
+        kernel_launches: 1,
+        sync_calls: 1,
+        hot_path_allocations: 0,
+        error: None,
+    };
+
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"head_size\":3"));
+    assert!(json.contains("\"state_width\":4"));
+    assert!(json.contains("\"written_tokens\":2"));
+    assert!(json.contains("\"skipped_tokens\":1"));
+}
+
+#[test]
 fn deepseek_kv_smoke_is_repeatable_when_device_is_available() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
@@ -190,6 +226,31 @@ fn deepseek_c128_topk_metadata_smoke_is_repeatable_when_device_is_available() {
 }
 
 #[test]
+fn deepseek_save_partial_states_smoke_is_repeatable_when_device_is_available() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let first = deepseek_save_partial_states_smoke();
+    if first.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let second = deepseek_save_partial_states_smoke();
+    assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    assert_eq!(second.num_tokens, 3);
+    assert_eq!(second.block_size, 4);
+    assert_eq!(second.head_size, 3);
+    assert_eq!(second.state_width, 4);
+    assert_eq!(second.compress_ratio, 4);
+    assert_eq!(second.written_tokens, 2);
+    assert_eq!(second.skipped_tokens, 1);
+    assert_partial_state_fixture(&second.state_cache);
+    assert_eq!(second.output_hash, first.output_hash);
+    assert_eq!(second.kernel_launches, 1);
+    assert_eq!(second.sync_calls, 1);
+    assert_eq!(second.hot_path_allocations, 0);
+}
+
+#[test]
 fn deepseek_fp8_ds_mla_pack_matches_vllm_block_offsets() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
@@ -222,6 +283,77 @@ fn deepseek_fp8_ds_mla_pack_matches_vllm_block_offsets() {
     );
     assert!(summary.output[..token_base].iter().all(|byte| *byte == 0));
     assert!(summary.output_hash != 0);
+}
+
+#[test]
+fn deepseek_save_partial_states_matches_vllm_state_cache_offsets() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let kv = [
+        1.0, 2.0, 3.0, // token 0
+        4.0, 5.0, 6.0, // token 1 skipped
+        7.0, 8.0, 9.0, // token 2
+    ];
+    let score = [
+        0.1, 0.2, 0.3, // token 0
+        0.4, 0.5, 0.6, // token 1 skipped
+        0.7, 0.8, 0.9, // token 2
+    ];
+    let ape = [
+        10.0, 20.0, 30.0, // row 0
+        40.0, 50.0, 60.0, // row 1
+        70.0, 80.0, 90.0, // row 2
+        100.0, 110.0, 120.0, // row 3
+    ];
+    let positions = [5, 6, 7];
+    let slot_mapping = [1, -1, 4];
+    let summary =
+        deepseek_save_partial_states(&kv, &score, &ape, &positions, &slot_mapping, 4, 3, 4, 4, 2);
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(summary.written_tokens, 2);
+    assert_eq!(summary.skipped_tokens, 1);
+    assert_partial_state_fixture(&summary.state_cache);
+    assert!(summary.output_hash != 0);
+}
+
+fn assert_partial_state_fixture(state_cache: &[f32]) {
+    assert_eq!(state_cache.len(), 64);
+    let row_stride = 8usize;
+    let block_stride = 32usize;
+    let token0_base = row_stride;
+    assert_eq!(&state_cache[token0_base..token0_base + 3], &[1.0, 2.0, 3.0]);
+    assert_close(
+        &state_cache[token0_base + 4..token0_base + 7],
+        &[40.1, 50.2, 60.3],
+    );
+    let token2_base = block_stride;
+    assert_eq!(&state_cache[token2_base..token2_base + 3], &[7.0, 8.0, 9.0]);
+    assert_close(
+        &state_cache[token2_base + 4..token2_base + 7],
+        &[100.7, 110.8, 120.9],
+    );
+    for (idx, value) in state_cache.iter().enumerate() {
+        let in_token0 = (token0_base..token0_base + 3).contains(&idx)
+            || (token0_base + 4..token0_base + 7).contains(&idx);
+        let in_token2 = (token2_base..token2_base + 3).contains(&idx)
+            || (token2_base + 4..token2_base + 7).contains(&idx);
+        if !in_token0 && !in_token2 {
+            assert_eq!(*value, 0.0, "unexpected state cache write at {idx}");
+        }
+    }
+}
+
+fn assert_close(actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected.iter()) {
+        assert!(
+            (*actual - *expected).abs() < 1e-4,
+            "actual {actual} expected {expected}"
+        );
+    }
 }
 
 #[test]

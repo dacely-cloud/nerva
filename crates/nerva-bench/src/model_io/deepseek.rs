@@ -5,6 +5,7 @@ use std::{
 
 use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
+use nerva_cuda::deepseek_kv::partial_states::deepseek_save_partial_states;
 use nerva_cuda::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
@@ -333,6 +334,7 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
             bench_compressed_slot_mapping,
         ),
         bench_primitive("c128_topk_metadata", iterations, bench_c128_topk_metadata),
+        bench_primitive("save_partial_states", iterations, bench_save_partial_states),
         bench_primitive("routed_moe_forward", iterations, bench_moe_forward),
     ];
     Ok(deepseek_cuda_primitive_bench_report_json(
@@ -388,6 +390,7 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let kv = nerva_cuda::deepseek_kv::probe::deepseek_kv_smoke();
     let compressed_slots = nerva_cuda::deepseek_kv::probe::deepseek_compressed_slot_mapping_smoke();
     let c128_topk = nerva_cuda::deepseek_kv::probe::deepseek_c128_topk_metadata_smoke();
+    let partial_states = nerva_cuda::deepseek_kv::probe::deepseek_save_partial_states_smoke();
     let mla_json = mla.to_json();
     let moe_json = moe.to_json();
     let quant_json = quant.to_json();
@@ -395,6 +398,7 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let kv_json = kv.to_json();
     let compressed_slots_json = compressed_slots.to_json();
     let c128_topk_json = c128_topk.to_json();
+    let partial_states_json = partial_states.to_json();
     let primitives = [
         DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_mla_decode_mqa_smoke",
@@ -430,6 +434,11 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
             name: "cuda_deepseek_c128_topk_metadata_smoke",
             status: smoke_status_label(&c128_topk.status),
             summary_json: &c128_topk_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_save_partial_states_smoke",
+            status: smoke_status_label(&partial_states.status),
+            summary_json: &partial_states_json,
         },
     ];
     deepseek_cuda_readiness_report_json(config_path, &primitives)
@@ -698,6 +707,8 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
         primitives.push("cuda_deepseek_c128_topk_metadata_api".to_string());
         primitives.push("cuda_deepseek_c128_topk_metadata_smoke".to_string());
+        primitives.push("cuda_deepseek_save_partial_states_api".to_string());
+        primitives.push("cuda_deepseek_save_partial_states_smoke".to_string());
     }
 
     primitives
@@ -854,12 +865,14 @@ fn coverage_for_unit(
                 "partial",
                 &[
                     "deepseek_v4_mhc_compressor_indexer_manifest",
+                    "cuda_deepseek_save_partial_states_api",
+                    "cuda_deepseek_save_partial_states_smoke",
                     "cuda_deepseek_compressed_slot_mapping_api",
                     "cuda_deepseek_compressed_slot_mapping_smoke",
                 ],
                 &[
                     "implement C4/C128 compressor kernels",
-                    "verify compressed-token cache selection against vLLM",
+                    "fuse compress, norm, RoPE, quant, and cache insert against vLLM",
                 ],
             ),
             (HfArchitectureKind::DeepSeekV4, "deepseek_v4_sparse_indexer") => (
@@ -1023,10 +1036,22 @@ fn deepseek_vllm_reference_specs() -> Vec<DeepSeekVllmReferenceSpec> {
             relative_path: "vllm/models/deepseek_v4/compressor.py",
             required_symbols: &[
                 "class DeepseekCompressor",
+                "save_partial_states",
                 "compress_norm_rope_store_triton",
                 "compress_ratio",
                 "SlidingWindowMLASpec",
                 "alignment=576",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_save_partial_states",
+            relative_path: "vllm/models/deepseek_v4/common/ops/save_partial_states.py",
+            required_symbols: &[
+                "def save_partial_states",
+                "_save_partial_states_kernel",
+                "slot_id < 0",
+                "score + ape",
             ],
         },
         DeepSeekVllmReferenceSpec {
@@ -1427,6 +1452,41 @@ fn bench_c128_topk_metadata() -> DeepSeekPrimitiveMetrics {
     }
 }
 
+fn bench_save_partial_states() -> DeepSeekPrimitiveMetrics {
+    let kv = [
+        1.0, 2.0, 3.0, // token 0
+        4.0, 5.0, 6.0, // token 1 skipped
+        7.0, 8.0, 9.0, // token 2
+    ];
+    let score = [
+        0.1, 0.2, 0.3, // token 0
+        0.4, 0.5, 0.6, // token 1 skipped
+        0.7, 0.8, 0.9, // token 2
+    ];
+    let ape = [
+        10.0, 20.0, 30.0, // row 0
+        40.0, 50.0, 60.0, // row 1
+        70.0, 80.0, 90.0, // row 2
+        100.0, 110.0, 120.0, // row 3
+    ];
+    let positions = [5, 6, 7];
+    let slot_mapping = [1, -1, 4];
+    let summary =
+        deepseek_save_partial_states(&kv, &score, &ape, &positions, &slot_mapping, 4, 3, 4, 4, 2);
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
 fn bench_moe_forward() -> DeepSeekPrimitiveMetrics {
     let input = [1.2, -0.7, 0.3];
     let expert_ids = [1, 0];
@@ -1570,6 +1630,7 @@ fn vllm_reference_units(architecture: HfArchitectureKind) -> Vec<String> {
             "/root/vllm/vllm/models/deepseek_v4/attention.py".to_string(),
             "/root/vllm/vllm/models/deepseek_v4/compressor.py".to_string(),
             "/root/vllm/vllm/models/deepseek_v4/sparse_mla.py".to_string(),
+            "/root/vllm/vllm/models/deepseek_v4/common/ops/save_partial_states.py".to_string(),
             "/root/vllm/vllm/v1/kv_cache_interface.py".to_string(),
         ],
         _ => Vec::new(),
