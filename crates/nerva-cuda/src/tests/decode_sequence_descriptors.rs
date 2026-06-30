@@ -165,17 +165,19 @@ fn assert_page_bytes_eq(actual: &[u8], expected: &[u8], message: &str) {
     }
 }
 
-fn expected_deepseek_v4_swa_fp8_ds_mla_page(
+fn expected_deepseek_v4_fp8_ds_mla_page(
     token_kv: &[Vec<f32>],
     qk_nope: usize,
     qk_rope: usize,
     page_bytes: usize,
+    block_tokens: usize,
 ) -> Vec<u8> {
     let token_stride = qk_nope + qk_rope * 2;
     let scale_dim = qk_nope / 64 + 1;
-    let scale_base = 64 * token_stride;
+    let scale_base = block_tokens * token_stride;
     let mut expected = vec![0u8; page_bytes];
     for (token, kv) in token_kv.iter().enumerate() {
+        assert!(token < block_tokens);
         assert_eq!(kv.len(), qk_nope + qk_rope);
         let data_base = token * token_stride;
         for scale_index in 0..scale_dim {
@@ -207,6 +209,15 @@ fn expected_deepseek_v4_swa_fp8_ds_mla_page(
         }
     }
     expected
+}
+
+fn expected_deepseek_v4_swa_fp8_ds_mla_page(
+    token_kv: &[Vec<f32>],
+    qk_nope: usize,
+    qk_rope: usize,
+    page_bytes: usize,
+) -> Vec<u8> {
+    expected_deepseek_v4_fp8_ds_mla_page(token_kv, qk_nope, qk_rope, page_bytes, 64)
 }
 
 fn expected_zero_deepseek_v4_swa_fp8_ds_mla_page(
@@ -2193,6 +2204,181 @@ fn deepseek_v4_compressed_snapshot_matches_fullsize_nonzero_fp8_ds_mla_page() {
         &snapshot.bytes,
         &expected,
         "V4 compressed full-size packed page must match vLLM fp8_ds_mla layout",
+    );
+    assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
+}
+
+#[test]
+fn deepseek_v4_c128_compressed_snapshot_matches_fullsize_fp8_ds_mla_page() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let hidden = 4usize;
+    let heads = 1usize;
+    let kv_heads = 1usize;
+    let qk_nope = 448usize;
+    let qk_rope = 64usize;
+    let head_dim = qk_nope + qk_rope;
+    let intermediate = 4usize;
+    let vocab_size = 8usize;
+    let rms_eps = 1.0e-5f32;
+    let mut layer = tiny_deepseek_v4_swa_dense_descriptor_layer();
+    layer.deepseek = layer.deepseek.map(|mut deepseek| {
+        deepseek.mode = CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED;
+        deepseek.flags = CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR;
+        deepseek.qk_nope_head_dim = qk_nope;
+        deepseek.qk_rope_head_dim = qk_rope;
+        deepseek.v_head_dim = head_dim;
+        deepseek.compress_ratio = 128;
+        deepseek
+    });
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: hidden as u32,
+        heads: heads as u32,
+        kv_heads: kv_heads as u32,
+        head_dim: head_dim as u32,
+        intermediate: intermediate as u32,
+        vocab_size: vocab_size as u32,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept full-size V4 C128 compressed page shape");
+    assert_ne!(
+        plan.deepseek_compressor_wkv,
+        CUDA_HF_SEQUENCE_MISSING_OFFSET
+    );
+    assert_ne!(
+        plan.deepseek_compressor_norm,
+        CUDA_HF_SEQUENCE_MISSING_OFFSET
+    );
+
+    let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    for dim in 0..hidden {
+        weight_storage[dim] = 0x3c00;
+        write_descriptor_u16(
+            &mut weight_storage,
+            plan.rms_attn + dim as u64,
+            hidden,
+            vocab_size,
+            f32_to_bf16_bits(1.0),
+        );
+    }
+    for dim in 0..head_dim {
+        write_descriptor_u16(
+            &mut weight_storage,
+            plan.deepseek_compressor_norm + dim as u64,
+            hidden,
+            vocab_size,
+            f32_to_bf16_bits(1.0),
+        );
+    }
+    for row in 0..head_dim {
+        write_descriptor_u16(
+            &mut weight_storage,
+            plan.deepseek_compressor_wkv + (row * hidden) as u64,
+            hidden,
+            vocab_size,
+            f32_to_bf16_bits(1.0),
+        );
+    }
+
+    let weight_blocks = descriptor_weight_blocks(
+        &weight_storage,
+        hidden,
+        vocab_size,
+        plan.resident_weight_bytes,
+    );
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden,
+        heads,
+        kv_heads,
+        head_dim,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 128,
+        rms_eps,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: weight_blocks.len() as u32,
+            gpu_resident_blocks: weight_blocks.len() as u32,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: Default::default(),
+    };
+
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V4 C128 compressed full-size page session should create: {:?}",
+        created.summary.error
+    );
+    let mut session = created
+        .session
+        .expect("V4 C128 compressed full-size page session handle should exist");
+
+    let summary = session.run(&[0], 128, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "C128 compression boundary should write a full-size compressed page: {:?}",
+        summary.error
+    );
+    assert_eq!(summary.steps, 128);
+    assert_eq!(summary.deepseek_compressor_state_writes, 128);
+    assert_eq!(summary.deepseek_compressed_kv_writes, 1);
+
+    let snapshot = session.deepseek_v4_compressed_kv_snapshot(0, 1728);
+    assert_eq!(
+        snapshot.status,
+        SmokeStatus::Ok,
+        "V4 C128 compressed packed KV snapshot should copy device cache: {:?}",
+        snapshot.error
+    );
+    assert_eq!(snapshot.block_count, 1);
+    assert_eq!(snapshot.layer_offset_bytes, 0);
+    assert_eq!(snapshot.layer_bytes, 1728);
+    assert_eq!(snapshot.page_bytes, 1728);
+    assert_eq!(snapshot.copied_bytes, 1728);
+
+    let normalized_k = 1.0_f32 / (1.0_f32 + rms_eps).sqrt();
+    let expected = expected_deepseek_v4_fp8_ds_mla_page(
+        &vec![vec![normalized_k; qk_nope + qk_rope]],
+        qk_nope,
+        qk_rope,
+        1728,
+        2,
+    );
+    let zero_expected = expected_deepseek_v4_fp8_ds_mla_page(
+        &vec![vec![0.0; qk_nope + qk_rope]],
+        qk_nope,
+        qk_rope,
+        1728,
+        2,
+    );
+    assert_ne!(
+        expected, zero_expected,
+        "C128 compressed verifier must exercise non-zero fp8, bf16, scales, and padding"
+    );
+    assert_page_bytes_eq(
+        &snapshot.bytes,
+        &expected,
+        "V4 C128 compressed page must match the fp8_ds_mla two-token packed layout",
     );
     assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
 }
