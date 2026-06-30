@@ -782,6 +782,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("deepseek_save_partial_states_reference".to_string());
         primitives.push("cuda_deepseek_save_partial_states_api".to_string());
         primitives.push("cuda_deepseek_save_partial_states_smoke".to_string());
+        primitives.push("deepseek_compress_norm_rope_fp8_cache_reference".to_string());
         primitives.push("cuda_deepseek_compress_norm_rope_fp8_cache_api".to_string());
         primitives.push("cuda_deepseek_compress_norm_rope_fp8_cache_smoke".to_string());
         primitives.push("cuda_deepseek_compress_norm_rope_mxfp4_cache_api".to_string());
@@ -1081,6 +1082,7 @@ fn coverage_for_unit(
                 "deepseek_save_partial_states_reference",
                 "cuda_deepseek_save_partial_states_api",
                 "cuda_deepseek_save_partial_states_smoke",
+                "deepseek_compress_norm_rope_fp8_cache_reference",
                 "cuda_deepseek_compress_norm_rope_fp8_cache_api",
                 "cuda_deepseek_compress_norm_rope_fp8_cache_smoke",
                 "cuda_deepseek_compress_norm_rope_mxfp4_cache_api",

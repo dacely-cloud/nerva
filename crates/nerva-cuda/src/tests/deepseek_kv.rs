@@ -5,8 +5,8 @@ use crate::deepseek_kv::c4_indexer_topk::{
     deepseek_c4_indexer_topk, deepseek_c4_indexer_topk_reference,
 };
 use crate::deepseek_kv::compress_cache::{
-    deepseek_compress_norm_rope_fp8_cache, DEEPSEEK_COMPRESS_SCALE_E8M0,
-    DEEPSEEK_COMPRESS_SCALE_F32, DEEPSEEK_COMPRESS_SCALE_MXFP4,
+    deepseek_compress_norm_rope_fp8_cache, deepseek_compress_norm_rope_fp8_cache_reference,
+    DEEPSEEK_COMPRESS_SCALE_E8M0, DEEPSEEK_COMPRESS_SCALE_F32, DEEPSEEK_COMPRESS_SCALE_MXFP4,
 };
 use crate::deepseek_kv::pack::{deepseek_fp8_ds_mla_pack, deepseek_v32_fp8_ds_mla_pack};
 use crate::deepseek_kv::partial_states::{
@@ -17,7 +17,7 @@ use crate::deepseek_kv::probe::{
     deepseek_c4_indexer_topk_smoke, deepseek_compress_norm_rope_fp8_cache_smoke,
     deepseek_compress_norm_rope_mxfp4_cache_smoke, deepseek_compressed_slot_mapping_smoke,
     deepseek_kv_smoke, deepseek_save_partial_states_smoke, mxfp4_compress_cache_fixture,
-    reference_compress_norm_rope_fp8_cache, scores_close,
+    scores_close,
 };
 use crate::deepseek_kv::slot_mapping::{
     deepseek_compressed_slot_mapping, deepseek_compressed_slot_mapping_reference,
@@ -911,13 +911,41 @@ fn deepseek_compress_norm_rope_fp8_cache_matches_vllm_sparse_cache_math() {
         return;
     }
 
-    let expected = reference_compress_norm_rope_fp8_cache(&fixture);
-    assert_eq!(summary.kv_cache, expected);
+    let expected = deepseek_compress_norm_rope_fp8_cache_reference(&fixture.input).unwrap();
+    assert_eq!(summary.kv_cache, expected.kv_cache);
     assert_eq!(summary.token_stride, 6);
     assert_eq!(summary.scale_dim, 2);
     assert_eq!(summary.scale_format, DEEPSEEK_COMPRESS_SCALE_E8M0);
     assert_eq!(summary.written_tokens, 2);
     assert_eq!(summary.skipped_tokens, 0);
+    assert!(summary.output_hash != 0);
+}
+
+#[test]
+fn deepseek_compress_norm_rope_fp8_cache_matches_multiblock_kv_slot_mapping() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let fixture = compress_cache_fixture(DEEPSEEK_COMPRESS_SCALE_E8M0);
+    let input = crate::deepseek_kv::compress_cache::CudaDeepSeekCompressNormRopeFp8CacheInput {
+        kv_slot_mapping: &[5, -1],
+        num_kv_blocks: 2,
+        ..fixture.input.clone()
+    };
+    let reference = deepseek_compress_norm_rope_fp8_cache_reference(&input).unwrap();
+    assert_eq!(reference.written_tokens, 1);
+    assert_eq!(reference.skipped_tokens, 1);
+    assert_eq!(reference.kv_cache.len(), 64);
+    assert!(reference.kv_cache[..32].iter().all(|byte| *byte == 0));
+    assert!(reference.kv_cache[32..].iter().any(|byte| *byte != 0));
+
+    let summary = deepseek_compress_norm_rope_fp8_cache(input);
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(summary.kv_cache, reference.kv_cache);
+    assert_eq!(summary.written_tokens, reference.written_tokens);
+    assert_eq!(summary.skipped_tokens, reference.skipped_tokens);
     assert!(summary.output_hash != 0);
 }
 
@@ -931,8 +959,8 @@ fn deepseek_compress_norm_rope_fp8_cache_matches_vllm_indexer_cache_math() {
         return;
     }
 
-    let expected = reference_compress_norm_rope_fp8_cache(&fixture);
-    assert_eq!(summary.kv_cache, expected);
+    let expected = deepseek_compress_norm_rope_fp8_cache_reference(&fixture.input).unwrap();
+    assert_eq!(summary.kv_cache, expected.kv_cache);
     assert_eq!(summary.token_stride, 4);
     assert_eq!(summary.scale_dim, size_of::<f32>() as u32);
     assert_eq!(summary.scale_format, DEEPSEEK_COMPRESS_SCALE_F32);
@@ -951,8 +979,8 @@ fn deepseek_compress_norm_rope_mxfp4_cache_matches_vllm_indexer_cache_math() {
         return;
     }
 
-    let expected = reference_compress_norm_rope_fp8_cache(&fixture);
-    assert_eq!(summary.kv_cache, expected);
+    let expected = deepseek_compress_norm_rope_fp8_cache_reference(&fixture.input).unwrap();
+    assert_eq!(summary.kv_cache, expected.kv_cache);
     assert_eq!(summary.head_size, 128);
     assert_eq!(summary.rope_head_dim, 64);
     assert_eq!(summary.quant_block, 32);

@@ -87,6 +87,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("deepseek_save_partial_states_reference"));
     assert!(json.contains("cuda_deepseek_save_partial_states_api"));
     assert!(json.contains("cuda_deepseek_save_partial_states_smoke"));
+    assert!(json.contains("deepseek_compress_norm_rope_fp8_cache_reference"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_api"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_smoke"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_mxfp4_cache_api"));
@@ -318,6 +319,7 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("cuda_deepseek_c4_indexer_topk_api"));
     assert!(json.contains("deepseek_save_partial_states_reference"));
     assert!(json.contains("cuda_deepseek_save_partial_states_api"));
+    assert!(json.contains("deepseek_compress_norm_rope_fp8_cache_reference"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_api"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_mxfp4_cache_api"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_index_topk_descriptor"));
