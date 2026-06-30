@@ -4,7 +4,7 @@ use crate::hf::linear_attention::{ConvStateLayout, Qwen35GatedDeltaNetSpec};
 use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind};
 use crate::hf::parser::parse_hf_config_metadata;
 use crate::precision::block::gdn::{PrecisionGatedDeltaNetConfig, PrecisionGatedDeltaNetMoeBlock};
-use crate::precision::block::moe::PrecisionMoeConfig;
+use crate::precision::block::moe::{PrecisionMoeConfig, PrecisionMoeRouterKind};
 use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::layout::plan::plan_hf_weight_layout;
 use crate::weights::manifest::build_hf_tensor_manifest;
@@ -907,6 +907,7 @@ fn precision_gdn_moe_block_with_linear_out(
         num_experts: 4,
         experts_per_token: 2,
         norm_topk_prob: true,
+        router_kind: PrecisionMoeRouterKind::Softmax,
     };
     PrecisionGatedDeltaNetMoeBlock::new_from_encoded(
         DType::BF16,

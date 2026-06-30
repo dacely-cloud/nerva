@@ -1,5 +1,8 @@
 use crate::common::math::{sigmoid, silu};
 use crate::common::shape::TransformerBlockShape;
+use crate::precision::block::moe::{
+    PrecisionMoeConfig, PrecisionMoeRouterKind, select_moe_route_for_logits,
+};
 use crate::reference::block::types::ReferenceTransformerBlock;
 use crate::reference::moe::{
     DeepSeekRoutedMoeConfig, deepseek_routed_moe_forward, deepseek_swiglu,
@@ -165,6 +168,116 @@ fn deepseek_v4_hash_router_uses_table_ids_and_unbiased_weights() {
     for (actual, expected) in route.weights.iter().zip(raw.iter()) {
         assert!((actual - expected / sum).abs() < 1e-6);
     }
+}
+
+#[test]
+fn precision_moe_deepseek_v3_router_matches_reference() {
+    let logits = [-2.0, 0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -3.0];
+    let correction_bias = [0.0, 0.0, 0.0, 4.0, 0.0, 0.0, -4.0, 0.0];
+    let precision_route = select_moe_route_for_logits(
+        &logits,
+        &correction_bias,
+        PrecisionMoeConfig {
+            moe_intermediate: 2,
+            shared_expert_intermediate: 0,
+            num_experts: 8,
+            experts_per_token: 2,
+            norm_topk_prob: true,
+            router_kind: PrecisionMoeRouterKind::DeepSeekV3GroupedSigmoid {
+                num_expert_groups: 2,
+                top_k_groups: 1,
+                routed_scaling_factor: 2.5,
+            },
+        },
+    )
+    .unwrap();
+    let reference_route = deepseek_v3_grouped_route(
+        &logits,
+        Some(&correction_bias),
+        DeepSeekV3GroupedRouterConfig {
+            top_k: 2,
+            num_expert_groups: 2,
+            top_k_groups: 1,
+            scoring: DeepSeekRouterScoring::Sigmoid,
+            renormalize: true,
+            routed_scaling_factor: 2.5,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        precision_route
+            .iter()
+            .map(|(expert, _)| *expert)
+            .collect::<Vec<_>>(),
+        reference_route.expert_ids
+    );
+    for ((_, actual), expected) in precision_route.iter().zip(reference_route.weights.iter()) {
+        assert!((actual - expected).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn precision_moe_deepseek_v4_router_matches_reference() {
+    let logits = [-2.0, 0.0, 1.0, 3.0];
+    let correction_bias = [0.0, 3.0, 0.0, -3.0];
+    let precision_route = select_moe_route_for_logits(
+        &logits,
+        &correction_bias,
+        PrecisionMoeConfig {
+            moe_intermediate: 2,
+            shared_expert_intermediate: 0,
+            num_experts: 4,
+            experts_per_token: 2,
+            norm_topk_prob: true,
+            router_kind: PrecisionMoeRouterKind::DeepSeekV4SqrtSoftplus {
+                routed_scaling_factor: 1.5,
+            },
+        },
+    )
+    .unwrap();
+    let reference_route = deepseek_v4_sqrtsoftplus_route(
+        &logits,
+        Some(&correction_bias),
+        None,
+        DeepSeekV4RouterConfig {
+            top_k: 2,
+            renormalize: true,
+            routed_scaling_factor: 1.5,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        precision_route
+            .iter()
+            .map(|(expert, _)| *expert)
+            .collect::<Vec<_>>(),
+        reference_route.expert_ids
+    );
+    for ((_, actual), expected) in precision_route.iter().zip(reference_route.weights.iter()) {
+        assert!((actual - expected).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn precision_moe_deepseek_v4_hash_router_requires_runtime_route_table() {
+    let error = select_moe_route_for_logits(
+        &[4.0, -1.0, 0.0, 2.0],
+        &[0.0, 0.0, 0.0, 0.0],
+        PrecisionMoeConfig {
+            moe_intermediate: 2,
+            shared_expert_intermediate: 0,
+            num_experts: 4,
+            experts_per_token: 2,
+            norm_topk_prob: true,
+            router_kind: PrecisionMoeRouterKind::DeepSeekV4Hash {
+                routed_scaling_factor: 1.0,
+            },
+        },
+    )
+    .unwrap_err();
+    assert!(format!("{error:?}").contains("token-id route tables"));
 }
 
 #[test]

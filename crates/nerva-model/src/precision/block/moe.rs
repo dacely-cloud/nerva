@@ -28,6 +28,7 @@ pub struct PrecisionMoeTransformerBlock {
     num_experts: usize,
     experts_per_token: usize,
     norm_topk_prob: bool,
+    router_kind: PrecisionMoeRouterKind,
     rms_attn_weight: Vec<u16>,
     rms_mlp_weight: Vec<u16>,
     w_q: Vec<u16>,
@@ -42,6 +43,7 @@ pub struct PrecisionMoeTransformerBlock {
     v_bias: Option<Vec<u16>>,
     o_bias: Option<Vec<u16>>,
     router: Vec<u16>,
+    router_correction_bias: Vec<f32>,
     expert_gate_up: Vec<u16>,
     expert_down: Vec<u16>,
     shared_expert_gate: Vec<u16>,
@@ -52,13 +54,30 @@ pub struct PrecisionMoeTransformerBlock {
     rope_theta: Option<f32>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PrecisionMoeRouterKind {
+    Softmax,
+    DeepSeekV3GroupedSigmoid {
+        num_expert_groups: usize,
+        top_k_groups: usize,
+        routed_scaling_factor: f32,
+    },
+    DeepSeekV4SqrtSoftplus {
+        routed_scaling_factor: f32,
+    },
+    DeepSeekV4Hash {
+        routed_scaling_factor: f32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PrecisionMoeConfig {
     pub moe_intermediate: usize,
     pub shared_expert_intermediate: usize,
     pub num_experts: usize,
     pub experts_per_token: usize,
     pub norm_topk_prob: bool,
+    pub router_kind: PrecisionMoeRouterKind,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,6 +89,7 @@ pub struct PrecisionMoeTransformerBlockEncodedView<'a> {
     pub num_experts: usize,
     pub experts_per_token: usize,
     pub norm_topk_prob: bool,
+    pub router_kind: PrecisionMoeRouterKind,
     pub rms_attn_weight: &'a [u16],
     pub rms_mlp_weight: &'a [u16],
     pub w_q: &'a [u16],
@@ -84,6 +104,7 @@ pub struct PrecisionMoeTransformerBlockEncodedView<'a> {
     pub v_bias: Option<&'a [u16]>,
     pub o_bias: Option<&'a [u16]>,
     pub router: &'a [u16],
+    pub router_correction_bias: &'a [f32],
     pub expert_gate_up: &'a [u16],
     pub expert_down: &'a [u16],
     pub shared_expert_gate: &'a [u16],
@@ -142,6 +163,7 @@ impl PrecisionMoeTransformerBlock {
             num_experts: config.num_experts,
             experts_per_token: config.experts_per_token,
             norm_topk_prob: config.norm_topk_prob,
+            router_kind: config.router_kind,
             rms_attn_weight,
             rms_mlp_weight,
             w_q,
@@ -156,6 +178,7 @@ impl PrecisionMoeTransformerBlock {
             v_bias: None,
             o_bias: None,
             router,
+            router_correction_bias: Vec::new(),
             expert_gate_up,
             expert_down,
             shared_expert_gate,
@@ -238,6 +261,17 @@ impl PrecisionMoeTransformerBlock {
         Ok(self)
     }
 
+    pub fn with_router_correction_bias(mut self, bias: Vec<f32>) -> Result<Self> {
+        require_len("router correction bias", bias.len(), self.num_experts)?;
+        if bias.iter().any(|value| !value.is_finite()) {
+            return Err(NervaError::InvalidArgument {
+                reason: "router correction bias values must be finite".to_string(),
+            });
+        }
+        self.router_correction_bias = bias;
+        Ok(self)
+    }
+
     pub const fn rope_theta(&self) -> Option<f32> {
         self.rope_theta
     }
@@ -276,6 +310,7 @@ impl PrecisionMoeTransformerBlock {
             num_experts: self.num_experts,
             experts_per_token: self.experts_per_token,
             norm_topk_prob: self.norm_topk_prob,
+            router_kind: self.router_kind,
             rms_attn_weight: &self.rms_attn_weight,
             rms_mlp_weight: &self.rms_mlp_weight,
             w_q: &self.w_q,
@@ -290,6 +325,7 @@ impl PrecisionMoeTransformerBlock {
             v_bias: self.v_bias.as_deref(),
             o_bias: self.o_bias.as_deref(),
             router: &self.router,
+            router_correction_bias: &self.router_correction_bias,
             expert_gate_up: &self.expert_gate_up,
             expert_down: &self.expert_down,
             shared_expert_gate: &self.shared_expert_gate,
@@ -634,16 +670,11 @@ impl PrecisionMoeTransformerBlock {
     ) -> Result<()> {
         let mut router_logits = vec![0.0f32; self.num_experts];
         mat_vec_encoded_row_major(self.dtype, &self.router, input, &mut router_logits)?;
-        let router_probs = softmax(&router_logits);
-        let mut selected = top_k(&router_probs, self.experts_per_token);
-        if self.norm_topk_prob {
-            let sum = selected.iter().map(|(_, weight)| *weight).sum::<f32>();
-            if sum > 0.0 {
-                for (_, weight) in &mut selected {
-                    *weight /= sum;
-                }
-            }
-        }
+        let selected = select_moe_route_for_logits(
+            &router_logits,
+            &self.router_correction_bias,
+            self.config(),
+        )?;
 
         let expert_gate_up_stride = 2 * self.moe_intermediate * self.shape.hidden;
         let expert_down_stride = self.shape.hidden * self.moe_intermediate;
@@ -741,6 +772,17 @@ impl PrecisionMoeTransformerBlock {
         }
         Ok(())
     }
+
+    const fn config(&self) -> PrecisionMoeConfig {
+        PrecisionMoeConfig {
+            moe_intermediate: self.moe_intermediate,
+            shared_expert_intermediate: self.shared_expert_intermediate,
+            num_experts: self.num_experts,
+            experts_per_token: self.experts_per_token,
+            norm_topk_prob: self.norm_topk_prob,
+            router_kind: self.router_kind,
+        }
+    }
 }
 
 fn validate_moe_block_layout(
@@ -794,6 +836,7 @@ fn validate_moe_block_layout(
                 .to_string(),
         });
     }
+    validate_router_kind(config)?;
     require_len("rms_attn_weight", rms_attn_weight_len, shape.hidden)?;
     require_len("rms_mlp_weight", rms_mlp_weight_len, shape.hidden)?;
     require_len("w_q", w_q_len, shape.attention_hidden() * shape.hidden)?;
@@ -844,6 +887,226 @@ fn validate_moe_block_layout(
         });
     }
     Ok(())
+}
+
+fn validate_router_kind(config: PrecisionMoeConfig) -> Result<()> {
+    match config.router_kind {
+        PrecisionMoeRouterKind::Softmax => Ok(()),
+        PrecisionMoeRouterKind::DeepSeekV3GroupedSigmoid {
+            num_expert_groups,
+            top_k_groups,
+            routed_scaling_factor,
+        } => {
+            if num_expert_groups == 0 || top_k_groups == 0 {
+                return Err(NervaError::InvalidArgument {
+                    reason: "DeepSeek V3 MoE routing requires non-zero expert groups".to_string(),
+                });
+            }
+            if top_k_groups > num_expert_groups {
+                return Err(NervaError::InvalidArgument {
+                    reason: "DeepSeek V3 MoE top_k_groups cannot exceed num_expert_groups"
+                        .to_string(),
+                });
+            }
+            if !config.num_experts.is_multiple_of(num_expert_groups) {
+                return Err(NervaError::InvalidArgument {
+                    reason: "DeepSeek V3 MoE num_experts must be divisible by num_expert_groups"
+                        .to_string(),
+                });
+            }
+            validate_routed_scaling_factor(routed_scaling_factor)
+        }
+        PrecisionMoeRouterKind::DeepSeekV4SqrtSoftplus {
+            routed_scaling_factor,
+        }
+        | PrecisionMoeRouterKind::DeepSeekV4Hash {
+            routed_scaling_factor,
+        } => validate_routed_scaling_factor(routed_scaling_factor),
+    }
+}
+
+fn validate_routed_scaling_factor(value: f32) -> Result<()> {
+    if value.is_finite() && value > 0.0 {
+        Ok(())
+    } else {
+        Err(NervaError::InvalidArgument {
+            reason: "DeepSeek MoE routed scaling factor must be finite and positive".to_string(),
+        })
+    }
+}
+
+pub(crate) fn select_moe_route_for_logits(
+    router_logits: &[f32],
+    correction_bias: &[f32],
+    config: PrecisionMoeConfig,
+) -> Result<Vec<(usize, f32)>> {
+    require_len("router logits", router_logits.len(), config.num_experts)?;
+    if !correction_bias.is_empty() {
+        require_len(
+            "router correction bias",
+            correction_bias.len(),
+            config.num_experts,
+        )?;
+    }
+    if router_logits.iter().any(|value| !value.is_finite())
+        || correction_bias.iter().any(|value| !value.is_finite())
+    {
+        return Err(NervaError::InvalidArgument {
+            reason: "router logits and correction bias values must be finite".to_string(),
+        });
+    }
+    validate_router_kind(config)?;
+
+    let mut selected = match config.router_kind {
+        PrecisionMoeRouterKind::Softmax => {
+            let router_probs = softmax(router_logits);
+            top_k(&router_probs, config.experts_per_token)
+        }
+        PrecisionMoeRouterKind::DeepSeekV3GroupedSigmoid {
+            num_expert_groups,
+            top_k_groups,
+            routed_scaling_factor,
+        } => deepseek_v3_grouped_route(
+            router_logits,
+            correction_bias,
+            config,
+            num_expert_groups,
+            top_k_groups,
+            routed_scaling_factor,
+        ),
+        PrecisionMoeRouterKind::DeepSeekV4SqrtSoftplus {
+            routed_scaling_factor,
+        } => {
+            let scores = router_logits
+                .iter()
+                .map(|value| softplus(*value).sqrt())
+                .collect::<Vec<_>>();
+            let choice_scores = apply_router_bias(&scores, correction_bias);
+            let expert_ids = top_k_indices(&choice_scores, config.experts_per_token);
+            let mut selected = expert_ids
+                .into_iter()
+                .map(|expert| (expert, scores[expert]))
+                .collect::<Vec<_>>();
+            finish_route_weights(&mut selected, config.norm_topk_prob, routed_scaling_factor);
+            selected
+        }
+        PrecisionMoeRouterKind::DeepSeekV4Hash { .. } => {
+            return Err(NervaError::InvalidArgument {
+                reason: "DeepSeek V4 hash MoE routing requires token-id route tables in runtime"
+                    .to_string(),
+            });
+        }
+    };
+
+    if matches!(config.router_kind, PrecisionMoeRouterKind::Softmax) && config.norm_topk_prob {
+        finish_route_weights(&mut selected, true, 1.0);
+    }
+    Ok(selected)
+}
+
+fn deepseek_v3_grouped_route(
+    router_logits: &[f32],
+    correction_bias: &[f32],
+    config: PrecisionMoeConfig,
+    num_expert_groups: usize,
+    top_k_groups: usize,
+    routed_scaling_factor: f32,
+) -> Vec<(usize, f32)> {
+    let scores = router_logits
+        .iter()
+        .map(|value| sigmoid(*value))
+        .collect::<Vec<_>>();
+    let choice_scores = apply_router_bias(&scores, correction_bias);
+    let experts_per_group = config.num_experts / num_expert_groups;
+    let mut group_scores = vec![0.0f32; num_expert_groups];
+    for (group, group_score) in group_scores.iter_mut().enumerate() {
+        let start = group * experts_per_group;
+        let end = start + experts_per_group;
+        *group_score = if correction_bias.is_empty() {
+            choice_scores[start..end]
+                .iter()
+                .copied()
+                .fold(f32::NEG_INFINITY, f32::max)
+        } else {
+            top_n_sum(&choice_scores[start..end], 2)
+        };
+    }
+
+    let selected_groups = top_k_indices(&group_scores, top_k_groups);
+    let mut masked_choice_scores = vec![f32::NEG_INFINITY; config.num_experts];
+    for group in selected_groups {
+        let start = group * experts_per_group;
+        let end = start + experts_per_group;
+        masked_choice_scores[start..end].copy_from_slice(&choice_scores[start..end]);
+    }
+
+    let expert_ids = top_k_indices(&masked_choice_scores, config.experts_per_token);
+    let mut selected = expert_ids
+        .into_iter()
+        .map(|expert| (expert, scores[expert]))
+        .collect::<Vec<_>>();
+    finish_route_weights(&mut selected, config.norm_topk_prob, routed_scaling_factor);
+    selected
+}
+
+fn apply_router_bias(scores: &[f32], correction_bias: &[f32]) -> Vec<f32> {
+    if correction_bias.is_empty() {
+        return scores.to_vec();
+    }
+    scores
+        .iter()
+        .zip(correction_bias.iter())
+        .map(|(score, bias)| score + bias)
+        .collect()
+}
+
+fn finish_route_weights(selected: &mut [(usize, f32)], normalize: bool, scaling_factor: f32) {
+    if normalize {
+        let sum = selected.iter().map(|(_, weight)| *weight).sum::<f32>();
+        if sum > 0.0 && sum.is_finite() {
+            for (_, weight) in selected.iter_mut() {
+                *weight /= sum;
+            }
+        }
+    }
+    if scaling_factor != 1.0 {
+        for (_, weight) in selected.iter_mut() {
+            *weight *= scaling_factor;
+        }
+    }
+}
+
+fn top_n_sum(values: &[f32], count: usize) -> f32 {
+    let mut top = vec![f32::NEG_INFINITY; count.min(values.len())];
+    for value in values.iter().copied() {
+        for slot in 0..top.len() {
+            if value > top[slot] {
+                for shift in (slot + 1..top.len()).rev() {
+                    top[shift] = top[shift - 1];
+                }
+                top[slot] = value;
+                break;
+            }
+        }
+    }
+    top.into_iter().filter(|value| value.is_finite()).sum()
+}
+
+fn top_k_indices(values: &[f32], k: usize) -> Vec<usize> {
+    let mut indexed = values.iter().copied().enumerate().collect::<Vec<_>>();
+    indexed.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
+    indexed.truncate(k);
+    indexed.into_iter().map(|(index, _)| index).collect()
+}
+
+fn softplus(value: f32) -> f32 {
+    if value > 20.0 {
+        value
+    } else if value < -20.0 {
+        value.exp()
+    } else {
+        value.exp().ln_1p()
+    }
 }
 
 fn softmax(logits: &[f32]) -> Vec<f32> {

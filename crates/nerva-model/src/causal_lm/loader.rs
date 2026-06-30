@@ -15,7 +15,9 @@ use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata}
 use crate::hf::parser::parse_hf_config_metadata;
 use crate::precision::block::gdn::{PrecisionGatedDeltaNetConfig, PrecisionGatedDeltaNetMoeBlock};
 use crate::precision::block::model::PrecisionTransformerBlock;
-use crate::precision::block::moe::{PrecisionMoeConfig, PrecisionMoeTransformerBlock};
+use crate::precision::block::moe::{
+    PrecisionMoeConfig, PrecisionMoeRouterKind, PrecisionMoeTransformerBlock,
+};
 use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::layout::plan::plan_hf_weight_layout;
 use crate::weights::manifest::build_hf_tensor_manifest;
@@ -383,7 +385,7 @@ fn load_gated_delta_net_moe_layer(
             "linear_conv_kernel_dim",
         )?,
     };
-    let moe_config = moe_config_from_metadata(metadata)?;
+    let moe_config = moe_config_from_metadata(metadata, layer)?;
     let block = PrecisionGatedDeltaNetMoeBlock::new_from_encoded(
         dtype,
         shape,
@@ -558,7 +560,7 @@ fn load_sparse_moe_layer(
     options: HfCausalLmLoadOptions,
     accounting: &mut LoadAccounting,
 ) -> Result<HfCausalLmLayer> {
-    let moe_config = moe_config_from_metadata(metadata)?;
+    let moe_config = moe_config_from_metadata(metadata, layer)?;
     let (w_q, w_q_gate) = load_query_projection(dir, plan, metadata, layer, options, accounting)?;
     let mut block = PrecisionMoeTransformerBlock::new_from_encoded(
         dtype,
@@ -696,6 +698,18 @@ fn load_sparse_moe_layer(
                 accounting,
             )?,
         )?;
+    }
+    if plan.entries.iter().any(|entry| {
+        entry.role == WeightBlockRole::RouterCorrectionBias && entry.layer == Some(layer)
+    }) {
+        block = block.with_router_correction_bias(load_layer_tensor_f32(
+            dir,
+            plan,
+            WeightBlockRole::RouterCorrectionBias,
+            layer,
+            options,
+            accounting,
+        )?)?;
     }
     if attention_qkv_bias || attention_output_bias {
         block = block.with_optional_attention_biases(
@@ -1097,7 +1111,7 @@ fn require_loaded_tensor_len(tensor: &LoadedSafetensorsTensorU16, expected: usiz
     }
 }
 
-fn moe_config_from_metadata(metadata: &HfModelMetadata) -> Result<PrecisionMoeConfig> {
+fn moe_config_from_metadata(metadata: &HfModelMetadata, layer: u32) -> Result<PrecisionMoeConfig> {
     Ok(PrecisionMoeConfig {
         moe_intermediate: required_metadata_usize(
             metadata.moe_intermediate_size,
@@ -1110,11 +1124,72 @@ fn moe_config_from_metadata(metadata: &HfModelMetadata) -> Result<PrecisionMoeCo
             "num_experts_per_tok",
         )?,
         norm_topk_prob: metadata.norm_topk_prob,
+        router_kind: moe_router_kind_from_metadata(metadata, layer)?,
     })
+}
+
+fn moe_router_kind_from_metadata(
+    metadata: &HfModelMetadata,
+    layer: u32,
+) -> Result<PrecisionMoeRouterKind> {
+    match metadata.architecture {
+        HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32 => {
+            require_metadata_str(metadata.topk_method.as_deref(), "topk_method", "noaux_tc")?;
+            require_metadata_str(metadata.scoring_func.as_deref(), "scoring_func", "sigmoid")?;
+            Ok(PrecisionMoeRouterKind::DeepSeekV3GroupedSigmoid {
+                num_expert_groups: required_metadata_usize(
+                    metadata.num_expert_groups,
+                    "num_expert_groups",
+                )?,
+                top_k_groups: required_metadata_usize(metadata.topk_group, "topk_group")?,
+                routed_scaling_factor: metadata.routed_scaling_factor.unwrap_or(1.0),
+            })
+        }
+        HfArchitectureKind::DeepSeekV4 => {
+            require_metadata_str(metadata.topk_method.as_deref(), "topk_method", "noaux_tc")?;
+            require_metadata_str(
+                metadata.scoring_func.as_deref(),
+                "scoring_func",
+                "sqrtsoftplus",
+            )?;
+            let routed_scaling_factor = metadata.routed_scaling_factor.unwrap_or(1.0);
+            let hash_layers = metadata.num_hash_layers.unwrap_or(0);
+            let layer = usize::try_from(layer).map_err(|_| NervaError::InvalidArgument {
+                reason: "DeepSeek layer index does not fit usize".to_string(),
+            })?;
+            if layer < hash_layers {
+                Ok(PrecisionMoeRouterKind::DeepSeekV4Hash {
+                    routed_scaling_factor,
+                })
+            } else {
+                Ok(PrecisionMoeRouterKind::DeepSeekV4SqrtSoftplus {
+                    routed_scaling_factor,
+                })
+            }
+        }
+        _ => Ok(PrecisionMoeRouterKind::Softmax),
+    }
 }
 
 fn required_metadata_usize(value: Option<usize>, key: &'static str) -> Result<usize> {
     value.ok_or_else(|| NervaError::InvalidArgument {
         reason: format!("HF causal LM metadata is missing {key}"),
     })
+}
+
+fn require_metadata_str(
+    value: Option<&str>,
+    key: &'static str,
+    expected: &'static str,
+) -> Result<()> {
+    let actual = value.ok_or_else(|| NervaError::InvalidArgument {
+        reason: format!("HF causal LM metadata is missing {key}"),
+    })?;
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(NervaError::InvalidArgument {
+            reason: format!("HF causal LM metadata {key}={actual:?} does not match {expected:?}"),
+        })
+    }
 }
