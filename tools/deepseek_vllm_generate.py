@@ -31,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--runs", type=int, default=1)
+    parser.add_argument("--warmup-runs", type=int, default=1)
+    parser.add_argument("--enable-prefix-caching", action="store_true")
     parser.add_argument("--trust-remote-code", action="store_true", default=True)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--disable-log-stats", action="store_true", default=True)
@@ -63,6 +65,8 @@ def main() -> None:
     args = parse_args()
     if args.runs <= 0:
         raise SystemExit("--runs must be positive")
+    if args.warmup_runs < 0:
+        raise SystemExit("--warmup-runs must be zero or positive")
     prompt, prompt_mode = resolve_prompt(args.prompt)
 
     vllm_root = Path(args.vllm_root).resolve()
@@ -82,6 +86,7 @@ def main() -> None:
         trust_remote_code=args.trust_remote_code,
         enforce_eager=args.enforce_eager,
         disable_log_stats=args.disable_log_stats,
+        enable_prefix_caching=args.enable_prefix_caching,
         seed=args.seed,
     )
     sampling = SamplingParams(
@@ -95,6 +100,12 @@ def main() -> None:
     tokenizer = llm.get_tokenizer()
     prompt_token_ids = tokenizer.encode(prompt)
     outputs = None
+    warmup_elapsed_ns: list[int] = []
+    for _ in range(args.warmup_runs):
+        started = time.perf_counter_ns()
+        outputs = llm.generate([prompt], sampling_params=sampling, use_tqdm=False)
+        warmup_elapsed_ns.append(time.perf_counter_ns() - started)
+
     latency_samples_ns: list[int] = []
     total_elapsed_ns = 0
     for _ in range(args.runs):
@@ -133,6 +144,9 @@ def main() -> None:
                 "max_model_len": args.max_model_len,
                 "max_tokens": args.max_tokens,
                 "runs": args.runs,
+                "measured_runs": args.runs,
+                "warmup_runs": args.warmup_runs,
+                "enable_prefix_caching": args.enable_prefix_caching,
                 "sampler": {
                     "temperature": args.temperature,
                     "top_p": args.top_p,
@@ -145,6 +159,7 @@ def main() -> None:
                 "finish_reason": candidate.finish_reason,
                 "elapsed_wall_ns": best_elapsed_ns,
                 "total_elapsed_wall_ns": total_elapsed_ns,
+                "warmup_elapsed_wall_ns": warmup_elapsed_ns,
                 "tokens_per_second": tokens_per_second,
                 "request_p50_ms": request_p50_ms,
                 "request_p95_ms": request_p95_ms,

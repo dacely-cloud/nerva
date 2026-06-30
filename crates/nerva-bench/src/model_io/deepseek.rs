@@ -3,19 +3,19 @@ use std::{
     time::Instant,
 };
 
-use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::c4_indexer_topk::deepseek_c4_indexer_topk;
+use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use nerva_cuda::deepseek_kv::partial_states::deepseek_save_partial_states;
 use nerva_cuda::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
-use nerva_cuda::deepseek_mla::decode::{deepseek_mla_decode, CudaDeepSeekMlaDecodeInput};
+use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use nerva_cuda::deepseek_mla::qkv_norm::deepseek_qkv_rmsnorm;
 use nerva_cuda::deepseek_moe::experts::{
-    deepseek_megamoe_experts, CudaDeepSeekMegaMoeExpertsInput,
+    CudaDeepSeekMegaMoeExpertsInput, deepseek_megamoe_experts,
 };
-use nerva_cuda::deepseek_moe::forward::{deepseek_moe_forward, CudaDeepSeekMoeForwardInput};
+use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
 use nerva_cuda::deepseek_moe::prepare::{
-    deepseek_megamoe_prepare, CudaDeepSeekMegaMoeEplbMapping, CudaDeepSeekMegaMoePrepareInput,
+    CudaDeepSeekMegaMoeEplbMapping, CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare,
 };
 use nerva_cuda::deepseek_quant::dequant::{
     deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_mxfp4_e2m1_e8m0_dequant,
@@ -30,12 +30,12 @@ use nerva_model::hf::architecture::HfArchitectureKind;
 use nerva_model::hf::contract::validate_exact_runtime_contract;
 use nerva_model::hf::deepseek::plan_deepseek_vllm_kv_cache;
 use nerva_model::hf::deepseek_runtime::{
+    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS, DeepSeekExecutionUnitCoverage,
     deepseek_execution_unit_coverage as execution_unit_coverage,
     deepseek_implemented_primitives as implemented_primitives,
     deepseek_layer_report as layer_report,
     deepseek_required_execution_units as required_execution_units,
-    deepseek_v4_mhc_warmup_token_sizes, DeepSeekExecutionUnitCoverage,
-    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS,
+    deepseek_v4_mhc_warmup_token_sizes,
 };
 use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::parser::parse_hf_config_metadata;
@@ -316,6 +316,8 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
         "bfloat16".to_string(),
         "--runs".to_string(),
         "3".to_string(),
+        "--warmup-runs".to_string(),
+        "1".to_string(),
     ];
     let compare = vec![
         "cargo".to_string(),
@@ -329,7 +331,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
     ];
 
     Ok(format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-plan-v1\",\"architecture\":{},\"checkpoint_dir\":\"{}\",\"checkpoint_exists\":{},\"config_path\":\"{}\",\"config_status\":\"{}\",\"config_error\":{},\"weights_present\":{},\"prompt_spec\":\"{}\",\"prompt_status\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_root\":\"{}\",\"vllm_reference_status\":\"{}\",\"vllm_reference_units_total\":{},\"vllm_reference_units_ok\":{},\"runtime_units_total\":{},\"runtime_blocking_units_total\":{},\"runtime_blocking_units\":{},\"commands\":{{\"nerva_generate\":{},\"nerva_bench_generate\":{},\"vllm_generate\":{},\"compare\":{}}},\"required_comparison\":[\"same checkpoint directory\",\"same prompt text\",\"same greedy sampler temperature=0 top_p=1 top_k=0 seed=0\",\"compare generated token ids and generated text\",\"compare post-load/decode tokens_per_second and p99 latency\",\"run deepseek-vllm-compare on the two JSON artifacts\"],\"runtime_parity_status\":\"{}\",\"performance_status\":\"{}\",\"benchmark_allowed\":{},\"claim_allowed\":false}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-plan-v1\",\"architecture\":{},\"checkpoint_dir\":\"{}\",\"checkpoint_exists\":{},\"config_path\":\"{}\",\"config_status\":\"{}\",\"config_error\":{},\"weights_present\":{},\"prompt_spec\":\"{}\",\"prompt_status\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_root\":\"{}\",\"vllm_reference_status\":\"{}\",\"vllm_reference_units_total\":{},\"vllm_reference_units_ok\":{},\"runtime_units_total\":{},\"runtime_blocking_units_total\":{},\"runtime_blocking_units\":{},\"commands\":{{\"nerva_generate\":{},\"nerva_bench_generate\":{},\"vllm_generate\":{},\"compare\":{}}},\"required_comparison\":[\"same checkpoint directory\",\"same prompt text\",\"same greedy sampler temperature=0 top_p=1 top_k=0 seed=0\",\"discard vLLM warmup run and keep prefix caching disabled unless explicitly requested\",\"compare generated token ids and generated text\",\"compare post-load/decode tokens_per_second and p99 latency\",\"run deepseek-vllm-compare on the two JSON artifacts\"],\"runtime_parity_status\":\"{}\",\"performance_status\":\"{}\",\"benchmark_allowed\":{},\"claim_allowed\":false}}",
         status,
         json_opt_string(architecture.as_deref()),
         json_escape(&checkpoint_dir),

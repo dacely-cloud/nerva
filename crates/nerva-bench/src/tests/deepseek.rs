@@ -1,8 +1,8 @@
 use crate::model_io::deepseek::{
+    DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
     deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
     run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_compare,
     run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
-    DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
 };
 
 #[test]
@@ -504,8 +504,11 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(
         json.contains("benchmark V4 mHC, sparse MLA, and MegaMoE throughput against /root/vllm")
     );
-    assert!(json
-        .contains("run same-checkpoint full-layer routed output differential against /root/vllm"));
+    assert!(
+        json.contains(
+            "run same-checkpoint full-layer routed output differential against /root/vllm"
+        )
+    );
 
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -562,7 +565,11 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"--max-model-len\""));
     assert!(json.contains("\"--max-tokens\""));
     assert!(json.contains("\"--runs\""));
+    assert!(json.contains("\"--warmup-runs\""));
     assert!(json.contains("same greedy sampler temperature=0 top_p=1 top_k=0 seed=0"));
+    assert!(json.contains(
+        "discard vLLM warmup run and keep prefix caching disabled unless explicitly requested"
+    ));
     assert!(json.contains("run deepseek-vllm-compare on the two JSON artifacts"));
 
     let _ = std::fs::remove_dir_all(dir);
