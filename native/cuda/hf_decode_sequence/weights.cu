@@ -842,6 +842,7 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.deepseek_mode = layer.deepseek_mode;
   layout.deepseek_flags = layer.deepseek_flags;
   layout.deepseek_hc_mult = layer.deepseek_hc_mult;
+  layout.deepseek_hc_sinkhorn_iters = layer.deepseek_hc_sinkhorn_iters;
   layout.deepseek_q_lora_rank = layer.deepseek_q_lora_rank;
   layout.deepseek_kv_lora_rank = layer.deepseek_kv_lora_rank;
   layout.deepseek_o_lora_rank = layer.deepseek_o_lora_rank;
@@ -857,6 +858,8 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.deepseek_router_topk_groups = layer.deepseek_router_topk_groups;
   layout.deepseek_routed_scaling_factor =
       layer.deepseek_routed_scaling_factor;
+  layout.deepseek_hc_eps = layer.deepseek_hc_eps;
+  layout.deepseek_hc_post_alpha = layer.deepseek_hc_post_alpha;
   layout.rms_attn = kMissingOffset;
   layout.rms_mlp = kMissingOffset;
   layout.w_q = kMissingOffset;

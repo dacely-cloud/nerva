@@ -181,6 +181,7 @@ fn deepseek_marker(
         mode,
         flags,
         hc_mult: metadata.hc_mult.unwrap_or(0),
+        hc_sinkhorn_iters: metadata.hc_sinkhorn_iters.unwrap_or(0),
         q_lora_rank: required_deepseek_usize(metadata.q_lora_rank, "q_lora_rank")?,
         kv_lora_rank: metadata.kv_lora_rank.unwrap_or(0),
         o_lora_rank: metadata.o_lora_rank.unwrap_or(0),
@@ -195,6 +196,17 @@ fn deepseek_marker(
         router_num_groups: metadata.num_expert_groups.unwrap_or(0),
         router_topk_groups: metadata.topk_group.unwrap_or(0),
         routed_scaling_factor: metadata.routed_scaling_factor.unwrap_or(1.0),
+        hc_eps: metadata.hc_eps.unwrap_or(0.0),
+        hc_post_alpha: if matches!(
+            execution.attention_kind,
+            DeepSeekAttentionExecutionKind::V4SlidingWindowMla
+                | DeepSeekAttentionExecutionKind::V4CompressedMla
+                | DeepSeekAttentionExecutionKind::V4CompressedMlaWithSparseIndexer
+        ) {
+            2.0
+        } else {
+            0.0
+        },
     })
 }
 

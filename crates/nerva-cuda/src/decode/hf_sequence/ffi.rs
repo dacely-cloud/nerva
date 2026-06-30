@@ -172,6 +172,8 @@ pub(crate) struct NervaCudaHfDecodeSequenceLayoutPlanResult {
     pub(crate) attention_kind: u32,
     pub(crate) deepseek_mode: u32,
     pub(crate) deepseek_flags: u32,
+    pub(crate) deepseek_hc_mult: u32,
+    pub(crate) deepseek_hc_sinkhorn_iters: u32,
     pub(crate) deepseek_qk_head_dim: u32,
     pub(crate) deepseek_q_rows: u32,
     pub(crate) deepseek_kv_cache_width: u32,
@@ -223,6 +225,8 @@ pub(crate) struct NervaCudaHfDecodeSequenceLayoutPlanResult {
     pub(crate) deepseek_hc_ffn_base: u64,
     pub(crate) deepseek_hc_ffn_fn: u64,
     pub(crate) deepseek_hc_ffn_scale: u64,
+    pub(crate) deepseek_hc_eps: f32,
+    pub(crate) deepseek_hc_post_alpha: f32,
 }
 
 unsafe extern "C" {

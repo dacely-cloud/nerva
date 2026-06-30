@@ -62,6 +62,7 @@ pub struct CudaHfDeepSeekLayer {
     pub mode: u32,
     pub flags: u32,
     pub hc_mult: usize,
+    pub hc_sinkhorn_iters: usize,
     pub q_lora_rank: usize,
     pub kv_lora_rank: usize,
     pub o_lora_rank: usize,
@@ -76,6 +77,8 @@ pub struct CudaHfDeepSeekLayer {
     pub router_num_groups: usize,
     pub router_topk_groups: usize,
     pub routed_scaling_factor: f32,
+    pub hc_eps: f32,
+    pub hc_post_alpha: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -270,6 +273,9 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             deepseek_mode: self.deepseek.map_or(0, |layer| layer.mode),
             deepseek_flags: self.deepseek.map_or(0, |layer| layer.flags),
             deepseek_hc_mult: self.deepseek.map_or(0, |layer| layer.hc_mult as u32),
+            deepseek_hc_sinkhorn_iters: self
+                .deepseek
+                .map_or(0, |layer| layer.hc_sinkhorn_iters as u32),
             deepseek_q_lora_rank: self.deepseek.map_or(0, |layer| layer.q_lora_rank as u32),
             deepseek_kv_lora_rank: self.deepseek.map_or(0, |layer| layer.kv_lora_rank as u32),
             deepseek_o_lora_rank: self.deepseek.map_or(0, |layer| layer.o_lora_rank as u32),
@@ -294,6 +300,8 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             deepseek_routed_scaling_factor: self
                 .deepseek
                 .map_or(1.0, |layer| layer.routed_scaling_factor),
+            deepseek_hc_eps: self.deepseek.map_or(0.0, |layer| layer.hc_eps),
+            deepseek_hc_post_alpha: self.deepseek.map_or(0.0, |layer| layer.hc_post_alpha),
         }
     }
 
@@ -346,6 +354,9 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             deepseek_mode: self.deepseek.map_or(0, |layer| layer.mode),
             deepseek_flags: self.deepseek.map_or(0, |layer| layer.flags),
             deepseek_hc_mult: self.deepseek.map_or(0, |layer| layer.hc_mult as u32),
+            deepseek_hc_sinkhorn_iters: self
+                .deepseek
+                .map_or(0, |layer| layer.hc_sinkhorn_iters as u32),
             deepseek_q_lora_rank: self.deepseek.map_or(0, |layer| layer.q_lora_rank as u32),
             deepseek_kv_lora_rank: self.deepseek.map_or(0, |layer| layer.kv_lora_rank as u32),
             deepseek_o_lora_rank: self.deepseek.map_or(0, |layer| layer.o_lora_rank as u32),
@@ -370,6 +381,8 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             deepseek_routed_scaling_factor: self
                 .deepseek
                 .map_or(1.0, |layer| layer.routed_scaling_factor),
+            deepseek_hc_eps: self.deepseek.map_or(0.0, |layer| layer.hc_eps),
+            deepseek_hc_post_alpha: self.deepseek.map_or(0.0, |layer| layer.hc_post_alpha),
         }
     }
 

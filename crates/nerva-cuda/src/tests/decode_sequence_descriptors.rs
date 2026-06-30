@@ -440,6 +440,7 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
             | CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER
             | CUDA_HF_DEEPSEEK_FLAG_MOE,
         hc_mult: 4,
+        hc_sinkhorn_iters: 20,
         q_lora_rank: 1536,
         kv_lora_rank: 512,
         o_lora_rank: 1536,
@@ -454,6 +455,8 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
         router_num_groups: 0,
         router_topk_groups: 0,
         routed_scaling_factor: 1.0,
+        hc_eps: 1.0e-6,
+        hc_post_alpha: 2.0,
     };
     let layer = CudaHfDecodeChainLayer {
         rms_attn_weight: &rms,
@@ -497,6 +500,10 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     assert_eq!(ffi.deepseek_mode, deepseek.mode);
     assert_eq!(ffi.deepseek_flags, deepseek.flags);
     assert_eq!(ffi.deepseek_hc_mult, deepseek.hc_mult as u32);
+    assert_eq!(
+        ffi.deepseek_hc_sinkhorn_iters,
+        deepseek.hc_sinkhorn_iters as u32
+    );
     assert_eq!(ffi.deepseek_q_lora_rank, deepseek.q_lora_rank as u32);
     assert_eq!(ffi.deepseek_kv_lora_rank, deepseek.kv_lora_rank as u32);
     assert_eq!(ffi.deepseek_o_lora_rank, deepseek.o_lora_rank as u32);
@@ -526,6 +533,8 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
         ffi.deepseek_routed_scaling_factor,
         deepseek.routed_scaling_factor
     );
+    assert_eq!(ffi.deepseek_hc_eps, deepseek.hc_eps);
+    assert_eq!(ffi.deepseek_hc_post_alpha, deepseek.hc_post_alpha);
 
     let descriptor = layer.to_descriptor_layout_ffi();
     assert!(descriptor.w_q.is_null());
@@ -533,9 +542,15 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     assert_eq!(descriptor.deepseek_mode, deepseek.mode);
     assert_eq!(descriptor.deepseek_flags, deepseek.flags);
     assert_eq!(
+        descriptor.deepseek_hc_sinkhorn_iters,
+        deepseek.hc_sinkhorn_iters as u32
+    );
+    assert_eq!(
         descriptor.deepseek_router_num_groups,
         deepseek.router_num_groups as u32
     );
+    assert_eq!(descriptor.deepseek_hc_eps, deepseek.hc_eps);
+    assert_eq!(descriptor.deepseek_hc_post_alpha, deepseek.hc_post_alpha);
 }
 
 #[test]
@@ -544,6 +559,7 @@ fn deepseek_v3_mla_shape_matches_vllm_contract() {
         mode: CUDA_HF_DEEPSEEK_MODE_V3_MLA,
         flags: 0,
         hc_mult: 0,
+        hc_sinkhorn_iters: 0,
         q_lora_rank: 1536,
         kv_lora_rank: 512,
         o_lora_rank: 0,
@@ -558,6 +574,8 @@ fn deepseek_v3_mla_shape_matches_vllm_contract() {
         router_num_groups: 8,
         router_topk_groups: 4,
         routed_scaling_factor: 2.5,
+        hc_eps: 0.0,
+        hc_post_alpha: 0.0,
     };
 
     assert!(deepseek.is_v3_mla());
@@ -2189,7 +2207,7 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
         plan.deepseek_compressor_ape,
         CUDA_HF_SEQUENCE_MISSING_OFFSET
     );
-    assert_eq!(plan.layout_bytes, 632);
+    assert_eq!(plan.layout_bytes, 640);
     assert!(plan.resident_weight_bytes > 0);
 
     let request = CudaHfDecodeSequenceRequest {
@@ -4097,6 +4115,10 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
         plan.deepseek_mode,
         CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER
     );
+    assert_eq!(plan.deepseek_hc_mult, 2);
+    assert_eq!(plan.deepseek_hc_sinkhorn_iters, 20);
+    assert_eq!(plan.deepseek_hc_eps, 1.0e-6);
+    assert_eq!(plan.deepseek_hc_post_alpha, 2.0);
     assert_eq!(plan.deepseek_qk_head_dim, 0);
     assert_eq!(plan.deepseek_q_rows, 0);
     assert_eq!(plan.deepseek_kv_cache_width, 0);
@@ -4139,7 +4161,7 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     assert_eq!(plan.rms_mlp, 558);
     assert_eq!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_eq!(plan.deepseek_kv_b_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
-    assert_eq!(plan.layout_bytes, 632);
+    assert_eq!(plan.layout_bytes, 640);
 }
 
 fn with_tiny_deepseek_v4_descriptor_session(
@@ -4259,6 +4281,7 @@ fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             mode: CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
             flags: CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
             hc_mult: 0,
+            hc_sinkhorn_iters: 0,
             q_lora_rank: 2,
             kv_lora_rank: 2,
             o_lora_rank: 0,
@@ -4273,6 +4296,8 @@ fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             router_num_groups: 1,
             router_topk_groups: 1,
             routed_scaling_factor: 1.0,
+            hc_eps: 0.0,
+            hc_post_alpha: 0.0,
         }),
         mlp_kind: 0,
         moe_intermediate: 0,
@@ -4314,6 +4339,7 @@ fn tiny_deepseek_v3_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             mode: CUDA_HF_DEEPSEEK_MODE_V3_MLA,
             flags: 0,
             hc_mult: 0,
+            hc_sinkhorn_iters: 0,
             q_lora_rank: 2,
             kv_lora_rank: 2,
             o_lora_rank: 0,
@@ -4328,6 +4354,8 @@ fn tiny_deepseek_v3_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             router_num_groups: 1,
             router_topk_groups: 1,
             routed_scaling_factor: 1.0,
+            hc_eps: 0.0,
+            hc_post_alpha: 0.0,
         }),
         mlp_kind: CUDA_HF_MLP_DENSE,
         moe_intermediate: 0,
@@ -4472,6 +4500,7 @@ fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
                 | CUDA_HF_DEEPSEEK_FLAG_MOE
                 | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS,
             hc_mult: 2,
+            hc_sinkhorn_iters: 20,
             q_lora_rank: 2,
             kv_lora_rank: 1,
             o_lora_rank: 2,
@@ -4486,6 +4515,8 @@ fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             router_num_groups: 0,
             router_topk_groups: 0,
             routed_scaling_factor: 1.0,
+            hc_eps: 1.0e-6,
+            hc_post_alpha: 2.0,
         }),
         mlp_kind: CUDA_HF_MLP_SPARSE_MOE,
         moe_intermediate: 4,
@@ -4527,6 +4558,7 @@ fn tiny_deepseek_v4_swa_dense_descriptor_layer() -> CudaHfDecodeChainLayer<'stat
             mode: CUDA_HF_DEEPSEEK_MODE_V4_SWA,
             flags: 0,
             hc_mult: 2,
+            hc_sinkhorn_iters: 20,
             q_lora_rank: 2,
             kv_lora_rank: 0,
             o_lora_rank: 2,
@@ -4541,6 +4573,8 @@ fn tiny_deepseek_v4_swa_dense_descriptor_layer() -> CudaHfDecodeChainLayer<'stat
             router_num_groups: 0,
             router_topk_groups: 0,
             routed_scaling_factor: 1.0,
+            hc_eps: 1.0e-6,
+            hc_post_alpha: 2.0,
         }),
         mlp_kind: CUDA_HF_MLP_DENSE,
         moe_intermediate: 0,

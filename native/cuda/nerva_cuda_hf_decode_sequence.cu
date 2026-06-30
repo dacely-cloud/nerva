@@ -151,6 +151,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_plan_layout(
   out->attention_kind = layout.attention_kind;
   out->deepseek_mode = layout.deepseek_mode;
   out->deepseek_flags = layout.deepseek_flags;
+  out->deepseek_hc_mult = layout.deepseek_hc_mult;
+  out->deepseek_hc_sinkhorn_iters = layout.deepseek_hc_sinkhorn_iters;
+  out->deepseek_hc_eps = layout.deepseek_hc_eps;
+  out->deepseek_hc_post_alpha = layout.deepseek_hc_post_alpha;
   fill_deepseek_v3_mla_shape(request->layers[request->layer_index], out);
   out->resident_weight_bytes = elements * sizeof(uint16_t) -
                                hidden * 2u * sizeof(uint16_t);

@@ -174,6 +174,7 @@ struct SequenceLayerLayout {
   uint32_t deepseek_mode;
   uint32_t deepseek_flags;
   uint32_t deepseek_hc_mult;
+  uint32_t deepseek_hc_sinkhorn_iters;
   uint32_t deepseek_q_lora_rank;
   uint32_t deepseek_kv_lora_rank;
   uint32_t deepseek_o_lora_rank;
@@ -188,6 +189,8 @@ struct SequenceLayerLayout {
   uint32_t deepseek_router_num_groups;
   uint32_t deepseek_router_topk_groups;
   float deepseek_routed_scaling_factor;
+  float deepseek_hc_eps;
+  float deepseek_hc_post_alpha;
   uint64_t deepseek_q_a_scale;
   uint64_t deepseek_q_b;
   uint64_t deepseek_q_b_scale;

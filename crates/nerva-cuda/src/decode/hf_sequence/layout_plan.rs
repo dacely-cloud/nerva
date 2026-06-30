@@ -32,6 +32,8 @@ pub struct CudaHfDecodeSequenceLayoutPlan {
     pub attention_kind: u32,
     pub deepseek_mode: u32,
     pub deepseek_flags: u32,
+    pub deepseek_hc_mult: u32,
+    pub deepseek_hc_sinkhorn_iters: u32,
     pub deepseek_qk_head_dim: u32,
     pub deepseek_q_rows: u32,
     pub deepseek_kv_cache_width: u32,
@@ -83,6 +85,8 @@ pub struct CudaHfDecodeSequenceLayoutPlan {
     pub deepseek_hc_ffn_base: u64,
     pub deepseek_hc_ffn_fn: u64,
     pub deepseek_hc_ffn_scale: u64,
+    pub deepseek_hc_eps: f32,
+    pub deepseek_hc_post_alpha: f32,
 }
 
 impl<'a> CudaHfDecodeSequenceLayoutPlanRequest<'a> {
@@ -136,6 +140,8 @@ impl From<NervaCudaHfDecodeSequenceLayoutPlanResult> for CudaHfDecodeSequenceLay
             attention_kind: value.attention_kind,
             deepseek_mode: value.deepseek_mode,
             deepseek_flags: value.deepseek_flags,
+            deepseek_hc_mult: value.deepseek_hc_mult,
+            deepseek_hc_sinkhorn_iters: value.deepseek_hc_sinkhorn_iters,
             deepseek_qk_head_dim: value.deepseek_qk_head_dim,
             deepseek_q_rows: value.deepseek_q_rows,
             deepseek_kv_cache_width: value.deepseek_kv_cache_width,
@@ -187,6 +193,8 @@ impl From<NervaCudaHfDecodeSequenceLayoutPlanResult> for CudaHfDecodeSequenceLay
             deepseek_hc_ffn_base: value.deepseek_hc_ffn_base,
             deepseek_hc_ffn_fn: value.deepseek_hc_ffn_fn,
             deepseek_hc_ffn_scale: value.deepseek_hc_ffn_scale,
+            deepseek_hc_eps: value.deepseek_hc_eps,
+            deepseek_hc_post_alpha: value.deepseek_hc_post_alpha,
         }
     }
 }
