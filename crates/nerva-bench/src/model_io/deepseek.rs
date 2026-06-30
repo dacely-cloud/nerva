@@ -3,6 +3,7 @@ use std::{
     time::Instant,
 };
 
+use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use nerva_cuda::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
@@ -331,6 +332,7 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
             iterations,
             bench_compressed_slot_mapping,
         ),
+        bench_primitive("c128_topk_metadata", iterations, bench_c128_topk_metadata),
         bench_primitive("routed_moe_forward", iterations, bench_moe_forward),
     ];
     Ok(deepseek_cuda_primitive_bench_report_json(
@@ -385,12 +387,14 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let router = nerva_cuda::deepseek_router::probe::deepseek_router_smoke();
     let kv = nerva_cuda::deepseek_kv::probe::deepseek_kv_smoke();
     let compressed_slots = nerva_cuda::deepseek_kv::probe::deepseek_compressed_slot_mapping_smoke();
+    let c128_topk = nerva_cuda::deepseek_kv::probe::deepseek_c128_topk_metadata_smoke();
     let mla_json = mla.to_json();
     let moe_json = moe.to_json();
     let quant_json = quant.to_json();
     let router_json = router.to_json();
     let kv_json = kv.to_json();
     let compressed_slots_json = compressed_slots.to_json();
+    let c128_topk_json = c128_topk.to_json();
     let primitives = [
         DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_mla_decode_mqa_smoke",
@@ -421,6 +425,11 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
             name: "cuda_deepseek_compressed_slot_mapping_smoke",
             status: smoke_status_label(&compressed_slots.status),
             summary_json: &compressed_slots_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_c128_topk_metadata_smoke",
+            status: smoke_status_label(&c128_topk.status),
+            summary_json: &c128_topk_json,
         },
     ];
     deepseek_cuda_readiness_report_json(config_path, &primitives)
@@ -686,6 +695,10 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         primitives.push("cuda_deepseek_compressed_slot_mapping_api".to_string());
         primitives.push("cuda_deepseek_compressed_slot_mapping_smoke".to_string());
     }
+    if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
+        primitives.push("cuda_deepseek_c128_topk_metadata_api".to_string());
+        primitives.push("cuda_deepseek_c128_topk_metadata_smoke".to_string());
+    }
 
     primitives
 }
@@ -856,10 +869,12 @@ fn coverage_for_unit(
                     "deepseek_v4_mhc_compressor_indexer_manifest",
                     "cuda_deepseek_compressed_slot_mapping_api",
                     "cuda_deepseek_compressed_slot_mapping_smoke",
+                    "cuda_deepseek_c128_topk_metadata_api",
+                    "cuda_deepseek_c128_topk_metadata_smoke",
                 ],
                 &[
                     "implement DeepseekV4 indexer runtime",
-                    "verify C4/C128 indexer page writes and sparse block choices",
+                    "verify C4 indexer page writes and sparse block choices",
                 ],
             ),
             (HfArchitectureKind::DeepSeekV4, "deepseek_v4_parallel_attention_gemm_streams") => (
@@ -1024,6 +1039,7 @@ fn deepseek_vllm_reference_specs() -> Vec<DeepSeekVllmReferenceSpec> {
                 "fp8_ds_mla",
                 "584",
                 "DeepseekV4FlashMLAMetadataBuilder",
+                "build_c128a_topk_metadata",
             ],
         },
         DeepSeekVllmReferenceSpec {
@@ -1364,6 +1380,39 @@ fn bench_compressed_slot_mapping() -> DeepSeekPrimitiveMetrics {
     ];
     let summary =
         deepseek_compressed_slot_mapping(&query_start_loc, &seq_lens, &block_table, 4, 4, 4);
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_c128_topk_metadata() -> DeepSeekPrimitiveMetrics {
+    let positions = [127, 255, 383, 511];
+    let token_to_req = [0, 1, 0, 1];
+    let block_table = [
+        40, 41, 42, 43, // request 0
+        50, 51, 52, 53, // request 1
+    ];
+    let slot_mapping = [10, -1, 12, 13];
+    let summary = deepseek_c128_topk_metadata(
+        &positions,
+        2,
+        &token_to_req,
+        &block_table,
+        4,
+        &slot_mapping,
+        2,
+        128,
+        4,
+    );
     DeepSeekPrimitiveMetrics {
         status: summary.status,
         output_hash: summary.output_hash,

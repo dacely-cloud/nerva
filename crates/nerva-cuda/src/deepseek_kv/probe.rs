@@ -1,7 +1,9 @@
+use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use crate::deepseek_kv::summary::{
-    CudaDeepSeekCompressedSlotMappingSummary, CudaDeepSeekKvSummary,
+    CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekCompressedSlotMappingSummary,
+    CudaDeepSeekKvSummary,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -75,6 +77,58 @@ pub fn deepseek_compressed_slot_mapping_smoke() -> CudaDeepSeekCompressedSlotMap
         let mut failed = summary;
         failed.status = SmokeStatus::Failed;
         failed.error = Some("DeepSeek compressed slot mapping smoke mismatch".to_string());
+        return failed;
+    }
+
+    summary
+}
+
+pub fn deepseek_c128_topk_metadata_smoke() -> CudaDeepSeekC128TopkMetadataSummary {
+    let positions = [127, 255, 383, 511];
+    let token_to_req = [0, 1, 0, 1];
+    let block_table = [
+        40, 41, 42, 43, // request 0
+        50, 51, 52, 53, // request 1
+    ];
+    let slot_mapping = [10, -1, 12, 13];
+    let expected_global = [
+        80, -1, -1, -1, // decode token 0, valid
+        100, 101, -1, -1, // decode token 1, invalid slot but row is populated
+    ];
+    let expected_decode_lens = [1, 0];
+    let expected_prefill = [
+        0, 1, 2, -1, // prefill token 0
+        0, 1, 2, 3, // prefill token 1
+    ];
+
+    let summary = deepseek_c128_topk_metadata(
+        &positions,
+        2,
+        &token_to_req,
+        &block_table,
+        4,
+        &slot_mapping,
+        2,
+        128,
+        4,
+    );
+    if summary.status != SmokeStatus::Ok {
+        return summary;
+    }
+
+    if summary.global_decode != expected_global
+        || summary.decode_lens != expected_decode_lens
+        || summary.prefill_local != expected_prefill
+        || summary.valid_decode_tokens != 1
+        || summary.decode_entries != 1
+        || summary.prefill_entries != 7
+        || summary.kernel_launches != 1
+        || summary.sync_calls != 1
+        || summary.hot_path_allocations != 0
+    {
+        let mut failed = summary;
+        failed.status = SmokeStatus::Failed;
+        failed.error = Some("DeepSeek C128A top-k metadata smoke mismatch".to_string());
         return failed;
     }
 

@@ -1,8 +1,12 @@
+use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
-use crate::deepseek_kv::probe::{deepseek_compressed_slot_mapping_smoke, deepseek_kv_smoke};
+use crate::deepseek_kv::probe::{
+    deepseek_c128_topk_metadata_smoke, deepseek_compressed_slot_mapping_smoke, deepseek_kv_smoke,
+};
 use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use crate::deepseek_kv::summary::{
-    CudaDeepSeekCompressedSlotMappingSummary, CudaDeepSeekKvSummary,
+    CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekCompressedSlotMappingSummary,
+    CudaDeepSeekKvSummary,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -71,6 +75,45 @@ fn deepseek_compressed_slot_mapping_summary_serializes_vllm_metadata() {
 }
 
 #[test]
+fn deepseek_c128_topk_metadata_summary_serializes_vllm_metadata() {
+    let summary = CudaDeepSeekC128TopkMetadataSummary {
+        status: SmokeStatus::Ok,
+        return_code: 0,
+        cuda_error: 0,
+        num_tokens: 4,
+        num_decode_tokens: 2,
+        num_prefill_tokens: 2,
+        num_reqs: 2,
+        block_table_stride: 4,
+        block_size: 2,
+        compress_ratio: 128,
+        max_compressed_tokens: 4,
+        valid_decode_tokens: 1,
+        decode_entries: 1,
+        prefill_entries: 7,
+        output_hash: 88,
+        global_decode: vec![80, -1, -1, -1, 100, 101, -1, -1],
+        decode_lens: vec![1, 0],
+        prefill_local: vec![0, 1, 2, -1, 0, 1, 2, 3],
+        device_arena_bytes: 300,
+        pinned_host_bytes: 72,
+        h2d_bytes: 128,
+        d2h_bytes: 72,
+        kernel_launches: 1,
+        sync_calls: 1,
+        hot_path_allocations: 0,
+        error: None,
+    };
+
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"num_decode_tokens\":2"));
+    assert!(json.contains("\"num_prefill_tokens\":2"));
+    assert!(json.contains("\"compress_ratio\":128"));
+    assert!(json.contains("\"prefill_entries\":7"));
+}
+
+#[test]
 fn deepseek_kv_smoke_is_repeatable_when_device_is_available() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
@@ -120,6 +163,33 @@ fn deepseek_compressed_slot_mapping_smoke_is_repeatable_when_device_is_available
 }
 
 #[test]
+fn deepseek_c128_topk_metadata_smoke_is_repeatable_when_device_is_available() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let first = deepseek_c128_topk_metadata_smoke();
+    if first.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let second = deepseek_c128_topk_metadata_smoke();
+    assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    assert_eq!(second.num_tokens, 4);
+    assert_eq!(second.num_decode_tokens, 2);
+    assert_eq!(second.num_prefill_tokens, 2);
+    assert_eq!(second.compress_ratio, 128);
+    assert_eq!(second.global_decode, vec![80, -1, -1, -1, 100, 101, -1, -1]);
+    assert_eq!(second.decode_lens, vec![1, 0]);
+    assert_eq!(second.prefill_local, vec![0, 1, 2, -1, 0, 1, 2, 3]);
+    assert_eq!(second.valid_decode_tokens, 1);
+    assert_eq!(second.decode_entries, 1);
+    assert_eq!(second.prefill_entries, 7);
+    assert_eq!(second.output_hash, first.output_hash);
+    assert_eq!(second.kernel_launches, 1);
+    assert_eq!(second.sync_calls, 1);
+    assert_eq!(second.hot_path_allocations, 0);
+}
+
+#[test]
 fn deepseek_fp8_ds_mla_pack_matches_vllm_block_offsets() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
@@ -151,6 +221,44 @@ fn deepseek_fp8_ds_mla_pack_matches_vllm_block_offsets() {
         &scales
     );
     assert!(summary.output[..token_base].iter().all(|byte| *byte == 0));
+    assert!(summary.output_hash != 0);
+}
+
+#[test]
+fn deepseek_c128_topk_metadata_matches_vllm_decode_and_prefill_math() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let positions = [127, 255, 383, 511];
+    let token_to_req = [0, 1, 0, 1];
+    let block_table = [
+        40, 41, 42, 43, // request 0
+        50, 51, 52, 53, // request 1
+    ];
+    let slot_mapping = [10, -1, 12, 13];
+    let summary = deepseek_c128_topk_metadata(
+        &positions,
+        2,
+        &token_to_req,
+        &block_table,
+        4,
+        &slot_mapping,
+        2,
+        128,
+        4,
+    );
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(
+        summary.global_decode,
+        vec![80, -1, -1, -1, 100, 101, -1, -1]
+    );
+    assert_eq!(summary.decode_lens, vec![1, 0]);
+    assert_eq!(summary.prefill_local, vec![0, 1, 2, -1, 0, 1, 2, 3]);
+    assert_eq!(summary.valid_decode_tokens, 1);
+    assert_eq!(summary.decode_entries, 1);
+    assert_eq!(summary.prefill_entries, 7);
     assert!(summary.output_hash != 0);
 }
 

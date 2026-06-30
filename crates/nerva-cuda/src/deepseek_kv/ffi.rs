@@ -72,6 +72,52 @@ pub(crate) struct NervaCudaDeepSeekCompressedSlotMappingResult {
     pub(crate) hot_path_allocations: u64,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaDeepSeekC128TopkMetadataRequest {
+    pub(crate) num_tokens: u32,
+    pub(crate) num_decode_tokens: u32,
+    pub(crate) num_reqs: u32,
+    pub(crate) block_table_stride: u32,
+    pub(crate) block_size: u32,
+    pub(crate) compress_ratio: u32,
+    pub(crate) max_compressed_tokens: u32,
+    pub(crate) positions: *const i64,
+    pub(crate) token_to_req_indices: *const i32,
+    pub(crate) block_table: *const i32,
+    pub(crate) slot_mapping: *const i64,
+    pub(crate) global_decode: *mut i32,
+    pub(crate) decode_lens: *mut i32,
+    pub(crate) prefill_local: *mut i32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NervaCudaDeepSeekC128TopkMetadataResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) device_count: i32,
+    pub(crate) num_tokens: u32,
+    pub(crate) num_decode_tokens: u32,
+    pub(crate) num_prefill_tokens: u32,
+    pub(crate) num_reqs: u32,
+    pub(crate) block_table_stride: u32,
+    pub(crate) block_size: u32,
+    pub(crate) compress_ratio: u32,
+    pub(crate) max_compressed_tokens: u32,
+    pub(crate) valid_decode_tokens: u32,
+    pub(crate) decode_entries: u32,
+    pub(crate) prefill_entries: u32,
+    pub(crate) output_hash: u64,
+    pub(crate) device_arena_bytes: u64,
+    pub(crate) pinned_host_bytes: u64,
+    pub(crate) h2d_bytes: u64,
+    pub(crate) d2h_bytes: u64,
+    pub(crate) kernel_launches: u64,
+    pub(crate) sync_calls: u64,
+    pub(crate) hot_path_allocations: u64,
+}
+
 unsafe extern "C" {
     fn nerva_cuda_deepseek_kv_fp8_ds_mla_pack(
         request: *const NervaCudaDeepSeekKvFp8DsMlaPackRequest,
@@ -80,6 +126,10 @@ unsafe extern "C" {
     fn nerva_cuda_deepseek_compressed_slot_mapping(
         request: *const NervaCudaDeepSeekCompressedSlotMappingRequest,
         out: *mut NervaCudaDeepSeekCompressedSlotMappingResult,
+    ) -> c_int;
+    fn nerva_cuda_deepseek_c128_topk_metadata(
+        request: *const NervaCudaDeepSeekC128TopkMetadataRequest,
+        out: *mut NervaCudaDeepSeekC128TopkMetadataResult,
     ) -> c_int;
 }
 
@@ -95,4 +145,11 @@ pub(crate) fn run_deepseek_compressed_slot_mapping(
     out: &mut NervaCudaDeepSeekCompressedSlotMappingResult,
 ) -> c_int {
     unsafe { nerva_cuda_deepseek_compressed_slot_mapping(request, out) }
+}
+
+pub(crate) fn run_deepseek_c128_topk_metadata(
+    request: &NervaCudaDeepSeekC128TopkMetadataRequest,
+    out: &mut NervaCudaDeepSeekC128TopkMetadataResult,
+) -> c_int {
+    unsafe { nerva_cuda_deepseek_c128_topk_metadata(request, out) }
 }

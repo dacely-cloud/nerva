@@ -1284,6 +1284,48 @@ typedef struct NervaCudaDeepSeekCompressedSlotMappingResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekCompressedSlotMappingResult;
 
+typedef struct NervaCudaDeepSeekC128TopkMetadataRequest {
+  uint32_t num_tokens;
+  uint32_t num_decode_tokens;
+  uint32_t num_reqs;
+  uint32_t block_table_stride;
+  uint32_t block_size;
+  uint32_t compress_ratio;
+  uint32_t max_compressed_tokens;
+  const int64_t *positions;
+  const int32_t *token_to_req_indices;
+  const int32_t *block_table;
+  const int64_t *slot_mapping;
+  int32_t *global_decode;
+  int32_t *decode_lens;
+  int32_t *prefill_local;
+} NervaCudaDeepSeekC128TopkMetadataRequest;
+
+typedef struct NervaCudaDeepSeekC128TopkMetadataResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t num_tokens;
+  uint32_t num_decode_tokens;
+  uint32_t num_prefill_tokens;
+  uint32_t num_reqs;
+  uint32_t block_table_stride;
+  uint32_t block_size;
+  uint32_t compress_ratio;
+  uint32_t max_compressed_tokens;
+  uint32_t valid_decode_tokens;
+  uint32_t decode_entries;
+  uint32_t prefill_entries;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekC128TopkMetadataResult;
+
 typedef struct NervaCudaDeepSeekMoeSmokeResult {
   int32_t status;
   int32_t cuda_error;
@@ -1429,6 +1471,9 @@ int nerva_cuda_deepseek_kv_fp8_ds_mla_pack(
 int nerva_cuda_deepseek_compressed_slot_mapping(
     const NervaCudaDeepSeekCompressedSlotMappingRequest *request,
     NervaCudaDeepSeekCompressedSlotMappingResult *out);
+int nerva_cuda_deepseek_c128_topk_metadata(
+    const NervaCudaDeepSeekC128TopkMetadataRequest *request,
+    NervaCudaDeepSeekC128TopkMetadataResult *out);
 int nerva_cuda_deepseek_moe_smoke(NervaCudaDeepSeekMoeSmokeResult *out);
 int nerva_cuda_deepseek_moe_forward(
     const NervaCudaDeepSeekMoeForwardRequest *request,
