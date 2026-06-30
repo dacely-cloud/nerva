@@ -1,6 +1,9 @@
 use crate::common::math::{sigmoid, silu};
 use crate::common::shape::TransformerBlockShape;
 use crate::reference::block::types::ReferenceTransformerBlock;
+use crate::reference::moe::{
+    DeepSeekRoutedMoeConfig, deepseek_routed_moe_forward, deepseek_swiglu,
+};
 use crate::reference::router::{
     DeepSeekRouterScoring, DeepSeekV3GroupedRouterConfig, DeepSeekV4RouterConfig,
     deepseek_v3_grouped_route, deepseek_v4_sqrtsoftplus_route,
@@ -192,6 +195,97 @@ fn deepseek_router_rejects_invalid_configs() {
                 renormalize: true,
                 routed_scaling_factor: 1.0,
             },
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn deepseek_routed_moe_combines_selected_experts_with_swiglu_clamp() {
+    let input = [1.2, -0.7, 0.3];
+    let expert_ids = [1usize, 0usize];
+    let expert_weights = [0.75, 0.25];
+    let w_gate = [
+        1.0, -0.5, 0.25, -0.25, 0.75, 1.25, 0.5, 0.2, -0.1, -1.0, 0.4, 0.3,
+    ];
+    let w_up = [
+        -0.2, 0.4, 1.1, 0.8, -0.6, 0.2, 1.5, -0.3, 0.1, 0.7, 0.6, -0.4,
+    ];
+    let w_down = [
+        0.3, -0.2, 0.4, 0.1, -0.5, 0.2, -0.7, 0.6, -0.1, 0.25, 0.35, -0.45,
+    ];
+    let mut output = [0.0; 3];
+
+    deepseek_routed_moe_forward(
+        &input,
+        &expert_ids,
+        &expert_weights,
+        &w_gate,
+        &w_up,
+        &w_down,
+        DeepSeekRoutedMoeConfig {
+            hidden_size: 3,
+            intermediate_size: 2,
+            top_k: 2,
+            swiglu_limit: Some(1.0),
+        },
+        &mut output,
+    )
+    .unwrap();
+
+    let expert_1_gate_0 = 0.5 * input[0] + 0.2 * input[1] - 0.1 * input[2];
+    let expert_1_up_0 = 1.5 * input[0] - 0.3 * input[1] + 0.1 * input[2];
+    let expert_1_gate_1 = -input[0] + 0.4 * input[1] + 0.3 * input[2];
+    let expert_1_up_1 = 0.7 * input[0] + 0.6 * input[1] - 0.4 * input[2];
+    let expert_1_hidden = [
+        deepseek_swiglu(expert_1_gate_0, expert_1_up_0, Some(1.0)),
+        deepseek_swiglu(expert_1_gate_1, expert_1_up_1, Some(1.0)),
+    ];
+
+    let expert_0_gate_0 = input[0] - 0.5 * input[1] + 0.25 * input[2];
+    let expert_0_up_0 = -0.2 * input[0] + 0.4 * input[1] + 1.1 * input[2];
+    let expert_0_gate_1 = -0.25 * input[0] + 0.75 * input[1] + 1.25 * input[2];
+    let expert_0_up_1 = 0.8 * input[0] - 0.6 * input[1] + 0.2 * input[2];
+    let expert_0_hidden = [
+        deepseek_swiglu(expert_0_gate_0, expert_0_up_0, Some(1.0)),
+        deepseek_swiglu(expert_0_gate_1, expert_0_up_1, Some(1.0)),
+    ];
+
+    let expected = [
+        0.75 * (expert_1_hidden[0] * -0.7 + expert_1_hidden[1] * 0.6)
+            + 0.25 * (expert_0_hidden[0] * 0.3 + expert_0_hidden[1] * -0.2),
+        0.75 * (expert_1_hidden[0] * -0.1 + expert_1_hidden[1] * 0.25)
+            + 0.25 * (expert_0_hidden[0] * 0.4 + expert_0_hidden[1] * 0.1),
+        0.75 * (expert_1_hidden[0] * 0.35 + expert_1_hidden[1] * -0.45)
+            + 0.25 * (expert_0_hidden[0] * -0.5 + expert_0_hidden[1] * 0.2),
+    ];
+
+    for (actual, expected) in output.iter().zip(expected) {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "actual={actual} expected={expected}"
+        );
+    }
+}
+
+#[test]
+fn deepseek_routed_moe_rejects_bad_shapes() {
+    let mut output = [0.0; 2];
+    assert!(
+        deepseek_routed_moe_forward(
+            &[1.0, 2.0],
+            &[0],
+            &[1.0],
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0],
+            DeepSeekRoutedMoeConfig {
+                hidden_size: 2,
+                intermediate_size: 2,
+                top_k: 1,
+                swiglu_limit: None,
+            },
+            &mut output,
         )
         .is_err()
     );

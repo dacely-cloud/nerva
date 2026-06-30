@@ -48,6 +48,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "cuda-loaded-block" => Ok(nerva_cuda::block::probe::loaded_tiny_block_smoke().to_json()),
         "cuda-attention" => Ok(nerva_cuda::attention::probe::tiered_attention_smoke().to_json()),
         "cuda-deepseek-mla" => Ok(nerva_cuda::deepseek_mla::probe::deepseek_mla_smoke().to_json()),
+        "cuda-deepseek-moe" => Ok(nerva_cuda::deepseek_moe::probe::deepseek_moe_smoke().to_json()),
         "cuda-deepseek-quant" => {
             Ok(nerva_cuda::deepseek_quant::probe::deepseek_quant_smoke().to_json())
         }

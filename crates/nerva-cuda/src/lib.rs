@@ -8,6 +8,7 @@ pub mod backend;
 pub mod block;
 pub mod decode;
 pub mod deepseek_mla;
+pub mod deepseek_moe;
 pub mod deepseek_quant;
 pub mod deepseek_router;
 pub mod experimental_rt;

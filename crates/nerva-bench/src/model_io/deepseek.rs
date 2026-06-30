@@ -24,9 +24,11 @@ pub(crate) fn run_deepseek_runtime_plan(config_path: Option<String>) -> Result<S
 
 pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result<String, String> {
     let mla = nerva_cuda::deepseek_mla::probe::deepseek_mla_smoke();
+    let moe = nerva_cuda::deepseek_moe::probe::deepseek_moe_smoke();
     let quant = nerva_cuda::deepseek_quant::probe::deepseek_quant_smoke();
     let router = nerva_cuda::deepseek_router::probe::deepseek_router_smoke();
     let mla_json = mla.to_json();
+    let moe_json = moe.to_json();
     let quant_json = quant.to_json();
     let router_json = router.to_json();
     let primitives = [
@@ -34,6 +36,11 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
             name: "cuda_deepseek_mla_decode_mqa_smoke",
             status: smoke_status_label(&mla.status),
             summary_json: &mla_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_routed_moe_smoke",
+            status: smoke_status_label(&moe.status),
+            summary_json: &moe_json,
         },
         DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_quant_block_dequant_smoke",
@@ -270,6 +277,8 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         "deepseek_vllm_kv_cache_spec_planner".to_string(),
         "deepseek_mla_decode_mqa_reference".to_string(),
         "cuda_deepseek_mla_decode_mqa_smoke".to_string(),
+        "deepseek_routed_moe_reference".to_string(),
+        "cuda_deepseek_routed_moe_smoke".to_string(),
         "deepseek_v3_grouped_sigmoid_router_reference".to_string(),
         "cuda_deepseek_v3_grouped_sigmoid_router_smoke".to_string(),
     ];

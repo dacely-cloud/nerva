@@ -96,6 +96,11 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
             summary_json: "{\"status\":\"ok\",\"fp8_mismatches\":0,\"mxfp4_mismatches\":0}",
         },
         DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_routed_moe_smoke",
+            status: "ok",
+            summary_json: "{\"status\":\"ok\",\"mismatches\":0}",
+        },
+        DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_router_smoke",
             status: "ok",
             summary_json: "{\"status\":\"ok\",\"v4_hash_mismatches\":0}",
@@ -112,10 +117,11 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"status\":\"primitive_smokes_ok\""));
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
     assert!(json.contains("\"primitive_status\":\"ok\""));
-    assert!(json.contains("\"primitive_smokes_passed\":3"));
-    assert!(json.contains("\"primitive_smokes_total\":3"));
+    assert!(json.contains("\"primitive_smokes_passed\":4"));
+    assert!(json.contains("\"primitive_smokes_total\":4"));
     assert!(json.contains("\"cuda_deepseek_mla_decode_mqa_smoke\""));
     assert!(json.contains("\"cuda_deepseek_quant_block_dequant_smoke\""));
+    assert!(json.contains("\"cuda_deepseek_routed_moe_smoke\""));
     assert!(json.contains("\"cuda_deepseek_router_smoke\""));
     assert!(json.contains("\"vllm_kv_cache_plan\""));
     assert!(json.contains("\"default_block_size\":256"));

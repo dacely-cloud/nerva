@@ -11,6 +11,7 @@ mod decode_sequence_file_descriptors;
 mod decode_sequence_qk_norm;
 mod decode_sequence_session;
 mod deepseek_mla;
+mod deepseek_moe;
 mod deepseek_quant;
 mod deepseek_router;
 mod experimental_rt;

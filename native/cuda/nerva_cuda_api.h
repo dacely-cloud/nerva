@@ -1107,6 +1107,29 @@ typedef struct NervaCudaDeepSeekMlaSmokeResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekMlaSmokeResult;
 
+typedef struct NervaCudaDeepSeekMoeSmokeResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t hidden_size;
+  uint32_t intermediate_size;
+  uint32_t num_experts;
+  uint32_t top_k;
+  float swiglu_limit;
+  uint32_t expert_ids[2];
+  float expert_weights[2];
+  float output[3];
+  uint64_t output_hash;
+  uint64_t mismatches;
+  float max_abs_diff;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekMoeSmokeResult;
+
 int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out);
 int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      uint32_t ring_capacity,
@@ -1174,6 +1197,7 @@ int nerva_cuda_experimental_rt_candidate_bench(
 int nerva_cuda_deepseek_quant_smoke(NervaCudaDeepSeekQuantSmokeResult *out);
 int nerva_cuda_deepseek_router_smoke(NervaCudaDeepSeekRouterSmokeResult *out);
 int nerva_cuda_deepseek_mla_smoke(NervaCudaDeepSeekMlaSmokeResult *out);
+int nerva_cuda_deepseek_moe_smoke(NervaCudaDeepSeekMoeSmokeResult *out);
 
 #ifdef __cplusplus
 }
