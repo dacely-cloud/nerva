@@ -441,8 +441,8 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-reference-audit-v1\""));
     assert!(json.contains("\"status\":\"ok\""));
-    assert!(json.contains("\"reference_units_total\":18"));
-    assert!(json.contains("\"reference_units_ok\":18"));
+    assert!(json.contains("\"reference_units_total\":19"));
+    assert!(json.contains("\"reference_units_ok\":19"));
     assert!(json.contains("\"reference_units_missing_file\":0"));
     assert!(json.contains("\"reference_units_symbol_gap\":0"));
     assert!(json.contains("\"runtime_parity_status\":\"vllm_reference_sources_pinned\""));
@@ -450,6 +450,7 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("\"execution_unit\":\"v3_mla_moe_model\""));
     assert!(json.contains("\"execution_unit\":\"v4_sparse_mla_backend\""));
+    assert!(json.contains("\"execution_unit\":\"v4_packed_kv_cache_config\""));
     assert!(json.contains("\"execution_unit\":\"v4_mhc_torch_reference\""));
     assert!(json.contains("\"execution_unit\":\"v4_mhc_tilelang_ops\""));
     assert!(json.contains("\"execution_unit\":\"v4_mhc_tilelang_warmup\""));
@@ -489,8 +490,8 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
     assert!(json.contains("\"runtime_contract_status\":\"unsupported\""));
     assert!(json.contains("\"vllm_reference_status\":\"ok\""));
-    assert!(json.contains("\"vllm_reference_units_total\":18"));
-    assert!(json.contains("\"vllm_reference_units_ok\":18"));
+    assert!(json.contains("\"vllm_reference_units_total\":19"));
+    assert!(json.contains("\"vllm_reference_units_ok\":19"));
     assert!(json.contains("\"runtime_units_total\":9"));
     assert!(json.contains("\"runtime_blocking_units_total\":8"));
     assert!(json.contains("\"runtime_units_partial\":8"));
@@ -668,6 +669,19 @@ return self.block_size // self.compress_ratio
 return self.storage_block_size * 584
 return self.block_size * 656
 _apply_alignment_padding
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/v1/core/kv_cache_utils.py",
+        r#"
+def group_and_unify_kv_cache_specs(): pass
+def _get_kv_cache_groups_uniform_groups(): pass
+def _bucket_layers_by_page_size(): pass
+def _get_kv_cache_config_packed(): pass
+total_num_bytes_per_block
+block_stride=total_num_bytes_per_block
+DeepSeek V4 uses the packed layout by default
 "#,
     );
     write_fixture_file(

@@ -1104,6 +1104,20 @@ fn deepseek_vllm_reference_specs() -> Vec<DeepSeekVllmReferenceSpec> {
         },
         DeepSeekVllmReferenceSpec {
             architecture: "deepseek_v4",
+            execution_unit: "v4_packed_kv_cache_config",
+            relative_path: "vllm/v1/core/kv_cache_utils.py",
+            required_symbols: &[
+                "def group_and_unify_kv_cache_specs",
+                "def _get_kv_cache_groups_uniform_groups",
+                "def _bucket_layers_by_page_size",
+                "def _get_kv_cache_config_packed",
+                "total_num_bytes_per_block",
+                "block_stride=total_num_bytes_per_block",
+                "DeepSeek V4 uses the packed layout by default",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
             execution_unit: "v4_mhc_torch_reference",
             relative_path: "vllm/model_executor/kernels/mhc/torch.py",
             required_symbols: &[

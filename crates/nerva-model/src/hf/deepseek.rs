@@ -103,29 +103,88 @@ impl DeepSeekVllmKvCacheGroup {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeepSeekVllmPackedKvTensor {
+    pub page_size_bytes: usize,
+    pub slot_index: usize,
+    pub offset_bytes: usize,
+    pub block_stride_bytes: usize,
+    pub shared_by: Vec<String>,
+}
+
+impl DeepSeekVllmPackedKvTensor {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"page_size_bytes\":{},\"slot_index\":{},\"offset_bytes\":{},\"block_stride_bytes\":{},\"shared_by\":{}}}",
+            self.page_size_bytes,
+            self.slot_index,
+            self.offset_bytes,
+            self.block_stride_bytes,
+            json_string_array(&self.shared_by),
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeepSeekVllmPackedKvLayout {
+    pub total_bytes_per_block: usize,
+    pub tensors: Vec<DeepSeekVllmPackedKvTensor>,
+}
+
+impl DeepSeekVllmPackedKvLayout {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"total_bytes_per_block\":{},\"tensors\":{}}}",
+            self.total_bytes_per_block,
+            json_packed_tensors(&self.tensors),
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeepSeekVllmKvCachePlan {
     pub architecture: HfArchitectureKind,
     pub default_block_size: usize,
     pub cache_dtype_str: String,
     pub mla_dimensions: DeepSeekMlaDimensions,
     pub groups: Vec<DeepSeekVllmKvCacheGroup>,
+    pub packed_layout: Option<DeepSeekVllmPackedKvLayout>,
     pub vllm_reference_units: Vec<&'static str>,
 }
 
 impl DeepSeekVllmKvCachePlan {
     pub fn to_json(&self) -> String {
         let groups = json_groups(&self.groups);
+        let packed_layout = self
+            .packed_layout
+            .as_ref()
+            .map_or_else(|| "null".to_string(), DeepSeekVllmPackedKvLayout::to_json);
         let refs = json_static_str_array(&self.vllm_reference_units);
         format!(
-            "{{\"architecture\":\"{}\",\"default_block_size\":{},\"cache_dtype_str\":\"{}\",\"mla_dimensions\":{},\"groups\":{},\"vllm_reference_units\":{}}}",
+            "{{\"architecture\":\"{}\",\"default_block_size\":{},\"cache_dtype_str\":\"{}\",\"mla_dimensions\":{},\"groups\":{},\"packed_layout\":{},\"vllm_reference_units\":{}}}",
             self.architecture.as_str(),
             self.default_block_size,
             json_escape(&self.cache_dtype_str),
             self.mla_dimensions.to_json(),
             groups,
+            packed_layout,
             refs,
         )
     }
+}
+
+#[derive(Clone)]
+struct VirtualKvEntry {
+    name: String,
+    page_size_bytes: usize,
+    kind: VirtualKvKind,
+    block_size: usize,
+    sliding_window: Option<usize>,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum VirtualKvKind {
+    Mla,
+    SlidingMla,
 }
 
 pub fn default_vllm_deepseek_block_size(metadata: &HfModelMetadata) -> Result<usize> {
@@ -337,12 +396,18 @@ pub fn plan_deepseek_vllm_kv_cache_with_block_size(
         }
     }
 
+    let packed_layout = match metadata.architecture {
+        HfArchitectureKind::DeepSeekV4 => Some(plan_deepseek_v4_packed_layout(metadata, &groups)?),
+        _ => None,
+    };
+
     Ok(DeepSeekVllmKvCachePlan {
         architecture: metadata.architecture,
         default_block_size: block_size,
         cache_dtype_str: normalized_cache_dtype.to_string(),
         mla_dimensions,
         groups,
+        packed_layout,
         vllm_reference_units: vllm_kv_reference_units(metadata.architecture),
     })
 }
@@ -527,6 +592,346 @@ fn v4_compressor_state_dim(head_dim: usize, compress_ratio: usize) -> Result<usi
         1,
         "DeepSeek V4 compressor state dimension",
     )
+}
+
+fn plan_deepseek_v4_packed_layout(
+    metadata: &HfModelMetadata,
+    groups: &[DeepSeekVllmKvCacheGroup],
+) -> Result<DeepSeekVllmPackedKvLayout> {
+    let ratios = v4_layer_compress_ratios(metadata)?;
+    let swa_page = group_page_size(groups, "v4_swa")?;
+    let mut mla_entries = Vec::new();
+    let mut sliding_entries = Vec::new();
+
+    for (layer, ratio) in ratios.into_iter().enumerate() {
+        sliding_entries.push(VirtualKvEntry {
+            name: format!("model.layers.{layer}.self_attn.swa_cache"),
+            page_size_bytes: swa_page,
+            kind: VirtualKvKind::SlidingMla,
+            block_size: VLLM_DEEPSEEK_V4_SWA_BLOCK_SIZE,
+            sliding_window: metadata.sliding_window,
+        });
+
+        match ratio.max(1) {
+            1 => {}
+            4 => {
+                mla_entries.push(VirtualKvEntry {
+                    name: format!("model.layers.{layer}.self_attn"),
+                    page_size_bytes: group_page_size(groups, "v4_c4_mla")?,
+                    kind: VirtualKvKind::Mla,
+                    block_size: VLLM_DEEPSEEK_V4_BLOCK_SIZE,
+                    sliding_window: None,
+                });
+                mla_entries.push(VirtualKvEntry {
+                    name: format!("model.layers.{layer}.self_attn.indexer.k_cache"),
+                    page_size_bytes: group_page_size(groups, "v4_c4_mla_indexer")?,
+                    kind: VirtualKvKind::Mla,
+                    block_size: VLLM_DEEPSEEK_V4_BLOCK_SIZE,
+                    sliding_window: None,
+                });
+                sliding_entries.push(VirtualKvEntry {
+                    name: format!("model.layers.{layer}.self_attn.compressor.state_cache"),
+                    page_size_bytes: group_page_size(groups, "v4_c4_compressor_state")?,
+                    kind: VirtualKvKind::SlidingMla,
+                    block_size: VLLM_DEEPSEEK_V4_C4_COMPRESSOR_BLOCK_SIZE,
+                    sliding_window: Some(8),
+                });
+                sliding_entries.push(VirtualKvEntry {
+                    name: format!("model.layers.{layer}.self_attn.indexer.compressor.state_cache"),
+                    page_size_bytes: group_page_size(groups, "v4_c4_indexer_compressor_state")?,
+                    kind: VirtualKvKind::SlidingMla,
+                    block_size: VLLM_DEEPSEEK_V4_C4_COMPRESSOR_BLOCK_SIZE,
+                    sliding_window: Some(8),
+                });
+            }
+            128 => {
+                mla_entries.push(VirtualKvEntry {
+                    name: format!("model.layers.{layer}.self_attn"),
+                    page_size_bytes: group_page_size(groups, "v4_c128_mla")?,
+                    kind: VirtualKvKind::Mla,
+                    block_size: VLLM_DEEPSEEK_V4_BLOCK_SIZE,
+                    sliding_window: None,
+                });
+                sliding_entries.push(VirtualKvEntry {
+                    name: format!("model.layers.{layer}.self_attn.compressor.state_cache"),
+                    page_size_bytes: group_page_size(groups, "v4_c128_compressor_state")?,
+                    kind: VirtualKvKind::SlidingMla,
+                    block_size: VLLM_DEEPSEEK_V4_C128_COMPRESSOR_BLOCK_SIZE,
+                    sliding_window: Some(128),
+                });
+            }
+            other => {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!(
+                        "DeepSeek V4 layer {layer} has unsupported compress_ratio {other}; expected 0/1, 4, or 128"
+                    ),
+                });
+            }
+        }
+    }
+
+    let virtual_groups = vllm_virtual_cache_groups(mla_entries, sliding_entries)?;
+    let tensors = vllm_packed_tensors(&virtual_groups)?;
+    let total_bytes_per_block = tensors
+        .iter()
+        .map(|tensor| tensor.page_size_bytes)
+        .try_fold(0usize, |sum, page_size| {
+            checked_add(sum, page_size, "DeepSeek V4 packed KV block bytes")
+        })?;
+    Ok(DeepSeekVllmPackedKvLayout {
+        total_bytes_per_block,
+        tensors: tensors
+            .into_iter()
+            .map(|mut tensor| {
+                tensor.block_stride_bytes = total_bytes_per_block;
+                tensor
+            })
+            .collect(),
+    })
+}
+
+fn vllm_virtual_cache_groups(
+    mla_entries: Vec<VirtualKvEntry>,
+    sliding_entries: Vec<VirtualKvEntry>,
+) -> Result<Vec<Vec<VirtualKvEntry>>> {
+    let mut groups = Vec::new();
+    let full_page_sizes = unique_page_sizes(&mla_entries);
+    let full_tuple_count = most_common_page_count(&mla_entries).unwrap_or(1);
+    if !mla_entries.is_empty() {
+        groups.push(mla_entries);
+    }
+
+    let mut sliding_specs: Vec<(usize, Option<usize>, Vec<VirtualKvEntry>)> = Vec::new();
+    for entry in sliding_entries {
+        if entry.kind != VirtualKvKind::SlidingMla {
+            return Err(NervaError::InvalidArgument {
+                reason: "DeepSeek V4 packed layout expected only sliding MLA state entries"
+                    .to_string(),
+            });
+        }
+        if let Some((_, _, entries)) =
+            sliding_specs
+                .iter_mut()
+                .find(|(block_size, sliding_window, _)| {
+                    *block_size == entry.block_size && *sliding_window == entry.sliding_window
+                })
+        {
+            entries.push(entry);
+        } else {
+            sliding_specs.push((entry.block_size, entry.sliding_window, vec![entry]));
+        }
+    }
+
+    let mut tuple_counts = vec![full_tuple_count];
+    tuple_counts.extend(
+        sliding_specs
+            .iter()
+            .filter_map(|(_, _, entries)| most_common_page_count(entries)),
+    );
+    let num_layer_tuples = approximate_gcd(&tuple_counts, full_tuple_count)?;
+
+    for (_, _, entries) in sliding_specs {
+        groups.extend(split_vllm_sliding_group(
+            entries,
+            &full_page_sizes,
+            num_layer_tuples,
+        )?);
+    }
+    Ok(groups)
+}
+
+fn split_vllm_sliding_group(
+    entries: Vec<VirtualKvEntry>,
+    full_page_sizes: &[usize],
+    num_layer_tuples: usize,
+) -> Result<Vec<Vec<VirtualKvEntry>>> {
+    let mut layers_per_size: Vec<(usize, Vec<VirtualKvEntry>)> = Vec::new();
+    for mut entry in entries {
+        let candidate = nearest_vllm_full_page_size(entry.page_size_bytes, full_page_sizes)?;
+        entry.page_size_bytes = candidate;
+        if let Some((_, bucket_entries)) = layers_per_size
+            .iter_mut()
+            .find(|(page_size, _)| *page_size == candidate)
+        {
+            bucket_entries.push(entry);
+        } else {
+            layers_per_size.push((candidate, vec![entry]));
+        }
+    }
+    if layers_per_size.is_empty() {
+        return Ok(Vec::new());
+    }
+    let num_layers_per_size = layers_per_size[0].1.len();
+    if layers_per_size
+        .iter()
+        .any(|(_, entries)| entries.len() != num_layers_per_size)
+    {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 packed sliding cache pages must form equal layer tuples"
+                .to_string(),
+        });
+    }
+    let num_tuple_groups = ceil_div(num_layers_per_size, num_layer_tuples)?;
+    let mut groups = Vec::new();
+    for group_index in 0..num_tuple_groups {
+        let mut group_entries = Vec::new();
+        let mut tuple_index = group_index;
+        while tuple_index < num_layers_per_size {
+            for (_, bucket_entries) in &layers_per_size {
+                group_entries.push(bucket_entries[tuple_index].clone());
+            }
+            tuple_index += num_tuple_groups;
+        }
+        groups.push(group_entries);
+    }
+    Ok(groups)
+}
+
+fn vllm_packed_tensors(
+    virtual_groups: &[Vec<VirtualKvEntry>],
+) -> Result<Vec<DeepSeekVllmPackedKvTensor>> {
+    let mut buckets: Vec<(usize, Vec<Vec<String>>)> = Vec::new();
+    for group in virtual_groups {
+        let mut slot_counts: Vec<(usize, usize)> = Vec::new();
+        for entry in group {
+            let slot_index = if let Some((_, count)) = slot_counts
+                .iter_mut()
+                .find(|(page_size, _)| *page_size == entry.page_size_bytes)
+            {
+                let slot_index = *count;
+                *count += 1;
+                slot_index
+            } else {
+                slot_counts.push((entry.page_size_bytes, 1));
+                0
+            };
+            let bucket_index = if let Some(index) = buckets
+                .iter()
+                .position(|(page_size, _)| *page_size == entry.page_size_bytes)
+            {
+                index
+            } else {
+                buckets.push((entry.page_size_bytes, Vec::new()));
+                buckets.len() - 1
+            };
+            while buckets[bucket_index].1.len() <= slot_index {
+                buckets[bucket_index].1.push(Vec::new());
+            }
+            buckets[bucket_index].1[slot_index].push(entry.name.clone());
+        }
+    }
+
+    let mut tensors = Vec::new();
+    let mut offset_bytes = 0usize;
+    for (page_size_bytes, slots) in buckets {
+        for (slot_index, shared_by) in slots.into_iter().enumerate() {
+            tensors.push(DeepSeekVllmPackedKvTensor {
+                page_size_bytes,
+                slot_index,
+                offset_bytes,
+                block_stride_bytes: 0,
+                shared_by,
+            });
+            offset_bytes = checked_add(
+                offset_bytes,
+                page_size_bytes,
+                "DeepSeek V4 packed KV tensor offset",
+            )?;
+        }
+    }
+    Ok(tensors)
+}
+
+fn nearest_vllm_full_page_size(page_size: usize, full_page_sizes: &[usize]) -> Result<usize> {
+    if full_page_sizes.is_empty() {
+        return Ok(page_size);
+    }
+    full_page_sizes
+        .iter()
+        .copied()
+        .filter(|candidate| *candidate >= page_size)
+        .min()
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: format!(
+                "DeepSeek V4 sliding cache page {page_size} is larger than every full MLA page"
+            ),
+        })
+}
+
+fn unique_page_sizes(entries: &[VirtualKvEntry]) -> Vec<usize> {
+    let mut values = Vec::new();
+    for entry in entries {
+        if !values.contains(&entry.page_size_bytes) {
+            values.push(entry.page_size_bytes);
+        }
+    }
+    values
+}
+
+fn most_common_page_count(entries: &[VirtualKvEntry]) -> Option<usize> {
+    let mut counts: Vec<(usize, usize)> = Vec::new();
+    for entry in entries {
+        if let Some((_, count)) = counts
+            .iter_mut()
+            .find(|(page_size, _)| *page_size == entry.page_size_bytes)
+        {
+            *count += 1;
+        } else {
+            counts.push((entry.page_size_bytes, 1));
+        }
+    }
+    counts.into_iter().map(|(_, count)| count).max()
+}
+
+fn approximate_gcd(values: &[usize], lower_bound: usize) -> Result<usize> {
+    if values.is_empty() || values.iter().any(|value| *value == 0) || lower_bound == 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 packed layout tuple counts must be positive".to_string(),
+        });
+    }
+    let max_value = values.iter().copied().max().unwrap_or(lower_bound);
+    if lower_bound > max_value {
+        return Ok(lower_bound);
+    }
+    let mut best = lower_bound;
+    let mut best_padding: Option<usize> = None;
+    for candidate in lower_bound..=max_value {
+        let padding = values.iter().try_fold(0usize, |sum, value| {
+            checked_add(
+                sum,
+                (candidate - (value % candidate)) % candidate,
+                "DeepSeek V4 packed layout tuple padding",
+            )
+        })?;
+        let should_update = match best_padding {
+            Some(current) => padding < current || padding == current && candidate > best,
+            None => true,
+        };
+        if should_update {
+            best = candidate;
+            best_padding = Some(padding);
+        }
+    }
+    Ok(best)
+}
+
+fn ceil_div(value: usize, divisor: usize) -> Result<usize> {
+    if divisor == 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 packed layout divisor must be non-zero".to_string(),
+        });
+    }
+    Ok(value.div_ceil(divisor))
+}
+
+fn group_page_size(groups: &[DeepSeekVllmKvCacheGroup], name: &str) -> Result<usize> {
+    groups
+        .iter()
+        .find(|group| group.name == name)
+        .map(|group| group.spec.page_size_bytes)
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: format!("DeepSeek V4 packed layout is missing KV group {name}"),
+        })
 }
 
 fn spec_from_parts(
@@ -720,6 +1125,32 @@ fn json_groups(groups: &[DeepSeekVllmKvCacheGroup]) -> String {
             out.push(',');
         }
         out.push_str(&group.to_json());
+    }
+    out.push(']');
+    out
+}
+
+fn json_packed_tensors(tensors: &[DeepSeekVllmPackedKvTensor]) -> String {
+    let mut out = String::from("[");
+    for (index, tensor) in tensors.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&tensor.to_json());
+    }
+    out.push(']');
+    out
+}
+
+fn json_string_array(values: &[String]) -> String {
+    let mut out = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(&json_escape(value));
+        out.push('"');
     }
     out.push(']');
     out

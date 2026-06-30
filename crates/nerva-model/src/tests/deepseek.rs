@@ -386,6 +386,42 @@ fn deepseek_vllm_kv_plan_matches_v4_sparse_swa_and_indexer_contracts() {
     assert!(plan
         .to_json()
         .contains("\"indexes_kv_by_block_stride\":false"));
+
+    let packed = plan
+        .packed_layout
+        .as_ref()
+        .expect("DeepSeek V4 should expose vLLM packed KV layout");
+    assert_eq!(packed.total_bytes_per_block, 37_440 + 8_640 + 1_728);
+    assert_eq!(packed.tensors.len(), 3);
+    assert_eq!(packed.tensors[0].page_size_bytes, 37_440);
+    assert_eq!(packed.tensors[0].slot_index, 0);
+    assert_eq!(packed.tensors[0].offset_bytes, 0);
+    assert_eq!(packed.tensors[0].block_stride_bytes, 47_808);
+    assert_eq!(packed.tensors[0].shared_by.len(), 7);
+    assert!(packed.tensors[0]
+        .shared_by
+        .iter()
+        .any(|name| name == "model.layers.2.self_attn.compressor.state_cache"));
+    assert!(packed.tensors[0]
+        .shared_by
+        .iter()
+        .any(|name| name == "model.layers.3.self_attn.compressor.state_cache"));
+    assert_eq!(packed.tensors[1].page_size_bytes, 8_640);
+    assert_eq!(packed.tensors[1].offset_bytes, 37_440);
+    assert_eq!(packed.tensors[1].block_stride_bytes, 47_808);
+    assert_eq!(packed.tensors[1].shared_by.len(), 2);
+    assert!(packed.tensors[1]
+        .shared_by
+        .iter()
+        .any(|name| name == "model.layers.2.self_attn.indexer.compressor.state_cache"));
+    assert_eq!(packed.tensors[2].page_size_bytes, 1_728);
+    assert_eq!(packed.tensors[2].offset_bytes, 46_080);
+    assert_eq!(packed.tensors[2].block_stride_bytes, 47_808);
+    assert_eq!(
+        packed.tensors[2].shared_by,
+        vec!["model.layers.3.self_attn".to_string()]
+    );
+    assert!(plan.to_json().contains("\"packed_layout\""));
 }
 
 #[test]
