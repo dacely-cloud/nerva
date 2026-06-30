@@ -538,7 +538,7 @@ fn vllm_kv_reference_units(architecture: HfArchitectureKind) -> Vec<&'static str
             "/root/vllm/vllm/model_executor/layers/attention/mla_attention.py",
             "/root/vllm/vllm/model_executor/models/deepseek_v2.py",
             "/root/vllm/vllm/v1/kv_cache_interface.py",
-            "/root/vllm/vllm/v1/attention/backends/mla/flashinfer_mla_sparse.py",
+            "/root/vllm/vllm/v1/attention/backends/mla/indexer.py",
         ],
         HfArchitectureKind::DeepSeekV4 => vec![
             "/root/vllm/vllm/models/deepseek_v4/attention.py",

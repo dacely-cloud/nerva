@@ -137,7 +137,7 @@ fn deepseek_vllm_kv_plan_matches_v3_and_v32_mla_cache_contracts() {
     assert!(
         v32_plan
             .to_json()
-            .contains("/root/vllm/vllm/v1/attention/backends/mla/flashinfer_mla_sparse.py")
+            .contains("/root/vllm/vllm/v1/attention/backends/mla/indexer.py")
     );
 }
 

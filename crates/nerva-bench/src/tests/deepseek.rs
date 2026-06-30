@@ -348,8 +348,8 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-reference-audit-v1\""));
     assert!(json.contains("\"status\":\"ok\""));
-    assert!(json.contains("\"reference_units_total\":13"));
-    assert!(json.contains("\"reference_units_ok\":13"));
+    assert!(json.contains("\"reference_units_total\":14"));
+    assert!(json.contains("\"reference_units_ok\":14"));
     assert!(json.contains("\"reference_units_missing_file\":0"));
     assert!(json.contains("\"reference_units_symbol_gap\":0"));
     assert!(json.contains("\"runtime_parity_status\":\"vllm_reference_sources_pinned\""));
@@ -357,6 +357,7 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("\"execution_unit\":\"v3_mla_moe_model\""));
     assert!(json.contains("\"execution_unit\":\"v4_sparse_mla_backend\""));
+    assert!(json.contains("\"execution_unit\":\"v4_swa_cache_spec\""));
     assert!(json.contains("\"execution_unit\":\"v4_save_partial_states\""));
     assert!(json.contains("\"execution_unit\":\"v4_fused_qkv_rmsnorm\""));
     assert!(json.contains("\"execution_unit\":\"v4_fused_inv_rope_fp8_quant\""));
@@ -391,8 +392,8 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
     assert!(json.contains("\"runtime_contract_status\":\"unsupported\""));
     assert!(json.contains("\"vllm_reference_status\":\"ok\""));
-    assert!(json.contains("\"vllm_reference_units_total\":13"));
-    assert!(json.contains("\"vllm_reference_units_ok\":13"));
+    assert!(json.contains("\"vllm_reference_units_total\":14"));
+    assert!(json.contains("\"vllm_reference_units_ok\":14"));
     assert!(json.contains("\"runtime_units_total\":8"));
     assert!(json.contains("\"runtime_blocking_units_total\":8"));
     assert!(json.contains("\"runtime_units_partial\":7"));
@@ -429,6 +430,8 @@ class DeepseekV4IndexerBackend: pass
 compress_ratio
 get_compressed_slot_mapping
 DeepseekV32IndexerMetadataBuilder
+get_supported_kernel_block_sizes
+return [1, 64] if current_platform.is_rocm() else [64]
 "#,
     );
     write_fixture_file(
@@ -440,6 +443,10 @@ class SlidingWindowMLASpec: pass
 fp8_ds_mla
 compress_ratio
 real_page_size_bytes
+return self.block_size // self.compress_ratio
+return self.storage_block_size * 584
+return self.block_size * 656
+_apply_alignment_padding
 "#,
     );
     write_fixture_file(
@@ -453,6 +460,9 @@ execute_in_parallel
 MLAAttentionSpec
 compress_ratio
 fp8_ds_mla
+DeepseekV4SWACache
+alignment=576 if uses_fp8_ds_mla_layout else None
+self.quant_block_size = 128
 "#,
     );
     write_fixture_file(
@@ -465,6 +475,19 @@ compress_norm_rope_store_triton
 compress_ratio
 SlidingWindowMLASpec
 alignment=576
+CompressorMetadataBuilder
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/v1/attention/backends/mla/sparse_swa.py",
+        r#"
+class DeepseekV4SWACache: pass
+self.block_size = 64
+SlidingWindowMLASpec
+alignment=576 if uses_fp8_ds_mla_layout else None
+model_version="deepseek_v4"
+return (num_blocks, block_size, 584)
 "#,
     );
     write_fixture_file(
@@ -507,6 +530,8 @@ class DeepseekV4FlashMLABackend: pass
 FLASHMLA_SPARSE_DSV4
 fp8_ds_mla
 584
+return [256]
+return (num_blocks, block_size, 584)
 DeepseekV4FlashMLAMetadataBuilder
 build_c128a_topk_metadata
 "#,
