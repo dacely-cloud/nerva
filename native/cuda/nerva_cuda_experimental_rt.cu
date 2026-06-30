@@ -71,6 +71,16 @@ uint64_t div_u64(uint64_t numerator, uint64_t denominator) {
   return denominator == 0 ? 0 : numerator / denominator;
 }
 
+uint64_t mul_div_u64(uint64_t lhs, uint64_t rhs, uint64_t divisor) {
+  if (divisor == 0) {
+    return 0;
+  }
+  const __uint128_t product =
+      static_cast<__uint128_t>(lhs) * static_cast<__uint128_t>(rhs);
+  const __uint128_t value = product / divisor;
+  return value > UINT64_MAX ? UINT64_MAX : static_cast<uint64_t>(value);
+}
+
 void set_cstr(char *dst, size_t dst_len, const char *src) {
   if (dst == nullptr || dst_len == 0) {
     return;
@@ -3725,6 +3735,170 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   out->hot_path_allocations = 0;
   out->status = 0;
 
+  cleanup();
+  return 0;
+}
+
+namespace {
+
+void clear_cold_kv_result(
+    const NervaCudaExperimentalRtColdKvStagingRequest *request,
+    NervaCudaExperimentalRtColdKvStagingResult *out) {
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  out->device_ordinal = -1;
+  set_cstr(out->backend, sizeof(out->backend),
+           "cuda_pinned_h2d_cold_kv_staging");
+  set_cstr(out->reason, sizeof(out->reason),
+           "Pinned host to device cold KV page staging benchmark");
+  if (request == nullptr) {
+    return;
+  }
+  out->page_bytes = request->page_bytes;
+  out->pages_per_step = request->pages_per_step;
+  out->iterations = request->iterations;
+  out->warmup_iterations = request->warmup_iterations;
+  out->bytes_per_step =
+      checked_mul_u64(request->page_bytes, request->pages_per_step);
+  out->total_h2d_bytes =
+      checked_mul_u64(out->bytes_per_step, request->iterations);
+}
+
+int fail_cold_kv(NervaCudaExperimentalRtColdKvStagingResult *out,
+                 cudaError_t err) {
+  out->cuda_error = static_cast<int32_t>(err);
+  out->status = -1;
+  return -1;
+}
+
+}  // namespace
+
+extern "C" int nerva_cuda_experimental_rt_cold_kv_staging_bench(
+    const NervaCudaExperimentalRtColdKvStagingRequest *request,
+    NervaCudaExperimentalRtColdKvStagingResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_cold_kv_result(request, out);
+  if (request == nullptr || request->page_bytes == 0 ||
+      request->pages_per_step == 0 || request->iterations == 0 ||
+      out->bytes_per_step == 0 || out->bytes_per_step == UINT64_MAX ||
+      out->total_h2d_bytes == UINT64_MAX) {
+    return fail_cold_kv(out, cudaErrorInvalidValue);
+  }
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail_cold_kv(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail_cold_kv(out, cudaErrorNoDevice);
+  }
+  err = cudaGetDevice(&out->device_ordinal);
+  if (err != cudaSuccess) {
+    return fail_cold_kv(out, err);
+  }
+  cudaDeviceProp props{};
+  err = cudaGetDeviceProperties(&props, out->device_ordinal);
+  if (err != cudaSuccess) {
+    return fail_cold_kv(out, err);
+  }
+  out->compute_capability_major = props.major;
+  out->compute_capability_minor = props.minor;
+
+  void *host = nullptr;
+  void *device = nullptr;
+  cudaStream_t stream = nullptr;
+  cudaEvent_t start = nullptr;
+  cudaEvent_t stop = nullptr;
+  auto cleanup = [&]() {
+    if (stop != nullptr) {
+      cudaEventDestroy(stop);
+    }
+    if (start != nullptr) {
+      cudaEventDestroy(start);
+    }
+    if (stream != nullptr) {
+      cudaStreamDestroy(stream);
+    }
+    if (device != nullptr) {
+      cudaFree(device);
+      out->device_frees += 1;
+    }
+    if (host != nullptr) {
+      cudaFreeHost(host);
+      out->pinned_host_frees += 1;
+    }
+  };
+  auto fail_with_cleanup = [&](cudaError_t failure) {
+    cleanup();
+    return fail_cold_kv(out, failure);
+  };
+
+  const size_t bytes_per_step = static_cast<size_t>(out->bytes_per_step);
+  if (static_cast<uint64_t>(bytes_per_step) != out->bytes_per_step) {
+    return fail_cold_kv(out, cudaErrorInvalidValue);
+  }
+  err = cudaHostAlloc(&host, bytes_per_step, cudaHostAllocDefault);
+  if (err != cudaSuccess) {
+    return fail_cold_kv(out, err);
+  }
+  out->pinned_host_allocations += 1;
+  out->pinned_host_bytes = out->bytes_per_step;
+  memset(host, 0x5a, bytes_per_step);
+
+  err = cudaMalloc(&device, bytes_per_step);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+  out->device_allocations += 1;
+  out->device_arena_bytes = out->bytes_per_step;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err == cudaSuccess) {
+    err = cudaEventCreate(&start);
+  }
+  if (err == cudaSuccess) {
+    err = cudaEventCreate(&stop);
+  }
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+
+  for (uint32_t iter = 0; iter < request->warmup_iterations; ++iter) {
+    err = cudaMemcpyAsync(device, host, bytes_per_step, cudaMemcpyHostToDevice,
+                          stream);
+    if (err != cudaSuccess) {
+      return fail_with_cleanup(err);
+    }
+  }
+  err = cudaEventRecord(start, stream);
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+  for (uint32_t iter = 0; iter < request->iterations; ++iter) {
+    err = cudaMemcpyAsync(device, host, bytes_per_step, cudaMemcpyHostToDevice,
+                          stream);
+    if (err != cudaSuccess) {
+      return fail_with_cleanup(err);
+    }
+  }
+  err = cudaEventRecord(stop, stream);
+  if (err == cudaSuccess) {
+    err = cudaEventSynchronize(stop);
+    out->sync_calls += 1;
+  }
+  if (err != cudaSuccess) {
+    return fail_with_cleanup(err);
+  }
+
+  out->h2d_total_ns = elapsed_ns(start, stop);
+  out->h2d_avg_ns = div_u64(out->h2d_total_ns, request->iterations);
+  out->h2d_avg_page_ns = div_u64(out->h2d_avg_ns, request->pages_per_step);
+  out->effective_bandwidth_bps =
+      mul_div_u64(out->total_h2d_bytes, 1000000000ull, out->h2d_total_ns);
+  out->hot_path_allocations = 0;
+  out->status = 0;
   cleanup();
   return 0;
 }

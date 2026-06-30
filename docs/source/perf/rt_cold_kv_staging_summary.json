@@ -1,0 +1,110 @@
+{
+  "artifact": "rt_cold_kv_staging_summary",
+  "date": "2026-06-30",
+  "backend": "cuda_pinned_h2d_cold_kv_staging",
+  "device": {
+    "name": "RTX 5090",
+    "compute_capability_major": 12,
+    "compute_capability_minor": 0
+  },
+  "scope": "standalone pinned-host to device cold KV page staging",
+  "command_template": "target/debug/nerva-bench experimental-rt-cold-kv 9437184 <pages_per_step> <iterations> <warmup_iterations>",
+  "qwen3_8b_bf16_page": {
+    "layers": 36,
+    "kv_heads": 8,
+    "head_dim": 128,
+    "page_tokens": 64,
+    "page_bytes": 9437184,
+    "page_mib": 9.0
+  },
+  "notes": [
+    "This measures transfer cost only; it does not include selected-page attention, projection, MLP, sampling, or decode graph replay.",
+    "All points reported status ok, hot_path_allocations 0, and matched allocation/free counters.",
+    "Token-time hot/cold KV paging is not yet integrated into Qwen decode."
+  ],
+  "points": [
+    {
+      "pages_per_step": 1,
+      "iterations": 64,
+      "warmup_iterations": 8,
+      "bytes_per_step": 9437184,
+      "h2d_avg_ns": 688771,
+      "h2d_avg_ms": 0.688771,
+      "h2d_avg_page_ns": 688771,
+      "h2d_avg_page_ms": 0.688771,
+      "effective_bandwidth_bps": 13701482786,
+      "effective_bandwidth_gbps_x1000": 13701,
+      "transfer_only_steps_per_second_x1000": 1451861
+    },
+    {
+      "pages_per_step": 4,
+      "iterations": 64,
+      "warmup_iterations": 8,
+      "bytes_per_step": 37748736,
+      "h2d_avg_ns": 2742778,
+      "h2d_avg_ms": 2.742778,
+      "h2d_avg_page_ns": 685694,
+      "h2d_avg_page_ms": 0.685694,
+      "effective_bandwidth_bps": 13762954609,
+      "effective_bandwidth_gbps_x1000": 13762,
+      "transfer_only_steps_per_second_x1000": 364593
+    },
+    {
+      "pages_per_step": 8,
+      "iterations": 64,
+      "warmup_iterations": 8,
+      "bytes_per_step": 75497472,
+      "h2d_avg_ns": 5451802,
+      "h2d_avg_ms": 5.451802,
+      "h2d_avg_page_ns": 681475,
+      "h2d_avg_page_ms": 0.681475,
+      "effective_bandwidth_bps": 13848168367,
+      "effective_bandwidth_gbps_x1000": 13848,
+      "transfer_only_steps_per_second_x1000": 183425
+    },
+    {
+      "pages_per_step": 16,
+      "iterations": 64,
+      "warmup_iterations": 8,
+      "bytes_per_step": 150994944,
+      "h2d_avg_ns": 20559444,
+      "h2d_avg_ms": 20.559444,
+      "h2d_avg_page_ns": 1284965,
+      "h2d_avg_page_ms": 1.284965,
+      "effective_bandwidth_bps": 7344310672,
+      "effective_bandwidth_gbps_x1000": 7344,
+      "transfer_only_steps_per_second_x1000": 48639
+    },
+    {
+      "pages_per_step": 32,
+      "iterations": 48,
+      "warmup_iterations": 6,
+      "bytes_per_step": 301989888,
+      "h2d_avg_ns": 21784734,
+      "h2d_avg_ms": 21.784734,
+      "h2d_avg_page_ns": 680772,
+      "h2d_avg_page_ms": 0.680772,
+      "effective_bandwidth_bps": 13862454265,
+      "effective_bandwidth_gbps_x1000": 13862,
+      "transfer_only_steps_per_second_x1000": 45903
+    },
+    {
+      "pages_per_step": 64,
+      "iterations": 32,
+      "warmup_iterations": 4,
+      "bytes_per_step": 603979776,
+      "h2d_avg_ns": 65662896,
+      "h2d_avg_ms": 65.662896,
+      "h2d_avg_page_ns": 1025982,
+      "h2d_avg_page_ms": 1.025982,
+      "effective_bandwidth_bps": 9198189735,
+      "effective_bandwidth_gbps_x1000": 9198,
+      "transfer_only_steps_per_second_x1000": 15229
+    }
+  ],
+  "interpretation": {
+    "one_to_four_pages": "Small cold deltas are viable as transfer work: one Qwen3-8B 64-token KV page measured 0.689 ms and four pages measured 2.743 ms.",
+    "many_pages": "Large cold misses dominate decode latency: 16 pages measured 20.559 ms and 64 pages measured 65.663 ms before attention or projection.",
+    "design_constraint": "A hot/cold RT path must keep selected reusable pages resident and prefetch cold deltas; fetching hundreds of selected pages from host every token is not viable over this path."
+  }
+}

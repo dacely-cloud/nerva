@@ -10,6 +10,7 @@ const COMMANDS: &[&str] = &[
     "experimental-rt [context_tokens] [query_count] [candidates_per_query] [iterations] [page_tokens] [layer_count]",
     "experimental-rt-sweep [context_tokens] [query_count] [max_candidates_per_query] [iterations] [page_tokens] [min_candidates_per_query] [layer_count]",
     "experimental-rt-matrix [iterations] [page_tokens] [layer_count]",
+    "experimental-rt-cold-kv [page_bytes] [pages_per_step] [iterations] [warmup_iterations]",
     "capabilities",
     "backend-contract",
     "hot-path-guard",

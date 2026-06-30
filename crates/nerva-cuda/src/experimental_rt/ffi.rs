@@ -115,6 +115,79 @@ pub(crate) struct NervaCudaExperimentalRtCandidateBenchResult {
     pub(crate) reason: [c_char; 192],
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaExperimentalRtColdKvStagingRequest {
+    pub(crate) page_bytes: u64,
+    pub(crate) pages_per_step: u32,
+    pub(crate) iterations: u32,
+    pub(crate) warmup_iterations: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaExperimentalRtColdKvStagingResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) device_count: i32,
+    pub(crate) device_ordinal: i32,
+    pub(crate) compute_capability_major: i32,
+    pub(crate) compute_capability_minor: i32,
+    pub(crate) page_bytes: u64,
+    pub(crate) pages_per_step: u32,
+    pub(crate) iterations: u32,
+    pub(crate) warmup_iterations: u32,
+    pub(crate) bytes_per_step: u64,
+    pub(crate) total_h2d_bytes: u64,
+    pub(crate) h2d_total_ns: u64,
+    pub(crate) h2d_avg_ns: u64,
+    pub(crate) h2d_avg_page_ns: u64,
+    pub(crate) effective_bandwidth_bps: u64,
+    pub(crate) device_arena_bytes: u64,
+    pub(crate) pinned_host_bytes: u64,
+    pub(crate) device_allocations: u64,
+    pub(crate) device_frees: u64,
+    pub(crate) pinned_host_allocations: u64,
+    pub(crate) pinned_host_frees: u64,
+    pub(crate) sync_calls: u64,
+    pub(crate) hot_path_allocations: u64,
+    pub(crate) backend: [c_char; 64],
+    pub(crate) reason: [c_char; 192],
+}
+
+impl Default for NervaCudaExperimentalRtColdKvStagingResult {
+    fn default() -> Self {
+        Self {
+            status: -1,
+            cuda_error: 0,
+            device_count: 0,
+            device_ordinal: -1,
+            compute_capability_major: 0,
+            compute_capability_minor: 0,
+            page_bytes: 0,
+            pages_per_step: 0,
+            iterations: 0,
+            warmup_iterations: 0,
+            bytes_per_step: 0,
+            total_h2d_bytes: 0,
+            h2d_total_ns: 0,
+            h2d_avg_ns: 0,
+            h2d_avg_page_ns: 0,
+            effective_bandwidth_bps: 0,
+            device_arena_bytes: 0,
+            pinned_host_bytes: 0,
+            device_allocations: 0,
+            device_frees: 0,
+            pinned_host_allocations: 0,
+            pinned_host_frees: 0,
+            sync_calls: 0,
+            hot_path_allocations: 0,
+            backend: [0; 64],
+            reason: [0; 192],
+        }
+    }
+}
+
 impl Default for NervaCudaExperimentalRtCandidateBenchResult {
     fn default() -> Self {
         Self {
@@ -225,6 +298,10 @@ unsafe extern "C" {
         request: *const NervaCudaExperimentalRtCandidateBenchRequest,
         out: *mut NervaCudaExperimentalRtCandidateBenchResult,
     ) -> c_int;
+    fn nerva_cuda_experimental_rt_cold_kv_staging_bench(
+        request: *const NervaCudaExperimentalRtColdKvStagingRequest,
+        out: *mut NervaCudaExperimentalRtColdKvStagingResult,
+    ) -> c_int;
 }
 
 pub(crate) fn run_experimental_rt_candidate_bench(
@@ -232,4 +309,11 @@ pub(crate) fn run_experimental_rt_candidate_bench(
     out: &mut NervaCudaExperimentalRtCandidateBenchResult,
 ) -> c_int {
     unsafe { nerva_cuda_experimental_rt_candidate_bench(request, out) }
+}
+
+pub(crate) fn run_experimental_rt_cold_kv_staging_bench(
+    request: &NervaCudaExperimentalRtColdKvStagingRequest,
+    out: &mut NervaCudaExperimentalRtColdKvStagingResult,
+) -> c_int {
+    unsafe { nerva_cuda_experimental_rt_cold_kv_staging_bench(request, out) }
 }

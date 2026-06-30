@@ -1,5 +1,6 @@
 use std::process::ExitCode;
 
+use nerva_cuda::experimental_rt::cold_kv::experimental_rt_cold_kv_staging_bench;
 use nerva_cuda::experimental_rt::probe::experimental_rt_candidate_bench;
 use nerva_cuda::experimental_rt::summary::CudaExperimentalRtCandidateBenchSummary;
 
@@ -8,11 +9,12 @@ use crate::cli::cuda_rt_equal_bytes::{
     fine_token_projected_page_byte_bracket_json, page_level_equal_bytes_baseline_json,
     recall_curve_json,
 };
-use crate::parse::{parse_optional_u32, parse_optional_usize};
+use crate::parse::{parse_optional_u32, parse_optional_u64, parse_optional_usize};
 
 const DIMS: u32 = 16;
 const WARMUP_ITERATIONS: u32 = 8;
 const DEFAULT_LAYER_COUNT: u32 = 36;
+const QWEN3_8B_BF16_KV_PAGE_BYTES: u64 = 9_437_184;
 const DEFAULT_MATRIX_ITERATIONS: u32 = 16;
 const MATRIX_CONTEXT_TOKENS: [usize; 4] = [128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024];
 const MATRIX_QUERY_COUNTS: [u32; 3] = [1, 8, 32];
@@ -118,6 +120,41 @@ pub(crate) fn run_experimental_rt_matrix(args: &mut impl Iterator<Item = String>
     }
     let passed = points.iter().all(|point| point.summary.passed());
     print_status_json(matrix_json(&config, &points), passed)
+}
+
+pub(crate) fn run_experimental_rt_cold_kv(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let page_bytes =
+        match parse_optional_u64(args.next(), QWEN3_8B_BF16_KV_PAGE_BYTES, "page_bytes") {
+            Ok(page_bytes) => page_bytes.max(1),
+            Err(reason) => return parse_error(reason),
+        };
+    let pages_per_step = match parse_optional_u32(args.next(), 1, "pages_per_step") {
+        Ok(pages_per_step) => pages_per_step.max(1),
+        Err(reason) => return parse_error(reason),
+    };
+    let iterations = match parse_optional_u32(args.next(), 64, "iterations") {
+        Ok(iterations) => iterations.max(1),
+        Err(reason) => return parse_error(reason),
+    };
+    let warmup_iterations =
+        match parse_optional_u32(args.next(), WARMUP_ITERATIONS, "warmup_iterations") {
+            Ok(warmup_iterations) => warmup_iterations,
+            Err(reason) => return parse_error(reason),
+        };
+    let summary = experimental_rt_cold_kv_staging_bench(
+        page_bytes,
+        pages_per_step,
+        iterations,
+        warmup_iterations,
+    );
+    print_status_json(
+        format!(
+            "{{\"status\":\"{}\",\"backend\":\"cuda\",\"mode\":\"experimental_rt_cold_kv_staging\",\"scope\":\"pinned_host_to_device_cold_kv_pages\",\"summary\":{}}}",
+            if summary.passed() { "ok" } else { "failed" },
+            summary.to_json(),
+        ),
+        summary.passed(),
+    )
 }
 
 fn parse_rt_args(

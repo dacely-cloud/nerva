@@ -1232,6 +1232,42 @@ typedef struct NervaCudaExperimentalRtCandidateBenchResult {
   char reason[192];
 } NervaCudaExperimentalRtCandidateBenchResult;
 
+typedef struct NervaCudaExperimentalRtColdKvStagingRequest {
+  uint64_t page_bytes;
+  uint32_t pages_per_step;
+  uint32_t iterations;
+  uint32_t warmup_iterations;
+} NervaCudaExperimentalRtColdKvStagingRequest;
+
+typedef struct NervaCudaExperimentalRtColdKvStagingResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t device_ordinal;
+  int32_t compute_capability_major;
+  int32_t compute_capability_minor;
+  uint64_t page_bytes;
+  uint32_t pages_per_step;
+  uint32_t iterations;
+  uint32_t warmup_iterations;
+  uint64_t bytes_per_step;
+  uint64_t total_h2d_bytes;
+  uint64_t h2d_total_ns;
+  uint64_t h2d_avg_ns;
+  uint64_t h2d_avg_page_ns;
+  uint64_t effective_bandwidth_bps;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t device_allocations;
+  uint64_t device_frees;
+  uint64_t pinned_host_allocations;
+  uint64_t pinned_host_frees;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+  char backend[64];
+  char reason[192];
+} NervaCudaExperimentalRtColdKvStagingResult;
+
 typedef struct NervaCudaDeepSeekQuantSmokeResult {
   int32_t status;
   int32_t cuda_error;
@@ -2142,6 +2178,9 @@ int nerva_cuda_projection_bench(const NervaCudaProjectionBenchRequest *request,
 int nerva_cuda_experimental_rt_candidate_bench(
     const NervaCudaExperimentalRtCandidateBenchRequest *request,
     NervaCudaExperimentalRtCandidateBenchResult *out);
+int nerva_cuda_experimental_rt_cold_kv_staging_bench(
+    const NervaCudaExperimentalRtColdKvStagingRequest *request,
+    NervaCudaExperimentalRtColdKvStagingResult *out);
 int nerva_cuda_deepseek_quant_smoke(NervaCudaDeepSeekQuantSmokeResult *out);
 int nerva_cuda_deepseek_quant_fp8_dequant(
     const NervaCudaDeepSeekQuantFp8DequantRequest *request,

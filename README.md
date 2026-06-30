@@ -491,6 +491,7 @@ NERVA_EXPERIMENTAL_RT_SEMANTIC_OPTIX=1 \
   cargo run -p nerva-bench -- experimental-rt 524288 8 512 64 64 36
 cargo run -p nerva-bench -- experimental-rt-sweep 524288 8 1024 64 64 1 36
 cargo run -p nerva-bench -- experimental-rt-matrix 16 64 36
+cargo run -p nerva-bench -- experimental-rt-cold-kv 9437184 4 64 8
 cargo run -p nerva -- -m qwen3-8b -p "Tell me a story" -c 32768 -o 2048 \
   --rt-mode sparse --rt-far-pages 14 --rt-local-window 4096 --rt-sink-tokens 128
 NERVA_EXPERIMENTAL_RT_QK_SELECTOR=1 NERVA_EXPERIMENTAL_RT_QK_FUSED=1 \
@@ -529,6 +530,8 @@ The 1,048,576-token synthetic sweep now has a summarized artifact at `docs/sourc
 
 The fixed-1024-candidate synthetic scale artifact at `docs/source/perf/rt_context_scale_c1024_summary.json` extends that check to 8,388,608 tokens. RT selected attention stayed near 2.31 ms while dense synthetic attention grew to 109.02 ms; the estimated Qwen3-8B hot KV set stays about 10.125 GiB while dense BF16 KV would be about 1,152 GiB. This supports the hot/cold memory direction, not exact over-context Qwen inference.
 
+The cold-KV staging artifact at `docs/source/perf/rt_cold_kv_staging_summary.json` measures pinned host-to-device transfer for Qwen3-8B BF16 KV pages. One 64-token page is 9 MiB across all layers. Staging one page took 0.689 ms, four pages took 2.743 ms, eight pages took 5.452 ms, and sixty-four pages took 65.663 ms. That means cold misses must be small, rare, or prefetched; fetching hundreds of pages from host every token would erase the RT selection win. Token-time hot/cold KV paging is still not integrated into Qwen decode.
+
 On the 30,571-token Qwen3-8B prompt with 2,048 generated tokens, 80 selected pages, 4,096 local tokens, 128 sink tokens, and `NERVA_EXPERIMENTAL_PREFILL_LOCAL_WINDOW_TOKENS=4096`, the current decode comparison is:
 
 | Selector policy | Decode throughput | Decode wall | Attention per 256-token chunk | Notes |
@@ -539,7 +542,7 @@ On the 30,571-token Qwen3-8B prompt with 2,048 generated tokens, 80 selected pag
 | `cuda_qk_representative_page_selector` | 80.74 tok/s | 25.39s | 777.78 ms | Semantic page choice, separate selector kernels. |
 | `cuda_qk_fused_attention_page_selector` | 81.65 tok/s | 25.11s | 723.46 ms | Semantic page choice with selector launch overhead removed. |
 
-The sparse runs above generate different tokens from dense on this prompt. Dense versus synthetic RT and dense versus fused Q/K first diverge at generated token index 7. That makes current sparse RT a speed experiment, not an exact decode replacement. It also does not reduce VRAM yet: the current Qwen path still allocates the full resident KV cache, so 32k dense and sparse both use about 31.8 GiB on the RTX 5090. Hot/cold KV paging is still future work.
+The sparse runs above generate different tokens from dense on this prompt. Dense versus synthetic RT and dense versus fused Q/K first diverge at generated token index 7. That makes current sparse RT a speed experiment, not an exact decode replacement. It also does not reduce VRAM yet: the current Qwen path still allocates the full resident KV cache, so 32k dense and sparse both use about 31.8 GiB on the RTX 5090. The standalone cold-KV staging probe exists; token-time hot/cold KV paging is still future work.
 
 The current real-model integration has three modes:
 
@@ -590,7 +593,7 @@ Implemented or actively wired:
 | Attention and KV probes | Exact online-softmax blockwise attention, KV page residency decisions, prefetch, demotion, eviction, and stall ledger events. |
 | Warm compute | CPU-resident, GPU-resident, GPU-staged, and hybrid matvec candidates are measured instead of assumed. |
 | Transport groundwork | Fabric topology, RDMA/DPDK/backend capability classification, DPDK UDP chunk planning, registration-cache invariants, stage-pipeline planning, and same-node multi-GPU island planning. |
-| Experimental RT | OptiX-backed synthetic candidate selection, CUDA selected-page attention, query/key-aware CUDA selector experiments, shadow/sparse/auto modes, and synthetic attention-stage estimates. |
+| Experimental RT | OptiX-backed synthetic candidate selection, CUDA selected-page attention, query/key-aware CUDA selector experiments, shadow/sparse/auto modes, synthetic attention-stage estimates, and cold-KV staging measurements. |
 | MoE groundwork | Qwen3-MoE parser, manifest, shared-expert roles, loader wiring, native contract limits, and real-config manifest tests. |
 
 Not finished:
@@ -599,7 +602,7 @@ Not finished:
 |---|---|
 | Production serving | No production scheduler/API server yet. |
 | Full RT decode proof | Candidate selection is measured; full Qwen decode speedup, semantic RT selection, and quality bounds are still being tested. |
-| Long-context overprovisioning | Hot/warm/cold KV design exists, but exact multi-tier long-context decode is not complete. |
+| Long-context overprovisioning | Hot/warm/cold KV design exists and cold-KV H2D staging is measured, but exact multi-tier long-context decode is not complete. |
 | Qwen3.5 hybrid attention | Configs are recognized and intentionally rejected until the required attention runtime exists. |
 | Distributed execution | Transport and stage probes exist; multi-host inference is still future work. |
 
@@ -708,8 +711,9 @@ cargo run -p nerva-bench -- stage-pipeline
 cargo run -p nerva-bench -- multi-gpu
 cargo run -p nerva-bench -- experimental-rt 524288 8 512 64 64 36
 cargo run -p nerva-bench -- experimental-rt-matrix 16 64 36
+cargo run -p nerva-bench -- experimental-rt-cold-kv 9437184 4 64 8
 cargo run -p nerva-bench -- hf-cuda-shared-fork-batch-compare path/to/qwen3-8b 32 128 4 32 2 "Hello" 120
 cargo run -p nerva -- -m qwen3-8b -p "Tell me a story" -c 32768 -o 2048
 ```
 
-The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, exact token parity for the f32 model probe, exact FP16/BF16 token parity for the precision model probe, exact FP16/BF16 bit parity for the precision block probe, bounded safetensors `header_bytes` and `payload_bytes`, safetensors file-prefetch `disk_read_events`, `ready_blocks`, and `data_hash`, exact vLLM-style token identity parity, Qwen3-8B `token_match: true` for shared-fork comparisons, exact dense-reference parity for the attention tests, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, token-policy `policy_syncs`, token-policy `device_fast_host_dependencies: 0`, phase-handoff `phase_handoff_syncs`, phase-handoff `owner_mismatch_rejections`, shared-queue `queue_full_rejections`, shared-queue `payload_bytes_in_queue: 0`, transaction `block_version_dependencies`, transaction `hard_syncs`, transaction `soft_visibility_syncs`, transaction `phase_handoff_syncs`, memory-loop `queue_overflows: 0`, memory-loop `pageable_copies: 0`, memory-loop `per_token_registrations: 0`, memory-loop `page_faults: 0`, fabric-topology `false_direct_claims: 0`, fabric-topology `degraded_to_pinned_host` when GPUDirect is not verified, fabric-backend `false_direct_claims: 0`, fabric-backend `explicit_degradations`, fabric-backend `dpdk_pkg_config`, DPDK UDP `direct_gpu_memory_claimed: false`, DPDK UDP `ack_packets: 0`, DPDK UDP `selective_retransmits`, warm-compute `execution_decisions`, contract `device_resident_buffers`, explicit KV residency transfer and stall ledger events, experimental RT `real_rt_backend_available`, `candidate_parity_checked`, `candidate_parity_mismatches: 0`, `attention_mass_recall_*`, and `full_decode_latency_measured: false` on derived estimates, transport `pageable_copies: 0`, transport `per_token_registrations: 0`, transport-registration `cache_hits`, transport-registration `stale_address_rejections`, transport-registration `per_token_registrations: 0`, stage-pipeline `inter_stage_weight_bytes: 0`, stage-pipeline `all_reduce_bytes: 0`, multi-gpu `aggregate_vram_pool_claimed: false`, multi-gpu `inter_gpu_weight_bytes: 0`, and multi-gpu `all_reduce_bytes: 0`.
+The benchmark commands emit single-line JSON summaries, and the acceptance fields that matter are `hot_path_allocations: 0`, exact token parity for the f32 model probe, exact FP16/BF16 token parity for the precision model probe, exact FP16/BF16 bit parity for the precision block probe, bounded safetensors `header_bytes` and `payload_bytes`, safetensors file-prefetch `disk_read_events`, `ready_blocks`, and `data_hash`, exact vLLM-style token identity parity, Qwen3-8B `token_match: true` for shared-fork comparisons, exact dense-reference parity for the attention tests, zero synthetic token audit failures, the graph, device, copy, and host-wait event counts, token-policy `policy_syncs`, token-policy `device_fast_host_dependencies: 0`, phase-handoff `phase_handoff_syncs`, phase-handoff `owner_mismatch_rejections`, shared-queue `queue_full_rejections`, shared-queue `payload_bytes_in_queue: 0`, transaction `block_version_dependencies`, transaction `hard_syncs`, transaction `soft_visibility_syncs`, transaction `phase_handoff_syncs`, memory-loop `queue_overflows: 0`, memory-loop `pageable_copies: 0`, memory-loop `per_token_registrations: 0`, memory-loop `page_faults: 0`, fabric-topology `false_direct_claims: 0`, fabric-topology `degraded_to_pinned_host` when GPUDirect is not verified, fabric-backend `false_direct_claims: 0`, fabric-backend `explicit_degradations`, fabric-backend `dpdk_pkg_config`, DPDK UDP `direct_gpu_memory_claimed: false`, DPDK UDP `ack_packets: 0`, DPDK UDP `selective_retransmits`, warm-compute `execution_decisions`, contract `device_resident_buffers`, explicit KV residency transfer and stall ledger events, experimental RT `real_rt_backend_available`, `candidate_parity_checked`, `candidate_parity_mismatches: 0`, `attention_mass_recall_*`, `full_decode_latency_measured: false` on derived estimates, cold-KV staging `effective_bandwidth_bps`, matching cold-KV allocation/free counters, transport `pageable_copies: 0`, transport `per_token_registrations: 0`, transport-registration `cache_hits`, transport-registration `stale_address_rejections`, transport-registration `per_token_registrations: 0`, stage-pipeline `inter_stage_weight_bytes: 0`, stage-pipeline `all_reduce_bytes: 0`, multi-gpu `aggregate_vram_pool_claimed: false`, multi-gpu `inter_gpu_weight_bytes: 0`, and multi-gpu `all_reduce_bytes: 0`.

@@ -19,6 +19,7 @@ pub(crate) fn dispatch(
         Some("experimental-rt") => Some(cuda_rt::run_experimental_rt(args)),
         Some("experimental-rt-sweep") => Some(cuda_rt::run_experimental_rt_sweep(args)),
         Some("experimental-rt-matrix") => Some(cuda_rt::run_experimental_rt_matrix(args)),
+        Some("experimental-rt-cold-kv") => Some(cuda_rt::run_experimental_rt_cold_kv(args)),
         _ => None,
     }
 }

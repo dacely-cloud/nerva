@@ -135,12 +135,25 @@ The 67-page sparse setting has an active KV working set of about 603 MiB. The
 80-page setting has an active KV working set of about 720 MiB. That is the
 potential hot-KV target, but the current runtime still keeps all KV resident.
 
-If cold pages are fetched from host memory, the transfer budget matters. One
-64-token page is about 9 MiB across all layers. Fetching one cold far page per
-token at 80 tok/s is roughly 720 MiB/s. Fetching fourteen cold far pages per
-token at 80 tok/s is over 10 GiB/s before overhead. The current measurements do
-not include that hot/cold transfer cost because cold KV staging is not
-implemented in this path.
+The standalone cold-KV staging probe measures pinned host-to-device transfer for
+one Qwen3-8B 64-token KV page, which is 9 MiB across all layers. The summarized
+artifact is `docs/source/perf/rt_cold_kv_staging_summary.json`.
+
+| Cold pages staged per step | Bytes per step | Transfer avg | Transfer avg/page | Effective bandwidth |
+|---:|---:|---:|---:|---:|
+| 1 | 9 MiB | 0.689 ms | 0.689 ms | 13.701 GB/s |
+| 4 | 36 MiB | 2.743 ms | 0.686 ms | 13.762 GB/s |
+| 8 | 72 MiB | 5.452 ms | 0.681 ms | 13.848 GB/s |
+| 16 | 144 MiB | 20.559 ms | 1.285 ms | 7.344 GB/s |
+| 32 | 288 MiB | 21.785 ms | 0.681 ms | 13.862 GB/s |
+| 64 | 576 MiB | 65.663 ms | 1.026 ms | 9.198 GB/s |
+
+This benchmark measures transfer only; it does not include attention, projection,
+MLP, sampling, or graph replay. The result is still enough to set the design
+constraint. Small cold deltas are viable. Fetching many pages from host every
+token is not viable. A real RT/hot-cold path has to keep reusable selected pages
+resident, prefetch cold deltas, and make cold misses rare enough that PCIe does
+not become the decode bottleneck.
 
 ## Context Limits
 
