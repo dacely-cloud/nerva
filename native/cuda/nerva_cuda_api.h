@@ -1084,6 +1084,43 @@ typedef struct NervaCudaDeepSeekRouterSmokeResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekRouterSmokeResult;
 
+typedef struct NervaCudaDeepSeekRouterRouteRequest {
+  uint32_t router_kind;
+  uint32_t num_experts;
+  uint32_t num_groups;
+  uint32_t top_k_groups;
+  uint32_t top_k;
+  uint32_t norm_topk_prob;
+  uint32_t route_token;
+  float routed_scaling_factor;
+  const float *logits;
+  const float *correction_bias;
+  const uint32_t *hash_route_table;
+  uint32_t hash_route_table_len;
+  uint32_t *expert_ids;
+  float *weights;
+} NervaCudaDeepSeekRouterRouteRequest;
+
+typedef struct NervaCudaDeepSeekRouterRouteResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t route_error;
+  uint32_t router_kind;
+  uint32_t num_experts;
+  uint32_t num_groups;
+  uint32_t top_k_groups;
+  uint32_t top_k;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekRouterRouteResult;
+
 typedef struct NervaCudaDeepSeekMlaSmokeResult {
   int32_t status;
   int32_t cuda_error;
@@ -1196,6 +1233,9 @@ int nerva_cuda_experimental_rt_candidate_bench(
     NervaCudaExperimentalRtCandidateBenchResult *out);
 int nerva_cuda_deepseek_quant_smoke(NervaCudaDeepSeekQuantSmokeResult *out);
 int nerva_cuda_deepseek_router_smoke(NervaCudaDeepSeekRouterSmokeResult *out);
+int nerva_cuda_deepseek_router_route(
+    const NervaCudaDeepSeekRouterRouteRequest *request,
+    NervaCudaDeepSeekRouterRouteResult *out);
 int nerva_cuda_deepseek_mla_smoke(NervaCudaDeepSeekMlaSmokeResult *out);
 int nerva_cuda_deepseek_moe_smoke(NervaCudaDeepSeekMoeSmokeResult *out);
 

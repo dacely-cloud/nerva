@@ -42,6 +42,7 @@ impl NativeCudaSources {
         let header = native_dir.join("nerva_cuda_api.h");
         let headers = vec![
             native_dir.join("deepseek_quant.cuh"),
+            native_dir.join("deepseek_router.cuh"),
             native_dir.join("hf_decode_sequence/device_ops.cuh"),
             native_dir.join("hf_decode_sequence/kernels.cuh"),
             native_dir.join("hf_decode_sequence/projection.cuh"),

@@ -1,4 +1,5 @@
 #include "nerva_cuda_api.h"
+#include "deepseek_router.cuh"
 
 #include <cuda_runtime.h>
 #include <math.h>
@@ -193,6 +194,62 @@ __global__ void deepseek_router_smoke_kernel(DeviceRouterOutput *out) {
   run_v4_hash_route(out);
 }
 
+__global__ void deepseek_router_route_kernel(
+    uint32_t router_kind,
+    const float *logits,
+    const float *correction_bias,
+    const uint32_t *hash_route_table,
+    uint32_t hash_route_table_len,
+    uint32_t num_experts,
+    uint32_t num_groups,
+    uint32_t top_k_groups,
+    uint32_t top_k,
+    uint32_t norm_topk_prob,
+    uint32_t route_token,
+    float routed_scaling_factor,
+    uint32_t *expert_ids,
+    float *weights,
+    int32_t *route_error) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  namespace dsr = nerva::deepseek::router;
+  int status = -1;
+  if (router_kind == dsr::kV3GroupedSigmoid) {
+    status = dsr::route_v3_grouped_sigmoid(logits,
+                                           correction_bias,
+                                           num_experts,
+                                           num_groups,
+                                           top_k_groups,
+                                           top_k,
+                                           norm_topk_prob,
+                                           routed_scaling_factor,
+                                           expert_ids,
+                                           weights);
+  } else if (router_kind == dsr::kV4SqrtSoftplus) {
+    status = dsr::route_v4_sqrtsoftplus(logits,
+                                        correction_bias,
+                                        num_experts,
+                                        top_k,
+                                        norm_topk_prob,
+                                        routed_scaling_factor,
+                                        expert_ids,
+                                        weights);
+  } else if (router_kind == dsr::kV4Hash) {
+    status = dsr::route_v4_hash(logits,
+                                hash_route_table,
+                                hash_route_table_len,
+                                route_token,
+                                num_experts,
+                                top_k,
+                                norm_topk_prob,
+                                routed_scaling_factor,
+                                expert_ids,
+                                weights);
+  }
+  *route_error = status;
+}
+
 uint32_t f32_bits(float value) {
   uint32_t bits = 0;
   memcpy(&bits, &value, sizeof(bits));
@@ -282,6 +339,53 @@ int fail(NervaCudaDeepSeekRouterSmokeResult *out, cudaError_t err) {
   out->cuda_error = static_cast<int32_t>(err);
   out->status = -1;
   return -1;
+}
+
+void clear_route_result(const NervaCudaDeepSeekRouterRouteRequest *request,
+                        NervaCudaDeepSeekRouterRouteResult *out) {
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  out->route_error = -1;
+  if (request != nullptr) {
+    out->router_kind = request->router_kind;
+    out->num_experts = request->num_experts;
+    out->num_groups = request->num_groups;
+    out->top_k_groups = request->top_k_groups;
+    out->top_k = request->top_k;
+  }
+}
+
+int fail_route(NervaCudaDeepSeekRouterRouteResult *out, cudaError_t err) {
+  out->cuda_error = static_cast<int32_t>(err);
+  out->status = -1;
+  return -1;
+}
+
+bool validate_route_request(const NervaCudaDeepSeekRouterRouteRequest *request) {
+  namespace dsr = nerva::deepseek::router;
+  if (request == nullptr || request->logits == nullptr ||
+      request->expert_ids == nullptr || request->weights == nullptr ||
+      request->num_experts == 0 || request->top_k == 0 ||
+      request->top_k > dsr::kMaxTopK || request->top_k > request->num_experts) {
+    return false;
+  }
+  if (request->router_kind == dsr::kV3GroupedSigmoid) {
+    return request->num_groups > 0 && request->num_groups <= dsr::kMaxGroups &&
+           request->top_k_groups > 0 &&
+           request->top_k_groups <= request->num_groups &&
+           request->num_experts % request->num_groups == 0;
+  }
+  if (request->router_kind == dsr::kV4SqrtSoftplus) {
+    return true;
+  }
+  if (request->router_kind == dsr::kV4Hash) {
+    const uint64_t end =
+        static_cast<uint64_t>(request->route_token) * request->top_k +
+        request->top_k;
+    return request->hash_route_table != nullptr &&
+           end <= request->hash_route_table_len;
+  }
+  return false;
 }
 
 }  // namespace
@@ -396,6 +500,194 @@ cleanup:
 
   if (err != cudaSuccess) {
     return fail(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_deepseek_router_route(
+    const NervaCudaDeepSeekRouterRouteRequest *request,
+    NervaCudaDeepSeekRouterRouteResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_route_result(request, out);
+  if (!validate_route_request(request)) {
+    return -1;
+  }
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail_route(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail_route(out, cudaErrorNoDevice);
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail_route(out, err);
+  }
+
+  float *d_logits = nullptr;
+  float *d_bias = nullptr;
+  uint32_t *d_hash_route_table = nullptr;
+  uint32_t *d_ids = nullptr;
+  float *d_weights = nullptr;
+  int32_t *d_route_error = nullptr;
+  uint32_t *h_ids = nullptr;
+  float *h_weights = nullptr;
+  int32_t h_route_error = -1;
+  cudaStream_t stream = nullptr;
+
+  const uint64_t logits_bytes =
+      sizeof(float) * static_cast<uint64_t>(request->num_experts);
+  const uint64_t bias_bytes =
+      request->correction_bias == nullptr
+          ? 0
+          : sizeof(float) * static_cast<uint64_t>(request->num_experts);
+  const uint64_t hash_bytes =
+      request->hash_route_table == nullptr
+          ? 0
+          : sizeof(uint32_t) *
+                static_cast<uint64_t>(request->hash_route_table_len);
+  const uint64_t ids_bytes =
+      sizeof(uint32_t) * static_cast<uint64_t>(request->top_k);
+  const uint64_t weights_bytes =
+      sizeof(float) * static_cast<uint64_t>(request->top_k);
+  const uint64_t route_error_bytes = sizeof(int32_t);
+
+  err = cudaMalloc(reinterpret_cast<void **>(&d_logits), logits_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  if (bias_bytes != 0) {
+    err = cudaMalloc(reinterpret_cast<void **>(&d_bias), bias_bytes);
+    if (err != cudaSuccess) goto cleanup;
+  }
+  if (hash_bytes != 0) {
+    err = cudaMalloc(reinterpret_cast<void **>(&d_hash_route_table), hash_bytes);
+    if (err != cudaSuccess) goto cleanup;
+  }
+  err = cudaMalloc(reinterpret_cast<void **>(&d_ids), ids_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_weights), weights_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_route_error), route_error_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  out->device_arena_bytes =
+      logits_bytes + bias_bytes + hash_bytes + ids_bytes + weights_bytes +
+      route_error_bytes;
+
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_ids),
+                      ids_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_weights),
+                      weights_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  out->pinned_host_bytes = ids_bytes + weights_bytes;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(d_logits,
+                        request->logits,
+                        logits_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes += logits_bytes;
+  if (bias_bytes != 0) {
+    err = cudaMemcpyAsync(d_bias,
+                          request->correction_bias,
+                          bias_bytes,
+                          cudaMemcpyHostToDevice,
+                          stream);
+    if (err != cudaSuccess) goto cleanup;
+    out->h2d_bytes += bias_bytes;
+  }
+  if (hash_bytes != 0) {
+    err = cudaMemcpyAsync(d_hash_route_table,
+                          request->hash_route_table,
+                          hash_bytes,
+                          cudaMemcpyHostToDevice,
+                          stream);
+    if (err != cudaSuccess) goto cleanup;
+    out->h2d_bytes += hash_bytes;
+  }
+  err = cudaMemcpyAsync(d_route_error,
+                        &h_route_error,
+                        route_error_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes += route_error_bytes;
+
+  deepseek_router_route_kernel<<<1, 1, 0, stream>>>(
+      request->router_kind,
+      d_logits,
+      d_bias,
+      d_hash_route_table,
+      request->hash_route_table_len,
+      request->num_experts,
+      request->num_groups,
+      request->top_k_groups,
+      request->top_k,
+      request->norm_topk_prob,
+      request->route_token,
+      request->routed_scaling_factor,
+      d_ids,
+      d_weights,
+      d_route_error);
+  out->kernel_launches += 1;
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(h_ids,
+                        d_ids,
+                        ids_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(h_weights,
+                        d_weights,
+                        weights_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(&h_route_error,
+                        d_route_error,
+                        route_error_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->d2h_bytes = ids_bytes + weights_bytes + route_error_bytes;
+
+  err = cudaStreamSynchronize(stream);
+  out->sync_calls += 1;
+  if (err != cudaSuccess) goto cleanup;
+
+  out->route_error = h_route_error;
+  if (h_route_error == 0) {
+    memcpy(request->expert_ids, h_ids, ids_bytes);
+    memcpy(request->weights, h_weights, weights_bytes);
+    out->output_hash = hash_route(request->expert_ids,
+                                  request->weights,
+                                  request->top_k);
+    out->status = 0;
+  }
+
+cleanup:
+  if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_weights != nullptr) cudaFreeHost(h_weights);
+  if (h_ids != nullptr) cudaFreeHost(h_ids);
+  if (d_route_error != nullptr) cudaFree(d_route_error);
+  if (d_weights != nullptr) cudaFree(d_weights);
+  if (d_ids != nullptr) cudaFree(d_ids);
+  if (d_hash_route_table != nullptr) cudaFree(d_hash_route_table);
+  if (d_bias != nullptr) cudaFree(d_bias);
+  if (d_logits != nullptr) cudaFree(d_logits);
+
+  if (err != cudaSuccess) {
+    return fail_route(out, err);
   }
   return out->status == 0 ? 0 : -1;
 }

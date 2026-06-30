@@ -1,4 +1,8 @@
 use crate::deepseek_router::probe::deepseek_router_smoke;
+use crate::deepseek_router::route::{
+    deepseek_router_route_v3_grouped_sigmoid, deepseek_router_route_v4_hash,
+    deepseek_router_route_v4_sqrtsoftplus,
+};
 use crate::deepseek_router::summary::CudaDeepSeekRouterSummary;
 use crate::smoke::status::SmokeStatus;
 
@@ -74,4 +78,89 @@ fn deepseek_router_smoke_is_repeatable_when_device_is_available() {
     assert_eq!(second.v3_output_hash, first.v3_output_hash);
     assert_eq!(second.v4_output_hash, first.v4_output_hash);
     assert_eq!(second.v4_hash_output_hash, first.v4_hash_output_hash);
+}
+
+#[test]
+fn deepseek_router_route_api_matches_v3_v4_and_hash_reference() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let v3 = deepseek_router_route_v3_grouped_sigmoid(
+        &[-2.0, 0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -3.0],
+        Some(&[0.0, 0.0, 0.0, 4.0, 0.0, 0.0, -4.0, 0.0]),
+        2,
+        1,
+        2,
+        true,
+        2.5,
+    );
+    if v3.status != SmokeStatus::Ok {
+        return;
+    }
+    assert_eq!(v3.expert_ids, [3, 2]);
+    assert_close(
+        v3.weights[0],
+        sigmoid(-1.0) * 2.5 / (sigmoid(-1.0) + sigmoid(1.0)),
+    );
+    assert_close(
+        v3.weights[1],
+        sigmoid(1.0) * 2.5 / (sigmoid(-1.0) + sigmoid(1.0)),
+    );
+    assert_eq!(v3.kernel_launches, 1);
+    assert_eq!(v3.sync_calls, 1);
+    assert_eq!(v3.hot_path_allocations, 0);
+    assert!(v3.output_hash != 0);
+
+    let v4 = deepseek_router_route_v4_sqrtsoftplus(
+        &[-2.0, 0.0, 1.0, 3.0],
+        Some(&[0.0, 3.0, 0.0, -3.0]),
+        2,
+        true,
+        1.5,
+    );
+    assert_eq!(v4.status, SmokeStatus::Ok, "v4 route: {v4:?}");
+    assert_eq!(v4.expert_ids, [1, 2]);
+    let v4_w1 = sqrt_softplus(0.0);
+    let v4_w2 = sqrt_softplus(1.0);
+    assert_close(v4.weights[0], v4_w1 * 1.5 / (v4_w1 + v4_w2));
+    assert_close(v4.weights[1], v4_w2 * 1.5 / (v4_w1 + v4_w2));
+    assert_eq!(v4.kernel_launches, 1);
+    assert_eq!(v4.sync_calls, 1);
+    assert!(v4.output_hash != 0);
+
+    let hash_table = [
+        0u32, 1, 3, // token 0
+        2, 1, 3, // token 1
+        3, 0, 2, // token 2
+    ];
+    let v4_hash =
+        deepseek_router_route_v4_hash(&[4.0, -1.0, 0.0, 2.0], &hash_table, 1, 3, true, 1.0);
+    assert_eq!(
+        v4_hash.status,
+        SmokeStatus::Ok,
+        "v4 hash route: {v4_hash:?}"
+    );
+    assert_eq!(v4_hash.expert_ids, [2, 1, 3]);
+    let expected = [sqrt_softplus(0.0), sqrt_softplus(-1.0), sqrt_softplus(2.0)];
+    let sum = expected.iter().sum::<f32>();
+    for (actual, expected) in v4_hash.weights.iter().zip(expected) {
+        assert_close(*actual, expected / sum);
+    }
+    assert_eq!(v4_hash.kernel_launches, 1);
+    assert_eq!(v4_hash.sync_calls, 1);
+    assert!(v4_hash.output_hash != 0);
+}
+
+fn sigmoid(value: f32) -> f32 {
+    1.0 / (1.0 + (-value).exp())
+}
+
+fn sqrt_softplus(value: f32) -> f32 {
+    value.exp().ln_1p().sqrt()
+}
+
+fn assert_close(actual: f32, expected: f32) {
+    assert!(
+        (actual - expected).abs() <= 1e-6,
+        "actual={actual} expected={expected}"
+    );
 }

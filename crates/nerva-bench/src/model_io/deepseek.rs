@@ -288,6 +288,7 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         "deepseek_v3_grouped_sigmoid_router_reference".to_string(),
         "precision_moe_deepseek_v3_grouped_router".to_string(),
         "precision_moe_deepseek_router_correction_bias_load".to_string(),
+        "cuda_deepseek_router_route_api".to_string(),
         "cuda_deepseek_v3_grouped_sigmoid_router_smoke".to_string(),
     ];
 
@@ -378,6 +379,7 @@ fn coverage_for_unit(
                     "deepseek_v3_grouped_sigmoid_router_reference",
                     "precision_moe_deepseek_v3_grouped_router",
                     "precision_moe_deepseek_router_correction_bias_load",
+                    "cuda_deepseek_router_route_api",
                     "cuda_deepseek_v3_grouped_sigmoid_router_smoke",
                 ],
                 &[
@@ -470,6 +472,7 @@ fn coverage_for_unit(
                     "precision_moe_deepseek_v4_sqrtsoftplus_router",
                     "deepseek_v4_hash_route_table_i64_loader",
                     "precision_moe_deepseek_v4_hash_route_table",
+                    "cuda_deepseek_router_route_api",
                     "cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke",
                 ],
                 &[
