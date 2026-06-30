@@ -57,6 +57,7 @@ const COMMANDS: &[&str] = &[
     "manifest [config.json]",
     "manifest-coverage config.json model.safetensors.index.json",
     "deepseek-runtime-plan config.json",
+    "deepseek-cuda-readiness [config.json]",
     "safetensors [config.json model.safetensors]",
     "safetensors-shards config.json model.safetensors.index.json checkpoint_dir",
     "resident-shards config.json model.safetensors.index.json checkpoint_dir [max_task_bytes]",

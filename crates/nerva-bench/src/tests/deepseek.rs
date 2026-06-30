@@ -27,6 +27,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("fp8_e4m3fn_decode_matches_torch"));
     assert!(json.contains("e8m0_scale_upcast_matches_vllm_raw_exponent_path"));
     assert!(json.contains("cuda_fp8_e4m3fn_e8m0_block_dequant_smoke"));
+    assert!(json.contains("deepseek_vllm_kv_cache_spec_planner"));
     assert!(json.contains("deepseek_mla_decode_mqa_reference"));
     assert!(json.contains("cuda_deepseek_mla_decode_mqa_smoke"));
     assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
@@ -62,6 +63,7 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("deepseek_v32_sparse_attention_indexer"));
     assert!(json.contains("fp8_e4m3fn_e8m0_block_dequant_reference"));
     assert!(json.contains("cuda_fp8_e4m3fn_e8m0_block_dequant_smoke"));
+    assert!(json.contains("deepseek_vllm_kv_cache_spec_planner"));
     assert!(json.contains("deepseek_mla_decode_mqa_reference"));
     assert!(json.contains("cuda_deepseek_mla_decode_mqa_smoke"));
     assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
@@ -115,6 +117,13 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"cuda_deepseek_mla_decode_mqa_smoke\""));
     assert!(json.contains("\"cuda_deepseek_quant_block_dequant_smoke\""));
     assert!(json.contains("\"cuda_deepseek_router_smoke\""));
+    assert!(json.contains("\"vllm_kv_cache_plan\""));
+    assert!(json.contains("\"default_block_size\":256"));
+    assert!(json.contains("\"v4_swa\""));
+    assert!(json.contains("\"v4_c4_mla\""));
+    assert!(json.contains("\"v4_c128_mla\""));
+    assert!(json.contains("\"cache_dtype_str\":\"fp8_ds_mla\""));
+    assert!(json.contains("\"page_size_bytes\":1728"));
     assert!(json.contains("deepseek_v4_megamoe_int8_fp4_experts"));
     assert!(json.contains("\"runtime_parity_status\":\"not_verified\""));
     assert!(json.contains("\"performance_status\":\"not_benchmarked\""));
@@ -144,6 +153,7 @@ fn deepseek_cuda_readiness_without_config_reports_unknown_architecture() {
     assert!(json.contains("\"implemented_primitives\":[]"));
     assert!(json.contains("\"required_execution_units\":[]"));
     assert!(json.contains("\"vllm_reference_units\":[]"));
+    assert!(json.contains("\"vllm_kv_cache_plan\":null"));
     assert!(json.contains("\"claim_allowed\":false"));
 }
 
@@ -171,6 +181,7 @@ fn deepseek_v4_config() -> &'static str {
         "index_topk": 512,
         "index_n_heads": 64,
         "index_head_dim": 128,
+        "sliding_window": 4096,
         "compress_ratios": [0, 0, 4, 128],
         "hc_mult": 4,
         "hc_sinkhorn_iters": 20,

@@ -1,5 +1,6 @@
 use nerva_model::hf::architecture::HfArchitectureKind;
 use nerva_model::hf::contract::validate_exact_runtime_contract;
+use nerva_model::hf::deepseek::plan_deepseek_vllm_kv_cache;
 use nerva_model::hf::metadata::{HfMlpLayerKind, HfModelMetadata};
 use nerva_model::hf::parser::parse_hf_config_metadata;
 
@@ -75,6 +76,16 @@ pub(crate) fn deepseek_cuda_readiness_report_json(
     let vllm_refs = metadata_ref.map_or_else(Vec::new, |metadata| {
         vllm_reference_units(metadata.architecture)
     });
+    let vllm_kv_cache_plan = metadata_ref
+        .map(|metadata| {
+            let cache_dtype = match metadata.architecture {
+                HfArchitectureKind::DeepSeekV32 | HfArchitectureKind::DeepSeekV4 => "fp8_ds_mla",
+                _ => "bfloat16",
+            };
+            plan_deepseek_vllm_kv_cache(metadata, cache_dtype).map(|plan| plan.to_json())
+        })
+        .transpose()
+        .map_err(|err| format!("DeepSeek vLLM KV cache plan failed: {err:?}"))?;
     let passed = primitives
         .iter()
         .filter(|primitive| primitive.status == "ok")
@@ -103,7 +114,7 @@ pub(crate) fn deepseek_cuda_readiness_report_json(
     };
 
     Ok(format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-cuda-readiness-v1\",\"architecture\":{},\"primitive_status\":\"{}\",\"primitive_smokes_passed\":{},\"primitive_smokes_total\":{},\"cuda_primitives\":{},\"implemented_primitives\":{},\"required_execution_units\":{},\"remaining_required_execution_units\":{},\"vllm_reference_units\":{},\"runtime_parity_status\":\"not_verified\",\"performance_status\":\"not_benchmarked\",\"claim_allowed\":false}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-cuda-readiness-v1\",\"architecture\":{},\"primitive_status\":\"{}\",\"primitive_smokes_passed\":{},\"primitive_smokes_total\":{},\"cuda_primitives\":{},\"implemented_primitives\":{},\"required_execution_units\":{},\"remaining_required_execution_units\":{},\"vllm_reference_units\":{},\"vllm_kv_cache_plan\":{},\"runtime_parity_status\":\"not_verified\",\"performance_status\":\"not_benchmarked\",\"claim_allowed\":false}}",
         readiness_status,
         json_opt_architecture(architecture),
         primitive_status,
@@ -114,6 +125,7 @@ pub(crate) fn deepseek_cuda_readiness_report_json(
         json_string_array(&required),
         json_string_array(&required),
         json_string_array(&vllm_refs),
+        vllm_kv_cache_plan.unwrap_or_else(|| "null".to_string()),
     ))
 }
 
@@ -255,6 +267,7 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         "e8m0_scale_upcast_matches_vllm_raw_exponent_path".to_string(),
         "fp8_e4m3fn_e8m0_block_dequant_reference".to_string(),
         "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke".to_string(),
+        "deepseek_vllm_kv_cache_spec_planner".to_string(),
         "deepseek_mla_decode_mqa_reference".to_string(),
         "cuda_deepseek_mla_decode_mqa_smoke".to_string(),
         "deepseek_v3_grouped_sigmoid_router_reference".to_string(),

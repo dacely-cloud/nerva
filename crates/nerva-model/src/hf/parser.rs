@@ -32,6 +32,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
     let vocab_size = required_model_usize(config_json, decoder_config_json, "vocab_size")?;
     let max_position_embeddings =
         optional_model_usize(config_json, decoder_config_json, "max_position_embeddings")?;
+    let sliding_window = optional_model_usize(config_json, decoder_config_json, "sliding_window")?;
     let rope_theta = parse_rope_theta(config_json, decoder_config_json)?;
     let rms_norm_eps = parse_rms_norm_eps(config_json, decoder_config_json)?;
     let bos_token_id =
@@ -85,6 +86,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         intermediate_size,
         vocab_size,
         max_position_embeddings,
+        sliding_window,
         rope_theta,
         rms_norm_eps,
         bos_token_id,

@@ -281,8 +281,8 @@ fn generate_json_output(
     );
     let experimental_rt_qk_selector = experimental_rt_qk_selector_from_env();
     let experimental_rt_qk_fused_selector = experimental_rt_qk_fused_selector_from_env();
-    let rt_core_page_selector = output.stream.create.experimental_rt_decode_enabled
-        && !experimental_rt_qk_selector;
+    let rt_core_page_selector =
+        output.stream.create.experimental_rt_decode_enabled && !experimental_rt_qk_selector;
     let semantic_page_selection = experimental_rt_qk_selector;
     let semantic_rt_retrieval = false;
     let experimental_prefill_local_window_tokens =

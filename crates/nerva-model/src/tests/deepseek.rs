@@ -1,5 +1,9 @@
 use crate::hf::architecture::HfArchitectureKind;
 use crate::hf::contract::validate_exact_runtime_contract;
+use crate::hf::deepseek::{
+    deepseek_mla_dimensions, plan_deepseek_vllm_kv_cache,
+    plan_deepseek_vllm_kv_cache_with_block_size,
+};
 use crate::hf::metadata::HfMlpLayerKind;
 use crate::hf::parser::parse_hf_config_metadata;
 use crate::weights::layout::entry::WeightBlockRole;
@@ -61,6 +65,7 @@ fn parses_deepseek_v32_indexer_metadata() {
     assert_eq!(metadata.index_topk, Some(2048));
     assert_eq!(metadata.index_n_heads, Some(64));
     assert_eq!(metadata.index_head_dim, Some(128));
+    assert_eq!(metadata.sliding_window, None);
     assert_eq!(metadata.mlp_layer_types[0], HfMlpLayerKind::Dense);
     assert_eq!(metadata.mlp_layer_types[3], HfMlpLayerKind::SparseMoe);
 }
@@ -86,6 +91,7 @@ fn parses_deepseek_v4_flash_metadata() {
     assert_eq!(metadata.shared_expert_intermediate_size, Some(2048));
     assert_eq!(metadata.scoring_func.as_deref(), Some("sqrtsoftplus"));
     assert_eq!(metadata.index_topk, Some(512));
+    assert_eq!(metadata.sliding_window, Some(4096));
     assert_eq!(metadata.compress_ratios, vec![0, 0, 4, 128]);
     assert_eq!(metadata.hc_mult, Some(4));
     assert_eq!(metadata.hc_sinkhorn_iters, Some(20));
@@ -99,6 +105,104 @@ fn parses_deepseek_v4_flash_metadata() {
             .iter()
             .all(|kind| *kind == HfMlpLayerKind::SparseMoe)
     );
+}
+
+#[test]
+fn deepseek_vllm_kv_plan_matches_v3_and_v32_mla_cache_contracts() {
+    let v3 = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
+    let dims = deepseek_mla_dimensions(&v3).unwrap();
+    assert_eq!(dims.kv_lora_rank, 512);
+    assert_eq!(dims.qk_rope_head_dim, 64);
+    assert_eq!(dims.semantic_head_size, 576);
+
+    let v3_plan = plan_deepseek_vllm_kv_cache(&v3, "bfloat16").unwrap();
+    assert_eq!(v3_plan.default_block_size, 64);
+    assert_eq!(v3_plan.groups.len(), 1);
+    assert_eq!(v3_plan.groups[0].name, "v3_main_mla");
+    assert_eq!(v3_plan.groups[0].layers, 6);
+    assert_eq!(v3_plan.groups[0].spec.head_size, 576);
+    assert_eq!(v3_plan.groups[0].spec.real_page_size_bytes, 64 * 576 * 2);
+
+    let v32 = parse_hf_config_metadata(deepseek_v32_config()).unwrap();
+    let v32_plan = plan_deepseek_vllm_kv_cache(&v32, "fp8_ds_mla").unwrap();
+    assert_eq!(v32_plan.groups.len(), 2);
+    assert_eq!(v32_plan.groups[0].name, "v3_2_main_mla");
+    assert_eq!(v32_plan.groups[0].spec.dtype, DType::U8);
+    assert_eq!(v32_plan.groups[0].spec.real_page_size_bytes, 64 * 656);
+    assert_eq!(v32_plan.groups[1].name, "v3_2_sparse_indexer");
+    assert_eq!(v32_plan.groups[1].spec.head_size, 132);
+    assert_eq!(v32_plan.groups[1].spec.real_page_size_bytes, 64 * 132);
+    assert!(
+        v32_plan
+            .to_json()
+            .contains("/root/vllm/vllm/v1/attention/backends/mla/flashinfer_mla_sparse.py")
+    );
+}
+
+#[test]
+fn deepseek_vllm_kv_plan_matches_v4_sparse_swa_and_indexer_contracts() {
+    let metadata = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
+    let dims = deepseek_mla_dimensions(&metadata).unwrap();
+    assert_eq!(dims.kv_lora_rank, 512);
+    assert_eq!(dims.qk_nope_head_dim, 448);
+    assert_eq!(dims.qk_rope_head_dim, 64);
+    assert_eq!(dims.v_head_dim, 512);
+    assert_eq!(dims.semantic_head_size, 512);
+
+    let plan = plan_deepseek_vllm_kv_cache(&metadata, "fp8_ds_mla").unwrap();
+    assert_eq!(plan.default_block_size, 256);
+    assert_eq!(plan.groups.len(), 5);
+
+    let swa = &plan.groups[0];
+    assert_eq!(swa.name, "v4_swa");
+    assert_eq!(swa.layers, 2);
+    assert_eq!(swa.spec.kind, "sliding_window_mla");
+    assert_eq!(swa.spec.block_size, 64);
+    assert_eq!(swa.spec.sliding_window, Some(4096));
+    assert_eq!(swa.spec.real_page_size_bytes, 64 * 584);
+    assert_eq!(swa.spec.page_size_bytes, 37440);
+
+    let c4 = &plan.groups[1];
+    assert_eq!(c4.name, "v4_c4_mla");
+    assert_eq!(c4.layers, 1);
+    assert_eq!(c4.spec.storage_block_size, 64);
+    assert_eq!(c4.spec.real_page_size_bytes, 64 * 584);
+    assert_eq!(c4.spec.alignment, Some(576));
+
+    let c4_indexer = &plan.groups[2];
+    assert_eq!(c4_indexer.name, "v4_c4_mla_indexer");
+    assert_eq!(c4_indexer.spec.head_size, 132);
+    assert_eq!(c4_indexer.spec.storage_block_size, 64);
+    assert_eq!(c4_indexer.spec.real_page_size_bytes, 64 * 132);
+    assert_eq!(c4_indexer.spec.page_size_bytes, 8640);
+
+    let c128 = &plan.groups[3];
+    assert_eq!(c128.name, "v4_c128_mla");
+    assert_eq!(c128.layers, 1);
+    assert_eq!(c128.spec.storage_block_size, 2);
+    assert_eq!(c128.spec.real_page_size_bytes, 2 * 584);
+    assert_eq!(c128.spec.page_size_bytes, 1728);
+
+    let c128_indexer = &plan.groups[4];
+    assert_eq!(c128_indexer.name, "v4_c128_mla_indexer");
+    assert_eq!(c128_indexer.spec.storage_block_size, 2);
+    assert_eq!(c128_indexer.spec.real_page_size_bytes, 2 * 132);
+    assert_eq!(c128_indexer.spec.page_size_bytes, 576);
+    assert!(
+        plan.to_json()
+            .contains("/root/vllm/vllm/models/deepseek_v4/sparse_mla.py")
+    );
+}
+
+#[test]
+fn deepseek_vllm_kv_plan_rejects_invalid_block_and_cache_dtype_combinations() {
+    let v3 = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
+    let error = plan_deepseek_vllm_kv_cache(&v3, "fp8_ds_mla").unwrap_err();
+    assert!(format!("{error:?}").contains("DeepSeek V3.2"));
+
+    let v4 = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
+    let error = plan_deepseek_vllm_kv_cache_with_block_size(&v4, "fp8_ds_mla", 64).unwrap_err();
+    assert!(format!("{error:?}").contains("compress_ratio 128"));
 }
 
 #[test]
@@ -454,6 +558,7 @@ fn deepseek_v4_flash_config() -> &'static str {
         "index_topk": 512,
         "index_n_heads": 64,
         "index_head_dim": 128,
+        "sliding_window": 4096,
         "compress_ratios": [0, 0, 4, 128],
         "hc_mult": 4,
         "hc_sinkhorn_iters": 20,
