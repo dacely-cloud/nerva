@@ -10,7 +10,9 @@ use crate::reference::mhc::{
     deepseek_mhc_pre_torch_reference,
 };
 use crate::reference::moe::{
-    DeepSeekRoutedMoeConfig, deepseek_routed_moe_forward, deepseek_swiglu,
+    DeepSeekFullRoutedMoeConfig, DeepSeekRoutedMoeConfig, DeepSeekRoutedMoeWeights,
+    DeepSeekSharedMoeWeights, deepseek_full_routed_moe_forward, deepseek_routed_moe_forward,
+    deepseek_swiglu,
 };
 use crate::reference::router::{
     DeepSeekRouterScoring, DeepSeekV3GroupedRouterConfig, DeepSeekV4RouterConfig,
@@ -498,6 +500,144 @@ fn deepseek_routed_moe_combines_selected_experts_with_swiglu_clamp() {
 }
 
 #[test]
+fn deepseek_v3_full_routed_moe_combines_noaux_route_and_shared_experts() {
+    let input = [2.0, -1.0];
+    let logits = [2.0, 0.0, 0.5, -1.0];
+    let correction_bias = [0.0, 0.0, 5.0, 5.0];
+    let route = deepseek_v3_grouped_route(
+        &logits,
+        Some(&correction_bias),
+        DeepSeekV3GroupedRouterConfig {
+            top_k: 2,
+            num_expert_groups: 2,
+            top_k_groups: 1,
+            scoring: DeepSeekRouterScoring::Sigmoid,
+            renormalize: true,
+            routed_scaling_factor: 1.25,
+        },
+    )
+    .unwrap();
+    assert_eq!(route.expert_ids, vec![2, 3]);
+
+    let w_gate = [1.0, 0.0, 0.0, 1.0, 0.5, -0.25, -0.5, 1.0];
+    let w_up = [0.5, 0.5, -0.25, 0.75, 0.25, 0.75, 1.0, 0.5];
+    let w_down = [1.0, 0.0, -0.5, 0.25, 0.4, -0.6, 1.2, 0.3];
+    let shared_w_gate = [0.2, 0.1, -0.3, 0.4];
+    let shared_w_up = [1.0, 0.0, 0.0, 1.0];
+    let shared_w_down = [0.5, -0.25, -0.75, 0.2];
+    let mut output = [0.0; 2];
+
+    deepseek_full_routed_moe_forward(
+        &input,
+        &route,
+        DeepSeekRoutedMoeWeights {
+            w_gate: &w_gate,
+            w_up: &w_up,
+            w_down: &w_down,
+        },
+        Some(DeepSeekSharedMoeWeights {
+            w_gate: &shared_w_gate,
+            w_up: &shared_w_up,
+            w_down: &shared_w_down,
+            intermediate_size: 2,
+        }),
+        DeepSeekFullRoutedMoeConfig {
+            hidden_size: 2,
+            routed_intermediate_size: 1,
+            top_k: 2,
+            swiglu_limit: None,
+        },
+        &mut output,
+    )
+    .unwrap();
+
+    let routed_2 = deepseek_swiglu(dot(&w_gate[4..6], &input), dot(&w_up[4..6], &input), None);
+    let routed_3 = deepseek_swiglu(dot(&w_gate[6..8], &input), dot(&w_up[6..8], &input), None);
+    let shared_0 = deepseek_swiglu(
+        dot(&shared_w_gate[0..2], &input),
+        dot(&shared_w_up[0..2], &input),
+        None,
+    );
+    let shared_1 = deepseek_swiglu(
+        dot(&shared_w_gate[2..4], &input),
+        dot(&shared_w_up[2..4], &input),
+        None,
+    );
+    let expected = [
+        route.weights[0] * routed_2 * w_down[4]
+            + route.weights[1] * routed_3 * w_down[6]
+            + shared_0 * shared_w_down[0]
+            + shared_1 * shared_w_down[1],
+        route.weights[0] * routed_2 * w_down[5]
+            + route.weights[1] * routed_3 * w_down[7]
+            + shared_0 * shared_w_down[2]
+            + shared_1 * shared_w_down[3],
+    ];
+
+    assert_close_slice(&output, &expected, 1.0e-6);
+}
+
+#[test]
+fn deepseek_v4_full_routed_moe_uses_hash_route_table_with_swiglu_limit() {
+    let input = [1.1, -0.2];
+    let logits = [0.5, -1.0, 1.25, 0.0];
+    let hash_ids = [3usize, 0usize];
+    let route = deepseek_v4_sqrtsoftplus_route(
+        &logits,
+        Some(&[99.0, 99.0, 99.0, 99.0]),
+        Some(&hash_ids),
+        DeepSeekV4RouterConfig {
+            top_k: 2,
+            renormalize: true,
+            routed_scaling_factor: 1.0,
+        },
+    )
+    .unwrap();
+    assert_eq!(route.expert_ids, hash_ids);
+
+    let w_gate = [2.0, -1.0, 0.5, 0.5, -0.5, 0.75, 0.25, 1.5];
+    let w_up = [0.5, 0.5, -0.25, 0.75, 0.25, 0.75, 2.0, -2.0];
+    let w_down = [0.3, -0.4, -0.2, 0.1, 0.6, 0.2, -0.5, 0.75];
+    let mut output = [0.0; 2];
+
+    deepseek_full_routed_moe_forward(
+        &input,
+        &route,
+        DeepSeekRoutedMoeWeights {
+            w_gate: &w_gate,
+            w_up: &w_up,
+            w_down: &w_down,
+        },
+        None,
+        DeepSeekFullRoutedMoeConfig {
+            hidden_size: 2,
+            routed_intermediate_size: 1,
+            top_k: 2,
+            swiglu_limit: Some(1.0),
+        },
+        &mut output,
+    )
+    .unwrap();
+
+    let routed_3 = deepseek_swiglu(
+        dot(&w_gate[6..8], &input),
+        dot(&w_up[6..8], &input),
+        Some(1.0),
+    );
+    let routed_0 = deepseek_swiglu(
+        dot(&w_gate[0..2], &input),
+        dot(&w_up[0..2], &input),
+        Some(1.0),
+    );
+    let expected = [
+        route.weights[0] * routed_3 * w_down[6] + route.weights[1] * routed_0 * w_down[0],
+        route.weights[0] * routed_3 * w_down[7] + route.weights[1] * routed_0 * w_down[1],
+    ];
+
+    assert_close_slice(&output, &expected, 1.0e-6);
+}
+
+#[test]
 fn deepseek_routed_moe_rejects_bad_shapes() {
     let mut output = [0.0; 2];
     assert!(
@@ -550,4 +690,11 @@ fn assert_close_slice(actual: &[f32], expected: &[f32], tolerance: f32) {
             "actual {actual} expected {expected} tolerance {tolerance}"
         );
     }
+}
+
+fn dot(left: &[f32], right: &[f32]) -> f32 {
+    left.iter()
+        .zip(right.iter())
+        .map(|(left, right)| left * right)
+        .sum()
 }

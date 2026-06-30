@@ -235,6 +235,7 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
         "cuda_deepseek_megamoe_eplb_mapping_smoke",
         "cuda_deepseek_megamoe_fp8_fp4_expert_api",
         "cuda_deepseek_megamoe_fp8_fp4_expert_smoke",
+        "deepseek_full_routed_moe_reference",
     ] {
         assert!(
             primitives.iter().any(|item| item == primitive),
@@ -248,6 +249,17 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
             "missing DeepSeek V4 MegaMoE validated primitive: {primitive}"
         );
     }
+
+    let router = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v4_hash_and_bias_router")
+        .expect("DeepSeek V4 should report hash/bias router coverage");
+    assert!(
+        router
+            .validated_primitives
+            .iter()
+            .any(|item| item == "deepseek_v4_full_routed_moe_hash_reference")
+    );
 
     let parity = coverage
         .iter()

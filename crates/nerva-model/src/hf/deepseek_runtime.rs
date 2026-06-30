@@ -686,9 +686,11 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         "cuda_deepseek_mla_decode_api".to_string(),
         "cuda_deepseek_mla_decode_mqa_smoke".to_string(),
         "deepseek_routed_moe_reference".to_string(),
+        "deepseek_full_routed_moe_reference".to_string(),
         "cuda_deepseek_routed_moe_api".to_string(),
         "cuda_deepseek_routed_moe_smoke".to_string(),
         "deepseek_v3_grouped_sigmoid_router_reference".to_string(),
+        "deepseek_v3_full_routed_moe_noaux_tc_reference".to_string(),
         "precision_moe_deepseek_v3_grouped_router".to_string(),
         "precision_moe_deepseek_router_correction_bias_load".to_string(),
         "cuda_deepseek_router_route_api".to_string(),
@@ -731,6 +733,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_megamoe_fp8_fp4_expert_api".to_string());
         primitives.push("cuda_deepseek_megamoe_fp8_fp4_expert_smoke".to_string());
         primitives.push("deepseek_v4_sqrtsoftplus_hash_router_reference".to_string());
+        primitives.push("deepseek_v4_full_routed_moe_hash_reference".to_string());
         primitives.push("precision_moe_deepseek_v4_sqrtsoftplus_router".to_string());
         primitives.push("deepseek_v4_hash_route_table_i64_loader".to_string());
         primitives.push("precision_moe_deepseek_v4_hash_route_table".to_string());
@@ -933,6 +936,7 @@ fn coverage_for_unit(
             "partial",
             &[
                 "deepseek_v3_grouped_sigmoid_router_reference",
+                "deepseek_v3_full_routed_moe_noaux_tc_reference",
                 "precision_moe_deepseek_v3_grouped_router",
                 "precision_moe_deepseek_router_correction_bias_load",
                 "cuda_deepseek_router_route_api",
@@ -940,7 +944,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v3_grouped_router_runtime",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
-            &["verify full-layer routed outputs against vLLM"],
+            &["run same-checkpoint full-layer routed output differential against /root/vllm"],
         ),
         (
             HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
@@ -949,6 +953,7 @@ fn coverage_for_unit(
             "partial",
             &[
                 "deepseek_routed_moe_reference",
+                "deepseek_full_routed_moe_reference",
                 "cuda_deepseek_routed_moe_api",
                 "cuda_deepseek_routed_moe_smoke",
                 "fp8_e4m3fn_e8m0_block_dequant_reference",
@@ -958,7 +963,7 @@ fn coverage_for_unit(
             ],
             &[
                 "run routed expert gate/up/down GEMMs with checkpoint FP8 scales",
-                "integrate shared experts and routed output accumulation",
+                "wire full routed plus shared MoE accumulation into CUDA decode",
                 "benchmark fused MoE against vLLM FusedMoE",
             ],
         ),
@@ -1118,6 +1123,7 @@ fn coverage_for_unit(
             &[
                 "deepseek_v4_hash_router_manifest",
                 "deepseek_v4_sqrtsoftplus_hash_router_reference",
+                "deepseek_v4_full_routed_moe_hash_reference",
                 "precision_moe_deepseek_v4_sqrtsoftplus_router",
                 "deepseek_v4_hash_route_table_i64_loader",
                 "precision_moe_deepseek_v4_hash_route_table",
@@ -1127,7 +1133,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v4_hash_router_runtime",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
-            &["verify full-layer routed outputs against vLLM"],
+            &["run same-checkpoint full-layer routed output differential against /root/vllm"],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_megamoe_int8_fp4_experts") => (
             "partial",
@@ -1142,6 +1148,7 @@ fn coverage_for_unit(
                 "cuda_deepseek_megamoe_fp8_fp4_expert_api",
                 "cuda_deepseek_megamoe_fp8_fp4_expert_smoke",
                 "deepseek_routed_moe_reference",
+                "deepseek_full_routed_moe_reference",
                 "cuda_deepseek_routed_moe_api",
                 "cuda_deepseek_routed_moe_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
