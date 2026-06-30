@@ -103,8 +103,7 @@ bool has_unsupported_deepseek_layers(const NervaCudaHfDecodeChainLayer *layers,
       const bool supported_v4_swa =
           layer.deepseek_mode == kDeepSeekModeV4Swa &&
           (layer.mlp_kind == kMlpKindDense ||
-           (layer.mlp_kind == kMlpKindSparseMoe &&
-            (layer.deepseek_flags & kDeepSeekFlagHashRouter) == 0));
+           layer.mlp_kind == kMlpKindSparseMoe);
       if (!supported_v3 && !supported_v4_swa) {
         return true;
       }

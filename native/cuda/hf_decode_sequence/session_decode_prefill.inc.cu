@@ -266,7 +266,7 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
 
 cudaError_t launch_deepseek_v4_swa_dense_projection_step(
     NervaCudaHfDecodeSequenceSession *session, const SequenceLayerLayout &layout,
-    uint32_t layer_index, uint32_t max_steps) {
+    uint32_t layer_index, uint32_t max_steps, uint32_t prompt_token_count) {
   if (!layout_is_deepseek_v4_swa_native(layout)) {
     return cudaErrorInvalidValue;
   }
@@ -277,6 +277,8 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       session->rms_eps, session->rope_theta, session->device_scratch,
       session->device_kv_keys, session->device_kv_values,
       session->kv_block_count, session->device_kv_block_table,
+      session->vocab_size, session->device_prompt_tokens, prompt_token_count,
+      session->device_slots,
       session->device_projection_input);
   return cudaGetLastError();
 }
@@ -335,7 +337,7 @@ cudaError_t launch_cublas_layer_session_step(
           session, layout, layer_index, max_steps);
     } else if (is_deepseek_v4_swa_native) {
       err = launch_deepseek_v4_swa_dense_projection_step(
-          session, layout, layer_index, max_steps);
+          session, layout, layer_index, max_steps, prompt_token_count);
     } else {
       err = project_encoded_rows(
           session, &session->qkv_plan,

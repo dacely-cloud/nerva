@@ -202,8 +202,7 @@ bool layout_is_deepseek_v4_swa_native(const SequenceLayerLayout &layout) {
   if (layout.mlp_kind == kMlpKindDense) {
     return true;
   }
-  return layout.mlp_kind == kMlpKindSparseMoe &&
-         (layout.deepseek_flags & kDeepSeekFlagHashRouter) == 0;
+  return layout.mlp_kind == kMlpKindSparseMoe;
 }
 
 bool layout_is_native_deepseek_session(const SequenceLayerLayout &layout) {

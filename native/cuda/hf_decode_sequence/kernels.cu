@@ -307,6 +307,15 @@ __device__ __forceinline__ uint64_t deepseek_device_rank3_slots(
   return deepseek_device_byte_slots(depth * rows * cols);
 }
 
+__device__ __forceinline__ uint64_t deepseek_u64_from_u16_slots(
+    const uint16_t *slots, uint64_t index) {
+  const uint64_t base = index * 4u;
+  return static_cast<uint64_t>(slots[base]) |
+         (static_cast<uint64_t>(slots[base + 1u]) << 16u) |
+         (static_cast<uint64_t>(slots[base + 2u]) << 32u) |
+         (static_cast<uint64_t>(slots[base + 3u]) << 48u);
+}
+
 __device__ __forceinline__ uint32_t deepseek_device_scale_dim(
     uint32_t value) {
   return (value + 127u) / 128u;
@@ -1042,12 +1051,17 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float rms_eps, float rope_theta, float *scratch, uint16_t *kv_keys,
     uint16_t *kv_values, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint16_t *projection_input) {
+    const uint32_t *kv_block_table, uint32_t vocab_size,
+    const uint32_t *prompt_tokens, uint32_t prompt_token_count,
+    const NervaCudaSyntheticTokenSlot *slots, uint16_t *projection_input) {
   if (threadIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
     return;
   }
   const uint32_t position = step_cursor == nullptr ? 0 : *step_cursor;
+  const uint32_t current_token =
+      position < prompt_token_count ? prompt_tokens[position]
+                                    : slots[position - 1u].token;
   const uint32_t q_lora_rank = layout.deepseek_q_lora_rank;
   const uint32_t qk_nope = layout.deepseek_qk_nope_head_dim;
   const uint32_t qk_rope = layout.deepseek_qk_rope_head_dim;
@@ -1281,7 +1295,6 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     if (layout.w_router == kMissingOffset ||
         layout.w_expert_gate_up == kMissingOffset ||
         layout.w_expert_down == kMissingOffset ||
-        (layout.deepseek_flags & kDeepSeekFlagHashRouter) != 0 ||
         num_experts == 0 || num_experts > kSparseMoeExpertsMax ||
         top_k == 0 || top_k > kSparseMoeTopKMax ||
         top_k > num_experts || moe_intermediate == 0 ||
@@ -1289,8 +1302,10 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
         (moe_intermediate & 1u) != 0) {
       return;
     }
-    const uint64_t router_bias_offset =
+    const uint64_t router_metadata_offset =
         layout.w_router + static_cast<uint64_t>(num_experts) * hidden;
+    const bool hash_router =
+        (layout.deepseek_flags & kDeepSeekFlagHashRouter) != 0;
     for (uint32_t expert = 0; expert < num_experts; ++expert) {
       float sum = 0.0f;
       const uint64_t row = layout.w_router +
@@ -1300,18 +1315,47 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
       }
       router_logits[expert] = sum;
       correction_bias[expert] =
-          f32_from_u16_slots(arena + router_bias_offset, expert);
+          hash_router ? 0.0f
+                      : f32_from_u16_slots(arena + router_metadata_offset,
+                                           expert);
     }
     const float routed_scale =
         isfinite(layout.deepseek_routed_scaling_factor) &&
                 layout.deepseek_routed_scaling_factor != 0.0f
             ? layout.deepseek_routed_scaling_factor
             : 1.0f;
-    if (nerva::deepseek::router::route_v4_sqrtsoftplus(
-            router_logits, correction_bias, num_experts, top_k,
-            layout.norm_topk_prob, routed_scale, selected_experts,
-            selected_weights) != 0) {
-      return;
+    if (hash_router) {
+      if (current_token >= vocab_size) {
+        return;
+      }
+      float weight_sum = 0.0f;
+      for (uint32_t rank = 0; rank < top_k; ++rank) {
+        const uint64_t table_index =
+            static_cast<uint64_t>(current_token) * top_k + rank;
+        const uint64_t expert64 =
+            deepseek_u64_from_u16_slots(arena + router_metadata_offset,
+                                        table_index);
+        if (expert64 >= num_experts) {
+          return;
+        }
+        const uint32_t expert = static_cast<uint32_t>(expert64);
+        selected_experts[rank] = expert;
+        selected_weights[rank] =
+            nerva::deepseek::router::sqrtsoftplus_score(router_logits[expert]);
+        weight_sum += selected_weights[rank];
+      }
+      const float scale = nerva::deepseek::router::route_scale(
+          weight_sum, layout.norm_topk_prob, routed_scale);
+      for (uint32_t rank = 0; rank < top_k; ++rank) {
+        selected_weights[rank] *= scale;
+      }
+    } else {
+      if (nerva::deepseek::router::route_v4_sqrtsoftplus(
+              router_logits, correction_bias, num_experts, top_k,
+              layout.norm_topk_prob, routed_scale, selected_experts,
+              selected_weights) != 0) {
+        return;
+      }
     }
     for (uint32_t row = 0; row < hidden; ++row) {
       s.down[row] = 0.0f;

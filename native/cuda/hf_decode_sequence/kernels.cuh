@@ -144,7 +144,9 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float rms_eps, float rope_theta, float *scratch, uint16_t *kv_keys,
     uint16_t *kv_values, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint16_t *projection_input);
+    const uint32_t *kv_block_table, uint32_t vocab_size,
+    const uint32_t *prompt_tokens, uint32_t prompt_token_count,
+    const NervaCudaSyntheticTokenSlot *slots, uint16_t *projection_input);
 __global__ void hf_layer_finish_kernel(
     uint16_t *arena, uint64_t output_offset, uint32_t dtype, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
