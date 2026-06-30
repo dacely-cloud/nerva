@@ -525,6 +525,8 @@ The measured 512k-token synthetic selector point on an RTX 5090 is:
 
 The same run reports synthetic full dense attention at 5.238 ms/layer and the RT selected-page attention stage at 1.211 ms/layer, or 1.202 ms/layer with selector/local overlap modeled. That is a useful attention-stage result, but it is not yet a proven full Qwen decode win. Full decode still has projection, MLP, sampling, graph, and quality effects, and sparse selected-page decode can change outputs unless the candidate set preserves the relevant attention mass.
 
+The 1,048,576-token synthetic sweep now has a summarized artifact at `docs/source/perf/rt_1m_synthetic_sweep_summary.json`. The high-signal points are 512 candidate pages/query at 3.9062% estimated KV bytes with 95.4528% attention-mass recall, and 1024 candidate pages/query at 7.0312% estimated KV bytes with 99.9937% attention-mass recall. This supports RT candidate selection as a viable hot/cold KV search primitive, but it is still synthetic and not semantic Qwen retrieval.
+
 On the 30,571-token Qwen3-8B prompt with 2,048 generated tokens, 80 selected pages, 4,096 local tokens, 128 sink tokens, and `NERVA_EXPERIMENTAL_PREFILL_LOCAL_WINDOW_TOKENS=4096`, the current decode comparison is:
 
 | Selector policy | Decode throughput | Decode wall | Attention per 256-token chunk | Notes |

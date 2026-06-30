@@ -35,6 +35,25 @@ The synthetic RT selector is real OptiX traversal on RT-capable hardware. On the
 512k-token synthetic point, the query-derived OptiX selector measured about
 9.135 us, and selector plus CUDA rerank measured about 13.279 us.
 
+At 1,048,576 synthetic tokens, `NERVA_EXPERIMENTAL_RT_SEMANTIC_OPTIX=1
+target/debug/nerva-bench experimental-rt-sweep 1048576 8 1024 16 64 1 36`
+completed on the RTX 5090 with 16,384 pages and zero candidate parity
+mismatches. The summarized artifact is
+`docs/source/perf/rt_1m_synthetic_sweep_summary.json`.
+
+| Candidate pages/query | Selector | Selector + rerank | Estimated KV fraction | Attention-mass recall | RT attention stage | Dense full attention | Stage speedup |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 11.722 us | 15.946 us | 1.5625% | 38.2955% | 0.401 ms | 12.276 ms | 30.59x |
+| 256 | 10.684 us | 14.908 us | 2.3437% | 68.2687% | 0.674 ms | 12.273 ms | 18.22x |
+| 512 | 10.866 us | 15.090 us | 3.9062% | 95.4528% | 1.215 ms | 12.231 ms | 10.07x |
+| 1024 | 12.914 us | 19.150 us | 7.0312% | 99.9937% | 2.310 ms | 12.227 ms | 5.29x |
+
+This is the strongest current evidence for the hot/cold direction: at 1M
+synthetic tokens, the RT selector overhead stays in the low tens of
+microseconds while the selected-page attention stage can run against roughly
+4-7% of dense KV bytes. It is still synthetic descriptor work, so it proves the
+shape of the systems opportunity, not real Qwen semantic quality.
+
 The real Qwen selected-page attention integration is wired into the existing
 decode pipeline. It does not replace decode, attention projection, MLP, sampling,
 or KV layout with a separate implementation.
