@@ -1,5 +1,6 @@
 use crate::deepseek_quant::dequant::{
-    deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_mxfp4_e2m1_e8m0_dequant,
+    deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_fp8_e4m3fn_f32_scale_matvec,
+    deepseek_mxfp4_e2m1_e8m0_dequant,
 };
 use crate::deepseek_quant::inv_rope::{
     CudaDeepSeekFusedInvRopeFp8QuantSummary, deepseek_fused_inv_rope_fp8_quant,
@@ -347,4 +348,30 @@ fn deepseek_quant_dequant_apis_match_reference_values() {
     assert_eq!(mxfp4.sync_calls, 1);
     assert_eq!(mxfp4.hot_path_allocations, 0);
     assert!(mxfp4.output_hash != 0);
+}
+
+#[test]
+fn deepseek_fp8_f32_scale_matvec_matches_reference_values() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let weights = [
+        0x38, 0x40, 0x30, 0xb8, 0x70, 0x77, 0x78, 0x7e, 0x20, 0x28, 0x30, 0x38,
+    ];
+    let scales = [1.0, 2.0, 0.5, 4.0];
+    let input = [0.5, -1.0, 2.0, 0.25];
+
+    let summary = deepseek_fp8_e4m3fn_f32_scale_matvec(&weights, &scales, &input, 3, 4, 2, 2);
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(summary.rows, 3);
+    assert_eq!(summary.cols, 4);
+    assert_eq!(summary.block_rows, 2);
+    assert_eq!(summary.block_cols, 2);
+    assert_eq!(summary.output, [0.0, 1072.0, 4.90625]);
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert!(summary.output_hash != 0);
 }

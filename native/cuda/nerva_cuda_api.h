@@ -1169,6 +1169,17 @@ typedef struct NervaCudaDeepSeekQuantDequantResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekQuantDequantResult;
 
+typedef struct NervaCudaDeepSeekQuantFp8F32ScaleMatvecRequest {
+  uint32_t rows;
+  uint32_t cols;
+  uint32_t block_rows;
+  uint32_t block_cols;
+  const uint8_t *weights;
+  const float *scales;
+  const float *input;
+  float *output;
+} NervaCudaDeepSeekQuantFp8F32ScaleMatvecRequest;
+
 typedef struct NervaCudaDeepSeekFusedInvRopeFp8QuantRequest {
   uint32_t num_tokens;
   uint32_t n_groups;
@@ -1708,6 +1719,9 @@ int nerva_cuda_deepseek_quant_fp8_dequant(
     NervaCudaDeepSeekQuantDequantResult *out);
 int nerva_cuda_deepseek_quant_mxfp4_dequant(
     const NervaCudaDeepSeekQuantMxfp4DequantRequest *request,
+    NervaCudaDeepSeekQuantDequantResult *out);
+int nerva_cuda_deepseek_quant_fp8_f32_scale_matvec(
+    const NervaCudaDeepSeekQuantFp8F32ScaleMatvecRequest *request,
     NervaCudaDeepSeekQuantDequantResult *out);
 int nerva_cuda_deepseek_fused_inv_rope_fp8_quant(
     const NervaCudaDeepSeekFusedInvRopeFp8QuantRequest *request,
