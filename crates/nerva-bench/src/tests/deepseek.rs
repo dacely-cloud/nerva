@@ -119,7 +119,9 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
     assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
     assert!(json.contains("\"unit\":\"deepseek_v32_sparse_attention_indexer\""));
-    assert!(json.contains("consume packed V3.2 sparse indexer query/weights offsets in runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v32_indexer_query_state_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v32_indexer_query_state_contents"));
+    assert!(json.contains("verify selected sparse blocks against vLLM"));
     assert!(json.contains("\"runtime_status\":\"unsupported\""));
     assert!(json.contains("\"claim_allowed\":false"));
 

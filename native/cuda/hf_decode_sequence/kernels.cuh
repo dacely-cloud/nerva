@@ -80,6 +80,18 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
     uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count);
+__global__ void hf_deepseek_v32_indexer_weight_state_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
+    const uint16_t *projection_input, uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes);
+__global__ void hf_deepseek_v32_indexer_query_state_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t q_lora_rank, uint32_t *step_cursor, uint32_t max_steps,
+    float rope_theta, const uint16_t *qr_norm,
+    uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    uint64_t *deepseek_runtime_counters);
 __global__ void hf_layer_attention_encode_kernel(
     uint32_t layer_index, uint32_t dtype, uint32_t hidden, uint32_t heads,
     uint32_t kv_heads, uint32_t head_dim, uint32_t intermediate,
