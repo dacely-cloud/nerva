@@ -56,7 +56,7 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
                 const NervaCudaHfDecodeChainLayer &layer, uint64_t hidden,
                 uint64_t attention_hidden, uint64_t kv_hidden,
                 uint64_t head_dim, uint64_t intermediate, uint64_t vocab_size);
-void pack_deepseek_static(uint64_t &cursor,
+void pack_deepseek_static(SequenceArenaLayout &arena_layout, uint64_t &cursor,
                           const NervaCudaHfDecodeChainLayer *layers,
                           uint32_t layer_count, uint64_t hidden);
 void copy_layer(uint16_t *arena, const SequenceLayerLayout &layout,

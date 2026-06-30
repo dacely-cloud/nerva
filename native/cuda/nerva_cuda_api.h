@@ -561,6 +561,15 @@ typedef struct NervaCudaHfDecodeSequenceLayoutPlanResult {
   uint64_t deepseek_indexer_compressor_wkv;
   uint64_t deepseek_indexer_compressor_wgate;
   uint64_t deepseek_indexer_compressor_norm;
+  uint64_t deepseek_hc_head_base;
+  uint64_t deepseek_hc_head_fn;
+  uint64_t deepseek_hc_head_scale;
+  uint64_t deepseek_hc_attn_base;
+  uint64_t deepseek_hc_attn_fn;
+  uint64_t deepseek_hc_attn_scale;
+  uint64_t deepseek_hc_ffn_base;
+  uint64_t deepseek_hc_ffn_fn;
+  uint64_t deepseek_hc_ffn_scale;
 } NervaCudaHfDecodeSequenceLayoutPlanResult;
 
 typedef struct NervaCudaHfDecodeSequenceSession NervaCudaHfDecodeSequenceSession;

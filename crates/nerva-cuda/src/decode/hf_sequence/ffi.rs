@@ -211,6 +211,15 @@ pub(crate) struct NervaCudaHfDecodeSequenceLayoutPlanResult {
     pub(crate) deepseek_indexer_compressor_wkv: u64,
     pub(crate) deepseek_indexer_compressor_wgate: u64,
     pub(crate) deepseek_indexer_compressor_norm: u64,
+    pub(crate) deepseek_hc_head_base: u64,
+    pub(crate) deepseek_hc_head_fn: u64,
+    pub(crate) deepseek_hc_head_scale: u64,
+    pub(crate) deepseek_hc_attn_base: u64,
+    pub(crate) deepseek_hc_attn_fn: u64,
+    pub(crate) deepseek_hc_attn_scale: u64,
+    pub(crate) deepseek_hc_ffn_base: u64,
+    pub(crate) deepseek_hc_ffn_fn: u64,
+    pub(crate) deepseek_hc_ffn_scale: u64,
 }
 
 unsafe extern "C" {

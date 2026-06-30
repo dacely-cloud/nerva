@@ -117,6 +117,9 @@ struct SequenceArenaLayout {
   uint64_t embeddings;
   uint64_t input;
   uint64_t scratch;
+  uint64_t deepseek_hc_head_base;
+  uint64_t deepseek_hc_head_fn;
+  uint64_t deepseek_hc_head_scale;
   uint64_t final_norm;
   uint64_t lm_head;
 };
@@ -193,6 +196,12 @@ struct SequenceLayerLayout {
   uint64_t deepseek_o_a_scale;
   uint64_t deepseek_o_b;
   uint64_t deepseek_o_b_scale;
+  uint64_t deepseek_hc_attn_base;
+  uint64_t deepseek_hc_attn_fn;
+  uint64_t deepseek_hc_attn_scale;
+  uint64_t deepseek_hc_ffn_base;
+  uint64_t deepseek_hc_ffn_fn;
+  uint64_t deepseek_hc_ffn_scale;
   uint64_t deepseek_attention_sink;
   uint64_t deepseek_indexer_q;
   uint64_t deepseek_indexer_q_scale;

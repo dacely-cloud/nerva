@@ -74,6 +74,15 @@ pub struct CudaHfDecodeSequenceLayoutPlan {
     pub deepseek_indexer_compressor_wkv: u64,
     pub deepseek_indexer_compressor_wgate: u64,
     pub deepseek_indexer_compressor_norm: u64,
+    pub deepseek_hc_head_base: u64,
+    pub deepseek_hc_head_fn: u64,
+    pub deepseek_hc_head_scale: u64,
+    pub deepseek_hc_attn_base: u64,
+    pub deepseek_hc_attn_fn: u64,
+    pub deepseek_hc_attn_scale: u64,
+    pub deepseek_hc_ffn_base: u64,
+    pub deepseek_hc_ffn_fn: u64,
+    pub deepseek_hc_ffn_scale: u64,
 }
 
 impl<'a> CudaHfDecodeSequenceLayoutPlanRequest<'a> {
@@ -169,6 +178,15 @@ impl From<NervaCudaHfDecodeSequenceLayoutPlanResult> for CudaHfDecodeSequenceLay
             deepseek_indexer_compressor_wkv: value.deepseek_indexer_compressor_wkv,
             deepseek_indexer_compressor_wgate: value.deepseek_indexer_compressor_wgate,
             deepseek_indexer_compressor_norm: value.deepseek_indexer_compressor_norm,
+            deepseek_hc_head_base: value.deepseek_hc_head_base,
+            deepseek_hc_head_fn: value.deepseek_hc_head_fn,
+            deepseek_hc_head_scale: value.deepseek_hc_head_scale,
+            deepseek_hc_attn_base: value.deepseek_hc_attn_base,
+            deepseek_hc_attn_fn: value.deepseek_hc_attn_fn,
+            deepseek_hc_attn_scale: value.deepseek_hc_attn_scale,
+            deepseek_hc_ffn_base: value.deepseek_hc_ffn_base,
+            deepseek_hc_ffn_fn: value.deepseek_hc_ffn_fn,
+            deepseek_hc_ffn_scale: value.deepseek_hc_ffn_scale,
         }
     }
 }

@@ -115,12 +115,17 @@ extern "C" int nerva_cuda_hf_decode_sequence_plan_layout(
       static_cast<uint64_t>(request->kv_heads) * request->head_dim;
   const uint64_t intermediate = request->intermediate;
   const uint64_t vocab_size = request->vocab_size;
+  SequenceArenaLayout arena_layout{};
   std::vector<SequenceLayerLayout> layouts(request->layer_count);
   uint64_t elements = 0;
-  push(elements, vocab_size * hidden);
-  push(elements, hidden);
-  push(elements, hidden);
-  pack_deepseek_static(elements, request->layers, request->layer_count, hidden);
+  arena_layout.embeddings = push(elements, vocab_size * hidden);
+  arena_layout.input = push(elements, hidden);
+  arena_layout.scratch = push(elements, hidden);
+  arena_layout.deepseek_hc_head_base = kMissingOffset;
+  arena_layout.deepseek_hc_head_fn = kMissingOffset;
+  arena_layout.deepseek_hc_head_scale = kMissingOffset;
+  pack_deepseek_static(arena_layout, elements, request->layers,
+                       request->layer_count, hidden);
   for (uint32_t index = 0; index < request->layer_count; ++index) {
     pack_layer(layouts[index], elements, request->layers[index], hidden,
                attention_hidden, kv_hidden, request->head_dim, intermediate,
@@ -130,8 +135,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_plan_layout(
   uint64_t linear_gdn_recurrent_state_elements = 0;
   assign_linear_gdn_state_offsets(layouts, &linear_gdn_conv_state_elements,
                                   &linear_gdn_recurrent_state_elements);
-  push(elements, hidden);
-  push(elements, vocab_size * hidden);
+  arena_layout.final_norm = push(elements, hidden);
+  arena_layout.lm_head = push(elements, vocab_size * hidden);
 
   const SequenceLayerLayout &layout = layouts[request->layer_index];
   out->status = 0;
@@ -169,6 +174,15 @@ extern "C" int nerva_cuda_hf_decode_sequence_plan_layout(
   out->deepseek_o_a_scale = layout.deepseek_o_a_scale;
   out->deepseek_o_b = layout.deepseek_o_b;
   out->deepseek_o_b_scale = layout.deepseek_o_b_scale;
+  out->deepseek_hc_head_base = arena_layout.deepseek_hc_head_base;
+  out->deepseek_hc_head_fn = arena_layout.deepseek_hc_head_fn;
+  out->deepseek_hc_head_scale = arena_layout.deepseek_hc_head_scale;
+  out->deepseek_hc_attn_base = layout.deepseek_hc_attn_base;
+  out->deepseek_hc_attn_fn = layout.deepseek_hc_attn_fn;
+  out->deepseek_hc_attn_scale = layout.deepseek_hc_attn_scale;
+  out->deepseek_hc_ffn_base = layout.deepseek_hc_ffn_base;
+  out->deepseek_hc_ffn_fn = layout.deepseek_hc_ffn_fn;
+  out->deepseek_hc_ffn_scale = layout.deepseek_hc_ffn_scale;
   out->deepseek_attention_sink = layout.deepseek_attention_sink;
   out->deepseek_indexer_q = layout.deepseek_indexer_q;
   out->deepseek_indexer_q_scale = layout.deepseek_indexer_q_scale;

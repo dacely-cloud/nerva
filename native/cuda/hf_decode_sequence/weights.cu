@@ -584,7 +584,7 @@ PackedProjectionShape packed_projection_shape(uint64_t hidden,
   return shape;
 }
 
-void pack_deepseek_static(uint64_t &cursor,
+void pack_deepseek_static(SequenceArenaLayout &arena_layout, uint64_t &cursor,
                           const NervaCudaHfDecodeChainLayer *layers,
                           uint32_t layer_count, uint64_t hidden) {
   if (layers == nullptr || layer_count == 0) {
@@ -597,9 +597,9 @@ void pack_deepseek_static(uint64_t &cursor,
   }
   const uint64_t hc_mult = layer.deepseek_hc_mult;
   const uint64_t hc_dim = hidden * hc_mult;
-  push(cursor, f32_slots(hc_mult, 1));
-  push(cursor, f32_slots(hc_mult, hc_dim));
-  push(cursor, f32_slots(1, 1));
+  arena_layout.deepseek_hc_head_base = push(cursor, f32_slots(hc_mult, 1));
+  arena_layout.deepseek_hc_head_fn = push(cursor, f32_slots(hc_mult, hc_dim));
+  arena_layout.deepseek_hc_head_scale = push(cursor, f32_slots(1, 1));
 }
 
 void pack_deepseek_v3_attention(SequenceLayerLayout &layout, uint64_t &cursor,
@@ -668,12 +668,12 @@ void pack_deepseek_v4_attention(SequenceLayerLayout &layout, uint64_t &cursor,
       static_cast<uint64_t>(layer.deepseek_o_groups) * layer.deepseek_o_lora_rank;
   const uint64_t wo_a_cols = q_rows / layer.deepseek_o_groups;
 
-  push(cursor, f32_slots(mix_hc, 1));
-  push(cursor, f32_slots(mix_hc, hc_dim));
-  push(cursor, f32_slots(3, 1));
-  push(cursor, f32_slots(mix_hc, 1));
-  push(cursor, f32_slots(mix_hc, hc_dim));
-  push(cursor, f32_slots(3, 1));
+  layout.deepseek_hc_attn_base = push(cursor, f32_slots(mix_hc, 1));
+  layout.deepseek_hc_attn_fn = push(cursor, f32_slots(mix_hc, hc_dim));
+  layout.deepseek_hc_attn_scale = push(cursor, f32_slots(3, 1));
+  layout.deepseek_hc_ffn_base = push(cursor, f32_slots(mix_hc, 1));
+  layout.deepseek_hc_ffn_fn = push(cursor, f32_slots(mix_hc, hc_dim));
+  layout.deepseek_hc_ffn_scale = push(cursor, f32_slots(3, 1));
   layout.deepseek_attention_sink = push(cursor, f32_slots(heads, 1));
   layout.w_q = push(cursor, fp8_slots(q_lora_rank, hidden));
   layout.deepseek_q_a_scale =
@@ -895,6 +895,12 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.deepseek_o_a_scale = kMissingOffset;
   layout.deepseek_o_b = kMissingOffset;
   layout.deepseek_o_b_scale = kMissingOffset;
+  layout.deepseek_hc_attn_base = kMissingOffset;
+  layout.deepseek_hc_attn_fn = kMissingOffset;
+  layout.deepseek_hc_attn_scale = kMissingOffset;
+  layout.deepseek_hc_ffn_base = kMissingOffset;
+  layout.deepseek_hc_ffn_fn = kMissingOffset;
+  layout.deepseek_hc_ffn_scale = kMissingOffset;
   layout.deepseek_attention_sink = kMissingOffset;
   layout.deepseek_indexer_q = kMissingOffset;
   layout.deepseek_indexer_q_scale = kMissingOffset;

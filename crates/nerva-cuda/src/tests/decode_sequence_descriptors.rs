@@ -2023,7 +2023,7 @@ fn declared_sparse_moe_descriptor_footprint_uses_router_and_experts() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 448);
-    assert_eq!(footprint.layout_bytes, 584);
+    assert_eq!(footprint.layout_bytes, 632);
 }
 
 #[test]
@@ -2064,7 +2064,7 @@ fn declared_deepseek_v4_descriptor_footprint_counts_storage_widths_and_hc_blocks
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 1306);
-    assert_eq!(footprint.layout_bytes, 584);
+    assert_eq!(footprint.layout_bytes, 632);
 }
 
 #[test]
@@ -2189,7 +2189,7 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
         plan.deepseek_compressor_ape,
         CUDA_HF_SEQUENCE_MISSING_OFFSET
     );
-    assert_eq!(plan.layout_bytes, 584);
+    assert_eq!(plan.layout_bytes, 632);
     assert!(plan.resident_weight_bytes > 0);
 
     let request = CudaHfDecodeSequenceRequest {
@@ -4087,7 +4087,16 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     assert_eq!(plan.deepseek_kv_cache_width, 0);
     assert_eq!(plan.deepseek_kv_b_rows, 0);
     assert_eq!(plan.deepseek_value_rows, 0);
+    assert_eq!(plan.deepseek_hc_head_base, 40);
+    assert_eq!(plan.deepseek_hc_head_fn, 44);
+    assert_eq!(plan.deepseek_hc_head_scale, 76);
     assert_eq!(plan.rms_attn, 78);
+    assert_eq!(plan.deepseek_hc_attn_base, 82);
+    assert_eq!(plan.deepseek_hc_attn_fn, 98);
+    assert_eq!(plan.deepseek_hc_attn_scale, 226);
+    assert_eq!(plan.deepseek_hc_ffn_base, 232);
+    assert_eq!(plan.deepseek_hc_ffn_fn, 248);
+    assert_eq!(plan.deepseek_hc_ffn_scale, 376);
     assert_eq!(plan.deepseek_attention_sink, 382);
     assert_eq!(plan.w_q, 386);
     assert_eq!(plan.deepseek_q_a_scale, 390);
@@ -4115,7 +4124,7 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     assert_eq!(plan.rms_mlp, 558);
     assert_eq!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_eq!(plan.deepseek_kv_b_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
-    assert_eq!(plan.layout_bytes, 584);
+    assert_eq!(plan.layout_bytes, 632);
 }
 
 fn with_tiny_deepseek_v4_descriptor_session(
@@ -4599,7 +4608,7 @@ fn query_gate_footprint_counts_optional_projection() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 504);
-    assert_eq!(footprint.layout_bytes, 584);
+    assert_eq!(footprint.layout_bytes, 632);
 }
 
 #[test]
@@ -4688,10 +4697,10 @@ fn linear_gdn_moe_footprint_counts_state_and_scratch() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 436);
-    assert_eq!(footprint.layout_bytes, 584);
+    assert_eq!(footprint.layout_bytes, 632);
     assert_eq!(footprint.scratch_bytes, 276);
     assert_eq!(footprint.resident_kv_bytes, 128);
-    assert_eq!(footprint.device_arena_bytes, 1640);
+    assert_eq!(footprint.device_arena_bytes, 1688);
 }
 
 fn assert_raw_descriptor_decode_matches_request(sampler: CudaHfDecodeSamplerConfig) {

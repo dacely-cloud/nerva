@@ -35,7 +35,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   arena_layout.embeddings = push(elements, vocab_size * hidden);
   arena_layout.input = push(elements, hidden);
   arena_layout.scratch = push(elements, hidden);
-  pack_deepseek_static(elements, request->layers, request->layer_count, hidden);
+  arena_layout.deepseek_hc_head_base = kMissingOffset;
+  arena_layout.deepseek_hc_head_fn = kMissingOffset;
+  arena_layout.deepseek_hc_head_scale = kMissingOffset;
+  pack_deepseek_static(arena_layout, elements, request->layers,
+                       request->layer_count, hidden);
   for (uint32_t index = 0; index < request->layer_count; ++index) {
     pack_layer(layouts[index], elements, request->layers[index], hidden,
                attention_hidden, kv_hidden, request->head_dim, intermediate,
