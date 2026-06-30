@@ -73,6 +73,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_index_topk_descriptor"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_selection_hash"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources"));
     assert!(json.contains("cuda_hf_sequence_deepseek_descriptor_abi"));
@@ -273,7 +274,9 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_index_topk_descriptor"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_selection_hash"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut"));
+    assert!(json.contains("run full-size V4 C4 sparse top-k differential against vLLM runtime"));
     assert!(json.contains("deepseek_v4_megamoe_int8_fp4_experts"));
     assert!(json.contains("cuda_hf_sequence_deepseek_descriptor_abi"));
     assert!(json.contains("cuda_hf_sequence_deepseek_footprint_accounting"));

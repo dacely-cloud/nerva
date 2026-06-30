@@ -105,6 +105,17 @@ fn deepseek_sparse_attention_output_hash_head0(values: &[f32]) -> u64 {
         })
 }
 
+fn deepseek_sparse_topk_selection_hash(selections: &[(usize, &[u64])]) -> u64 {
+    selections.iter().fold(0u64, |acc, (position, slots)| {
+        acc + slots.iter().enumerate().fold(0u64, |inner, (rank, slot)| {
+            inner
+                + (((*position as u64) + 1) * 1_315_423_911u64
+                    ^ ((rank as u64) + 1) * 2_654_435_761u64
+                    ^ (*slot + 1))
+        })
+    })
+}
+
 fn deepseek_rope_value_reference(
     left: f32,
     right: f32,
@@ -3282,6 +3293,11 @@ fn deepseek_v4_compressed_indexer_writes_first_boundary_cache() {
         assert_eq!(summary.deepseek_sparse_topk_selections, 1);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 1);
         assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
+        assert_eq!(
+            summary.deepseek_sparse_topk_selection_hash,
+            deepseek_sparse_topk_selection_hash(&[(3, &[0])]),
+            "V4 C4 sparse indexer should select the first compressed slot at the first compression boundary"
+        );
     });
 }
 
@@ -3769,6 +3785,11 @@ fn deepseek_v4_compressed_indexer_runs_past_first_boundary_with_compressed_atten
         assert_eq!(summary.deepseek_sparse_topk_selections, 2);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 2);
         assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
+        assert_eq!(
+            summary.deepseek_sparse_topk_selection_hash,
+            deepseek_sparse_topk_selection_hash(&[(3, &[0]), (4, &[0])]),
+            "V4 C4 sparse indexer should preserve vLLM slot order for cover-all top-k"
+        );
     });
 }
 
@@ -3814,6 +3835,17 @@ fn deepseek_v4_compressed_indexer_tracks_compressed_attention_scan_growth() {
         assert_eq!(summary.deepseek_sparse_topk_selections, 5);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 6);
         assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
+        assert_eq!(
+            summary.deepseek_sparse_topk_selection_hash,
+            deepseek_sparse_topk_selection_hash(&[
+                (3, &[0]),
+                (4, &[0]),
+                (5, &[0]),
+                (6, &[0]),
+                (7, &[0, 1]),
+            ]),
+            "V4 C4 sparse indexer should hash cover-all selected compressed slots in vLLM order"
+        );
     });
 }
 
@@ -3862,6 +3894,17 @@ fn deepseek_v4_compressed_indexer_limits_attention_to_sparse_topk() {
         assert_eq!(summary.deepseek_sparse_topk_selections, 5);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 5);
         assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 2);
+        assert_eq!(
+            summary.deepseek_sparse_topk_selection_hash,
+            deepseek_sparse_topk_selection_hash(&[
+                (3, &[0]),
+                (4, &[0]),
+                (5, &[0]),
+                (6, &[0]),
+                (7, &[0]),
+            ]),
+            "V4 C4 sparse top-k=1 should select the vLLM tie-broken lowest compressed slot"
+        );
     });
 }
 

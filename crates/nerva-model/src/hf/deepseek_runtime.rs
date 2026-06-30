@@ -655,6 +655,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
             .push("cuda_hf_sequence_deepseek_v4_fp8_ds_mla_fullsize_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c128_fp8_ds_mla_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_selection_hash".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources".to_string());
     }
@@ -918,11 +919,12 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v4_index_topk_descriptor",
                 "cuda_hf_sequence_deepseek_v4_compressed_scan_metrics",
                 "cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime",
+                "cuda_hf_sequence_deepseek_v4_c4_sparse_topk_selection_hash",
                 "cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
             &[
-                "verify C4 sparse top-k numerics against vLLM end-to-end",
+                "run full-size V4 C4 sparse top-k differential against vLLM runtime",
                 "integrate split paged-logits/top-k sparse scorer into full decode runtime for partial-cover cases",
             ],
         ),
