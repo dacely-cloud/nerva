@@ -813,9 +813,10 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime",
                 "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_contents",
                 "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_nonzero_page_contents",
+                "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_fullsize_page_contents",
             ],
             &[
-                "verify full-size V4 SWA fp8_ds_mla pages against vLLM FlashMLA",
+                "run full-size V4 SWA fp8_ds_mla page differential against vLLM FlashMLA",
                 "replace serial SWA page reader with the vLLM FlashMLA/FlashInfer kernel path",
             ],
         ),

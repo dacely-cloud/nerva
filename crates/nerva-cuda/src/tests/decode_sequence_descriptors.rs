@@ -87,8 +87,86 @@ fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
     sign * (1.0 + (frac as f32) * 0.125) * 2.0f32.powi(exp as i32 - 7)
 }
 
+fn deepseek_rope_value_reference(
+    left: f32,
+    right: f32,
+    offset: usize,
+    dim: usize,
+    position: usize,
+    theta: f32,
+    second: bool,
+) -> f32 {
+    if theta <= 0.0 || dim < 2 {
+        return if second { right } else { left };
+    }
+    let exponent = (2 * offset) as f32 / dim as f32;
+    let angle = position as f32 / theta.powf(exponent);
+    let sin_value = angle.sin();
+    let cos_value = angle.cos();
+    if second {
+        right * cos_value + left * sin_value
+    } else {
+        left * cos_value - right * sin_value
+    }
+}
+
+fn fullsize_v4_swa_expected_token(position: usize, normalized_k: f32) -> Vec<f32> {
+    let qk_nope = 448usize;
+    let qk_rope = 64usize;
+    let mut values = vec![normalized_k; qk_nope + qk_rope];
+    let rope_half = qk_rope / 2;
+    for offset in 0..rope_half {
+        let left = qk_nope + offset;
+        let right = left + rope_half;
+        let left_value = values[left];
+        let right_value = values[right];
+        values[left] = deepseek_rope_value_reference(
+            left_value,
+            right_value,
+            offset,
+            qk_rope,
+            position,
+            10_000.0,
+            false,
+        );
+        values[right] = deepseek_rope_value_reference(
+            left_value,
+            right_value,
+            offset,
+            qk_rope,
+            position,
+            10_000.0,
+            true,
+        );
+    }
+    values
+}
+
+fn assert_page_bytes_eq(actual: &[u8], expected: &[u8], message: &str) {
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "{message}: page lengths differ"
+    );
+    if let Some(index) = actual
+        .iter()
+        .zip(expected.iter())
+        .position(|(actual, expected)| actual != expected)
+    {
+        let start = index.saturating_sub(8);
+        let end = (index + 9).min(actual.len());
+        panic!(
+            "{message}: byte {index} differs actual={} expected={} actual_window={:?} expected_window={:?}",
+            actual[index],
+            expected[index],
+            &actual[start..end],
+            &expected[start..end]
+        );
+    }
+}
+
 fn expected_deepseek_v4_swa_fp8_ds_mla_page(
-    token_kv: &[[f32; 2]],
+    token_kv: &[Vec<f32>],
     qk_nope: usize,
     qk_rope: usize,
     page_bytes: usize,
@@ -98,6 +176,7 @@ fn expected_deepseek_v4_swa_fp8_ds_mla_page(
     let scale_base = 64 * token_stride;
     let mut expected = vec![0u8; page_bytes];
     for (token, kv) in token_kv.iter().enumerate() {
+        assert_eq!(kv.len(), qk_nope + qk_rope);
         let data_base = token * token_stride;
         for scale_index in 0..scale_dim {
             let start = scale_index * 64;
@@ -137,7 +216,7 @@ fn expected_zero_deepseek_v4_swa_fp8_ds_mla_page(
     page_bytes: usize,
 ) -> Vec<u8> {
     expected_deepseek_v4_swa_fp8_ds_mla_page(
-        &vec![[0.0, 0.0]; written_tokens],
+        &vec![vec![0.0; qk_nope + qk_rope]; written_tokens],
         qk_nope,
         qk_rope,
         page_bytes,
@@ -1305,12 +1384,8 @@ fn deepseek_v4_swa_dense_snapshot_matches_nonzero_fp8_ds_mla_page() {
     assert_eq!(snapshot.copied_bytes, 576);
 
     let normalized_k = 1.0_f32 / (1.0_f32 + rms_eps).sqrt();
-    let expected = expected_deepseek_v4_swa_fp8_ds_mla_page(
-        &[[normalized_k, normalized_k], [normalized_k, normalized_k]],
-        1,
-        1,
-        576,
-    );
+    let expected =
+        expected_deepseek_v4_swa_fp8_ds_mla_page(&vec![vec![normalized_k; 2]; 2], 1, 1, 576);
     let zero_expected = expected_zero_deepseek_v4_swa_fp8_ds_mla_page(2, 1, 1, 576);
     assert_ne!(
         expected, zero_expected,
@@ -1319,6 +1394,180 @@ fn deepseek_v4_swa_dense_snapshot_matches_nonzero_fp8_ds_mla_page() {
     assert_eq!(
         snapshot.bytes, expected,
         "V4 SWA packed fp8_ds_mla page bytes must match non-zero vLLM offsets"
+    );
+    assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
+}
+
+#[test]
+fn deepseek_v4_swa_dense_snapshot_matches_fullsize_fp8_ds_mla_page() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let hidden = 4usize;
+    let heads = 1usize;
+    let kv_heads = 1usize;
+    let qk_nope = 448usize;
+    let qk_rope = 64usize;
+    let head_dim = qk_nope + qk_rope;
+    let intermediate = 4usize;
+    let vocab_size = 8usize;
+    let rms_eps = 1.0e-5f32;
+    let mut layer = tiny_deepseek_v4_swa_dense_descriptor_layer();
+    layer.deepseek = layer.deepseek.map(|mut deepseek| {
+        deepseek.qk_nope_head_dim = qk_nope;
+        deepseek.qk_rope_head_dim = qk_rope;
+        deepseek.v_head_dim = head_dim;
+        deepseek
+    });
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: hidden as u32,
+        heads: heads as u32,
+        kv_heads: kv_heads as u32,
+        head_dim: head_dim as u32,
+        intermediate: intermediate as u32,
+        vocab_size: vocab_size as u32,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept full-size V4 SWA page shape");
+    assert_ne!(plan.w_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.deepseek_kv_a_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.k_norm, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+
+    let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    for dim in 0..hidden {
+        weight_storage[dim] = 0x3c00;
+        write_descriptor_u16(
+            &mut weight_storage,
+            plan.rms_attn + dim as u64,
+            hidden,
+            vocab_size,
+            f32_to_bf16_bits(1.0),
+        );
+    }
+    for dim in 0..head_dim {
+        write_descriptor_u16(
+            &mut weight_storage,
+            plan.k_norm + dim as u64,
+            hidden,
+            vocab_size,
+            f32_to_bf16_bits(1.0),
+        );
+    }
+    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    for row in 0..head_dim {
+        write_descriptor_byte(
+            &mut weight_storage,
+            plan.w_k,
+            row * hidden,
+            hidden,
+            vocab_size,
+            one_fp8,
+        );
+    }
+    for scale in 0..4 {
+        write_descriptor_byte(
+            &mut weight_storage,
+            plan.deepseek_kv_a_scale,
+            scale,
+            hidden,
+            vocab_size,
+            encode_e8m0_scale(1.0),
+        );
+    }
+
+    let weight_blocks = descriptor_weight_blocks(
+        &weight_storage,
+        hidden,
+        vocab_size,
+        plan.resident_weight_bytes,
+    );
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden,
+        heads,
+        kv_heads,
+        head_dim,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 4,
+        rms_eps,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: weight_blocks.len() as u32,
+            gpu_resident_blocks: weight_blocks.len() as u32,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: Default::default(),
+    };
+
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V4 SWA full-size page session should create: {:?}",
+        created.summary.error
+    );
+    let swa_kv_bytes = created.summary.deepseek_v4_swa_kv_bytes as usize;
+    assert_eq!(swa_kv_bytes, 37440);
+    let mut session = created
+        .session
+        .expect("V4 SWA full-size page session handle should exist");
+
+    let summary = session.run(&[0], 2, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V4 SWA full-size page path should run through sampling: {:?}",
+        summary.error
+    );
+    assert_eq!(summary.steps, 2);
+    assert_eq!(summary.tokens, vec![0, 0]);
+    assert_eq!(summary.kv_tokens, 2);
+
+    let snapshot = session.deepseek_v4_swa_kv_snapshot(0, swa_kv_bytes);
+    assert_eq!(
+        snapshot.status,
+        SmokeStatus::Ok,
+        "V4 SWA full-size packed KV snapshot should copy device cache: {:?}",
+        snapshot.error
+    );
+    assert_eq!(snapshot.block_count, 1);
+    assert_eq!(snapshot.layer_bytes, 37440);
+    assert_eq!(snapshot.page_bytes, 37440);
+    assert_eq!(snapshot.copied_bytes, 37440);
+
+    let normalized_k = 1.0_f32 / (1.0_f32 + rms_eps).sqrt();
+    let expected_tokens = vec![
+        fullsize_v4_swa_expected_token(0, normalized_k),
+        fullsize_v4_swa_expected_token(1, normalized_k),
+    ];
+    let expected =
+        expected_deepseek_v4_swa_fp8_ds_mla_page(&expected_tokens, qk_nope, qk_rope, 37440);
+    let zero_expected = expected_zero_deepseek_v4_swa_fp8_ds_mla_page(2, qk_nope, qk_rope, 37440);
+    assert_ne!(
+        expected, zero_expected,
+        "full-size V4 SWA verifier must exercise fp8, bf16, scales, and padding"
+    );
+    assert_page_bytes_eq(
+        &snapshot.bytes,
+        &expected,
+        "V4 SWA full-size packed page must match vLLM fp8_ds_mla layout",
     );
     assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
 }
