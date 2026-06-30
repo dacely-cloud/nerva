@@ -527,9 +527,13 @@ On the 30,571-token Qwen3-8B prompt with 2,048 generated tokens, 80 selected pag
 
 | Selector policy | Decode throughput | Decode wall | Attention per 256-token chunk | Notes |
 |---|---:|---:|---:|---|
-| `optix_synthetic_sink_local_far_page_pattern` | 86.66 tok/s | 23.65s | 532.89 ms | Fastest current RT path, but not semantic retrieval. |
+| Dense no-RT | 78.24 tok/s | 26.25s | 890.92 ms | Exact full selected-chunk coverage. |
+| `optix_synthetic_sink_local_far_page_pattern`, 67 pages | 87.57 tok/s | 23.41s | 516.51 ms | Fastest measured sparse setting; local + sink + one synthetic far page. |
+| `optix_synthetic_sink_local_far_page_pattern`, 80 pages | 86.63 tok/s | 23.66s | 536.07 ms | Reproduced current RT path; local + sink + 14 synthetic far pages. |
 | `cuda_qk_representative_page_selector` | 80.74 tok/s | 25.39s | 777.78 ms | Semantic page choice, separate selector kernels. |
 | `cuda_qk_fused_attention_page_selector` | 81.65 tok/s | 25.11s | 723.46 ms | Semantic page choice with selector launch overhead removed. |
+
+The sparse runs above generate different tokens from dense on this prompt. Dense versus synthetic RT and dense versus fused Q/K first diverge at generated token index 7. That makes current sparse RT a speed experiment, not an exact decode replacement. It also does not reduce VRAM yet: the current Qwen path still allocates the full resident KV cache, so 32k dense and sparse both use about 31.8 GiB on the RTX 5090. Hot/cold KV paging is still future work.
 
 The current real-model integration has three modes:
 
