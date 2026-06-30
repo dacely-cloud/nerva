@@ -56,6 +56,9 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "cuda-deepseek-quant" => {
             Ok(nerva_cuda::deepseek_quant::probe::deepseek_quant_smoke().to_json())
         }
+        "cuda-deepseek-inv-rope-fp8-quant" => Ok(
+            nerva_cuda::deepseek_quant::probe::deepseek_fused_inv_rope_fp8_quant_smoke().to_json(),
+        ),
         "cuda-deepseek-router" => {
             Ok(nerva_cuda::deepseek_router::probe::deepseek_router_smoke().to_json())
         }

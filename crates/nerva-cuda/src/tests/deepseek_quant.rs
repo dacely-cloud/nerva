@@ -1,7 +1,10 @@
 use crate::deepseek_quant::dequant::{
     deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_mxfp4_e2m1_e8m0_dequant,
 };
-use crate::deepseek_quant::probe::deepseek_quant_smoke;
+use crate::deepseek_quant::inv_rope::{
+    CudaDeepSeekFusedInvRopeFp8QuantSummary, deepseek_fused_inv_rope_fp8_quant,
+};
+use crate::deepseek_quant::probe::{deepseek_fused_inv_rope_fp8_quant_smoke, deepseek_quant_smoke};
 use crate::deepseek_quant::summary::CudaDeepSeekQuantSummary;
 use crate::smoke::status::SmokeStatus;
 
@@ -44,6 +47,115 @@ fn deepseek_quant_summary_serializes_layout_and_mismatches() {
 }
 
 #[test]
+fn deepseek_fused_inv_rope_fp8_quant_summary_serializes_outputs() {
+    let summary = CudaDeepSeekFusedInvRopeFp8QuantSummary {
+        status: SmokeStatus::Ok,
+        return_code: 0,
+        cuda_error: 0,
+        num_tokens: 2,
+        n_groups: 1,
+        heads_per_group: 2,
+        head_dim: 4,
+        rope_dim: 2,
+        quant_group_size: 2,
+        scale_blocks: 4,
+        fp8_output: vec![1, 2, 3],
+        scale_output: vec![0.5, 1.0],
+        packed_scale_output: vec![0x7f80],
+        fp8_output_hash: 11,
+        scale_output_hash: 22,
+        packed_scale_output_hash: 33,
+        device_arena_bytes: 64,
+        pinned_host_bytes: 32,
+        h2d_bytes: 48,
+        d2h_bytes: 32,
+        kernel_launches: 1,
+        sync_calls: 1,
+        hot_path_allocations: 0,
+        error: None,
+    };
+
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"num_tokens\":2"));
+    assert!(json.contains("\"heads_per_group\":2"));
+    assert!(json.contains("\"fp8_output\":[1,2,3]"));
+    assert!(json.contains("\"scale_output\":[0.5,1]"));
+    assert!(json.contains("\"packed_scale_output\":[32640]"));
+    assert!(json.contains("\"hot_path_allocations\":0"));
+}
+
+#[test]
+fn deepseek_fused_inv_rope_fp8_quant_smoke_is_repeatable_when_device_is_available() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let first = deepseek_fused_inv_rope_fp8_quant_smoke();
+    if first.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let second = deepseek_fused_inv_rope_fp8_quant_smoke();
+    assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    assert_eq!(second.num_tokens, 2);
+    assert_eq!(second.n_groups, 1);
+    assert_eq!(second.heads_per_group, 2);
+    assert_eq!(second.head_dim, 4);
+    assert_eq!(second.rope_dim, 2);
+    assert_eq!(second.quant_group_size, 2);
+    assert_eq!(second.fp8_output_hash, first.fp8_output_hash);
+    assert_eq!(second.scale_output_hash, first.scale_output_hash);
+    assert_eq!(
+        second.packed_scale_output_hash,
+        first.packed_scale_output_hash
+    );
+    assert_eq!(second.kernel_launches, 1);
+    assert_eq!(second.sync_calls, 1);
+    assert_eq!(second.hot_path_allocations, 0);
+}
+
+#[test]
+fn deepseek_fused_inv_rope_fp8_quant_api_matches_vllm_math() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let input = inv_rope_fixture_input();
+    let positions = [0i64, 1i64];
+    let cos_sin_cache = [1.0, 0.0, 0.6, 0.8];
+    let summary = deepseek_fused_inv_rope_fp8_quant(
+        &input,
+        &positions,
+        &cos_sin_cache,
+        2,
+        1,
+        2,
+        4,
+        2,
+        2,
+        2,
+        448.0,
+        1e-10,
+    );
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let expected = reference_inv_rope_fp8_quant(&input, &positions, &cos_sin_cache);
+    assert_eq!(summary.fp8_output, expected.0);
+    assert_eq!(summary.packed_scale_output, expected.2);
+    for (actual, expected) in summary.scale_output.iter().zip(expected.1.iter()) {
+        assert!(
+            (actual - expected).abs() <= 1e-6,
+            "scale actual={actual} expected={expected}"
+        );
+    }
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert!(summary.fp8_output_hash != 0);
+    assert!(summary.scale_output_hash != 0);
+    assert!(summary.packed_scale_output_hash != 0);
+}
+
+#[test]
 fn deepseek_quant_smoke_is_repeatable_when_device_is_available() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
@@ -63,6 +175,130 @@ fn deepseek_quant_smoke_is_repeatable_when_device_is_available() {
     assert_eq!(second.hot_path_allocations, 0);
     assert_eq!(second.fp8_output_hash, first.fp8_output_hash);
     assert_eq!(second.mxfp4_output_hash, first.mxfp4_output_hash);
+}
+
+fn inv_rope_fixture_input() -> [f32; 16] {
+    [
+        1.0, -2.0, 3.0, -4.0, -0.5, 1.5, -2.5, 3.5, 0.25, -0.75, 1.25, -1.5, -2.0, 2.25, -2.5, 2.75,
+    ]
+}
+
+fn reference_inv_rope_fp8_quant(
+    input: &[f32],
+    positions: &[i64],
+    cos_sin_cache: &[f32],
+) -> (Vec<u8>, Vec<f32>, Vec<u32>) {
+    let num_tokens = 2usize;
+    let heads_per_group = 2usize;
+    let head_dim = 4usize;
+    let rope_dim = 2usize;
+    let quant_group_size = 2usize;
+    let chunks_per_head = head_dim / quant_group_size;
+    let scale_blocks = heads_per_group * chunks_per_head;
+    let mut fp8 = vec![0u8; num_tokens * heads_per_group * head_dim];
+    let mut scales = vec![0.0f32; num_tokens * scale_blocks];
+    let mut packed = vec![0u32; num_tokens * heads_per_group];
+    for token in 0..num_tokens {
+        for head in 0..heads_per_group {
+            for chunk in 0..chunks_per_head {
+                let mut rotated = [0.0f32; 2];
+                let mut absmax = 0.0f32;
+                for (offset, value) in rotated.iter_mut().enumerate() {
+                    let dim = chunk * quant_group_size + offset;
+                    *value = rotated_value(
+                        input,
+                        cos_sin_cache,
+                        positions[token],
+                        token,
+                        head,
+                        dim,
+                        heads_per_group,
+                        head_dim,
+                        rope_dim,
+                        quant_group_size,
+                    );
+                    absmax = absmax.max(value.abs());
+                }
+                let scale = ((absmax.max(1e-10) / 448.0).log2().ceil()).exp2();
+                let scale_idx = token * scale_blocks + head * chunks_per_head + chunk;
+                scales[scale_idx] = scale;
+                packed[token * heads_per_group + head] |=
+                    ((scale.to_bits() >> 23) & 0xff) << (chunk * 8);
+                for (offset, value) in rotated.iter().enumerate() {
+                    let dim = chunk * quant_group_size + offset;
+                    fp8[token * heads_per_group * head_dim + head * head_dim + dim] =
+                        f32_to_f8_e4m3fn_bits_nearest((value / scale).clamp(-448.0, 448.0));
+                }
+            }
+        }
+    }
+    (fp8, scales, packed)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rotated_value(
+    input: &[f32],
+    cos_sin_cache: &[f32],
+    position: i64,
+    token: usize,
+    head: usize,
+    dim: usize,
+    heads_per_group: usize,
+    head_dim: usize,
+    rope_dim: usize,
+    quant_group_size: usize,
+) -> f32 {
+    let chunks_per_head = head_dim / quant_group_size;
+    let nope_dim = head_dim - rope_dim;
+    let rope_abs_start = (chunks_per_head - 1) * quant_group_size + (nope_dim % quant_group_size);
+    let input_base = (token * heads_per_group + head) * head_dim;
+    let value = input[input_base + dim];
+    if dim < rope_abs_start {
+        return value;
+    }
+    let rope_local = dim - rope_abs_start;
+    let partner = input[input_base + (dim ^ 1)];
+    let cache_base = position.max(0) as usize * rope_dim;
+    let cos = cos_sin_cache[cache_base + (rope_local >> 1)];
+    let sin = cos_sin_cache[cache_base + rope_dim / 2 + (rope_local >> 1)];
+    if rope_local & 1 == 0 {
+        value * cos + partner * sin
+    } else {
+        value * cos - partner * sin
+    }
+}
+
+fn f32_to_f8_e4m3fn_bits_nearest(value: f32) -> u8 {
+    let mut best_bits = 0u8;
+    let mut best_diff = value.abs();
+    for bits in 0..=0xfeu8 {
+        let candidate = f8_e4m3fn_bits_to_f32(bits);
+        if !candidate.is_finite() {
+            continue;
+        }
+        let diff = (value - candidate).abs();
+        if diff < best_diff {
+            best_diff = diff;
+            best_bits = bits;
+        }
+    }
+    best_bits
+}
+
+fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
+    let sign = if bits & 0x80 != 0 { -1.0 } else { 1.0 };
+    let exp = (bits >> 3) & 0x0f;
+    let frac = bits & 0x07;
+    if exp == 0 {
+        if frac == 0 {
+            return sign * 0.0;
+        }
+        return sign * ((frac as f32) * 0.125) * 2f32.powi(-6);
+    }
+    if exp == 0x0f && frac == 0x07 {
+        return f32::NAN;
+    }
+    sign * (1.0 + (frac as f32) * 0.125) * 2f32.powi(exp as i32 - 7)
 }
 
 #[test]

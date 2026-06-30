@@ -44,6 +44,8 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("mxfp4_e2m1_e8m0_block_dequant_reference"));
     assert!(json.contains("cuda_mxfp4_e2m1_e8m0_dequant_api"));
     assert!(json.contains("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke"));
+    assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_api"));
+    assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_smoke"));
     assert!(json.contains("deepseek_v4_sqrtsoftplus_hash_router_reference"));
     assert!(json.contains("precision_moe_deepseek_v4_sqrtsoftplus_router"));
     assert!(json.contains("deepseek_v4_hash_route_table_i64_loader"));
@@ -126,6 +128,11 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
             summary_json: "{\"status\":\"ok\",\"fp8_mismatches\":0,\"mxfp4_mismatches\":0}",
         },
         DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_fused_inv_rope_fp8_quant_smoke",
+            status: "ok",
+            summary_json: "{\"status\":\"ok\",\"fp8_output_hash\":1,\"scale_output_hash\":2,\"packed_scale_output_hash\":3}",
+        },
+        DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_routed_moe_smoke",
             status: "ok",
             summary_json: "{\"status\":\"ok\",\"mismatches\":0}",
@@ -172,10 +179,11 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"status\":\"primitive_smokes_ok\""));
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
     assert!(json.contains("\"primitive_status\":\"ok\""));
-    assert!(json.contains("\"primitive_smokes_passed\":9"));
-    assert!(json.contains("\"primitive_smokes_total\":9"));
+    assert!(json.contains("\"primitive_smokes_passed\":10"));
+    assert!(json.contains("\"primitive_smokes_total\":10"));
     assert!(json.contains("\"cuda_deepseek_mla_decode_mqa_smoke\""));
     assert!(json.contains("\"cuda_deepseek_quant_block_dequant_smoke\""));
+    assert!(json.contains("\"cuda_deepseek_fused_inv_rope_fp8_quant_smoke\""));
     assert!(json.contains("\"cuda_deepseek_routed_moe_smoke\""));
     assert!(json.contains("\"cuda_deepseek_router_smoke\""));
     assert!(json.contains("\"cuda_deepseek_qkv_rmsnorm_smoke\""));
@@ -201,6 +209,7 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"page_size_bytes\":1728"));
     assert!(json.contains("cuda_deepseek_fp8_ds_mla_kv_pack_api"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_api"));
+    assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_api"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
     assert!(json.contains("cuda_deepseek_c128_topk_metadata_api"));
     assert!(json.contains("cuda_deepseek_save_partial_states_api"));
@@ -310,8 +319,8 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-reference-audit-v1\""));
     assert!(json.contains("\"status\":\"ok\""));
-    assert!(json.contains("\"reference_units_total\":12"));
-    assert!(json.contains("\"reference_units_ok\":12"));
+    assert!(json.contains("\"reference_units_total\":13"));
+    assert!(json.contains("\"reference_units_ok\":13"));
     assert!(json.contains("\"reference_units_missing_file\":0"));
     assert!(json.contains("\"reference_units_symbol_gap\":0"));
     assert!(json.contains("\"runtime_parity_status\":\"vllm_reference_sources_pinned\""));
@@ -321,6 +330,7 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
     assert!(json.contains("\"execution_unit\":\"v4_sparse_mla_backend\""));
     assert!(json.contains("\"execution_unit\":\"v4_save_partial_states\""));
     assert!(json.contains("\"execution_unit\":\"v4_fused_qkv_rmsnorm\""));
+    assert!(json.contains("\"execution_unit\":\"v4_fused_inv_rope_fp8_quant\""));
     assert!(json.contains("\"execution_unit\":\"v4_fused_compress_quant_cache\""));
     assert!(json.contains("\"fnv1a64\":\"0x"));
     assert!(json.contains("DeepseekV4FlashMLABackend"));
@@ -352,8 +362,8 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
     assert!(json.contains("\"runtime_contract_status\":\"unsupported\""));
     assert!(json.contains("\"vllm_reference_status\":\"ok\""));
-    assert!(json.contains("\"vllm_reference_units_total\":12"));
-    assert!(json.contains("\"vllm_reference_units_ok\":12"));
+    assert!(json.contains("\"vllm_reference_units_total\":13"));
+    assert!(json.contains("\"vllm_reference_units_ok\":13"));
     assert!(json.contains("\"runtime_units_total\":8"));
     assert!(json.contains("\"runtime_blocking_units_total\":8"));
     assert!(json.contains("\"runtime_units_partial\":7"));
@@ -447,6 +457,17 @@ _fused_q_kv_rmsnorm_kernel
 num_tokens
 pid_task
 RMSNorm in fp32
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py",
+        r#"
+def fused_inv_rope_fp8_quant(): pass
+_fused_inv_rope_fp8_quant_per_head
+TMA_ALIGNED_SCALES
+float8e4nv
+packed_val
 "#,
     );
     write_fixture_file(

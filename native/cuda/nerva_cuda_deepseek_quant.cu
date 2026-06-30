@@ -145,6 +145,129 @@ __global__ void mxfp4_e2m1_block_dequant_dynamic_kernel(
       nerva::deepseek::mxfp4_e2m1_nibble_to_f32(byte >> 4) * scale;
 }
 
+__device__ uint8_t f32_to_f8_e4m3fn_bits_nearest(float value) {
+  if (!isfinite(value)) {
+    return value < 0.0f ? 0xfeu : 0x7eu;
+  }
+  uint8_t best_bits = 0;
+  float best_diff = fabsf(value);
+  for (uint32_t bits = 0; bits <= 0xfeu; ++bits) {
+    const uint8_t candidate_bits = static_cast<uint8_t>(bits);
+    const float candidate =
+        nerva::deepseek::f8_e4m3fn_bits_to_f32(candidate_bits);
+    if (!isfinite(candidate)) {
+      continue;
+    }
+    const float diff = fabsf(value - candidate);
+    if (diff < best_diff) {
+      best_diff = diff;
+      best_bits = candidate_bits;
+    }
+  }
+  return best_bits;
+}
+
+__global__ void fused_inv_rope_fp8_quant_kernel(
+    const float *input,
+    const int64_t *positions,
+    const float *cos_sin_cache,
+    uint8_t *fp8_output,
+    float *scale_output,
+    uint32_t *packed_scale_output,
+    uint32_t num_tokens,
+    uint32_t heads_per_group,
+    uint32_t head_dim,
+    uint32_t rope_dim,
+    uint32_t quant_group_size,
+    uint32_t cos_sin_stride,
+    uint32_t scale_blocks,
+    float fp8_max,
+    float eps) {
+  const uint32_t token_idx = blockIdx.x;
+  const uint32_t global_head = blockIdx.y;
+  if (token_idx >= num_tokens) {
+    return;
+  }
+
+  const uint32_t chunks_per_head = head_dim / quant_group_size;
+  const uint32_t nope_dim = head_dim - rope_dim;
+  const uint32_t rope_start = nope_dim % quant_group_size;
+  const uint32_t rope_abs_start =
+      (chunks_per_head - 1) * quant_group_size + rope_start;
+  const uint32_t half_rope = rope_dim / 2;
+  const uint32_t group_idx = global_head / heads_per_group;
+  const uint32_t head_in_group = global_head - group_idx * heads_per_group;
+  const uint32_t num_heads = gridDim.y;
+  const uint32_t n_groups = gridDim.y / heads_per_group;
+  const uint64_t input_base =
+      (static_cast<uint64_t>(token_idx) * num_heads + global_head) * head_dim;
+  const uint32_t d = heads_per_group * head_dim;
+  const uint64_t fp8_base =
+      (static_cast<uint64_t>(group_idx) * num_tokens + token_idx) * d +
+      static_cast<uint64_t>(head_in_group) * head_dim;
+  const uint64_t scale_base =
+      (static_cast<uint64_t>(group_idx) * num_tokens + token_idx) *
+      scale_blocks;
+  const uint64_t packed_base =
+      (static_cast<uint64_t>(group_idx) * num_tokens + token_idx) *
+      heads_per_group;
+  const int64_t position = positions[token_idx];
+  const uint64_t cache_base =
+      static_cast<uint64_t>(position < 0 ? 0 : position) * cos_sin_stride;
+
+  for (uint32_t chunk = 0; chunk < chunks_per_head; ++chunk) {
+    float block_absmax = 0.0f;
+    const uint32_t chunk_start = chunk * quant_group_size;
+    for (uint32_t offset = 0; offset < quant_group_size; ++offset) {
+      const uint32_t dim = chunk_start + offset;
+      float x = input[input_base + dim];
+      if (dim >= rope_abs_start && rope_dim > 0) {
+        const uint32_t rope_local = dim - rope_abs_start;
+        const uint32_t partner_dim = dim ^ 1u;
+        const float partner = input[input_base + partner_dim];
+        const uint32_t cs_idx = rope_local >> 1;
+        const float cos_v = cos_sin_cache[cache_base + cs_idx];
+        const float sin_v = cos_sin_cache[cache_base + half_rope + cs_idx];
+        const bool is_even = (rope_local & 1u) == 0u;
+        x = is_even ? x * cos_v + partner * sin_v
+                    : x * cos_v - partner * sin_v;
+      }
+      block_absmax = fmaxf(block_absmax, fabsf(x));
+    }
+
+    const float scale_raw = fmaxf(block_absmax, eps) / fp8_max;
+    const float scale = exp2f(ceilf(log2f(scale_raw)));
+    const uint32_t scale_idx = head_in_group * chunks_per_head + chunk;
+    scale_output[scale_base + scale_idx] = scale;
+
+    const uint32_t scale_bits = __float_as_uint(scale);
+    const uint32_t scale_byte = (scale_bits >> 23) & 0xffu;
+    if (chunk == 0) {
+      packed_scale_output[packed_base + head_in_group] = 0;
+    }
+    atomicOr(&packed_scale_output[packed_base + head_in_group],
+             scale_byte << (chunk * 8u));
+
+    for (uint32_t offset = 0; offset < quant_group_size; ++offset) {
+      const uint32_t dim = chunk_start + offset;
+      float x = input[input_base + dim];
+      if (dim >= rope_abs_start && rope_dim > 0) {
+        const uint32_t rope_local = dim - rope_abs_start;
+        const uint32_t partner_dim = dim ^ 1u;
+        const float partner = input[input_base + partner_dim];
+        const uint32_t cs_idx = rope_local >> 1;
+        const float cos_v = cos_sin_cache[cache_base + cs_idx];
+        const float sin_v = cos_sin_cache[cache_base + half_rope + cs_idx];
+        const bool is_even = (rope_local & 1u) == 0u;
+        x = is_even ? x * cos_v + partner * sin_v
+                    : x * cos_v - partner * sin_v;
+      }
+      const float scaled = fminf(fmaxf(x / scale, -fp8_max), fp8_max);
+      fp8_output[fp8_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+    }
+  }
+}
+
 uint32_t f32_bits(float value) {
   uint32_t bits = 0;
   memcpy(&bits, &value, sizeof(bits));
@@ -159,6 +282,15 @@ uint64_t hash_f32_bits(const float *values, uint32_t len) {
       hash ^= static_cast<uint8_t>((bits >> (byte * 8)) & 0xffu);
       hash *= 1099511628211ull;
     }
+  }
+  return hash;
+}
+
+uint64_t hash_bytes(const uint8_t *values, uint64_t len) {
+  uint64_t hash = 1469598103934665603ull;
+  for (uint64_t i = 0; i < len; ++i) {
+    hash ^= values[i];
+    hash *= 1099511628211ull;
   }
   return hash;
 }
@@ -210,6 +342,18 @@ int fail_dequant(NervaCudaDeepSeekQuantDequantResult *out, cudaError_t err) {
   return -1;
 }
 
+void clear_inv_rope_result(NervaCudaDeepSeekFusedInvRopeFp8QuantResult *out) {
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+}
+
+int fail_inv_rope(NervaCudaDeepSeekFusedInvRopeFp8QuantResult *out,
+                  cudaError_t err) {
+  out->cuda_error = static_cast<int32_t>(err);
+  out->status = -1;
+  return -1;
+}
+
 bool validate_fp8_request(const NervaCudaDeepSeekQuantFp8DequantRequest *request) {
   return request != nullptr && request->weights != nullptr &&
          request->scales != nullptr && request->output != nullptr &&
@@ -223,6 +367,26 @@ bool validate_mxfp4_request(
          request->scales != nullptr && request->output != nullptr &&
          request->rows > 0 && request->packed_cols > 0 &&
          request->scale_packed_cols > 0;
+}
+
+bool validate_inv_rope_request(
+    const NervaCudaDeepSeekFusedInvRopeFp8QuantRequest *request) {
+  if (request == nullptr || request->input == nullptr ||
+      request->positions == nullptr || request->cos_sin_cache == nullptr ||
+      request->fp8_output == nullptr || request->scale_output == nullptr ||
+      request->packed_scale_output == nullptr || request->num_tokens == 0 ||
+      request->n_groups == 0 || request->heads_per_group == 0 ||
+      request->head_dim == 0 || request->quant_group_size == 0 ||
+      request->cos_sin_stride == 0 || !isfinite(request->fp8_max) ||
+      !isfinite(request->eps) || request->fp8_max <= 0.0f ||
+      request->eps <= 0.0f) {
+    return false;
+  }
+  const uint32_t chunks = request->head_dim / request->quant_group_size;
+  return request->head_dim % request->quant_group_size == 0 &&
+         request->rope_dim <= request->head_dim && (request->rope_dim % 2) == 0 &&
+         request->cos_sin_stride >= request->rope_dim && chunks > 0 &&
+         chunks <= 4;
 }
 
 }  // namespace
@@ -622,6 +786,215 @@ cleanup:
   if (d_packed != nullptr) cudaFree(d_packed);
   if (err != cudaSuccess) {
     return fail_dequant(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_deepseek_fused_inv_rope_fp8_quant(
+    const NervaCudaDeepSeekFusedInvRopeFp8QuantRequest *request,
+    NervaCudaDeepSeekFusedInvRopeFp8QuantResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_inv_rope_result(out);
+  if (!validate_inv_rope_request(request)) {
+    return -1;
+  }
+
+  out->num_tokens = request->num_tokens;
+  out->n_groups = request->n_groups;
+  out->heads_per_group = request->heads_per_group;
+  out->head_dim = request->head_dim;
+  out->rope_dim = request->rope_dim;
+  out->quant_group_size = request->quant_group_size;
+  out->scale_blocks =
+      request->heads_per_group * (request->head_dim / request->quant_group_size);
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail_inv_rope(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail_inv_rope(out, cudaErrorNoDevice);
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail_inv_rope(out, err);
+  }
+
+  float *d_input = nullptr;
+  int64_t *d_positions = nullptr;
+  float *d_cos_sin = nullptr;
+  uint8_t *d_fp8_output = nullptr;
+  float *d_scale_output = nullptr;
+  uint32_t *d_packed_scale_output = nullptr;
+  uint8_t *h_fp8_output = nullptr;
+  float *h_scale_output = nullptr;
+  uint32_t *h_packed_scale_output = nullptr;
+  cudaStream_t stream = nullptr;
+
+  const uint32_t num_heads = request->n_groups * request->heads_per_group;
+  const uint64_t input_values =
+      static_cast<uint64_t>(request->num_tokens) * num_heads * request->head_dim;
+  const uint64_t position_values = request->num_tokens;
+  uint64_t max_position = 0;
+  for (uint32_t idx = 0; idx < request->num_tokens; ++idx) {
+    if (request->positions[idx] > static_cast<int64_t>(max_position)) {
+      max_position = static_cast<uint64_t>(request->positions[idx]);
+    }
+  }
+  const uint64_t cos_sin_values =
+      (max_position + 1ull) * request->cos_sin_stride;
+  const uint64_t fp8_values =
+      static_cast<uint64_t>(request->n_groups) * request->num_tokens *
+      request->heads_per_group * request->head_dim;
+  const uint64_t scale_values =
+      static_cast<uint64_t>(request->n_groups) * request->num_tokens *
+      out->scale_blocks;
+  const uint64_t packed_values =
+      static_cast<uint64_t>(request->n_groups) * request->num_tokens *
+      request->heads_per_group;
+  if (input_values > UINT32_MAX || fp8_values > UINT32_MAX ||
+      scale_values > UINT32_MAX || packed_values > UINT32_MAX) {
+    return -1;
+  }
+
+  const uint64_t input_bytes = input_values * sizeof(float);
+  const uint64_t position_bytes = position_values * sizeof(int64_t);
+  const uint64_t cos_sin_bytes = cos_sin_values * sizeof(float);
+  const uint64_t fp8_bytes = fp8_values;
+  const uint64_t scale_bytes = scale_values * sizeof(float);
+  const uint64_t packed_bytes = packed_values * sizeof(uint32_t);
+
+  err = cudaMalloc(reinterpret_cast<void **>(&d_input), input_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_positions), position_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_cos_sin), cos_sin_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_fp8_output), fp8_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_scale_output), scale_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_packed_scale_output),
+                   packed_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  out->device_arena_bytes = input_bytes + position_bytes + cos_sin_bytes +
+                            fp8_bytes + scale_bytes + packed_bytes;
+
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_fp8_output),
+                      fp8_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_scale_output),
+                      scale_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_packed_scale_output),
+                      packed_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  out->pinned_host_bytes = fp8_bytes + scale_bytes + packed_bytes;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) goto cleanup;
+  err =
+      cudaMemcpyAsync(d_input, request->input, input_bytes, cudaMemcpyHostToDevice, stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_positions,
+                        request->positions,
+                        position_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_cos_sin,
+                        request->cos_sin_cache,
+                        cos_sin_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes = input_bytes + position_bytes + cos_sin_bytes;
+
+  err = cudaMemsetAsync(d_fp8_output, 0, fp8_bytes, stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemsetAsync(d_scale_output, 0, scale_bytes, stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemsetAsync(d_packed_scale_output, 0, packed_bytes, stream);
+  if (err != cudaSuccess) goto cleanup;
+
+  {
+    const dim3 grid(request->num_tokens, num_heads, 1);
+    fused_inv_rope_fp8_quant_kernel<<<grid, 1, 0, stream>>>(
+        d_input,
+        d_positions,
+        d_cos_sin,
+        d_fp8_output,
+        d_scale_output,
+        d_packed_scale_output,
+        request->num_tokens,
+        request->heads_per_group,
+        request->head_dim,
+        request->rope_dim,
+        request->quant_group_size,
+        request->cos_sin_stride,
+        out->scale_blocks,
+        request->fp8_max,
+        request->eps);
+    out->kernel_launches += 1;
+  }
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(h_fp8_output,
+                        d_fp8_output,
+                        fp8_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(h_scale_output,
+                        d_scale_output,
+                        scale_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(h_packed_scale_output,
+                        d_packed_scale_output,
+                        packed_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->d2h_bytes = fp8_bytes + scale_bytes + packed_bytes;
+
+  err = cudaStreamSynchronize(stream);
+  out->sync_calls += 1;
+  if (err != cudaSuccess) goto cleanup;
+
+  memcpy(request->fp8_output, h_fp8_output, fp8_bytes);
+  memcpy(request->scale_output, h_scale_output, scale_bytes);
+  memcpy(request->packed_scale_output, h_packed_scale_output, packed_bytes);
+  out->fp8_output_hash =
+      hash_bytes(reinterpret_cast<const uint8_t *>(request->fp8_output),
+                 fp8_bytes);
+  out->scale_output_hash = hash_f32_bits(
+      request->scale_output, static_cast<uint32_t>(scale_values));
+  out->packed_scale_output_hash = hash_bytes(
+      reinterpret_cast<const uint8_t *>(request->packed_scale_output),
+      packed_bytes);
+  out->status = 0;
+
+cleanup:
+  if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_packed_scale_output != nullptr) cudaFreeHost(h_packed_scale_output);
+  if (h_scale_output != nullptr) cudaFreeHost(h_scale_output);
+  if (h_fp8_output != nullptr) cudaFreeHost(h_fp8_output);
+  if (d_packed_scale_output != nullptr) cudaFree(d_packed_scale_output);
+  if (d_scale_output != nullptr) cudaFree(d_scale_output);
+  if (d_fp8_output != nullptr) cudaFree(d_fp8_output);
+  if (d_cos_sin != nullptr) cudaFree(d_cos_sin);
+  if (d_positions != nullptr) cudaFree(d_positions);
+  if (d_input != nullptr) cudaFree(d_input);
+  if (err != cudaSuccess) {
+    return fail_inv_rope(out, err);
   }
   return out->status == 0 ? 0 : -1;
 }

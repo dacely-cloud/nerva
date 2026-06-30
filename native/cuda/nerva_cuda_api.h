@@ -1087,6 +1087,47 @@ typedef struct NervaCudaDeepSeekQuantDequantResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekQuantDequantResult;
 
+typedef struct NervaCudaDeepSeekFusedInvRopeFp8QuantRequest {
+  uint32_t num_tokens;
+  uint32_t n_groups;
+  uint32_t heads_per_group;
+  uint32_t head_dim;
+  uint32_t rope_dim;
+  uint32_t quant_group_size;
+  uint32_t cos_sin_stride;
+  float fp8_max;
+  float eps;
+  const float *input;
+  const int64_t *positions;
+  const float *cos_sin_cache;
+  uint8_t *fp8_output;
+  float *scale_output;
+  uint32_t *packed_scale_output;
+} NervaCudaDeepSeekFusedInvRopeFp8QuantRequest;
+
+typedef struct NervaCudaDeepSeekFusedInvRopeFp8QuantResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t num_tokens;
+  uint32_t n_groups;
+  uint32_t heads_per_group;
+  uint32_t head_dim;
+  uint32_t rope_dim;
+  uint32_t quant_group_size;
+  uint32_t scale_blocks;
+  uint64_t fp8_output_hash;
+  uint64_t scale_output_hash;
+  uint64_t packed_scale_output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekFusedInvRopeFp8QuantResult;
+
 typedef struct NervaCudaDeepSeekRouterSmokeResult {
   int32_t status;
   int32_t cuda_error;
@@ -1525,6 +1566,9 @@ int nerva_cuda_deepseek_quant_fp8_dequant(
 int nerva_cuda_deepseek_quant_mxfp4_dequant(
     const NervaCudaDeepSeekQuantMxfp4DequantRequest *request,
     NervaCudaDeepSeekQuantDequantResult *out);
+int nerva_cuda_deepseek_fused_inv_rope_fp8_quant(
+    const NervaCudaDeepSeekFusedInvRopeFp8QuantRequest *request,
+    NervaCudaDeepSeekFusedInvRopeFp8QuantResult *out);
 int nerva_cuda_deepseek_router_smoke(NervaCudaDeepSeekRouterSmokeResult *out);
 int nerva_cuda_deepseek_router_route(
     const NervaCudaDeepSeekRouterRouteRequest *request,
