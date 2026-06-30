@@ -62,6 +62,9 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_deepseek_compressor_state);
   cudaFree(session->device_deepseek_swa_kv);
   cudaFree(session->device_deepseek_v32_mla_kv);
+  cudaFree(session->device_deepseek_mhc_comb_mix);
+  cudaFree(session->device_deepseek_mhc_post_mix);
+  cudaFree(session->device_deepseek_mhc_residual);
   cudaFree(session->device_deepseek_runtime_counters);
   cudaFree(session->device_kv_values);
   cudaFree(session->device_kv_keys);
@@ -156,6 +159,9 @@ uint64_t session_device_footprint(
          session->deepseek_compressed_kv_bytes +
          session->deepseek_indexer_state_bytes +
          session->deepseek_indexer_kv_bytes +
+         session->deepseek_mhc_residual_bytes +
+         session->deepseek_mhc_post_mix_bytes +
+         session->deepseek_mhc_comb_mix_bytes +
          session->deepseek_runtime_counters_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
@@ -179,6 +185,9 @@ uint64_t session_fixed_footprint_without_prefill_chunk(
          session->deepseek_compressed_kv_bytes +
          session->deepseek_indexer_state_bytes +
          session->deepseek_indexer_kv_bytes +
+         session->deepseek_mhc_residual_bytes +
+         session->deepseek_mhc_post_mix_bytes +
+         session->deepseek_mhc_comb_mix_bytes +
          session->deepseek_runtime_counters_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
@@ -208,6 +217,9 @@ uint64_t session_resident_kv_bytes(
   bytes = sat_add_u64(bytes, session->deepseek_compressed_kv_bytes);
   bytes = sat_add_u64(bytes, session->deepseek_indexer_state_bytes);
   bytes = sat_add_u64(bytes, session->deepseek_indexer_kv_bytes);
+  bytes = sat_add_u64(bytes, session->deepseek_mhc_residual_bytes);
+  bytes = sat_add_u64(bytes, session->deepseek_mhc_post_mix_bytes);
+  bytes = sat_add_u64(bytes, session->deepseek_mhc_comb_mix_bytes);
   return bytes;
 }
 
@@ -793,6 +805,36 @@ uint64_t accumulate_deepseek_v32_mla_kv_bytes(
 bool layout_is_deepseek_v4_native(const SequenceLayerLayout &layout) {
   return layout_is_deepseek_v4_swa_native(layout) ||
          layout_is_deepseek_v4_compressed_native(layout);
+}
+
+void accumulate_deepseek_v4_mhc_runtime_bytes(
+    const std::vector<SequenceLayerLayout> &layouts, uint32_t max_context_tokens,
+    uint32_t hidden, uint64_t *residual_bytes, uint64_t *post_mix_bytes,
+    uint64_t *comb_mix_bytes) {
+  uint32_t hc_mult = 0;
+  for (const SequenceLayerLayout &layout : layouts) {
+    if (!layout_is_deepseek_v4_native(layout)) {
+      continue;
+    }
+    hc_mult = std::max(hc_mult, layout.deepseek_hc_mult);
+  }
+
+  uint64_t residual = 0;
+  uint64_t post_mix = 0;
+  uint64_t comb_mix = 0;
+  if (hc_mult != 0 && hidden != 0 && max_context_tokens != 0) {
+    const uint64_t tokens = max_context_tokens;
+    const uint64_t hc = hc_mult;
+    const uint64_t hc_hidden =
+        sat_mul_u64(static_cast<uint64_t>(hidden), hc);
+    residual = sat_mul_u64(sat_mul_u64(tokens, hc_hidden), sizeof(float));
+    post_mix = sat_mul_u64(sat_mul_u64(tokens, hc), sizeof(float));
+    comb_mix =
+        sat_mul_u64(sat_mul_u64(tokens, sat_mul_u64(hc, hc)), sizeof(float));
+  }
+  if (residual_bytes != nullptr) *residual_bytes = residual;
+  if (post_mix_bytes != nullptr) *post_mix_bytes = post_mix;
+  if (comb_mix_bytes != nullptr) *comb_mix_bytes = comb_mix;
 }
 
 bool layout_is_native_deepseek_session(const SequenceLayerLayout &layout) {

@@ -426,6 +426,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
       parent->deepseek_compressed_kv_bytes;
   session->deepseek_indexer_state_bytes = parent->deepseek_indexer_state_bytes;
   session->deepseek_indexer_kv_bytes = parent->deepseek_indexer_kv_bytes;
+  session->deepseek_mhc_residual_bytes =
+      parent->deepseek_mhc_residual_bytes;
+  session->deepseek_mhc_post_mix_bytes =
+      parent->deepseek_mhc_post_mix_bytes;
+  session->deepseek_mhc_comb_mix_bytes =
+      parent->deepseek_mhc_comb_mix_bytes;
   session->deepseek_runtime_counters_bytes =
       parent->deepseek_runtime_counters_bytes;
   session->kv_block_table_bytes = parent->kv_block_table_bytes;
@@ -595,6 +601,24 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
         reinterpret_cast<void **>(&session->device_deepseek_indexer_kv),
         session->deepseek_indexer_kv_bytes);
   }
+  if (err == cudaSuccess && session->deepseek_mhc_residual_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_mhc_residual),
+        session->deepseek_mhc_residual_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_mhc_post_mix_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_mhc_post_mix),
+        session->deepseek_mhc_post_mix_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_mhc_comb_mix_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_mhc_comb_mix),
+        session->deepseek_mhc_comb_mix_bytes);
+  }
   if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
     failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
     err = cudaMalloc(
@@ -720,6 +744,24 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
                           session->deepseek_indexer_kv_bytes, session->stream);
   }
   if (err == cudaSuccess && !clone_active_state &&
+      session->deepseek_mhc_residual_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_mhc_residual, 0,
+                          session->deepseek_mhc_residual_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && !clone_active_state &&
+      session->deepseek_mhc_post_mix_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_mhc_post_mix, 0,
+                          session->deepseek_mhc_post_mix_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && !clone_active_state &&
+      session->deepseek_mhc_comb_mix_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_mhc_comb_mix, 0,
+                          session->deepseek_mhc_comb_mix_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && !clone_active_state &&
       session->deepseek_runtime_counters_bytes != 0) {
     err = cudaMemsetAsync(session->device_deepseek_runtime_counters, 0,
                           session->deepseek_runtime_counters_bytes,
@@ -799,6 +841,27 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
     err = cudaMemcpyAsync(session->device_deepseek_indexer_kv,
                           parent->device_deepseek_indexer_kv,
                           session->deepseek_indexer_kv_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state &&
+      session->deepseek_mhc_residual_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_mhc_residual,
+                          parent->device_deepseek_mhc_residual,
+                          session->deepseek_mhc_residual_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state &&
+      session->deepseek_mhc_post_mix_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_mhc_post_mix,
+                          parent->device_deepseek_mhc_post_mix,
+                          session->deepseek_mhc_post_mix_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state &&
+      session->deepseek_mhc_comb_mix_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_mhc_comb_mix,
+                          parent->device_deepseek_mhc_comb_mix,
+                          session->deepseek_mhc_comb_mix_bytes,
                           cudaMemcpyDeviceToDevice, session->stream);
   }
   if (err == cudaSuccess && clone_active_state &&

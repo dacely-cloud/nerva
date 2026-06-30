@@ -3982,6 +3982,9 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
                 created.summary.deepseek_v4_swa_kv_bytes, 576,
                 "V4 SWA must reserve one vLLM-aligned fp8_ds_mla page"
             );
+            assert_eq!(created.summary.deepseek_mhc_residual_bytes, 256);
+            assert_eq!(created.summary.deepseek_mhc_post_mix_bytes, 64);
+            assert_eq!(created.summary.deepseek_mhc_comb_mix_bytes, 128);
             swa_kv_bytes = Some(created.summary.resident_kv_bytes);
         },
     );
@@ -4012,6 +4015,9 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
             created.summary.deepseek_v4_swa_kv_bytes, 576,
             "V4 compressed-indexer layers still reserve the local SWA fp8_ds_mla page"
         );
+        assert_eq!(created.summary.deepseek_mhc_residual_bytes, 256);
+        assert_eq!(created.summary.deepseek_mhc_post_mix_bytes, 64);
+        assert_eq!(created.summary.deepseek_mhc_comb_mix_bytes, 128);
         assert!(
             created.summary.resident_kv_bytes > swa_kv_bytes,
             "compressed-indexer V4 must reserve compressor/indexer runtime caches: {} <= {}",
@@ -4052,8 +4058,17 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
             created.summary.deepseek_v4_swa_kv_bytes, 2304,
             "V4 SWA cache must reserve four 64-token fp8_ds_mla pages for 256 tokens"
         );
+        assert_eq!(created.summary.deepseek_mhc_residual_bytes, 8192);
+        assert_eq!(created.summary.deepseek_mhc_post_mix_bytes, 2048);
+        assert_eq!(created.summary.deepseek_mhc_comb_mix_bytes, 4096);
+        let mhc_bytes = created.summary.deepseek_mhc_residual_bytes
+            + created.summary.deepseek_mhc_post_mix_bytes
+            + created.summary.deepseek_mhc_comb_mix_bytes;
         assert_eq!(
-            created.summary.resident_kv_bytes - 2048 - created.summary.deepseek_v4_swa_kv_bytes,
+            created.summary.resident_kv_bytes
+                - 2048
+                - created.summary.deepseek_v4_swa_kv_bytes
+                - mhc_bytes,
             4096 + 576 + 4096 + 576,
             "V4 C128 compressed/indexer runtime caches must reserve two-token vLLM-aligned packed pages"
         );

@@ -447,6 +447,9 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint32_t planned_weight_descriptor_count;
   uint64_t planned_weight_descriptor_hash;
   uint64_t resident_kv_bytes;
+  uint64_t deepseek_mhc_residual_bytes;
+  uint64_t deepseek_mhc_post_mix_bytes;
+  uint64_t deepseek_mhc_comb_mix_bytes;
   uint64_t kv_tokens;
   uint64_t device_arena_bytes;
   uint64_t pinned_host_bytes;
@@ -645,6 +648,9 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
   uint32_t deepseek_v4_attention_aux_streams;
   uint32_t deepseek_v4_attention_events;
   uint64_t deepseek_v4_swa_kv_bytes;
+  uint64_t deepseek_mhc_residual_bytes;
+  uint64_t deepseek_mhc_post_mix_bytes;
+  uint64_t deepseek_mhc_comb_mix_bytes;
   uint64_t resident_kv_bytes;
   uint64_t device_arena_bytes;
   uint64_t pinned_host_bytes;

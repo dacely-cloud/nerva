@@ -33,6 +33,9 @@ pub struct CudaHfDecodeSequenceSummary {
     pub planned_weight_descriptor_count: u32,
     pub planned_weight_descriptor_hash: u64,
     pub resident_kv_bytes: u64,
+    pub deepseek_mhc_residual_bytes: u64,
+    pub deepseek_mhc_post_mix_bytes: u64,
+    pub deepseek_mhc_comb_mix_bytes: u64,
     pub kv_tokens: u64,
     pub device_arena_bytes: u64,
     pub pinned_host_bytes: u64,
@@ -83,7 +86,7 @@ pub struct CudaHfDecodeSequenceSummary {
 impl CudaHfDecodeSequenceSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"planned_footprint\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"planned_gpu_resident_weight_bytes\":{},\"planned_gpu_staged_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"kv_tokens\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_captures\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"experimental_rt_selector_launches\":{},\"experimental_rt_sparse_attention_active\":{},\"experimental_rt_dense_attention_chunks\":{},\"experimental_rt_attention_chunks\":{},\"device_elapsed_ns\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"deepseek_compressor_state_writes\":{},\"deepseek_compressed_kv_writes\":{},\"deepseek_indexer_state_writes\":{},\"deepseek_indexer_kv_writes\":{},\"deepseek_compressed_kv_attention_reads\":{},\"deepseek_compressed_kv_attention_slots_scanned\":{},\"deepseek_sparse_topk_selections\":{},\"deepseek_sparse_topk_slots_selected\":{},\"deepseek_sparse_topk_candidates_scored\":{},\"deepseek_sparse_topk_selection_hash\":{},\"deepseek_v3_grouped_router_selections\":{},\"deepseek_v4_bias_router_selections\":{},\"deepseek_v4_hash_router_selections\":{},\"deepseek_raw_attention_tokens_scanned\":{},\"deepseek_sparse_attention_output_hash\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"steps\":{},\"seed_token\":{},\"tokens\":{},\"observed_tokens\":{},\"observed_token_hash\":{},\"planned_footprint\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"planned_gpu_resident_weight_bytes\":{},\"planned_gpu_staged_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"resident_kv_bytes\":{},\"deepseek_mhc_residual_bytes\":{},\"deepseek_mhc_post_mix_bytes\":{},\"deepseek_mhc_comb_mix_bytes\":{},\"kv_tokens\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"graph_replays\":{},\"graph_nodes\":{},\"graph_launches\":{},\"graph_captures\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"experimental_rt_selector_launches\":{},\"experimental_rt_sparse_attention_active\":{},\"experimental_rt_dense_attention_chunks\":{},\"experimental_rt_attention_chunks\":{},\"device_elapsed_ns\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"deepseek_compressor_state_writes\":{},\"deepseek_compressed_kv_writes\":{},\"deepseek_indexer_state_writes\":{},\"deepseek_indexer_kv_writes\":{},\"deepseek_compressed_kv_attention_reads\":{},\"deepseek_compressed_kv_attention_slots_scanned\":{},\"deepseek_sparse_topk_selections\":{},\"deepseek_sparse_topk_slots_selected\":{},\"deepseek_sparse_topk_candidates_scored\":{},\"deepseek_sparse_topk_selection_hash\":{},\"deepseek_v3_grouped_router_selections\":{},\"deepseek_v4_bias_router_selections\":{},\"deepseek_v4_hash_router_selections\":{},\"deepseek_raw_attention_tokens_scanned\":{},\"deepseek_sparse_attention_output_hash\":{},\"error\":{}}}",
             status_str(&self.status),
             self.dtype,
             self.hidden,
@@ -114,6 +117,9 @@ impl CudaHfDecodeSequenceSummary {
             self.planned_weight_descriptor_count,
             self.planned_weight_descriptor_hash,
             self.resident_kv_bytes,
+            self.deepseek_mhc_residual_bytes,
+            self.deepseek_mhc_post_mix_bytes,
+            self.deepseek_mhc_comb_mix_bytes,
             self.kv_tokens,
             self.device_arena_bytes,
             self.pinned_host_bytes,

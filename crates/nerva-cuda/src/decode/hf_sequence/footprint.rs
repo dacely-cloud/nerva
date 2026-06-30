@@ -97,6 +97,17 @@ pub fn estimate_sequence_footprint(
         checked_mul(kv_cache_width, U16_BYTES * 2, "KV token bytes")?,
         "resident KV bytes",
     )?;
+    let deepseek_mhc_runtime_bytes =
+        crate::decode::hf_sequence::footprint_layers::deepseek_v4_mhc_runtime_bytes(
+            request.layers,
+            hidden,
+            context_tokens,
+        )?;
+    let resident_kv_bytes = checked_add(
+        resident_kv_bytes,
+        deepseek_mhc_runtime_bytes,
+        "resident KV bytes",
+    )?;
     let kv_block_table_bytes = checked_mul(kv_block_count, 4, "KV block table bytes")?;
     let token_slot_bytes = checked_mul(context_tokens, TOKEN_SLOT_BYTES, "token slot bytes")?;
     let prompt_bytes = checked_mul(prompt_count, 4, "prompt bytes")?;

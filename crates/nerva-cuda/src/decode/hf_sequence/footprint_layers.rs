@@ -39,6 +39,49 @@ pub(crate) fn deepseek_static_elements(
     )
 }
 
+pub(crate) fn deepseek_v4_mhc_runtime_bytes(
+    layers: &[CudaHfDecodeChainLayer<'_>],
+    hidden: u64,
+    context_tokens: u64,
+) -> Result<u64, String> {
+    let hc_mult = layers
+        .iter()
+        .filter(|layer| layer.attention_kind == CUDA_HF_ATTENTION_DEEPSEEK_MLA)
+        .filter_map(|layer| layer.deepseek)
+        .filter(|deepseek| deepseek_is_v4(deepseek.mode))
+        .map(|deepseek| deepseek.hc_mult as u64)
+        .max()
+        .unwrap_or(0);
+    if hc_mult == 0 || hidden == 0 || context_tokens == 0 {
+        return Ok(0);
+    }
+    let hc_hidden = checked_mul(hidden, hc_mult, "DeepSeek V4 mHC residual width")?;
+    let residual = checked_mul(
+        checked_mul(context_tokens, hc_hidden, "DeepSeek V4 mHC residual")?,
+        4,
+        "DeepSeek V4 mHC residual bytes",
+    )?;
+    let post_mix = checked_mul(
+        checked_mul(context_tokens, hc_mult, "DeepSeek V4 mHC post mix")?,
+        4,
+        "DeepSeek V4 mHC post mix bytes",
+    )?;
+    let comb_mix = checked_mul(
+        checked_mul(
+            context_tokens,
+            checked_mul(hc_mult, hc_mult, "DeepSeek V4 mHC comb mix width")?,
+            "DeepSeek V4 mHC comb mix",
+        )?,
+        4,
+        "DeepSeek V4 mHC comb mix bytes",
+    )?;
+    checked_add(
+        checked_add(residual, post_mix, "DeepSeek V4 mHC runtime bytes")?,
+        comb_mix,
+        "DeepSeek V4 mHC runtime bytes",
+    )
+}
+
 pub(crate) fn layer_elements(
     layer: &CudaHfDecodeChainLayer<'_>,
     hidden: u64,

@@ -25,6 +25,9 @@ void fill_session_result_header(const NervaCudaHfDecodeSequenceSession *session,
       session->planned_weight_descriptor_count;
   out->planned_weight_descriptor_hash =
       session->planned_weight_descriptor_hash;
+  out->deepseek_mhc_residual_bytes = session->deepseek_mhc_residual_bytes;
+  out->deepseek_mhc_post_mix_bytes = session->deepseek_mhc_post_mix_bytes;
+  out->deepseek_mhc_comb_mix_bytes = session->deepseek_mhc_comb_mix_bytes;
 }
 
 void fill_deepseek_runtime_counter_result(
@@ -240,6 +243,9 @@ void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
   out->deepseek_v4_attention_events =
       session->deepseek_v4_attention_event_count;
   out->deepseek_v4_swa_kv_bytes = session->deepseek_swa_kv_bytes;
+  out->deepseek_mhc_residual_bytes = session->deepseek_mhc_residual_bytes;
+  out->deepseek_mhc_post_mix_bytes = session->deepseek_mhc_post_mix_bytes;
+  out->deepseek_mhc_comb_mix_bytes = session->deepseek_mhc_comb_mix_bytes;
   out->descriptor_gpu_resident_h2d_bytes = session->descriptor_gpu_resident_h2d_bytes;
   out->descriptor_gpu_staged_h2d_bytes = session->descriptor_gpu_staged_h2d_bytes;
   out->resident_kv_bytes = session_resident_kv_bytes(session);
