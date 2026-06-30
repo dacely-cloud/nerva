@@ -506,8 +506,9 @@ __global__ void hf_prefill_finish_kernel(uint32_t dtype, uint32_t hidden,
 
 __global__ void hf_prefill_final_norm_last_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t dtype,
-    uint32_t hidden, uint32_t prompt_token_count, float rms_eps,
-    const uint16_t *hidden_in, uint16_t *projection_input) {
+    uint32_t final_norm_weight_dtype, uint32_t hidden,
+    uint32_t prompt_token_count, float rms_eps, const uint16_t *hidden_in,
+    uint16_t *projection_input) {
   if (prompt_token_count == 0) {
     return;
   }
@@ -521,18 +522,29 @@ __global__ void hf_prefill_final_norm_last_kernel(
   mean_square = block_sum(mean_square);
   const float scale =
       rsqrtf(mean_square / static_cast<float>(hidden) + rms_eps);
-  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
-    projection_input[index] = f32_to_encoded(
-        encoded_to_f32(input[index], dtype) * scale *
-            encoded_to_f32(arena[arena_layout.final_norm + index], dtype),
-        dtype);
+  const uint16_t *norm_weight = arena + arena_layout.final_norm;
+  if (final_norm_weight_dtype == kDTypeF32) {
+    for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+      projection_input[index] = f32_to_encoded(
+          encoded_to_f32(input[index], dtype) * scale *
+              f32_weight_to_f32_unaligned(norm_weight, index),
+          dtype);
+    }
+  } else {
+    for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+      projection_input[index] = f32_to_encoded(
+          encoded_to_f32(input[index], dtype) * scale *
+              encoded_to_f32(norm_weight[index], final_norm_weight_dtype),
+          dtype);
+    }
   }
 }
 
 __global__ void hf_prefill_final_norm_range_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t dtype,
-    uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
-    float rms_eps, const uint16_t *hidden_in, uint16_t *projection_input) {
+    uint32_t final_norm_weight_dtype, uint32_t hidden, uint32_t chunk_start,
+    uint32_t chunk_tokens, float rms_eps, const uint16_t *hidden_in,
+    uint16_t *projection_input) {
   const uint32_t local_token = blockIdx.x;
   if (local_token >= chunk_tokens) {
     return;
@@ -549,10 +561,20 @@ __global__ void hf_prefill_final_norm_range_kernel(
   mean_square = block_sum(mean_square);
   const float scale =
       rsqrtf(mean_square / static_cast<float>(hidden) + rms_eps);
-  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
-    out[index] = f32_to_encoded(
-        encoded_to_f32(input[index], dtype) * scale *
-            encoded_to_f32(arena[arena_layout.final_norm + index], dtype),
-        dtype);
+  const uint16_t *norm_weight = arena + arena_layout.final_norm;
+  if (final_norm_weight_dtype == kDTypeF32) {
+    for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+      out[index] = f32_to_encoded(
+          encoded_to_f32(input[index], dtype) * scale *
+              f32_weight_to_f32_unaligned(norm_weight, index),
+          dtype);
+    }
+  } else {
+    for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+      out[index] = f32_to_encoded(
+          encoded_to_f32(input[index], dtype) * scale *
+              encoded_to_f32(norm_weight[index], final_norm_weight_dtype),
+          dtype);
+    }
   }
 }

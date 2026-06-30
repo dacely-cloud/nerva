@@ -177,6 +177,12 @@ fn create_error(
         out.failure_stage,
         create_stage_label(out.failure_stage),
     );
+    if out.planned_weight_bytes != 0 || out.resident_weight_bytes != 0 {
+        error.push_str(&format!(
+            " planned_weight_bytes={} resident_weight_bytes={}",
+            out.planned_weight_bytes, out.resident_weight_bytes
+        ));
+    }
     if out.device_arena_bytes != 0 {
         error.push_str(&format!(
             " requested_device_bytes={}",

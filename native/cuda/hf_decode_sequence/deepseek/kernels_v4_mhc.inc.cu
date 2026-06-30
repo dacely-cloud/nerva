@@ -328,12 +328,21 @@ __device__ void deepseek_session_finish_v4_mhc_head_norm(
   }
   const float final_norm_scale =
       rsqrtf(dense_sumsq / static_cast<float>(hidden) + rms_eps);
-  for (uint32_t dim = 0; dim < hidden; ++dim) {
-    const float normed =
-        temp_layer_input[dim] * final_norm_scale *
-        encoded_to_f32(arena[arena_layout.final_norm + dim],
-                       final_norm_weight_dtype);
-    projection_input[dim] = f32_to_encoded(normed, dtype);
+  const uint16_t *norm_weight = arena + arena_layout.final_norm;
+  if (final_norm_weight_dtype == kDTypeF32) {
+    for (uint32_t dim = 0; dim < hidden; ++dim) {
+      const float normed =
+          temp_layer_input[dim] * final_norm_scale *
+          f32_weight_to_f32_unaligned(norm_weight, dim);
+      projection_input[dim] = f32_to_encoded(normed, dtype);
+    }
+  } else {
+    for (uint32_t dim = 0; dim < hidden; ++dim) {
+      const float normed =
+          temp_layer_input[dim] * final_norm_scale *
+          encoded_to_f32(norm_weight[dim], final_norm_weight_dtype);
+      projection_input[dim] = f32_to_encoded(normed, dtype);
+    }
   }
 }
 

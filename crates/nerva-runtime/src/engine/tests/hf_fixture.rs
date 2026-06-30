@@ -535,13 +535,18 @@ fn values_for_entry_role(role: WeightBlockRole, elements: usize) -> Vec<u16> {
         | WeightBlockRole::DeepSeekV4WoBScale
         | WeightBlockRole::DeepSeekV4CompressorApe
         | WeightBlockRole::DeepSeekV4CompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4CompressorWkvScale
         | WeightBlockRole::DeepSeekV4CompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4CompressorWgateScale
         | WeightBlockRole::DeepSeekV4IndexerWqBProjection
         | WeightBlockRole::DeepSeekV4IndexerWqBScale
         | WeightBlockRole::DeepSeekV4IndexerCompressorApe
         | WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale
         | WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale
         | WeightBlockRole::DeepSeekV4IndexerWeightsProjection
+        | WeightBlockRole::DeepSeekV4IndexerWeightsScale
         | WeightBlockRole::DeepSeekV4HashRouteTable
         | WeightBlockRole::GateProjection
         | WeightBlockRole::UpProjection

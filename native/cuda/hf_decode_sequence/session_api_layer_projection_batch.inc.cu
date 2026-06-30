@@ -412,15 +412,19 @@ extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
       hf_layer_finish_next_attn_norm_encode_kernel<<<
           1, kDecodeNormThreads, 0, best->stream>>>(
           session->device_arena, output_offset, next_layout, session->dtype,
-          session->dtype, session->hidden, attention_hidden, kv_hidden,
-          session->intermediate, session->device_step,
+          layer_norm_weight_dtype(next_layout, session->dtype), session->hidden,
+          attention_hidden, kv_hidden, session->intermediate, session->device_step,
           session->max_context_tokens, session->rms_eps, session->device_scratch,
           session->device_projection_input);
     } else {
+      const uint32_t final_norm_weight_dtype =
+          final_norm_weight_dtype_for_layouts(session->host_layouts.data(),
+                                              session->layer_count,
+                                              session->dtype);
       hf_layer_finish_final_norm_encode_kernel<<<
           1, kDecodeNormThreads, 0, best->stream>>>(
           session->device_arena, session->arena_layout, session->dtype,
-          session->dtype, session->hidden, attention_hidden, kv_hidden,
+          final_norm_weight_dtype, session->hidden, attention_hidden, kv_hidden,
           session->intermediate, session->device_step,
           session->max_context_tokens, session->rms_eps, session->device_scratch,
           session->device_projection_input);

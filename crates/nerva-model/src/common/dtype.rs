@@ -3,9 +3,9 @@ use nerva_core::types::error::{NervaError, Result};
 
 pub(crate) fn dtype_size_bytes(dtype: DType) -> Result<usize> {
     match dtype {
-        DType::I8 | DType::F8E4M3 | DType::F8E8M0 => Ok(1),
+        DType::U8 | DType::I8 | DType::F8E4M3 | DType::F8E8M0 => Ok(1),
         DType::F16 | DType::BF16 => Ok(2),
-        DType::F32 => Ok(4),
+        DType::U32 | DType::I32 | DType::F32 => Ok(4),
         DType::I64 => Ok(8),
         _ => Err(NervaError::InvalidArgument {
             reason: format!(

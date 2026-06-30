@@ -49,7 +49,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   uint64_t linear_gdn_recurrent_state_elements = 0;
   assign_linear_gdn_state_offsets(layouts, &linear_gdn_conv_state_elements,
                                   &linear_gdn_recurrent_state_elements);
-  arena_layout.final_norm = push(elements, hidden);
+  const uint32_t final_norm_weight_dtype =
+      final_norm_weight_dtype_for_layers(request->layers, request->layer_count,
+                                         request->dtype);
+  const uint64_t final_norm_slots = dtype_slots(hidden, final_norm_weight_dtype);
+  arena_layout.final_norm = push(elements, final_norm_slots);
   arena_layout.lm_head = push(elements, vocab_size * hidden);
   const uint64_t arena_bytes = elements * sizeof(uint16_t);
   const uint64_t resident_weight_bytes = arena_bytes - (hidden * 2 * sizeof(uint16_t));
@@ -184,7 +188,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
                  attention_hidden, kv_hidden, request->head_dim, intermediate);
     }
     memcpy(host_arena + arena_layout.final_norm, request->final_norm_weight,
-           hidden * sizeof(uint16_t));
+           final_norm_slots * sizeof(uint16_t));
     memcpy(host_arena + arena_layout.lm_head, request->lm_head,
            vocab_size * hidden * sizeof(uint16_t));
   }
@@ -251,8 +255,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_u16(
   if (err == cudaSuccess) {
     hf_decode_sequence_kernel<<<1, kDecodeThreads, 0, stream>>>(
         device_arena, arena_layout, device_layouts, request->layer_count, request->dtype,
-        request->hidden, request->heads, request->kv_heads, request->head_dim,
-        request->intermediate, 0, device_step, context_steps, device_prompt_tokens,
+        final_norm_weight_dtype, request->hidden, request->heads,
+        request->kv_heads, request->head_dim, request->intermediate, 0,
+        device_step, context_steps, device_prompt_tokens,
         request->prompt_token_count, request->rms_eps, request->rope_theta,
         device_scratch, device_kv_keys, device_kv_values, kv_block_count,
         device_kv_block_table, device_slots, device_linear_gdn_conv_state,

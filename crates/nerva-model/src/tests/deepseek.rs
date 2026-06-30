@@ -11,7 +11,7 @@ use crate::hf::deepseek_runtime::{
     validate_deepseek_exact_runtime_contract, DeepSeekAttentionExecutionKind,
     DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS,
 };
-use crate::hf::metadata::HfMlpLayerKind;
+use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind};
 use crate::hf::parser::parse_hf_config_metadata;
 use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::layout::plan::plan_hf_weight_layout;
@@ -108,6 +108,27 @@ fn parses_deepseek_v4_flash_metadata() {
         .mlp_layer_types
         .iter()
         .all(|kind| *kind == HfMlpLayerKind::SparseMoe));
+}
+
+#[test]
+fn parses_deepseek_v4_vllm_attention_layer_type_aliases() {
+    let config = deepseek_v4_flash_config().replace(
+        "\"compress_ratios\": [0, 0, 4, 128],",
+        "\"layer_types\": [\"sliding_attention\", \"sliding_attention\", \"compressed_sparse_attention\", \"heavily_compressed_attention\"],\n        \"compress_ratios\": [0, 0, 4, 128],",
+    );
+    let metadata = parse_hf_config_metadata(&config).unwrap();
+
+    assert_eq!(metadata.architecture, HfArchitectureKind::DeepSeekV4);
+    assert_eq!(
+        metadata.attention_layer_types,
+        vec![
+            HfAttentionLayerKind::Full,
+            HfAttentionLayerKind::Full,
+            HfAttentionLayerKind::Full,
+            HfAttentionLayerKind::Full,
+        ]
+    );
+    assert_eq!(metadata.compress_ratios, vec![0, 0, 4, 128]);
 }
 
 #[test]
@@ -773,11 +794,27 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
     );
     assert_entry(
         &manifest,
+        "hc_head_base",
+        WeightBlockRole::DeepSeekV4HcHeadBase,
+        4,
+        1,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
         "hc_head_fn",
         WeightBlockRole::DeepSeekV4HcHeadFn,
         4,
         16384,
-        DType::F32,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
+        "hc_head_scale",
+        WeightBlockRole::DeepSeekV4HcHeadScale,
+        1,
+        1,
+        DType::BF16,
     );
     assert_entry(
         &manifest,
@@ -789,11 +826,19 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
     );
     assert_entry(
         &manifest,
+        "layers.0.attn.attn_sink",
+        WeightBlockRole::DeepSeekV4AttentionSink,
+        64,
+        1,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
         "layers.0.attn.wq_a.scale",
         WeightBlockRole::DeepSeekV4WqAScale,
         8,
         32,
-        DType::F8E8M0,
+        DType::BF16,
     );
     assert_entry(
         &manifest,
@@ -801,7 +846,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4CompressorApe,
         4,
         1024,
-        DType::F32,
+        DType::BF16,
     );
     assert_entry(
         &manifest,
@@ -825,7 +870,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4CompressorApe,
         128,
         512,
-        DType::F32,
+        DType::BF16,
     );
     assert_entry(
         &manifest,
@@ -847,9 +892,9 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         &manifest,
         "layers.0.ffn.shared_experts.w1.scale",
         WeightBlockRole::DeepSeekV4SharedExpertGateScale,
-        16,
-        32,
-        DType::F8E8M0,
+        2048,
+        256,
+        DType::F8E4M3,
     );
     assert_entry(
         &manifest,
@@ -857,15 +902,84 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::ExpertGateProjection,
         2048,
         2048,
-        DType::I8,
+        DType::U8,
     );
     assert_entry(
         &manifest,
         "layers.0.ffn.experts.0.w1.scale",
         WeightBlockRole::DeepSeekV4ExpertGateScale,
         2048,
-        128,
-        DType::F8E8M0,
+        256,
+        DType::F8E4M3,
+    );
+}
+
+#[test]
+fn deepseek_v4_bf16_shared_experts_do_not_require_quant_scales() {
+    let config = deepseek_v4_flash_config()
+        .replace("\"expert_dtype\": \"fp4\"", "\"expert_dtype\": \"bf16\"");
+    let metadata = parse_hf_config_metadata(&config).unwrap();
+    let manifest = build_hf_tensor_manifest(&plan_hf_weight_layout(&metadata).unwrap()).unwrap();
+
+    assert_entry(
+        &manifest,
+        "layers.0.ffn.shared_experts.w1.weight",
+        WeightBlockRole::SharedExpertGateProjection,
+        2048,
+        4096,
+        DType::BF16,
+    );
+    assert!(!manifest
+        .entries
+        .iter()
+        .any(|entry| entry.name == "layers.0.ffn.shared_experts.w1.scale"));
+    assert_entry(
+        &manifest,
+        "layers.0.ffn.experts.0.w1.scale",
+        WeightBlockRole::DeepSeekV4ExpertGateScale,
+        2048,
+        32,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
+        "layers.2.attn.compressor.wkv.weight",
+        WeightBlockRole::DeepSeekV4CompressorWkvProjection,
+        1024,
+        4096,
+        DType::F8E4M3,
+    );
+    assert_entry(
+        &manifest,
+        "layers.2.attn.compressor.wkv.scale",
+        WeightBlockRole::DeepSeekV4CompressorWkvScale,
+        8,
+        32,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
+        "layers.2.attn.indexer.weights_proj.weight",
+        WeightBlockRole::DeepSeekV4IndexerWeightsProjection,
+        64,
+        4096,
+        DType::F8E4M3,
+    );
+    assert_entry(
+        &manifest,
+        "layers.2.attn.indexer.weights_proj.scale",
+        WeightBlockRole::DeepSeekV4IndexerWeightsScale,
+        1,
+        32,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
+        "layers.0.ffn.experts.0.w1.weight",
+        WeightBlockRole::ExpertGateProjection,
+        2048,
+        512,
+        DType::I32,
     );
 }
 

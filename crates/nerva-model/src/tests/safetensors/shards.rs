@@ -1,11 +1,15 @@
 use crate::tests::support::{
-    SHARD_ONE, SHARD_TWO, synthetic_header_for_entries, synthetic_sharded_index_json,
-    tiny_llama_manifest,
+    synthetic_header_for_entries, synthetic_sharded_index_json, tiny_llama_manifest, SHARD_ONE,
+    SHARD_TWO,
 };
+use crate::weights::layout::entry::WeightBlockRole;
+use crate::weights::manifest::{HfTensorManifest, HfTensorManifestEntry};
 use crate::weights::safetensors::planner::{
     plan_safetensors_shards_for_manifest, required_safetensors_shards_for_manifest,
 };
 use crate::weights::safetensors::shard::SafetensorsShardHeader;
+use nerva_core::types::dtype::DType;
+use nerva_core::types::memory::tier::MemoryTier;
 
 #[test]
 fn plans_safetensors_shards_from_index_and_headers() {
@@ -81,12 +85,10 @@ fn safetensors_shard_plan_ignores_extra_non_manifest_tensors() {
     assert_eq!(plan.total_weight_bytes, manifest.total_weight_bytes);
     assert_eq!(plan.index_total_size, Some(manifest.total_weight_bytes + 2));
     assert_eq!(plan.shards[0].tensor_count, 10);
-    assert!(
-        !plan
-            .entries
-            .iter()
-            .any(|entry| entry.tensor_name.starts_with("model.visual."))
-    );
+    assert!(!plan
+        .entries
+        .iter()
+        .any(|entry| entry.tensor_name.starts_with("model.visual.")));
 }
 
 #[test]
@@ -111,11 +113,89 @@ fn safetensors_shard_plan_supports_tied_embedding_manifest() {
         plan.entries.last().unwrap().tensor_name,
         "model.norm.weight"
     );
-    assert!(
-        !plan
-            .entries
-            .iter()
-            .any(|entry| entry.tensor_name == "lm_head.weight")
+    assert!(!plan
+        .entries
+        .iter()
+        .any(|entry| entry.tensor_name == "lm_head.weight"));
+}
+
+#[test]
+fn deepseek_v4_quantized_checkpoint_aliases_resolve_to_real_index_names() {
+    let manifest = HfTensorManifest {
+        architecture: crate::hf::architecture::HfArchitectureKind::DeepSeekV4,
+        entries: vec![
+            HfTensorManifestEntry {
+                name: "layers.0.attn.wq_a.scale".to_string(),
+                role: WeightBlockRole::DeepSeekV4WqAScale,
+                layer: Some(0),
+                expert: None,
+                rows: 2,
+                cols: 3,
+                depth: None,
+                rank: 2,
+                elements: 6,
+                bytes: 6,
+                dtype: DType::F8E8M0,
+                tier: MemoryTier::Dram,
+            },
+            HfTensorManifestEntry {
+                name: "layers.0.ffn.experts.0.w1.weight".to_string(),
+                role: WeightBlockRole::ExpertGateProjection,
+                layer: Some(0),
+                expert: Some(0),
+                rows: 4,
+                cols: 5,
+                depth: None,
+                rank: 2,
+                elements: 20,
+                bytes: 20,
+                dtype: DType::I8,
+                tier: MemoryTier::Dram,
+            },
+            HfTensorManifestEntry {
+                name: "layers.3.ffn.gate.bias".to_string(),
+                role: WeightBlockRole::RouterCorrectionBias,
+                layer: Some(3),
+                expert: None,
+                rows: 2,
+                cols: 1,
+                depth: None,
+                rank: 1,
+                elements: 2,
+                bytes: 8,
+                dtype: DType::F32,
+                tier: MemoryTier::Dram,
+            },
+        ],
+        total_weight_bytes: 34,
+        manifest_hash: 42,
+    };
+    let index = format!(
+        "{{\"metadata\":{{\"total_size\":34}},\"weight_map\":{{\"layers.0.attn.wq_a.weight_scale\":\"{SHARD_ONE}\",\"layers.0.ffn.experts.0.w1.weight_packed\":\"{SHARD_ONE}\",\"layers.3.ffn.gate.e_score_correction_bias\":\"{SHARD_ONE}\"}}}}"
+    );
+    let header = "{\"layers.0.attn.wq_a.weight_scale\":{\"dtype\":\"F8_E8M0\",\"shape\":[2,3],\"data_offsets\":[0,6]},\"layers.0.ffn.experts.0.w1.weight_packed\":{\"dtype\":\"I8\",\"shape\":[4,5],\"data_offsets\":[6,26]},\"layers.3.ffn.gate.e_score_correction_bias\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[26,34]}}";
+
+    let required = required_safetensors_shards_for_manifest(&index, &manifest).unwrap();
+    let plan = plan_safetensors_shards_for_manifest(
+        &index,
+        &[SafetensorsShardHeader::new(SHARD_ONE, header)],
+        &manifest,
+    )
+    .unwrap();
+
+    assert_eq!(required, vec![SHARD_ONE.to_string()]);
+    assert_eq!(plan.entries.len(), 3);
+    assert_eq!(
+        plan.entries[0].tensor_name,
+        "layers.0.attn.wq_a.weight_scale"
+    );
+    assert_eq!(
+        plan.entries[1].tensor_name,
+        "layers.0.ffn.experts.0.w1.weight_packed"
+    );
+    assert_eq!(
+        plan.entries[2].tensor_name,
+        "layers.3.ffn.gate.e_score_correction_bias"
     );
 }
 
@@ -130,23 +210,19 @@ fn safetensors_shard_plan_rejects_missing_index_or_header() {
     );
 
     assert!(required_safetensors_shards_for_manifest(&missing_lm_head_index, &manifest).is_err());
-    assert!(
-        plan_safetensors_shards_for_manifest(
-            &index,
-            &[SafetensorsShardHeader::new(SHARD_ONE, &header_one)],
-            &manifest,
-        )
-        .is_err()
-    );
-    assert!(
-        plan_safetensors_shards_for_manifest(
-            &index,
-            &[
-                SafetensorsShardHeader::new(SHARD_ONE, &header_one),
-                SafetensorsShardHeader::new(SHARD_ONE, &header_one),
-            ],
-            &manifest,
-        )
-        .is_err()
-    );
+    assert!(plan_safetensors_shards_for_manifest(
+        &index,
+        &[SafetensorsShardHeader::new(SHARD_ONE, &header_one)],
+        &manifest,
+    )
+    .is_err());
+    assert!(plan_safetensors_shards_for_manifest(
+        &index,
+        &[
+            SafetensorsShardHeader::new(SHARD_ONE, &header_one),
+            SafetensorsShardHeader::new(SHARD_ONE, &header_one),
+        ],
+        &manifest,
+    )
+    .is_err());
 }

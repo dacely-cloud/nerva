@@ -68,10 +68,7 @@ pub(super) fn select_resident_weight_strategy(
     compute_capability: Option<u32>,
     costs: ResidentWeightCostModel,
 ) -> Result<ResidentWeightStepSelection> {
-    if matches!(
-        entry.role,
-        WeightBlockRole::LinearALog | WeightBlockRole::LinearNorm
-    ) {
+    if is_cuda_raw_weight_role(entry.role) {
         return Ok(select_cuda_raw_weight_strategy(entry, device, costs));
     }
 
@@ -158,9 +155,9 @@ fn select_cuda_raw_weight_strategy(
             executor: ExecutionOwner::Gpu(device),
             predicted_visible_ns: costs.gpu_resident_ns(entry.bytes),
             metric_source: MetricSource::EstimatedModel,
-            kernel_name: "cuda_resident_raw_f32_weight",
+            kernel_name: "cuda_resident_raw_weight",
             fallback: false,
-            reason: "linear attention raw F32 parameter is already resident in VRAM",
+            reason: "raw CUDA parameter is already resident in VRAM",
         }
     } else {
         ResidentWeightStepSelection {
@@ -168,11 +165,92 @@ fn select_cuda_raw_weight_strategy(
             executor: ExecutionOwner::Gpu(device),
             predicted_visible_ns: costs.gpu_staged_ns(entry.bytes),
             metric_source: MetricSource::EstimatedModel,
-            kernel_name: "cuda_staged_raw_f32_weight",
+            kernel_name: "cuda_staged_raw_weight",
             fallback: false,
-            reason: "linear attention raw F32 parameter is staged for CUDA execution",
+            reason: "raw CUDA parameter is staged for CUDA execution",
         }
     }
+}
+
+fn is_cuda_raw_weight_role(role: WeightBlockRole) -> bool {
+    matches!(
+        role,
+        WeightBlockRole::AttentionNorm
+            | WeightBlockRole::QueryNorm
+            | WeightBlockRole::QueryBias
+            | WeightBlockRole::KeyNorm
+            | WeightBlockRole::KeyBias
+            | WeightBlockRole::ValueBias
+            | WeightBlockRole::OutputBias
+            | WeightBlockRole::DeepSeekQALoraScaleInv
+            | WeightBlockRole::DeepSeekQALoraNorm
+            | WeightBlockRole::DeepSeekQBScaleInv
+            | WeightBlockRole::DeepSeekKvAScaleInv
+            | WeightBlockRole::DeepSeekKvANorm
+            | WeightBlockRole::DeepSeekKvBScaleInv
+            | WeightBlockRole::DeepSeekOutputScaleInv
+            | WeightBlockRole::DeepSeekIndexerQueryScaleInv
+            | WeightBlockRole::DeepSeekIndexerKeyScaleInv
+            | WeightBlockRole::DeepSeekIndexerKeyNorm
+            | WeightBlockRole::DeepSeekIndexerKeyNormBias
+            | WeightBlockRole::DeepSeekV4HcHeadBase
+            | WeightBlockRole::DeepSeekV4HcHeadFn
+            | WeightBlockRole::DeepSeekV4HcHeadScale
+            | WeightBlockRole::DeepSeekV4HcAttnBase
+            | WeightBlockRole::DeepSeekV4HcAttnFn
+            | WeightBlockRole::DeepSeekV4HcAttnScale
+            | WeightBlockRole::DeepSeekV4HcFfnBase
+            | WeightBlockRole::DeepSeekV4HcFfnFn
+            | WeightBlockRole::DeepSeekV4HcFfnScale
+            | WeightBlockRole::DeepSeekV4AttentionSink
+            | WeightBlockRole::DeepSeekV4WqAScale
+            | WeightBlockRole::DeepSeekV4WqBScale
+            | WeightBlockRole::DeepSeekV4QNorm
+            | WeightBlockRole::DeepSeekV4WkvScale
+            | WeightBlockRole::DeepSeekV4KvNorm
+            | WeightBlockRole::DeepSeekV4WoAScale
+            | WeightBlockRole::DeepSeekV4WoBScale
+            | WeightBlockRole::DeepSeekV4CompressorApe
+            | WeightBlockRole::DeepSeekV4CompressorWkvScale
+            | WeightBlockRole::DeepSeekV4CompressorWgateScale
+            | WeightBlockRole::DeepSeekV4CompressorNorm
+            | WeightBlockRole::DeepSeekV4IndexerWqBScale
+            | WeightBlockRole::DeepSeekV4IndexerCompressorApe
+            | WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale
+            | WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale
+            | WeightBlockRole::DeepSeekV4IndexerCompressorNorm
+            | WeightBlockRole::DeepSeekV4IndexerWeightsScale
+            | WeightBlockRole::DeepSeekV4HashRouteTable
+            | WeightBlockRole::DeepSeekV4ExpertGateScale
+            | WeightBlockRole::DeepSeekV4ExpertUpScale
+            | WeightBlockRole::DeepSeekV4ExpertDownScale
+            | WeightBlockRole::DeepSeekV4SharedExpertGateScale
+            | WeightBlockRole::DeepSeekV4SharedExpertUpScale
+            | WeightBlockRole::DeepSeekV4SharedExpertDownScale
+            | WeightBlockRole::LinearDtBias
+            | WeightBlockRole::LinearALog
+            | WeightBlockRole::LinearNorm
+            | WeightBlockRole::MlpNorm
+            | WeightBlockRole::GateScaleInv
+            | WeightBlockRole::UpScaleInv
+            | WeightBlockRole::DownScaleInv
+            | WeightBlockRole::RouterCorrectionBias
+            | WeightBlockRole::ExpertGateProjection
+            | WeightBlockRole::ExpertUpProjection
+            | WeightBlockRole::ExpertGateUpProjection
+            | WeightBlockRole::ExpertDownProjection
+            | WeightBlockRole::ExpertGateScaleInv
+            | WeightBlockRole::ExpertUpScaleInv
+            | WeightBlockRole::ExpertDownScaleInv
+            | WeightBlockRole::SharedExpertGateProjection
+            | WeightBlockRole::SharedExpertUpProjection
+            | WeightBlockRole::SharedExpertDownProjection
+            | WeightBlockRole::SharedExpertGateScaleInv
+            | WeightBlockRole::SharedExpertUpScaleInv
+            | WeightBlockRole::SharedExpertDownScaleInv
+            | WeightBlockRole::SharedExpertRouterProjection
+            | WeightBlockRole::FinalNorm
+    )
 }
 
 pub(super) fn resident_weight_candidate_costs(

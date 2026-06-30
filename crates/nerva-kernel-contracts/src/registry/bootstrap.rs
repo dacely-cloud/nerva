@@ -10,6 +10,7 @@ use crate::registry::types::registry::KernelContractRegistry;
 
 static DTYPE_F32: &[DType] = &[DType::F32];
 static DTYPE_FP16_BF16: &[DType] = &[DType::F16, DType::BF16];
+static DTYPE_F8_E4M3: &[DType] = &[DType::F8E4M3];
 static DTYPE_U32: &[DType] = &[DType::U32];
 
 pub fn bootstrap_registry() -> KernelContractRegistry {
@@ -40,6 +41,16 @@ pub fn bootstrap_registry() -> KernelContractRegistry {
             backend: KernelBackend::Cuda,
             architecture: Some(ArchitectureRange::new(75, 121)),
             dtypes: DTYPE_FP16_BF16,
+            graph_safe: true,
+            deterministic: true,
+            exactness: KernelExactness::ReferenceEquivalentWithinDeclaredFpTolerance,
+        })
+        .with_implementation(KernelImplementation {
+            name: "cuda_decode_dense_matvec_fp8_e4m3",
+            operation: KernelOperation::DenseMatVec,
+            backend: KernelBackend::Cuda,
+            architecture: Some(ArchitectureRange::new(75, 121)),
+            dtypes: DTYPE_F8_E4M3,
             graph_safe: true,
             deterministic: true,
             exactness: KernelExactness::ReferenceEquivalentWithinDeclaredFpTolerance,

@@ -405,21 +405,21 @@ fn plan_deepseek_v4_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeight
         WeightBlockRole::DeepSeekV4HcHeadBase,
         hc_mult,
         1,
-        DType::F32,
+        DType::BF16,
     )?;
     push_static_block(
         &mut blocks,
         WeightBlockRole::DeepSeekV4HcHeadFn,
         hc_mult,
         hc_dim,
-        DType::F32,
+        DType::BF16,
     )?;
     push_static_block(
         &mut blocks,
         WeightBlockRole::DeepSeekV4HcHeadScale,
         1,
         1,
-        DType::F32,
+        DType::BF16,
     )?;
 
     for layer in 0..metadata.num_hidden_layers {
@@ -641,7 +641,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4AttentionSink,
             metadata.num_attention_heads,
             1,
-            DType::F32,
+            DType::BF16,
         ),
         (
             WeightBlockRole::DeepSeekV4WqAProjection,
@@ -653,7 +653,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WqAScale,
             scale_dim(q_lora_rank),
             scale_dim(metadata.hidden_size),
-            DType::F8E8M0,
+            DType::BF16,
         ),
         (
             WeightBlockRole::DeepSeekV4WqBProjection,
@@ -665,7 +665,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WqBScale,
             scale_dim(q_rows),
             scale_dim(q_lora_rank),
-            DType::F8E8M0,
+            DType::BF16,
         ),
         (
             WeightBlockRole::DeepSeekV4QNorm,
@@ -683,7 +683,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WkvScale,
             scale_dim(metadata.head_dim),
             scale_dim(metadata.hidden_size),
-            DType::F8E8M0,
+            DType::BF16,
         ),
         (
             WeightBlockRole::DeepSeekV4KvNorm,
@@ -701,7 +701,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WoAScale,
             scale_dim(wo_a_rows),
             scale_dim(wo_a_cols),
-            DType::F8E8M0,
+            DType::BF16,
         ),
         (
             WeightBlockRole::DeepSeekV4WoBProjection,
@@ -713,7 +713,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WoBScale,
             scale_dim(metadata.hidden_size),
             scale_dim(wo_a_rows),
-            DType::F8E8M0,
+            DType::BF16,
         ),
     ] {
         push_block(blocks, role, layer, rows, cols, dtype)?;
@@ -727,6 +727,7 @@ fn push_deepseek_v4_attention_blocks(
             metadata.hidden_size,
             metadata.head_dim,
             false,
+            metadata.expert_dtype.as_deref() == Some("bf16"),
         )?;
     }
     if compress_ratio == 4 {
@@ -750,7 +751,7 @@ fn push_deepseek_v4_attention_blocks(
             layer,
             scale_dim(index_rows),
             scale_dim(q_lora_rank),
-            DType::F8E8M0,
+            DType::BF16,
         )?;
         push_deepseek_v4_compressor_blocks(
             blocks,
@@ -759,15 +760,35 @@ fn push_deepseek_v4_attention_blocks(
             metadata.hidden_size,
             index_head_dim,
             true,
+            metadata.expert_dtype.as_deref() == Some("bf16"),
         )?;
-        push_block(
-            blocks,
-            WeightBlockRole::DeepSeekV4IndexerWeightsProjection,
-            layer,
-            index_n_heads,
-            metadata.hidden_size,
-            DType::BF16,
-        )?;
+        if metadata.expert_dtype.as_deref() == Some("bf16") {
+            push_block(
+                blocks,
+                WeightBlockRole::DeepSeekV4IndexerWeightsProjection,
+                layer,
+                index_n_heads,
+                metadata.hidden_size,
+                DType::F8E4M3,
+            )?;
+            push_block(
+                blocks,
+                WeightBlockRole::DeepSeekV4IndexerWeightsScale,
+                layer,
+                scale_dim(index_n_heads),
+                scale_dim(metadata.hidden_size),
+                DType::BF16,
+            )?;
+        } else {
+            push_block(
+                blocks,
+                WeightBlockRole::DeepSeekV4IndexerWeightsProjection,
+                layer,
+                index_n_heads,
+                metadata.hidden_size,
+                DType::BF16,
+            )?;
+        }
     }
     Ok(())
 }
@@ -779,6 +800,7 @@ fn push_deepseek_v4_compressor_blocks(
     hidden_size: usize,
     head_dim: usize,
     indexer: bool,
+    quantized_projection: bool,
 ) -> Result<()> {
     let coff = if compress_ratio == 4 { 2 } else { 1 };
     let rows = head_dim
@@ -791,21 +813,46 @@ fn push_deepseek_v4_compressor_blocks(
         (
             WeightBlockRole::DeepSeekV4IndexerCompressorApe,
             WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection,
+            WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale,
             WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection,
+            WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale,
             WeightBlockRole::DeepSeekV4IndexerCompressorNorm,
         )
     } else {
         (
             WeightBlockRole::DeepSeekV4CompressorApe,
             WeightBlockRole::DeepSeekV4CompressorWkvProjection,
+            WeightBlockRole::DeepSeekV4CompressorWkvScale,
             WeightBlockRole::DeepSeekV4CompressorWgateProjection,
+            WeightBlockRole::DeepSeekV4CompressorWgateScale,
             WeightBlockRole::DeepSeekV4CompressorNorm,
         )
     };
-    push_block(blocks, roles.0, layer, compress_ratio, rows, DType::F32)?;
-    push_block(blocks, roles.1, layer, rows, hidden_size, DType::BF16)?;
-    push_block(blocks, roles.2, layer, rows, hidden_size, DType::BF16)?;
-    push_block(blocks, roles.3, layer, head_dim, 1, DType::BF16)
+    push_block(blocks, roles.0, layer, compress_ratio, rows, DType::BF16)?;
+    if quantized_projection {
+        push_block(blocks, roles.1, layer, rows, hidden_size, DType::F8E4M3)?;
+        push_block(
+            blocks,
+            roles.2,
+            layer,
+            scale_dim(rows),
+            scale_dim(hidden_size),
+            DType::BF16,
+        )?;
+        push_block(blocks, roles.3, layer, rows, hidden_size, DType::F8E4M3)?;
+        push_block(
+            blocks,
+            roles.4,
+            layer,
+            scale_dim(rows),
+            scale_dim(hidden_size),
+            DType::BF16,
+        )?;
+    } else {
+        push_block(blocks, roles.1, layer, rows, hidden_size, DType::BF16)?;
+        push_block(blocks, roles.3, layer, rows, hidden_size, DType::BF16)?;
+    }
+    push_block(blocks, roles.5, layer, head_dim, 1, DType::BF16)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -867,51 +914,81 @@ fn push_deepseek_v4_moe_blocks(
         ),
     ] {
         if rows > 0 {
-            push_block(blocks, role, layer, rows, cols, DType::F8E4M3)?;
-            push_block(
-                blocks,
-                scale_role,
-                layer,
-                scale_dim(rows),
-                scale_dim(cols),
-                DType::F8E8M0,
-            )?;
+            if metadata.expert_dtype.as_deref() == Some("bf16") {
+                push_block(blocks, role, layer, rows, cols, DType::BF16)?;
+            } else {
+                push_block(blocks, role, layer, rows, cols.div_ceil(2), DType::U8)?;
+                push_block(
+                    blocks,
+                    scale_role,
+                    layer,
+                    rows,
+                    cols.div_ceil(16),
+                    DType::F8E4M3,
+                )?;
+            }
         }
     }
 
-    let half_hidden = checked_half(metadata.hidden_size, "DeepSeek V4 routed expert hidden")?;
-    let half_intermediate =
-        checked_half(moe_intermediate, "DeepSeek V4 routed expert intermediate")?;
     for (role, scale_role, rows, cols) in [
         (
             WeightBlockRole::ExpertGateProjection,
             WeightBlockRole::DeepSeekV4ExpertGateScale,
             moe_intermediate,
-            half_hidden,
+            metadata.hidden_size,
         ),
         (
             WeightBlockRole::ExpertUpProjection,
             WeightBlockRole::DeepSeekV4ExpertUpScale,
             moe_intermediate,
-            half_hidden,
+            metadata.hidden_size,
         ),
         (
             WeightBlockRole::ExpertDownProjection,
             WeightBlockRole::DeepSeekV4ExpertDownScale,
             metadata.hidden_size,
-            half_intermediate,
+            moe_intermediate,
         ),
     ] {
-        push_expert_block(blocks, role, layer, num_experts, rows, cols, DType::I8)?;
-        push_expert_block(
-            blocks,
-            scale_role,
-            layer,
-            num_experts,
-            rows,
-            cols.div_ceil(16),
-            DType::F8E8M0,
-        )?;
+        if metadata.expert_dtype.as_deref() == Some("bf16") {
+            push_expert_block(
+                blocks,
+                role,
+                layer,
+                num_experts,
+                rows,
+                cols.div_ceil(8),
+                DType::I32,
+            )?;
+            push_expert_block(
+                blocks,
+                scale_role,
+                layer,
+                num_experts,
+                rows,
+                cols.div_ceil(128),
+                DType::BF16,
+            )?;
+        } else {
+            push_expert_block(
+                blocks,
+                role,
+                layer,
+                num_experts,
+                rows,
+                cols.div_ceil(2),
+                DType::U8,
+            )?;
+            push_expert_block(
+                blocks,
+                scale_role,
+                layer,
+                num_experts,
+                rows,
+                cols.div_ceil(16),
+                DType::F8E4M3,
+            )?;
+        }
     }
     Ok(())
 }
@@ -1289,15 +1366,6 @@ fn push_expert_block(
 
 fn scale_dim(value: usize) -> usize {
     value.div_ceil(128)
-}
-
-fn checked_half(value: usize, label: &'static str) -> Result<usize> {
-    if value % 2 != 0 {
-        return Err(NervaError::InvalidArgument {
-            reason: format!("{label} must be divisible by two"),
-        });
-    }
-    Ok(value / 2)
 }
 
 fn deepseek_v3_norm_dtype(architecture: HfArchitectureKind) -> DType {

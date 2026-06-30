@@ -114,10 +114,15 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   uint64_t linear_gdn_recurrent_state_elements = 0;
   assign_linear_gdn_state_offsets(layouts, &linear_gdn_conv_state_elements,
                                   &linear_gdn_recurrent_state_elements);
-  session->arena_layout.final_norm = push(elements, hidden);
+  const uint32_t final_norm_weight_dtype =
+      final_norm_weight_dtype_for_layers(request->layers, request->layer_count,
+                                         request->dtype);
+  const uint64_t final_norm_slots = dtype_slots(hidden, final_norm_weight_dtype);
+  session->arena_layout.final_norm = push(elements, final_norm_slots);
   session->arena_layout.lm_head = push(elements, vocab_size * hidden);
   session->arena_bytes = elements * sizeof(uint16_t);
   session->resident_weight_bytes = session->arena_bytes - hidden * 2 * sizeof(uint16_t);
+  out->resident_weight_bytes = session->resident_weight_bytes;
   if (request->planned_weight_blocks != 0 &&
       request->planned_weight_bytes != session->resident_weight_bytes) {
     out->failure_stage = kCreateStageInvalidRequest;
@@ -586,7 +591,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
                  attention_hidden, kv_hidden, request->head_dim, intermediate);
     }
     memcpy(host_arena + session->arena_layout.final_norm,
-           request->final_norm_weight, hidden * sizeof(uint16_t));
+           request->final_norm_weight, final_norm_slots * sizeof(uint16_t));
     memcpy(host_arena + session->arena_layout.lm_head, request->lm_head,
            vocab_size * hidden * sizeof(uint16_t));
   }

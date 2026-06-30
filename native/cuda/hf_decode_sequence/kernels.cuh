@@ -51,13 +51,15 @@ __global__ void hf_decode_final_head_rows_kernel(
     uint32_t max_steps, const float *scratch, float *scores);
 __global__ void hf_decode_sequence_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, SequenceLayerLayout *layers,
-    uint32_t layer_count, uint32_t dtype, uint32_t hidden, uint32_t heads,
-    uint32_t kv_heads, uint32_t head_dim, uint32_t intermediate, uint32_t position,
-    uint32_t *step_cursor, uint32_t max_steps, const uint32_t *prompt_tokens,
-    uint32_t prompt_token_count, float rms_eps, float rope_theta, float *scratch,
-    uint16_t *kv_keys, uint16_t *kv_values, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, const NervaCudaSyntheticTokenSlot *slots,
-    float *linear_gdn_conv_state, float *linear_gdn_recurrent_state);
+    uint32_t layer_count, uint32_t dtype, uint32_t final_norm_weight_dtype,
+    uint32_t hidden, uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
+    uint32_t intermediate, uint32_t position, uint32_t *step_cursor,
+    uint32_t max_steps, const uint32_t *prompt_tokens,
+    uint32_t prompt_token_count, float rms_eps, float rope_theta,
+    float *scratch, uint16_t *kv_keys, uint16_t *kv_values,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    const NervaCudaSyntheticTokenSlot *slots, float *linear_gdn_conv_state,
+    float *linear_gdn_recurrent_state);
 __global__ void hf_decode_prepare_input_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t hidden,
     uint32_t *step_cursor, uint32_t max_steps, const uint32_t *prompt_tokens,
@@ -147,8 +149,9 @@ __global__ void hf_layer_finish_final_norm_encode_kernel(
     uint16_t *projection_input);
 __global__ void hf_final_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint64_t input_offset,
-    uint32_t dtype, uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
-    float rms_eps, float *scratch, uint16_t *projection_input);
+    uint32_t dtype, uint32_t final_norm_weight_dtype, uint32_t hidden,
+    uint32_t *step_cursor, uint32_t max_steps, float rms_eps, float *scratch,
+    uint16_t *projection_input);
 
 __global__ void hf_prefill_embed_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t hidden,
@@ -200,12 +203,14 @@ __global__ void hf_prefill_finish_kernel(uint32_t dtype, uint32_t hidden,
                                          uint16_t *hidden_out);
 __global__ void hf_prefill_final_norm_last_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t dtype,
-    uint32_t hidden, uint32_t prompt_token_count, float rms_eps,
-    const uint16_t *hidden_in, uint16_t *projection_input);
+    uint32_t final_norm_weight_dtype, uint32_t hidden,
+    uint32_t prompt_token_count, float rms_eps, const uint16_t *hidden_in,
+    uint16_t *projection_input);
 __global__ void hf_prefill_final_norm_range_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t dtype,
-    uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
-    float rms_eps, const uint16_t *hidden_in, uint16_t *projection_input);
+    uint32_t final_norm_weight_dtype, uint32_t hidden, uint32_t chunk_start,
+    uint32_t chunk_tokens, float rms_eps, const uint16_t *hidden_in,
+    uint16_t *projection_input);
 
 __global__ void hf_decode_set_step_kernel(uint32_t *step_cursor,
                                           uint32_t value);

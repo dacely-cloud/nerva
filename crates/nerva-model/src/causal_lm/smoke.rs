@@ -13,7 +13,7 @@ use crate::hf::parser::parse_hf_config_metadata;
 use crate::precision::bits::f32_to_f16_bits;
 use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::layout::plan::plan_hf_weight_layout;
-use crate::weights::manifest::{HfTensorManifest, HfTensorManifestEntry, build_hf_tensor_manifest};
+use crate::weights::manifest::{build_hf_tensor_manifest, HfTensorManifest, HfTensorManifestEntry};
 use crate::weights::safetensors::header::synthetic_safetensors_header_for_manifest;
 
 pub fn hf_causal_lm_safetensors_smoke(steps: usize) -> Result<HfCausalLmSmokeSummary> {
@@ -219,13 +219,18 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Result<Vec<u16>> {
         | WeightBlockRole::DeepSeekV4WoBScale
         | WeightBlockRole::DeepSeekV4CompressorApe
         | WeightBlockRole::DeepSeekV4CompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4CompressorWkvScale
         | WeightBlockRole::DeepSeekV4CompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4CompressorWgateScale
         | WeightBlockRole::DeepSeekV4IndexerWqBProjection
         | WeightBlockRole::DeepSeekV4IndexerWqBScale
         | WeightBlockRole::DeepSeekV4IndexerCompressorApe
         | WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale
         | WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale
         | WeightBlockRole::DeepSeekV4IndexerWeightsProjection
+        | WeightBlockRole::DeepSeekV4IndexerWeightsScale
         | WeightBlockRole::DeepSeekV4HashRouteTable
         | WeightBlockRole::DeepSeekV4ExpertGateScale
         | WeightBlockRole::DeepSeekV4ExpertUpScale

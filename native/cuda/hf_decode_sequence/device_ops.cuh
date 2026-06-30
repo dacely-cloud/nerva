@@ -30,10 +30,17 @@ static __device__ __forceinline__ uint16_t f32_to_encoded(float value, uint32_t 
   return __half_as_ushort(__float2half_rn(value));
 }
 
+static __device__ __forceinline__ float f32_weight_to_f32_unaligned(
+    const uint16_t *weight, uint32_t index) {
+  const uint32_t lo = static_cast<uint32_t>(weight[index * 2u]);
+  const uint32_t hi = static_cast<uint32_t>(weight[index * 2u + 1u]);
+  return __uint_as_float(lo | (hi << 16));
+}
+
 static __device__ __forceinline__ float norm_weight_to_f32(
     const uint16_t *weight, uint32_t index, uint32_t dtype) {
   if (dtype == kDTypeF32) {
-    return reinterpret_cast<const float *>(weight)[index];
+    return f32_weight_to_f32_unaligned(weight, index);
   }
   return encoded_to_f32(weight[index], dtype);
 }
@@ -137,18 +144,33 @@ static __device__ void mat_vec(const uint16_t *matrix, const float *input, uint3
   __syncthreads();
 }
 
-static __device__ void rms_norm(const float *input, const uint16_t *weight, uint32_t hidden,
-                         uint32_t dtype, float eps, float *output) {
+static __device__ void rms_norm_with_weight_dtype(
+    const float *input, const uint16_t *weight, uint32_t hidden,
+    uint32_t weight_dtype, uint32_t input_dtype, float eps, float *output) {
+  (void)input_dtype;
   float mean_square = 0.0f;
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
     mean_square += input[index] * input[index];
   }
   mean_square = block_sum(mean_square);
   const float scale = rsqrtf(mean_square / static_cast<float>(hidden) + eps);
-  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
-    output[index] = input[index] * scale * encoded_to_f32(weight[index], dtype);
+  if (weight_dtype == kDTypeF32) {
+    for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+      output[index] =
+          input[index] * scale * f32_weight_to_f32_unaligned(weight, index);
+    }
+  } else {
+    for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+      output[index] =
+          input[index] * scale * encoded_to_f32(weight[index], weight_dtype);
+    }
   }
   __syncthreads();
+}
+
+static __device__ void rms_norm(const float *input, const uint16_t *weight, uint32_t hidden,
+                         uint32_t dtype, float eps, float *output) {
+  rms_norm_with_weight_dtype(input, weight, hidden, dtype, dtype, eps, output);
 }
 
 static __device__ void run_sparse_moe_mlp(
@@ -312,10 +334,18 @@ static __device__ void rms_norm_to_encoded_with_weight_dtype(
   }
   mean_square = block_sum(mean_square);
   const float scale = rsqrtf(mean_square / static_cast<float>(hidden) + eps);
-  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
-    output[index] = f32_to_encoded(
-        input[index] * scale * norm_weight_to_f32(weight, index, weight_dtype),
-        output_dtype);
+  if (weight_dtype == kDTypeF32) {
+    for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+      output[index] = f32_to_encoded(
+          input[index] * scale * f32_weight_to_f32_unaligned(weight, index),
+          output_dtype);
+    }
+  } else {
+    for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+      output[index] = f32_to_encoded(
+          input[index] * scale * encoded_to_f32(weight[index], weight_dtype),
+          output_dtype);
+    }
   }
   __syncthreads();
 }

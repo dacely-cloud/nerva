@@ -131,6 +131,11 @@ pub(super) fn weight_role_layout_id(role: WeightBlockRole) -> u32 {
         WeightBlockRole::DeepSeekV4SharedExpertGateScale => 102,
         WeightBlockRole::DeepSeekV4SharedExpertUpScale => 103,
         WeightBlockRole::DeepSeekV4SharedExpertDownScale => 104,
+        WeightBlockRole::DeepSeekV4CompressorWkvScale => 105,
+        WeightBlockRole::DeepSeekV4CompressorWgateScale => 106,
+        WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale => 107,
+        WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale => 108,
+        WeightBlockRole::DeepSeekV4IndexerWeightsScale => 109,
     }
 }
 

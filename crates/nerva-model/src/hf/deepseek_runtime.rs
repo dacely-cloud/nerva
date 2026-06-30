@@ -419,11 +419,22 @@ fn required_roles_for_execution(
         | DeepSeekAttentionExecutionKind::V4CompressedMlaWithSparseIndexer => {
             push_deepseek_v4_attention_roles(&mut roles);
             if execution.uses_compressor {
-                push_deepseek_v4_compressor_roles(&mut roles, false);
+                push_deepseek_v4_compressor_roles(
+                    &mut roles,
+                    false,
+                    metadata.expert_dtype.as_deref() == Some("bf16"),
+                );
             }
             if execution.uses_sparse_indexer {
-                push_deepseek_v4_sparse_indexer_roles(&mut roles);
-                push_deepseek_v4_compressor_roles(&mut roles, true);
+                push_deepseek_v4_sparse_indexer_roles(
+                    &mut roles,
+                    metadata.expert_dtype.as_deref() == Some("bf16"),
+                );
+                push_deepseek_v4_compressor_roles(
+                    &mut roles,
+                    true,
+                    metadata.expert_dtype.as_deref() == Some("bf16"),
+                );
             }
         }
     }
@@ -490,7 +501,11 @@ fn push_deepseek_v4_attention_roles(roles: &mut Vec<WeightBlockRole>) {
     ]);
 }
 
-fn push_deepseek_v4_compressor_roles(roles: &mut Vec<WeightBlockRole>, indexer: bool) {
+fn push_deepseek_v4_compressor_roles(
+    roles: &mut Vec<WeightBlockRole>,
+    indexer: bool,
+    quantized_projection: bool,
+) {
     if indexer {
         roles.extend([
             WeightBlockRole::DeepSeekV4IndexerCompressorApe,
@@ -498,6 +513,12 @@ fn push_deepseek_v4_compressor_roles(roles: &mut Vec<WeightBlockRole>, indexer: 
             WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection,
             WeightBlockRole::DeepSeekV4IndexerCompressorNorm,
         ]);
+        if quantized_projection {
+            roles.extend([
+                WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale,
+                WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale,
+            ]);
+        }
     } else {
         roles.extend([
             WeightBlockRole::DeepSeekV4CompressorApe,
@@ -505,15 +526,27 @@ fn push_deepseek_v4_compressor_roles(roles: &mut Vec<WeightBlockRole>, indexer: 
             WeightBlockRole::DeepSeekV4CompressorWgateProjection,
             WeightBlockRole::DeepSeekV4CompressorNorm,
         ]);
+        if quantized_projection {
+            roles.extend([
+                WeightBlockRole::DeepSeekV4CompressorWkvScale,
+                WeightBlockRole::DeepSeekV4CompressorWgateScale,
+            ]);
+        }
     }
 }
 
-fn push_deepseek_v4_sparse_indexer_roles(roles: &mut Vec<WeightBlockRole>) {
+fn push_deepseek_v4_sparse_indexer_roles(
+    roles: &mut Vec<WeightBlockRole>,
+    quantized_projection: bool,
+) {
     roles.extend([
         WeightBlockRole::DeepSeekV4IndexerWqBProjection,
         WeightBlockRole::DeepSeekV4IndexerWqBScale,
         WeightBlockRole::DeepSeekV4IndexerWeightsProjection,
     ]);
+    if quantized_projection {
+        roles.push(WeightBlockRole::DeepSeekV4IndexerWeightsScale);
+    }
 }
 
 fn push_deepseek_dense_mlp_roles(roles: &mut Vec<WeightBlockRole>) {

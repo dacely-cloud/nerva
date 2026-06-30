@@ -117,7 +117,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_plan_layout(
   uint64_t linear_gdn_recurrent_state_elements = 0;
   assign_linear_gdn_state_offsets(layouts, &linear_gdn_conv_state_elements,
                                   &linear_gdn_recurrent_state_elements);
-  arena_layout.final_norm = push(elements, hidden);
+  const uint32_t final_norm_weight_dtype =
+      final_norm_weight_dtype_for_layers(request->layers, request->layer_count,
+                                         kDTypeBF16);
+  arena_layout.final_norm = push(elements,
+                                 dtype_slots(hidden, final_norm_weight_dtype));
   arena_layout.lm_head = push(elements, vocab_size * hidden);
 
   const SequenceLayerLayout &layout = layouts[request->layer_index];

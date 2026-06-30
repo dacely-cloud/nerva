@@ -75,7 +75,10 @@ pub(crate) fn safetensors_file_data_start(header_json: &str) -> Result<usize> {
 
 pub(crate) fn safetensors_dtype(dtype: DType) -> Result<&'static str> {
     match dtype {
+        DType::U8 => Ok("U8"),
         DType::I8 => Ok("I8"),
+        DType::U32 => Ok("U32"),
+        DType::I32 => Ok("I32"),
         DType::I64 => Ok("I64"),
         DType::F16 => Ok("F16"),
         DType::BF16 => Ok("BF16"),

@@ -3,9 +3,10 @@ use std::collections::BTreeMap;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::hash::hash_bytes;
-use crate::common::json::parse::find_top_level_json_value;
+use crate::hf::architecture::HfArchitectureKind;
 use crate::weights::hash::hash_safetensors_shard_plan;
-use crate::weights::manifest::HfTensorManifest;
+use crate::weights::layout::entry::WeightBlockRole;
+use crate::weights::manifest::{HfTensorManifest, HfTensorManifestEntry};
 use crate::weights::safetensors::shard::{
     SafetensorsShardHeader, SafetensorsShardPlan, SafetensorsShardPlanEntry,
     SafetensorsShardPlanShard,
@@ -15,6 +16,11 @@ use crate::weights::safetensors::tensor::{
 };
 use crate::weights::safetensors::weight_map::parse_safetensors_weight_map;
 
+struct IndexedSafetensorsShardHeader<'a> {
+    header_json: &'a str,
+    tensor_json_by_name: BTreeMap<String, String>,
+}
+
 pub fn required_safetensors_shards_for_manifest(
     index_json: &str,
     manifest: &HfTensorManifest,
@@ -22,11 +28,9 @@ pub fn required_safetensors_shards_for_manifest(
     let weight_map = parse_safetensors_weight_map(index_json)?;
     let mut shards = BTreeMap::new();
     for entry in &manifest.entries {
-        let shard_file = weight_map.tensor_to_shard.get(&entry.name).ok_or_else(|| {
-            NervaError::InvalidArgument {
-                reason: format!("safetensors index is missing tensor {}", entry.name),
-            }
-        })?;
+        let (tensor_name, shard_file) =
+            resolve_index_tensor(manifest.architecture, entry, &weight_map.tensor_to_shard)?;
+        let _ = tensor_name;
         shards.insert(shard_file.clone(), ());
     }
     Ok(shards.into_keys().collect())
@@ -46,7 +50,7 @@ pub fn plan_safetensors_shards_for_manifest(
             });
         }
         if header_by_file
-            .insert(header.file_name, header.header_json)
+            .insert(header.file_name, index_safetensors_header(header)?)
             .is_some()
         {
             return Err(NervaError::InvalidArgument {
@@ -63,29 +67,26 @@ pub fn plan_safetensors_shards_for_manifest(
     let mut total_weight_bytes = 0usize;
 
     for entry in &manifest.entries {
-        let shard_file = weight_map.tensor_to_shard.get(&entry.name).ok_or_else(|| {
-            NervaError::InvalidArgument {
-                reason: format!("safetensors index is missing tensor {}", entry.name),
-            }
-        })?;
-        let header_json =
+        let (tensor_name, shard_file) =
+            resolve_index_tensor(manifest.architecture, entry, &weight_map.tensor_to_shard)?;
+        let header =
             header_by_file
                 .get(shard_file.as_str())
                 .ok_or_else(|| NervaError::InvalidArgument {
                     reason: format!("safetensors shard header for {shard_file} was not provided"),
                 })?;
-        let tensor_json =
-            find_top_level_json_value(header_json, &entry.name)?.ok_or_else(|| {
-                NervaError::InvalidArgument {
-                    reason: format!(
-                        "safetensors shard {shard_file} is missing tensor {}",
-                        entry.name
-                    ),
-                }
+        let tensor_json = header
+            .tensor_json_by_name
+            .get(&tensor_name)
+            .ok_or_else(|| NervaError::InvalidArgument {
+                reason: format!(
+                    "safetensors shard {shard_file} is missing tensor {}",
+                    tensor_name
+                ),
             })?;
         let (data_offset_begin, data_offset_end) =
             safetensors_tensor_data_offsets(tensor_json, entry)?;
-        let file_data_start = safetensors_file_data_start(header_json)?;
+        let file_data_start = safetensors_file_data_start(header.header_json)?;
         let file_offset_begin =
             file_data_start
                 .checked_add(data_offset_begin)
@@ -113,7 +114,7 @@ pub fn plan_safetensors_shards_for_manifest(
                     file_name: shard_file.clone(),
                     tensor_count: 0,
                     payload_bytes: 0,
-                    header_bytes: header_json.len(),
+                    header_bytes: header.header_json.len(),
                 });
         shard.tensor_count =
             shard
@@ -132,7 +133,7 @@ pub fn plan_safetensors_shards_for_manifest(
             })?;
 
         entries.push(SafetensorsShardPlanEntry {
-            tensor_name: entry.name.clone(),
+            tensor_name,
             shard_file: shard_file.clone(),
             role: entry.role,
             layer: entry.layer,
@@ -172,4 +173,101 @@ pub fn plan_safetensors_shards_for_manifest(
     };
     plan.plan_hash = hash_safetensors_shard_plan(&plan);
     Ok(plan)
+}
+
+fn resolve_index_tensor(
+    architecture: HfArchitectureKind,
+    entry: &HfTensorManifestEntry,
+    tensor_to_shard: &BTreeMap<String, String>,
+) -> Result<(String, String)> {
+    for tensor_name in safetensors_tensor_name_candidates(architecture, entry) {
+        if let Some(shard_file) = tensor_to_shard.get(&tensor_name) {
+            return Ok((tensor_name, shard_file.clone()));
+        }
+    }
+    Err(NervaError::InvalidArgument {
+        reason: format!("safetensors index is missing tensor {}", entry.name),
+    })
+}
+
+fn index_safetensors_header<'a>(
+    header: &SafetensorsShardHeader<'a>,
+) -> Result<IndexedSafetensorsShardHeader<'a>> {
+    let value: serde_json::Value =
+        serde_json::from_str(header.header_json).map_err(|err| NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors shard {} header is not valid JSON: {err}",
+                header.file_name
+            ),
+        })?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors shard {} header must be a JSON object",
+                header.file_name
+            ),
+        })?;
+    let mut tensor_json_by_name = BTreeMap::new();
+    for (name, tensor) in object {
+        if name == "__metadata__" {
+            continue;
+        }
+        tensor_json_by_name.insert(name.clone(), tensor.to_string());
+    }
+    Ok(IndexedSafetensorsShardHeader {
+        header_json: header.header_json,
+        tensor_json_by_name,
+    })
+}
+
+fn safetensors_tensor_name_candidates(
+    architecture: HfArchitectureKind,
+    entry: &HfTensorManifestEntry,
+) -> Vec<String> {
+    let mut names = vec![entry.name.clone()];
+    if architecture != HfArchitectureKind::DeepSeekV4 {
+        return names;
+    }
+
+    match entry.role {
+        WeightBlockRole::DeepSeekV4WqAScale
+        | WeightBlockRole::DeepSeekV4WqBScale
+        | WeightBlockRole::DeepSeekV4WkvScale
+        | WeightBlockRole::DeepSeekV4WoAScale
+        | WeightBlockRole::DeepSeekV4WoBScale
+        | WeightBlockRole::DeepSeekV4CompressorWkvScale
+        | WeightBlockRole::DeepSeekV4CompressorWgateScale
+        | WeightBlockRole::DeepSeekV4IndexerWqBScale
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale
+        | WeightBlockRole::DeepSeekV4IndexerWeightsScale
+        | WeightBlockRole::DeepSeekV4SharedExpertGateScale
+        | WeightBlockRole::DeepSeekV4SharedExpertUpScale
+        | WeightBlockRole::DeepSeekV4SharedExpertDownScale
+        | WeightBlockRole::DeepSeekV4ExpertGateScale
+        | WeightBlockRole::DeepSeekV4ExpertUpScale
+        | WeightBlockRole::DeepSeekV4ExpertDownScale => {
+            push_suffix_alias(&mut names, &entry.name, ".scale", ".weight_scale");
+        }
+        WeightBlockRole::SharedExpertGateProjection
+        | WeightBlockRole::SharedExpertUpProjection
+        | WeightBlockRole::SharedExpertDownProjection
+        | WeightBlockRole::ExpertGateProjection
+        | WeightBlockRole::ExpertUpProjection
+        | WeightBlockRole::ExpertDownProjection => {
+            push_suffix_alias(&mut names, &entry.name, ".weight", ".weight_packed");
+        }
+        WeightBlockRole::RouterCorrectionBias => {
+            push_suffix_alias(&mut names, &entry.name, ".bias", ".e_score_correction_bias");
+        }
+        _ => {}
+    }
+    names
+}
+
+fn push_suffix_alias(names: &mut Vec<String>, name: &str, suffix: &str, alias_suffix: &str) {
+    if let Some(prefix) = name.strip_suffix(suffix) {
+        names.push(format!("{prefix}{alias_suffix}"));
+    }
 }

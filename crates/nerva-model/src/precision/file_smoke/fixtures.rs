@@ -147,9 +147,14 @@ fn tensor_values_for_entry(
         | WeightBlockRole::DeepSeekV4WoAScale
         | WeightBlockRole::DeepSeekV4WoBScale
         | WeightBlockRole::DeepSeekV4CompressorApe
+        | WeightBlockRole::DeepSeekV4CompressorWkvScale
+        | WeightBlockRole::DeepSeekV4CompressorWgateScale
         | WeightBlockRole::DeepSeekV4IndexerWqBScale
         | WeightBlockRole::DeepSeekV4IndexerCompressorApe
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale
         | WeightBlockRole::DeepSeekV4HashRouteTable
+        | WeightBlockRole::DeepSeekV4IndexerWeightsScale
         | WeightBlockRole::LinearConvProjection
         | WeightBlockRole::LinearBProjection
         | WeightBlockRole::LinearAProjection

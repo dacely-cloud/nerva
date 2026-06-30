@@ -229,8 +229,14 @@ pub(crate) fn hf_tensor_name(
         WeightBlockRole::DeepSeekV4CompressorWkvProjection => {
             deepseek_v4_layer_name(role, layer, "attn.compressor.wkv.weight")
         }
+        WeightBlockRole::DeepSeekV4CompressorWkvScale => {
+            deepseek_v4_layer_name(role, layer, "attn.compressor.wkv.scale")
+        }
         WeightBlockRole::DeepSeekV4CompressorWgateProjection => {
             deepseek_v4_layer_name(role, layer, "attn.compressor.wgate.weight")
+        }
+        WeightBlockRole::DeepSeekV4CompressorWgateScale => {
+            deepseek_v4_layer_name(role, layer, "attn.compressor.wgate.scale")
         }
         WeightBlockRole::DeepSeekV4CompressorNorm => {
             deepseek_v4_layer_name(role, layer, "attn.compressor.norm.weight")
@@ -247,14 +253,23 @@ pub(crate) fn hf_tensor_name(
         WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection => {
             deepseek_v4_layer_name(role, layer, "attn.indexer.compressor.wkv.weight")
         }
+        WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale => {
+            deepseek_v4_layer_name(role, layer, "attn.indexer.compressor.wkv.scale")
+        }
         WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection => {
             deepseek_v4_layer_name(role, layer, "attn.indexer.compressor.wgate.weight")
+        }
+        WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale => {
+            deepseek_v4_layer_name(role, layer, "attn.indexer.compressor.wgate.scale")
         }
         WeightBlockRole::DeepSeekV4IndexerCompressorNorm => {
             deepseek_v4_layer_name(role, layer, "attn.indexer.compressor.norm.weight")
         }
         WeightBlockRole::DeepSeekV4IndexerWeightsProjection => {
             deepseek_v4_layer_name(role, layer, "attn.indexer.weights_proj.weight")
+        }
+        WeightBlockRole::DeepSeekV4IndexerWeightsScale => {
+            deepseek_v4_layer_name(role, layer, "attn.indexer.weights_proj.scale")
         }
         WeightBlockRole::DeepSeekV4HashRouteTable => {
             deepseek_v4_layer_name(role, layer, "ffn.gate.tid2eid")
@@ -666,13 +681,18 @@ pub(crate) fn weight_block_rank(role: WeightBlockRole) -> u8 {
         | WeightBlockRole::DeepSeekV4WoBScale
         | WeightBlockRole::DeepSeekV4CompressorApe
         | WeightBlockRole::DeepSeekV4CompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4CompressorWkvScale
         | WeightBlockRole::DeepSeekV4CompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4CompressorWgateScale
         | WeightBlockRole::DeepSeekV4IndexerWqBProjection
         | WeightBlockRole::DeepSeekV4IndexerWqBScale
         | WeightBlockRole::DeepSeekV4IndexerCompressorApe
         | WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale
         | WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale
         | WeightBlockRole::DeepSeekV4IndexerWeightsProjection
+        | WeightBlockRole::DeepSeekV4IndexerWeightsScale
         | WeightBlockRole::DeepSeekV4HashRouteTable
         | WeightBlockRole::LinearConvProjection
         | WeightBlockRole::LinearQkvProjection

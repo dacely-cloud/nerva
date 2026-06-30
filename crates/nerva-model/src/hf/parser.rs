@@ -5,7 +5,7 @@ use crate::common::json::fields::{
     optional_bool, optional_f32, optional_first_string, optional_object_f32, optional_object_json,
     optional_object_string, optional_string, optional_u32_or_first, optional_usize,
 };
-use crate::hf::architecture::{HfArchitectureKind, architecture_kind_from_str};
+use crate::hf::architecture::{architecture_kind_from_str, HfArchitectureKind};
 use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 use crate::hf::validate::validate_hf_metadata;
 
@@ -817,7 +817,12 @@ fn optional_attention_layer_types(config_json: &str) -> Result<Option<Vec<HfAtte
 
 fn parse_attention_layer_kind(value: &str) -> Result<HfAttentionLayerKind> {
     match value {
-        "full_attention" | "self_attention" | "attention" => Ok(HfAttentionLayerKind::Full),
+        "full_attention"
+        | "self_attention"
+        | "attention"
+        | "sliding_attention"
+        | "compressed_sparse_attention"
+        | "heavily_compressed_attention" => Ok(HfAttentionLayerKind::Full),
         "linear_attention" => Ok(HfAttentionLayerKind::Linear),
         other => Err(NervaError::InvalidArgument {
             reason: format!("unsupported HF attention layer type {other}"),

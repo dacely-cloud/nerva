@@ -1,7 +1,7 @@
 use nerva_core::types::dtype::DType;
 
 use crate::registry::bootstrap::bootstrap_registry;
-use crate::registry::probe::{KernelRegistryProbeStatus, kernel_registry_probe};
+use crate::registry::probe::{kernel_registry_probe, KernelRegistryProbeStatus};
 use crate::registry::types::backend::KernelBackend;
 use crate::registry::types::exactness::KernelExactness;
 use crate::registry::types::fallback::{KernelFallback, KernelFallbackClass};
@@ -27,6 +27,29 @@ fn registry_resolves_direct_cuda_contract_by_dtype_and_architecture() {
         panic!("expected direct kernel implementation");
     };
     assert_eq!(implementation.name, "cuda_decode_dense_matvec_fp16_bf16");
+    assert!(implementation.graph_safe);
+    assert_eq!(
+        implementation.exactness,
+        KernelExactness::ReferenceEquivalentWithinDeclaredFpTolerance
+    );
+}
+
+#[test]
+fn registry_resolves_direct_cuda_fp8_e4m3_dense_matvec_contract() {
+    let registry = bootstrap_registry();
+    let plan = registry
+        .resolve(KernelQuery::new(
+            KernelOperation::DenseMatVec,
+            KernelBackend::Cuda,
+            DType::F8E4M3,
+            Some(120),
+        ))
+        .unwrap();
+
+    let KernelPlan::Direct { implementation } = plan else {
+        panic!("expected direct kernel implementation");
+    };
+    assert_eq!(implementation.name, "cuda_decode_dense_matvec_fp8_e4m3");
     assert!(implementation.graph_safe);
     assert_eq!(
         implementation.exactness,
@@ -63,26 +86,22 @@ fn registry_selects_only_named_exact_fallbacks() {
 #[test]
 fn registry_rejects_missing_contracts_without_silent_fallback() {
     let registry = bootstrap_registry();
-    assert!(
-        registry
-            .resolve(KernelQuery::new(
-                KernelOperation::DenseMatVec,
-                KernelBackend::Hip,
-                DType::BF16,
-                Some(1100),
-            ))
-            .is_err()
-    );
-    assert!(
-        registry
-            .resolve(KernelQuery::new(
-                KernelOperation::GreedySample,
-                KernelBackend::Cuda,
-                DType::U32,
-                Some(70),
-            ))
-            .is_err()
-    );
+    assert!(registry
+        .resolve(KernelQuery::new(
+            KernelOperation::DenseMatVec,
+            KernelBackend::Hip,
+            DType::BF16,
+            Some(1100),
+        ))
+        .is_err());
+    assert!(registry
+        .resolve(KernelQuery::new(
+            KernelOperation::GreedySample,
+            KernelBackend::Cuda,
+            DType::U32,
+            Some(70),
+        ))
+        .is_err());
 }
 
 #[test]
@@ -108,23 +127,21 @@ fn registry_rejects_declared_approximate_fallback_for_exact_runtime() {
             class: KernelFallbackClass::ApproximateNamed,
         });
 
-    assert!(
-        registry
-            .resolve(KernelQuery::new(
-                KernelOperation::DenseMatVec,
-                KernelBackend::Cuda,
-                DType::F32,
-                Some(89),
-            ))
-            .is_err()
-    );
+    assert!(registry
+        .resolve(KernelQuery::new(
+            KernelOperation::DenseMatVec,
+            KernelBackend::Cuda,
+            DType::F32,
+            Some(89),
+        ))
+        .is_err());
 }
 
 #[test]
 fn registry_probe_reports_direct_fallback_and_rejection_counts() {
     let summary = kernel_registry_probe().unwrap();
     assert_eq!(summary.status, KernelRegistryProbeStatus::Ok);
-    assert_eq!(summary.implementations, 4);
+    assert_eq!(summary.implementations, 5);
     assert_eq!(summary.fallbacks, 1);
     assert_eq!(summary.direct_plans, 1);
     assert_eq!(summary.fallback_plans, 1);

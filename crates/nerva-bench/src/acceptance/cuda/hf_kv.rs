@@ -160,9 +160,14 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
         | WeightBlockRole::DeepSeekV4WoAScale
         | WeightBlockRole::DeepSeekV4WoBScale
         | WeightBlockRole::DeepSeekV4CompressorApe
+        | WeightBlockRole::DeepSeekV4CompressorWkvScale
+        | WeightBlockRole::DeepSeekV4CompressorWgateScale
         | WeightBlockRole::DeepSeekV4IndexerWqBScale
         | WeightBlockRole::DeepSeekV4IndexerCompressorApe
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale
         | WeightBlockRole::DeepSeekV4HashRouteTable
+        | WeightBlockRole::DeepSeekV4IndexerWeightsScale
         | WeightBlockRole::LinearConvProjection
         | WeightBlockRole::LinearQkvProjection
         | WeightBlockRole::LinearZProjection

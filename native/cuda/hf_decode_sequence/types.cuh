@@ -223,6 +223,42 @@ struct SequenceLayerLayout {
   uint64_t deepseek_indexer_compressor_norm;
 };
 
+__host__ __device__ inline uint64_t dtype_slots(uint64_t elements,
+                                                uint32_t dtype) {
+  return dtype == kDTypeF32 ? elements * 2u : elements;
+}
+
+__host__ __device__ inline uint32_t final_norm_weight_dtype_for_layer(
+    const NervaCudaHfDecodeChainLayer &layer, uint32_t dtype) {
+  return layer.attention_kind == kAttentionKindDeepSeekMla &&
+                 layer.deepseek_mode == kDeepSeekModeV32MlaIndexer
+             ? kDTypeF32
+             : dtype;
+}
+
+__host__ __device__ inline uint32_t final_norm_weight_dtype_for_layout(
+    const SequenceLayerLayout &layout, uint32_t dtype) {
+  return layout.attention_kind == kAttentionKindDeepSeekMla &&
+                 layout.deepseek_mode == kDeepSeekModeV32MlaIndexer
+             ? kDTypeF32
+             : dtype;
+}
+
+__host__ inline uint32_t final_norm_weight_dtype_for_layers(
+    const NervaCudaHfDecodeChainLayer *layers, uint32_t layer_count,
+    uint32_t dtype) {
+  return layers != nullptr && layer_count != 0
+             ? final_norm_weight_dtype_for_layer(layers[0], dtype)
+             : dtype;
+}
+
+__host__ inline uint32_t final_norm_weight_dtype_for_layouts(
+    const SequenceLayerLayout *layouts, uint32_t layer_count, uint32_t dtype) {
+  return layouts != nullptr && layer_count != 0
+             ? final_norm_weight_dtype_for_layout(layouts[0], dtype)
+             : dtype;
+}
+
 struct PackedProjectionShape {
   uint64_t qkv_rows;
   uint64_t gate_up_rows;
