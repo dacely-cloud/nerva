@@ -610,6 +610,9 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_api".to_string());
         primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_smoke".to_string());
     }
+    if metadata.architecture == HfArchitectureKind::DeepSeekV32 {
+        primitives.push("cuda_deepseek_v32_fp8_ds_mla_kv_pack_token_row".to_string());
+    }
     if matches!(
         metadata.architecture,
         HfArchitectureKind::DeepSeekV32 | HfArchitectureKind::DeepSeekV4
@@ -749,8 +752,10 @@ fn coverage_for_unit(
                 "cuda_deepseek_compressed_slot_mapping_api",
                 "cuda_deepseek_compressed_slot_mapping_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_deepseek_v32_fp8_ds_mla_kv_pack_token_row",
             ],
             &[
+                "wire V3.2 packed fp8_ds_mla main MLA pages into decode runtime",
                 "consume packed V3.2 sparse indexer query/key/weights offsets in runtime",
                 "store vLLM-compatible indexer cache pages",
                 "verify selected sparse blocks against vLLM",

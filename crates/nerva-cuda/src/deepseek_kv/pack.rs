@@ -1,6 +1,6 @@
 use crate::deepseek_kv::ffi::{
     NervaCudaDeepSeekKvFp8DsMlaPackRequest, NervaCudaDeepSeekKvFp8DsMlaPackResult,
-    run_deepseek_kv_fp8_ds_mla_pack,
+    run_deepseek_kv_fp8_ds_mla_pack, run_deepseek_v32_kv_fp8_ds_mla_pack,
 };
 use crate::deepseek_kv::summary::CudaDeepSeekKvSummary;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;
@@ -56,6 +56,51 @@ pub fn deepseek_fp8_ds_mla_pack(
     };
     let mut out = NervaCudaDeepSeekKvFp8DsMlaPackResult::default();
     let return_code = run_deepseek_kv_fp8_ds_mla_pack(&request, &mut out);
+    summarize(return_code, out, output)
+}
+
+pub fn deepseek_v32_fp8_ds_mla_pack(
+    token_index: u32,
+    nope_fp8: &[u8],
+    rope_bf16: &[u16],
+    scales_f32_bytes: &[u8],
+) -> CudaDeepSeekKvSummary {
+    const BLOCK_SIZE: u32 = 64;
+    const NOPE_BYTES: usize = 512;
+    const ROPE_VALUES: usize = 64;
+    const SCALE_BYTES: usize = 16;
+    const TOKEN_STRIDE: usize = NOPE_BYTES + SCALE_BYTES + ROPE_VALUES * 2;
+    let block_bytes = BLOCK_SIZE as usize * TOKEN_STRIDE;
+    if token_index >= BLOCK_SIZE
+        || nope_fp8.len() != NOPE_BYTES
+        || rope_bf16.len() != ROPE_VALUES
+        || scales_f32_bytes.len() != SCALE_BYTES
+    {
+        return failed_summary(
+            BLOCK_SIZE,
+            token_index,
+            TOKEN_STRIDE as u32,
+            SCALE_BYTES as u32,
+            block_bytes as u64,
+            Vec::new(),
+            "invalid DeepSeek V3.2 fp8_ds_mla pack shape",
+        );
+    }
+
+    let mut output = vec![0u8; block_bytes];
+    let request = NervaCudaDeepSeekKvFp8DsMlaPackRequest {
+        block_size: BLOCK_SIZE,
+        token_index,
+        nope_bytes: NOPE_BYTES as u32,
+        rope_bf16_values: ROPE_VALUES as u32,
+        scale_dim: SCALE_BYTES as u32,
+        nope_fp8: nope_fp8.as_ptr(),
+        rope_bf16: rope_bf16.as_ptr(),
+        scales: scales_f32_bytes.as_ptr(),
+        output_block: output.as_mut_ptr(),
+    };
+    let mut out = NervaCudaDeepSeekKvFp8DsMlaPackResult::default();
+    let return_code = run_deepseek_v32_kv_fp8_ds_mla_pack(&request, &mut out);
     summarize(return_code, out, output)
 }
 

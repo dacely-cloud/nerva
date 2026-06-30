@@ -265,6 +265,10 @@ unsafe extern "C" {
         request: *const NervaCudaDeepSeekKvFp8DsMlaPackRequest,
         out: *mut NervaCudaDeepSeekKvFp8DsMlaPackResult,
     ) -> c_int;
+    fn nerva_cuda_deepseek_v32_kv_fp8_ds_mla_pack(
+        request: *const NervaCudaDeepSeekKvFp8DsMlaPackRequest,
+        out: *mut NervaCudaDeepSeekKvFp8DsMlaPackResult,
+    ) -> c_int;
     fn nerva_cuda_deepseek_compressed_slot_mapping(
         request: *const NervaCudaDeepSeekCompressedSlotMappingRequest,
         out: *mut NervaCudaDeepSeekCompressedSlotMappingResult,
@@ -292,6 +296,13 @@ pub(crate) fn run_deepseek_kv_fp8_ds_mla_pack(
     out: &mut NervaCudaDeepSeekKvFp8DsMlaPackResult,
 ) -> c_int {
     unsafe { nerva_cuda_deepseek_kv_fp8_ds_mla_pack(request, out) }
+}
+
+pub(crate) fn run_deepseek_v32_kv_fp8_ds_mla_pack(
+    request: &NervaCudaDeepSeekKvFp8DsMlaPackRequest,
+    out: &mut NervaCudaDeepSeekKvFp8DsMlaPackResult,
+) -> c_int {
+    unsafe { nerva_cuda_deepseek_v32_kv_fp8_ds_mla_pack(request, out) }
 }
 
 pub(crate) fn run_deepseek_compressed_slot_mapping(

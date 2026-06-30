@@ -4,7 +4,7 @@ use crate::deepseek_kv::compress_cache::{
     DEEPSEEK_COMPRESS_SCALE_E8M0, DEEPSEEK_COMPRESS_SCALE_F32, DEEPSEEK_COMPRESS_SCALE_MXFP4,
     deepseek_compress_norm_rope_fp8_cache,
 };
-use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
+use crate::deepseek_kv::pack::{deepseek_fp8_ds_mla_pack, deepseek_v32_fp8_ds_mla_pack};
 use crate::deepseek_kv::partial_states::deepseek_save_partial_states;
 use crate::deepseek_kv::probe::{
     c4_indexer_topk_fixture, compress_cache_fixture, deepseek_c4_indexer_topk_smoke,
@@ -475,6 +475,55 @@ fn deepseek_fp8_ds_mla_pack_matches_vllm_block_offsets() {
         &scales
     );
     assert!(summary.output[..token_base].iter().all(|byte| *byte == 0));
+    assert!(summary.output_hash != 0);
+}
+
+#[test]
+fn deepseek_v32_fp8_ds_mla_pack_matches_vllm_token_row() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let token_index = 7;
+    let nope = (0..512)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    let rope = (0..64)
+        .map(|index| 0x3f80u16.wrapping_add(index as u16))
+        .collect::<Vec<_>>();
+    let scales = [
+        1.0f32.to_le_bytes(),
+        2.0f32.to_le_bytes(),
+        3.0f32.to_le_bytes(),
+        4.0f32.to_le_bytes(),
+    ]
+    .concat();
+    let summary = deepseek_v32_fp8_ds_mla_pack(token_index, &nope, &rope, &scales);
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(summary.block_size, 64);
+    assert_eq!(summary.token_stride, 656);
+    assert_eq!(summary.scale_dim, 16);
+    assert_eq!(summary.block_bytes, 64 * 656);
+    assert_eq!(summary.output.len(), 64 * 656);
+
+    let token_base = token_index as usize * 656;
+    assert_eq!(&summary.output[token_base..token_base + 512], &nope);
+    assert_eq!(&summary.output[token_base + 512..token_base + 528], &scales);
+    let mut expected_rope = Vec::with_capacity(128);
+    for value in rope {
+        expected_rope.extend_from_slice(&value.to_le_bytes());
+    }
+    assert_eq!(
+        &summary.output[token_base + 528..token_base + 656],
+        expected_rope.as_slice()
+    );
+    assert!(summary.output[..token_base].iter().all(|byte| *byte == 0));
+    assert!(
+        summary.output[token_base + 656..]
+            .iter()
+            .all(|byte| *byte == 0)
+    );
     assert!(summary.output_hash != 0);
 }
 

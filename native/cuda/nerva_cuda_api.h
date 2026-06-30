@@ -1876,6 +1876,9 @@ int nerva_cuda_deepseek_qkv_rmsnorm(
 int nerva_cuda_deepseek_kv_fp8_ds_mla_pack(
     const NervaCudaDeepSeekKvFp8DsMlaPackRequest *request,
     NervaCudaDeepSeekKvFp8DsMlaPackResult *out);
+int nerva_cuda_deepseek_v32_kv_fp8_ds_mla_pack(
+    const NervaCudaDeepSeekKvFp8DsMlaPackRequest *request,
+    NervaCudaDeepSeekKvFp8DsMlaPackResult *out);
 int nerva_cuda_deepseek_compressed_slot_mapping(
     const NervaCudaDeepSeekCompressedSlotMappingRequest *request,
     NervaCudaDeepSeekCompressedSlotMappingResult *out);
