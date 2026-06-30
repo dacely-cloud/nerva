@@ -643,6 +643,7 @@ pub fn deepseek_required_execution_units(metadata: &HfModelMetadata) -> Vec<Stri
             "deepseek_v3_block_fp8_projection_gemm".to_string(),
             "deepseek_v3_grouped_moe_router_noaux_tc".to_string(),
             "deepseek_v3_split_fp8_expert_moe".to_string(),
+            "deepseek_v3_vllm_e2e_parity".to_string(),
             "deepseek_v3_mtp_optional".to_string(),
         ],
         HfArchitectureKind::DeepSeekV32 => vec![
@@ -651,6 +652,7 @@ pub fn deepseek_required_execution_units(metadata: &HfModelMetadata) -> Vec<Stri
             "deepseek_v32_sparse_attention_indexer".to_string(),
             "deepseek_v3_grouped_moe_router_noaux_tc".to_string(),
             "deepseek_v3_split_fp8_expert_moe".to_string(),
+            "deepseek_v32_vllm_e2e_parity".to_string(),
         ],
         HfArchitectureKind::DeepSeekV4 => vec![
             "deepseek_v4_mhc_pre_post_head".to_string(),
@@ -661,6 +663,7 @@ pub fn deepseek_required_execution_units(metadata: &HfModelMetadata) -> Vec<Stri
             "deepseek_v4_parallel_attention_gemm_streams".to_string(),
             "deepseek_v4_hash_and_bias_router".to_string(),
             "deepseek_v4_megamoe_int8_fp4_experts".to_string(),
+            "deepseek_v4_vllm_e2e_parity".to_string(),
         ],
         _ => Vec::new(),
     }
@@ -784,6 +787,9 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_sparse_attention_swa_plus_topk".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_mhc_head_final_norm_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_mhc_native_profile_runtime".to_string());
     }
 
     primitives
@@ -951,8 +957,34 @@ fn coverage_for_unit(
             &[],
             &["optional MTP draft layers are not implemented"],
         ),
-        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mhc_pre_post_head") => (
+        (HfArchitectureKind::DeepSeekV3, "deepseek_v3_vllm_e2e_parity") => (
             "partial",
+            &[
+                "deepseek_vllm_kv_cache_spec_planner",
+                "deepseek_v3_manifest_uses_mla_fp8_scale_and_split_expert_names",
+                "cuda_hf_sequence_deepseek_v3_mla_fullsize_kv_page_contents",
+                "cuda_hf_sequence_deepseek_v3_grouped_router_runtime",
+            ],
+            &[
+                "run same-checkpoint V3 greedy text differential against /root/vllm",
+                "benchmark V3 prefill and decode throughput against /root/vllm on the same model and prompt",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV32, "deepseek_v32_vllm_e2e_parity") => (
+            "partial",
+            &[
+                "deepseek_vllm_kv_cache_spec_planner",
+                "deepseek_v32_manifest_adds_indexer_and_f32_norms",
+                "cuda_hf_sequence_deepseek_v32_fp8_ds_mla_page_contents",
+                "cuda_hf_sequence_deepseek_v32_sparse_attention_output_hash",
+            ],
+            &[
+                "run same-checkpoint V3.2 sparse MLA greedy text differential against /root/vllm",
+                "benchmark V3.2 sparse MLA decode against /root/vllm on the same model and prompt",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mhc_pre_post_head") => (
+            "complete",
             &[
                 "deepseek_v4_mhc_compressor_indexer_manifest",
                 "deepseek_v4_mhc_warmup_plan_matches_vllm",
@@ -973,15 +1005,11 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_footprint_accounting",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_execution_guard",
+                "cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime",
+                "cuda_hf_sequence_deepseek_v4_mhc_head_final_norm_runtime",
+                "cuda_hf_sequence_deepseek_v4_mhc_native_profile_runtime",
             ],
-            &[
-                "wire MHC pre/fused-post-pre/post/head into the full V4 sequence runtime",
-                "keep V4 hidden states as hc_mult streams across attention and FFN",
-                "execute MHC TileLang-equivalent warmup before first V4 request",
-                "integrate fused Q/KV RMSNorm into the active MHC attention runtime",
-                "integrate fused inverse RoPE FP8 quant into the active O projection runtime",
-                "benchmark end-to-end V4 MHC decode against vLLM on the same model and prompt",
-            ],
+            &[],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mla_swa_cache") => (
             "partial",
@@ -1106,6 +1134,21 @@ fn coverage_for_unit(
                 "implement V4 MegaMoE int8/fp4 expert kernels",
                 "support expert-parallel physical/logical expert mapping",
                 "benchmark MegaMoE against vLLM deep_gemm_mega_moe/FusedMoE",
+            ],
+        ),
+        (HfArchitectureKind::DeepSeekV4, "deepseek_v4_vllm_e2e_parity") => (
+            "partial",
+            &[
+                "deepseek_v4_mhc_compressor_indexer_manifest",
+                "deepseek_vllm_kv_cache_spec_planner",
+                "cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime",
+                "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_fullsize_page_contents",
+                "cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime",
+                "cuda_hf_sequence_deepseek_v4_hash_router_runtime",
+            ],
+            &[
+                "run same-checkpoint V4 greedy text differential against /root/vllm",
+                "benchmark V4 mHC, sparse MLA, and MegaMoE throughput against /root/vllm on the same model and prompt",
             ],
         ),
         _ => (

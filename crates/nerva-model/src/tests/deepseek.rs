@@ -161,7 +161,7 @@ fn deepseek_v4_mhc_warmup_plan_matches_vllm_token_sizes_and_split_k() {
 }
 
 #[test]
-fn deepseek_v4_coverage_reports_cuda_mhc_primitives_but_keeps_sequence_gap_open() {
+fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
     let metadata = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
 
     let primitives = deepseek_implemented_primitives(&metadata);
@@ -174,6 +174,9 @@ fn deepseek_v4_coverage_reports_cuda_mhc_primitives_but_keeps_sequence_gap_open(
         "cuda_deepseek_mhc_fused_post_pre_smoke",
         "cuda_deepseek_mhc_head_api",
         "cuda_deepseek_mhc_head_smoke",
+        "cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime",
+        "cuda_hf_sequence_deepseek_v4_mhc_head_final_norm_runtime",
+        "cuda_hf_sequence_deepseek_v4_mhc_native_profile_runtime",
     ] {
         assert!(
             primitives.iter().any(|item| item == primitive),
@@ -186,18 +189,31 @@ fn deepseek_v4_coverage_reports_cuda_mhc_primitives_but_keeps_sequence_gap_open(
         .iter()
         .find(|unit| unit.unit == "deepseek_v4_mhc_pre_post_head")
         .expect("DeepSeek V4 should report mHC coverage");
-    assert_eq!(mhc.status, "partial");
+    assert_eq!(mhc.status, "complete");
     assert!(
         mhc.validated_primitives
             .iter()
             .any(|item| item == "cuda_deepseek_mhc_fused_post_pre_api")
     );
     assert!(
-        mhc.remaining_gaps
+        mhc.validated_primitives
             .iter()
-            .any(|gap| gap.contains("full V4 sequence runtime"))
+            .any(|item| item == "cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime")
     );
-    assert!(mhc.remaining_gaps.iter().any(|gap| gap.contains("vLLM")));
+    assert!(mhc.remaining_gaps.is_empty());
+
+    let parity = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v4_vllm_e2e_parity")
+        .expect("DeepSeek V4 should keep an explicit vLLM parity gate");
+    assert_eq!(parity.status, "partial");
+    assert!(
+        parity
+            .remaining_gaps
+            .iter()
+            .any(|gap| gap.contains("/root/vllm")),
+        "vLLM parity gate must point at the local vLLM checkout"
+    );
 }
 
 #[test]
@@ -498,6 +514,7 @@ fn recognized_deepseek_configs_fail_exact_runtime_contract_precisely() {
 
         assert!(reason.contains("DeepSeek MLA attention"), "{reason}");
         assert!(reason.contains("block-quantized"), "{reason}");
+        assert!(reason.contains("/root/vllm"), "{reason}");
     }
 
     assert!(
