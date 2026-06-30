@@ -166,7 +166,9 @@ __global__ void hf_layer_attention_chunk_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, const uint32_t *selected_chunks) {
+    const uint32_t *kv_block_table, const uint32_t *selected_chunks,
+    uint32_t qk_fused_selector, uint32_t qk_local_window_tokens,
+    uint32_t qk_sink_tokens) {
   __shared__ uint32_t current_position_shared;
   if (threadIdx.x == 0) {
     current_position_shared = step_cursor == nullptr ? 0 : *step_cursor;
@@ -189,6 +191,9 @@ __global__ void hf_layer_attention_chunk_kernel(
           ? selected_slot
           : selected_chunks[static_cast<uint64_t>(kv_head) * attention_chunks +
                             selected_slot];
+  (void)qk_fused_selector;
+  (void)qk_local_window_tokens;
+  (void)qk_sink_tokens;
   const uint32_t chunk_start = chunk * kDecodeAttentionChunkTokens;
   const uint64_t slot =
       (static_cast<uint64_t>(head) * attention_chunks + selected_slot);
@@ -277,7 +282,9 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, const uint32_t *selected_chunks) {
+    const uint32_t *kv_block_table, const uint32_t *selected_chunks,
+    uint32_t qk_fused_selector, uint32_t qk_local_window_tokens,
+    uint32_t qk_sink_tokens) {
   __shared__ uint32_t current_position_shared;
   __shared__ float shared_k[kGroupedGqaHeadDimMax];
   __shared__ float shared_v[kGroupedGqaHeadDimMax];
@@ -304,6 +311,9 @@ __global__ void hf_layer_grouped_gqa_attention_chunk_kernel(
           ? selected_slot
           : selected_chunks[static_cast<uint64_t>(kv_head) * attention_chunks +
                             selected_slot];
+  (void)qk_fused_selector;
+  (void)qk_local_window_tokens;
+  (void)qk_sink_tokens;
   const uint32_t chunk_start = chunk * kDecodeAttentionChunkTokens;
   if (chunk_start > current_position) {
     if (threadIdx.x < kGroupedGqaHeads) {
@@ -421,8 +431,12 @@ __global__ void hf_layer_shared_warp_gqa_attention_chunk_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, const uint32_t *selected_chunks) {
+    const uint32_t *kv_block_table, const uint32_t *selected_chunks,
+    uint32_t qk_fused_selector, uint32_t qk_local_window_tokens,
+    uint32_t qk_sink_tokens) {
   __shared__ uint32_t current_position_shared;
+  __shared__ float qk_best_score_shared;
+  __shared__ uint32_t qk_best_page_shared;
   __shared__ float shared_k[kSharedWarpGqaTileElements];
   __shared__ float shared_v[kSharedWarpGqaTileElements];
   if (threadIdx.x == 0) {
@@ -442,11 +456,100 @@ __global__ void hf_layer_shared_warp_gqa_attention_chunk_kernel(
   if (kv_head >= kv_heads || selected_slot >= attention_chunks) {
     return;
   }
-  const uint32_t chunk =
+  const uint32_t attention_hidden = heads * head_dim;
+  const uint32_t kv_hidden = kv_heads * head_dim;
+  const uint32_t kv_start = kv_head * head_dim;
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  uint32_t chunk =
       selected_chunks == nullptr
           ? selected_slot
           : selected_chunks[static_cast<uint64_t>(kv_head) * attention_chunks +
                             selected_slot];
+  if (qk_fused_selector != 0) {
+    const uint32_t active_pages =
+        (current_position + kDecodeAttentionChunkTokens) /
+        kDecodeAttentionChunkTokens;
+    const uint32_t current_page =
+        current_position / kDecodeAttentionChunkTokens;
+    const uint32_t sink_pages =
+        (qk_sink_tokens + kDecodeAttentionChunkTokens - 1u) /
+        kDecodeAttentionChunkTokens;
+    const uint32_t raw_local_pages =
+        (qk_local_window_tokens + kDecodeAttentionChunkTokens - 1u) /
+        kDecodeAttentionChunkTokens;
+    uint32_t local_start =
+        current_page + 1u > raw_local_pages
+            ? current_page + 1u - raw_local_pages
+            : 0u;
+    if (local_start < sink_pages) {
+      local_start = sink_pages;
+    }
+    const uint32_t local_pages =
+        current_page >= local_start ? current_page - local_start + 1u : 0u;
+    const uint32_t local_limit = sink_pages + local_pages;
+    if (selected_slot < sink_pages) {
+      chunk = selected_slot < active_pages ? selected_slot : active_pages - 1u;
+    } else if (selected_slot < local_limit) {
+      const uint32_t page = local_start + (selected_slot - sink_pages);
+      chunk = page < active_pages ? page : active_pages - 1u;
+    } else {
+      const uint32_t far_start =
+          sink_pages < active_pages ? sink_pages : active_pages;
+      const uint32_t far_end =
+          local_start < active_pages ? local_start : active_pages;
+      const uint32_t far_pages = far_end > far_start ? far_end - far_start : 0u;
+      const uint32_t far_slots =
+          attention_chunks > local_limit ? attention_chunks - local_limit : 0u;
+      const uint32_t far_slot = selected_slot - local_limit;
+      if (far_pages == 0 || far_slots == 0 || far_slot >= far_slots) {
+        chunk = current_page < active_pages ? current_page : active_pages - 1u;
+      } else {
+        const uint32_t begin =
+            (static_cast<uint64_t>(far_slot) * far_pages) / far_slots;
+        const uint32_t end =
+            (static_cast<uint64_t>(far_slot + 1u) * far_pages) / far_slots;
+        const uint32_t representative_head = kv_head * kGroupedGqaHeads;
+        const uint32_t representative_q_start = representative_head * head_dim;
+        if (threadIdx.x == 0) {
+          qk_best_score_shared = -INFINITY;
+          qk_best_page_shared = far_start + begin;
+        }
+        __syncthreads();
+        for (uint32_t relative = begin; relative < end; ++relative) {
+          const uint32_t page = far_start + relative;
+          const uint32_t page_begin = page * kDecodeAttentionChunkTokens;
+          uint32_t token = page_begin + kDecodeAttentionChunkTokens / 2u;
+          if (token > current_position) {
+            token = current_position;
+          }
+          const uint32_t logical_block = token / kKvCacheBlockTokens;
+          const uint32_t block_offset =
+              token - logical_block * kKvCacheBlockTokens;
+          const uint64_t token_base = kv_cache_page_offset(
+              layer_index, kv_block_count, kv_block_table[logical_block],
+              block_offset, kv_hidden, kv_start);
+          float partial = 0.0f;
+          for (uint32_t offset = threadIdx.x; offset < head_dim;
+               offset += blockDim.x) {
+            partial += s.q[representative_q_start + offset] *
+                       encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+          }
+          const float score = block_sum(partial);
+          if (threadIdx.x == 0 && score > qk_best_score_shared) {
+            qk_best_score_shared = score;
+            qk_best_page_shared = page;
+          }
+          __syncthreads();
+        }
+        chunk = qk_best_page_shared;
+      }
+    }
+    __syncthreads();
+  } else {
+    (void)qk_local_window_tokens;
+    (void)qk_sink_tokens;
+  }
   const uint32_t q_in_group = threadIdx.x / kSharedWarpGqaThreadsPerHead;
   const uint32_t lane = threadIdx.x - q_in_group * kSharedWarpGqaThreadsPerHead;
   const uint32_t head = kv_head * kGroupedGqaHeads + q_in_group;
@@ -464,12 +567,7 @@ __global__ void hf_layer_shared_warp_gqa_attention_chunk_kernel(
   const uint32_t position_limit = current_position + 1u;
   const uint32_t chunk_end =
       chunk_limit < position_limit ? chunk_limit : position_limit;
-  const uint32_t attention_hidden = heads * head_dim;
-  const uint32_t kv_hidden = kv_heads * head_dim;
-  const uint32_t kv_start = kv_head * head_dim;
   const uint32_t head_start = head * head_dim;
-  LayerScratch s =
-      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   const float scale = rsqrtf(static_cast<float>(head_dim));
   float local_m = -INFINITY;
   float local_l = 0.0f;
@@ -771,49 +869,53 @@ void launch_hf_layer_attention_chunk_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, const uint32_t *selected_chunks) {
+    const uint32_t *kv_block_table, const uint32_t *selected_chunks,
+    uint32_t qk_fused_selector, uint32_t qk_local_window_tokens,
+    uint32_t qk_sink_tokens) {
   if (dtype == kDTypeBF16 && use_shared_warp_gqa) {
     hf_layer_shared_warp_gqa_attention_chunk_kernel<kDTypeBF16>
         <<<grid, kSharedWarpGqaThreads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table, selected_chunks);
+            kv_block_table, selected_chunks, qk_fused_selector,
+            qk_local_window_tokens, qk_sink_tokens);
   } else if (dtype == kDTypeBF16 && use_grouped_gqa) {
     hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeBF16>
         <<<grid, kGroupedGqaThreads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table, selected_chunks);
+            kv_block_table, selected_chunks, 0, 0, 0);
   } else if (dtype == kDTypeBF16) {
     hf_layer_attention_chunk_kernel<kDTypeBF16>
         <<<grid, dense_threads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table, selected_chunks);
+            kv_block_table, selected_chunks, 0, 0, 0);
   } else if (use_shared_warp_gqa) {
     hf_layer_shared_warp_gqa_attention_chunk_kernel<kDTypeF16>
         <<<grid, kSharedWarpGqaThreads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table, selected_chunks);
+            kv_block_table, selected_chunks, qk_fused_selector,
+            qk_local_window_tokens, qk_sink_tokens);
   } else if (use_grouped_gqa) {
     hf_layer_grouped_gqa_attention_chunk_kernel<kDTypeF16>
         <<<grid, kGroupedGqaThreads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table, selected_chunks);
+            kv_block_table, selected_chunks, 0, 0, 0);
   } else {
     hf_layer_attention_chunk_kernel<kDTypeF16>
         <<<grid, dense_threads, 0, stream>>>(
             layer_index, hidden, heads, kv_heads, head_dim, intermediate,
             step_cursor, max_steps, attention_chunks, scratch, kv_keys,
             kv_values, partial_values, partial_m, partial_l, kv_block_count,
-            kv_block_table, selected_chunks);
+            kv_block_table, selected_chunks, 0, 0, 0);
   }
 }
 

@@ -32,6 +32,7 @@ struct NervaCudaHfDecodeSequenceSession {
   void *experimental_rt_selector = nullptr;
   uint32_t *device_experimental_rt_candidate_pages = nullptr;
   uint32_t experimental_rt_query_key_selector = 0;
+  uint32_t experimental_rt_query_key_fused_selector = 0;
   uint32_t experimental_prefill_local_window_tokens = 0;
   float rms_eps = 0.0f;
   float rope_theta = 0.0f;

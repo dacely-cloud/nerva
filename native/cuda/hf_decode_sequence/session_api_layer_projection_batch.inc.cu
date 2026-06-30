@@ -217,15 +217,6 @@ extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
     if (local_err != cudaSuccess) {
       return local_err;
     }
-    local_err = launch_experimental_rt_qk_page_selector(
-        session, request->layer_index, attention_chunks, max_steps, best->stream);
-    if (local_err != cudaSuccess) {
-      return local_err;
-    }
-    if (experimental_rt_qk_selector_active(session, attention_chunks)) {
-      out->dependency_kernel_launches += 1;
-    }
-
     const uint32_t query_group = session->heads / session->kv_heads;
     const bool use_shared_warp_gqa =
         query_group == kGroupedGqaHeads &&
@@ -235,6 +226,19 @@ extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
         query_group == kGroupedGqaHeads &&
         session->heads % session->kv_heads == 0 &&
         session->head_dim <= kGroupedGqaHeadDimMax;
+    const bool use_fused_qk_selector =
+        use_shared_warp_gqa &&
+        experimental_rt_qk_fused_selector_active(session, attention_chunks);
+    if (!use_fused_qk_selector) {
+      local_err = launch_experimental_rt_qk_page_selector(
+          session, request->layer_index, attention_chunks, max_steps, best->stream);
+      if (local_err != cudaSuccess) {
+        return local_err;
+      }
+      if (experimental_rt_qk_selector_active(session, attention_chunks)) {
+        out->dependency_kernel_launches += 1;
+      }
+    }
     const dim3 grid((use_shared_warp_gqa || use_grouped_gqa) ? session->kv_heads
                                                              : session->heads,
                     attention_chunks);
@@ -251,7 +255,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
         session->device_kv_block_table,
         session->experimental_rt_sparse_attention_active == 0
             ? nullptr
-            : session->device_experimental_rt_candidate_pages);
+            : session->device_experimental_rt_candidate_pages,
+        use_fused_qk_selector ? 1u : 0u,
+        session->experimental_rt_local_window_tokens,
+        session->experimental_rt_sink_tokens);
 
     out->dependency_kernel_launches += 1;
     local_err = cudaGetLastError();

@@ -172,6 +172,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->experimental_rt_sink_tokens = request->experimental_rt_sink_tokens;
   session->experimental_rt_query_key_selector =
       experimental_rt_query_key_selector_enabled();
+  session->experimental_rt_query_key_fused_selector =
+      session->experimental_rt_query_key_selector == 0
+          ? 0u
+          : experimental_rt_query_key_fused_selector_enabled();
   session->experimental_prefill_local_window_tokens =
       experimental_prefill_local_window_tokens();
   session->rms_eps = request->rms_eps;

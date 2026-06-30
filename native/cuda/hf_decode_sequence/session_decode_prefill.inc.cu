@@ -141,7 +141,19 @@ cudaError_t launch_cublas_layer_session_step(
           use_cudnn_decode_sdpa ? session->device_decode_seq_len_q : nullptr,
           use_cudnn_decode_sdpa ? session->device_decode_seq_len_kv : nullptr);
       err = cudaGetLastError();
-      if (err == cudaSuccess) {
+      const uint32_t query_group = session->heads / session->kv_heads;
+      const bool use_shared_warp_gqa =
+          query_group == kGroupedGqaHeads &&
+          session->heads % session->kv_heads == 0 &&
+          session->head_dim <= kSharedWarpGqaHeadDimMax;
+      const bool use_grouped_gqa =
+          query_group == kGroupedGqaHeads &&
+          session->heads % session->kv_heads == 0 &&
+          session->head_dim <= kGroupedGqaHeadDimMax;
+      const bool use_fused_qk_selector =
+          use_shared_warp_gqa &&
+          experimental_rt_qk_fused_selector_active(session, attention_chunks);
+      if (err == cudaSuccess && !use_fused_qk_selector) {
         err = launch_experimental_rt_qk_page_selector(
             session, layer_index, attention_chunks, max_steps, session->stream);
       }
@@ -155,15 +167,6 @@ cudaError_t launch_cublas_layer_session_step(
       }
 #endif
       if (err == cudaSuccess && !ran_cudnn_decode_sdpa) {
-        const uint32_t query_group = session->heads / session->kv_heads;
-        const bool use_shared_warp_gqa =
-            query_group == kGroupedGqaHeads &&
-            session->heads % session->kv_heads == 0 &&
-            session->head_dim <= kSharedWarpGqaHeadDimMax;
-        const bool use_grouped_gqa =
-            query_group == kGroupedGqaHeads &&
-            session->heads % session->kv_heads == 0 &&
-            session->head_dim <= kGroupedGqaHeadDimMax;
         const dim3 grid((use_shared_warp_gqa || use_grouped_gqa)
                             ? session->kv_heads
                             : session->heads,
@@ -181,7 +184,10 @@ cudaError_t launch_cublas_layer_session_step(
             session->device_kv_block_table,
             session->experimental_rt_sparse_attention_active == 0
                 ? nullptr
-                : session->device_experimental_rt_candidate_pages);
+                : session->device_experimental_rt_candidate_pages,
+            use_fused_qk_selector ? 1u : 0u,
+            session->experimental_rt_local_window_tokens,
+            session->experimental_rt_sink_tokens);
 
         err = cudaGetLastError();
       }
@@ -401,7 +407,19 @@ cudaError_t profile_cublas_layer_session_step(
           use_cudnn_decode_sdpa ? session->device_decode_seq_len_q : nullptr,
           use_cudnn_decode_sdpa ? session->device_decode_seq_len_kv : nullptr);
       err = cudaGetLastError();
-      if (err == cudaSuccess) {
+      const uint32_t query_group = session->heads / session->kv_heads;
+      const bool use_shared_warp_gqa =
+          query_group == kGroupedGqaHeads &&
+          session->heads % session->kv_heads == 0 &&
+          session->head_dim <= kSharedWarpGqaHeadDimMax;
+      const bool use_grouped_gqa =
+          query_group == kGroupedGqaHeads &&
+          session->heads % session->kv_heads == 0 &&
+          session->head_dim <= kGroupedGqaHeadDimMax;
+      const bool use_fused_qk_selector =
+          use_shared_warp_gqa &&
+          experimental_rt_qk_fused_selector_active(session, attention_chunks);
+      if (err == cudaSuccess && !use_fused_qk_selector) {
         err = launch_experimental_rt_qk_page_selector(
             session, layer_index, attention_chunks, max_steps, session->stream);
       }
@@ -415,15 +433,6 @@ cudaError_t profile_cublas_layer_session_step(
       }
 #endif
       if (err == cudaSuccess && !ran_cudnn_decode_sdpa) {
-        const uint32_t query_group = session->heads / session->kv_heads;
-        const bool use_shared_warp_gqa =
-            query_group == kGroupedGqaHeads &&
-            session->heads % session->kv_heads == 0 &&
-            session->head_dim <= kSharedWarpGqaHeadDimMax;
-        const bool use_grouped_gqa =
-            query_group == kGroupedGqaHeads &&
-            session->heads % session->kv_heads == 0 &&
-            session->head_dim <= kGroupedGqaHeadDimMax;
         const dim3 grid((use_shared_warp_gqa || use_grouped_gqa)
                             ? session->kv_heads
                             : session->heads,
@@ -441,7 +450,10 @@ cudaError_t profile_cublas_layer_session_step(
             session->device_kv_block_table,
             session->experimental_rt_sparse_attention_active == 0
                 ? nullptr
-                : session->device_experimental_rt_candidate_pages);
+                : session->device_experimental_rt_candidate_pages,
+            use_fused_qk_selector ? 1u : 0u,
+            session->experimental_rt_local_window_tokens,
+            session->experimental_rt_sink_tokens);
 
         err = cudaGetLastError();
       }

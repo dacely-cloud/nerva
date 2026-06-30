@@ -17,7 +17,9 @@ void launch_hf_layer_attention_chunk_kernel(
     uint32_t max_steps, uint32_t attention_chunks, float *scratch,
     const uint16_t *kv_keys, const uint16_t *kv_values, float *partial_values,
     float *partial_m, float *partial_l, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, const uint32_t *selected_chunks);
+    const uint32_t *kv_block_table, const uint32_t *selected_chunks,
+    uint32_t qk_fused_selector, uint32_t qk_local_window_tokens,
+    uint32_t qk_sink_tokens);
 void launch_hf_experimental_qk_page_selector_kernel(
     cudaStream_t stream, dim3 grid, uint32_t dtype, uint32_t layer_index,
     uint32_t hidden, uint32_t heads, uint32_t kv_heads, uint32_t head_dim,

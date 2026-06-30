@@ -375,6 +375,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
   session->experimental_rt_sink_tokens = parent->experimental_rt_sink_tokens;
   session->experimental_rt_query_key_selector =
       parent->experimental_rt_query_key_selector;
+  session->experimental_rt_query_key_fused_selector =
+      parent->experimental_rt_query_key_fused_selector;
   session->experimental_prefill_local_window_tokens =
       parent->experimental_prefill_local_window_tokens;
   session->rms_eps = parent->rms_eps;

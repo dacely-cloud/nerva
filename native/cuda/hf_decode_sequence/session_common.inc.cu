@@ -309,6 +309,13 @@ bool experimental_rt_qk_selector_active(
          session->device_experimental_rt_candidate_pages != nullptr;
 }
 
+bool experimental_rt_qk_fused_selector_active(
+    const NervaCudaHfDecodeSequenceSession *session,
+    uint32_t attention_chunks) {
+  return experimental_rt_qk_selector_active(session, attention_chunks) &&
+         session->experimental_rt_query_key_fused_selector != 0;
+}
+
 cudaError_t launch_experimental_rt_qk_page_selector(
     NervaCudaHfDecodeSequenceSession *session, uint32_t layer_index,
     uint32_t attention_chunks, uint32_t max_steps, cudaStream_t stream) {
@@ -556,6 +563,17 @@ uint32_t experimental_prefill_local_window_tokens() {
 
 uint32_t experimental_rt_query_key_selector_enabled() {
   const char *env = getenv("NERVA_EXPERIMENTAL_RT_QK_SELECTOR");
+  if (env == nullptr || env[0] == '\0') {
+    return 0;
+  }
+  return (env[0] == '1' || env[0] == 'y' || env[0] == 'Y' ||
+          env[0] == 't' || env[0] == 'T')
+             ? 1u
+             : 0u;
+}
+
+uint32_t experimental_rt_query_key_fused_selector_enabled() {
+  const char *env = getenv("NERVA_EXPERIMENTAL_RT_QK_FUSED");
   if (env == nullptr || env[0] == '\0') {
     return 0;
   }
