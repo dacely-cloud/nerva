@@ -503,6 +503,8 @@ The current Qwen decode path has three selector policies. The default sparse RT 
 
 The RT microbench also has a query-derived OptiX selector behind `NERVA_EXPERIMENTAL_RT_SEMANTIC_OPTIX=1`. That path passes the synthetic query descriptors into the OptiX raygen program and derives the target page from those descriptors instead of hashing `query_id`. It is a measured building block for semantic RT page selection, not a Qwen decode integration yet. Qwen JSON now reports `rt_core_page_selector`, `semantic_page_selection`, and `semantic_rt_retrieval` separately so the synthetic RT path cannot be mistaken for semantic RT retrieval.
 
+Important correction: current Qwen `--rt-mode sparse` is not semantic RT retrieval. The decode integration calls OptiX with page/count metadata only, so it selects sink pages, local pages, and synthetic far pages before handing those page ids back to the existing CUDA selected-page attention path. The detailed evidence and viability notes are in [docs/source/RT_CORE_LLM_VIABILITY.md](docs/source/RT_CORE_LLM_VIABILITY.md).
+
 The measured 512k-token synthetic selector point on an RTX 5090 is:
 
 | Field | Value |
