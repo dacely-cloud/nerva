@@ -38,6 +38,9 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("deepseek_v4_sqrtsoftplus_hash_router_reference"));
     assert!(json.contains("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke"));
     assert!(json.contains("deepseek_v4_mhc_pre_post_head"));
+    assert!(json.contains("\"execution_unit_status\""));
+    assert!(json.contains("\"unit\":\"deepseek_v4_megamoe_int8_fp4_experts\""));
+    assert!(json.contains("implement V4 MegaMoE int8/fp4 expert kernels"));
     assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/attention.py"));
 
     let _ = std::fs::remove_file(config_path);
@@ -68,6 +71,8 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_deepseek_mla_decode_mqa_smoke"));
     assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
     assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
+    assert!(json.contains("\"unit\":\"deepseek_v32_sparse_attention_indexer\""));
+    assert!(json.contains("implement V3.2 sparse indexer query/key/weights runtime"));
     assert!(json.contains("\"runtime_status\":\"unsupported\""));
     assert!(json.contains("\"claim_allowed\":false"));
 
@@ -124,6 +129,12 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"cuda_deepseek_routed_moe_smoke\""));
     assert!(json.contains("\"cuda_deepseek_router_smoke\""));
     assert!(json.contains("\"vllm_kv_cache_plan\""));
+    assert!(json.contains("\"execution_unit_status\""));
+    assert!(json.contains("\"unit\":\"deepseek_v4_hash_and_bias_router\""));
+    assert!(json.contains("\"status\":\"partial\""));
+    assert!(json.contains("integrate hash routing by token id into decode layers"));
+    assert!(json.contains("\"unit\":\"deepseek_v4_parallel_attention_gemm_streams\""));
+    assert!(json.contains("\"status\":\"missing\""));
     assert!(json.contains("\"default_block_size\":256"));
     assert!(json.contains("\"v4_swa\""));
     assert!(json.contains("\"v4_c4_mla\""));
@@ -160,6 +171,7 @@ fn deepseek_cuda_readiness_without_config_reports_unknown_architecture() {
     assert!(json.contains("\"required_execution_units\":[]"));
     assert!(json.contains("\"vllm_reference_units\":[]"));
     assert!(json.contains("\"vllm_kv_cache_plan\":null"));
+    assert!(json.contains("\"execution_unit_status\":[]"));
     assert!(json.contains("\"claim_allowed\":false"));
 }
 

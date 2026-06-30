@@ -80,6 +80,9 @@ pub(crate) fn deepseek_cuda_readiness_report_json(
     let architecture = metadata_ref.map(|metadata| metadata.architecture.as_str());
     let implemented = metadata_ref.map_or_else(Vec::new, implemented_primitives);
     let required = metadata_ref.map_or_else(Vec::new, required_execution_units);
+    let execution_unit_status = metadata_ref
+        .map(execution_unit_coverage)
+        .unwrap_or_default();
     let vllm_refs = metadata_ref.map_or_else(Vec::new, |metadata| {
         vllm_reference_units(metadata.architecture)
     });
@@ -121,7 +124,7 @@ pub(crate) fn deepseek_cuda_readiness_report_json(
     };
 
     Ok(format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-cuda-readiness-v1\",\"architecture\":{},\"primitive_status\":\"{}\",\"primitive_smokes_passed\":{},\"primitive_smokes_total\":{},\"cuda_primitives\":{},\"implemented_primitives\":{},\"required_execution_units\":{},\"remaining_required_execution_units\":{},\"vllm_reference_units\":{},\"vllm_kv_cache_plan\":{},\"runtime_parity_status\":\"not_verified\",\"performance_status\":\"not_benchmarked\",\"claim_allowed\":false}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-cuda-readiness-v1\",\"architecture\":{},\"primitive_status\":\"{}\",\"primitive_smokes_passed\":{},\"primitive_smokes_total\":{},\"cuda_primitives\":{},\"implemented_primitives\":{},\"required_execution_units\":{},\"remaining_required_execution_units\":{},\"execution_unit_status\":{},\"vllm_reference_units\":{},\"vllm_kv_cache_plan\":{},\"runtime_parity_status\":\"not_verified\",\"performance_status\":\"not_benchmarked\",\"claim_allowed\":false}}",
         readiness_status,
         json_opt_architecture(architecture),
         primitive_status,
@@ -131,6 +134,7 @@ pub(crate) fn deepseek_cuda_readiness_report_json(
         json_string_array(&implemented),
         json_string_array(&required),
         json_string_array(&required),
+        execution_unit_coverage_json(&execution_unit_status),
         json_string_array(&vllm_refs),
         vllm_kv_cache_plan.unwrap_or_else(|| "null".to_string()),
     ))
@@ -156,12 +160,13 @@ pub(crate) fn deepseek_runtime_plan_json(metadata: &HfModelMetadata) -> Result<S
     };
     let implemented = implemented_primitives(metadata);
     let units = required_execution_units(metadata);
+    let execution_unit_status = execution_unit_coverage(metadata);
     let vllm_refs = vllm_reference_units(metadata.architecture);
     let layer_report = layer_report(metadata);
     let claim_allowed = runtime_contract.status == "supported";
 
     Ok(format!(
-        "{{\"status\":\"ok\",\"schema\":\"nerva-deepseek-runtime-plan-v1\",\"architecture\":\"{}\",\"layers\":{},\"hidden_size\":{},\"heads\":{},\"head_dim\":{},\"moe_layers\":{},\"dense_mlp_layers\":{},\"mla_layers\":{},\"v4_swa_layers\":{},\"v4_c4_layers\":{},\"v4_c128_layers\":{},\"v4_indexer_layers\":{},\"v4_hash_router_layers\":{},\"runtime_status\":\"{}\",\"runtime_reason\":\"{}\",\"implemented_primitives\":{},\"required_execution_units\":{},\"vllm_reference_units\":{},\"claim_allowed\":{}}}",
+        "{{\"status\":\"ok\",\"schema\":\"nerva-deepseek-runtime-plan-v1\",\"architecture\":\"{}\",\"layers\":{},\"hidden_size\":{},\"heads\":{},\"head_dim\":{},\"moe_layers\":{},\"dense_mlp_layers\":{},\"mla_layers\":{},\"v4_swa_layers\":{},\"v4_c4_layers\":{},\"v4_c128_layers\":{},\"v4_indexer_layers\":{},\"v4_hash_router_layers\":{},\"runtime_status\":\"{}\",\"runtime_reason\":\"{}\",\"implemented_primitives\":{},\"required_execution_units\":{},\"execution_unit_status\":{},\"vllm_reference_units\":{},\"claim_allowed\":{}}}",
         metadata.architecture.as_str(),
         metadata.num_hidden_layers,
         metadata.hidden_size,
@@ -179,6 +184,7 @@ pub(crate) fn deepseek_runtime_plan_json(metadata: &HfModelMetadata) -> Result<S
         json_escape(&runtime_contract.reason),
         json_string_array(&implemented),
         json_string_array(&units),
+        execution_unit_coverage_json(&execution_unit_status),
         json_string_array(&vllm_refs),
         claim_allowed,
     ))
@@ -293,6 +299,225 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
     }
 
     primitives
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DeepSeekExecutionUnitCoverage {
+    unit: String,
+    status: &'static str,
+    validated_primitives: Vec<String>,
+    remaining_gaps: Vec<String>,
+}
+
+fn execution_unit_coverage(metadata: &HfModelMetadata) -> Vec<DeepSeekExecutionUnitCoverage> {
+    required_execution_units(metadata)
+        .into_iter()
+        .map(|unit| coverage_for_unit(metadata.architecture, unit))
+        .collect()
+}
+
+fn coverage_for_unit(
+    architecture: HfArchitectureKind,
+    unit: String,
+) -> DeepSeekExecutionUnitCoverage {
+    let (status, validated_primitives, remaining_gaps): (&'static str, &[&str], &[&str]) =
+        match (architecture, unit.as_str()) {
+            (
+                HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
+                "deepseek_v3_mla_prefill_decode",
+            ) => (
+                "partial",
+                &[
+                    "deepseek_vllm_kv_cache_spec_planner",
+                    "deepseek_mla_decode_mqa_reference",
+                    "cuda_deepseek_mla_decode_mqa_smoke",
+                ],
+                &[
+                    "integrate MLA prefill/decode into exact runtime",
+                    "commit vLLM-compatible MLA KV cache pages during decode",
+                    "match vLLM DeepseekV2MLAAttention output numerics",
+                ],
+            ),
+            (
+                HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
+                "deepseek_v3_block_fp8_projection_gemm",
+            ) => (
+                "partial",
+                &[
+                    "fp8_e4m3fn_decode_matches_torch",
+                    "e8m0_scale_upcast_matches_vllm_raw_exponent_path",
+                    "fp8_e4m3fn_e8m0_block_dequant_reference",
+                    "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
+                ],
+                &[
+                    "fuse block-FP8 dequant with projection GEMM",
+                    "wire DeepSeek q_a/kv_a/q_b/kv_b/o projection scales into decode",
+                    "benchmark projection throughput against vLLM fused kernels",
+                ],
+            ),
+            (HfArchitectureKind::DeepSeekV32, "deepseek_v32_sparse_attention_indexer") => (
+                "partial",
+                &["deepseek_vllm_kv_cache_spec_planner"],
+                &[
+                    "implement V3.2 sparse indexer query/key/weights runtime",
+                    "store vLLM-compatible indexer cache pages",
+                    "verify selected sparse blocks against vLLM",
+                ],
+            ),
+            (
+                HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
+                "deepseek_v3_grouped_moe_router_noaux_tc",
+            ) => (
+                "partial",
+                &[
+                    "deepseek_v3_grouped_sigmoid_router_reference",
+                    "cuda_deepseek_v3_grouped_sigmoid_router_smoke",
+                ],
+                &[
+                    "integrate grouped sigmoid router into full decode layers",
+                    "load and apply e_score_correction_bias from checkpoints",
+                ],
+            ),
+            (
+                HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
+                "deepseek_v3_split_fp8_expert_moe",
+            ) => (
+                "partial",
+                &[
+                    "deepseek_routed_moe_reference",
+                    "cuda_deepseek_routed_moe_smoke",
+                    "fp8_e4m3fn_e8m0_block_dequant_reference",
+                    "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
+                ],
+                &[
+                    "run routed expert gate/up/down GEMMs with checkpoint FP8 scales",
+                    "integrate shared experts and routed output accumulation",
+                    "benchmark fused MoE against vLLM FusedMoE",
+                ],
+            ),
+            (HfArchitectureKind::DeepSeekV3, "deepseek_v3_mtp_optional") => (
+                "optional_missing",
+                &[],
+                &["optional MTP draft layers are not implemented"],
+            ),
+            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mhc_pre_post_head") => (
+                "partial",
+                &["deepseek_v4_mhc_compressor_indexer_manifest"],
+                &[
+                    "implement MHC pre/post-head transforms",
+                    "verify MHC head/attention/FFN scale handling against vLLM",
+                ],
+            ),
+            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mla_swa_cache") => (
+                "partial",
+                &["deepseek_vllm_kv_cache_spec_planner"],
+                &[
+                    "allocate and commit vLLM DeepseekV4 SWA cache pages",
+                    "enforce sliding-window sparse attention semantics",
+                ],
+            ),
+            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_fp8_ds_mla_cache") => (
+                "partial",
+                &[
+                    "deepseek_vllm_kv_cache_spec_planner",
+                    "fp8_e4m3fn_e8m0_block_dequant_reference",
+                    "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
+                ],
+                &[
+                    "write 584-byte/token fp8_ds_mla pages in decode",
+                    "match vLLM DeepseekV4 FlashMLA cache alignment",
+                ],
+            ),
+            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_c4_c128_compressor") => (
+                "partial",
+                &["deepseek_v4_mhc_compressor_indexer_manifest"],
+                &[
+                    "implement C4/C128 compressor kernels",
+                    "verify compressed-token cache selection against vLLM",
+                ],
+            ),
+            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_sparse_indexer") => (
+                "partial",
+                &[
+                    "deepseek_vllm_kv_cache_spec_planner",
+                    "deepseek_v4_mhc_compressor_indexer_manifest",
+                ],
+                &[
+                    "implement DeepseekV4 indexer runtime",
+                    "verify C4/C128 indexer page writes and sparse block choices",
+                ],
+            ),
+            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_parallel_attention_gemm_streams") => (
+                "missing",
+                &[],
+                &[
+                    "parallelize attention GEMM/compressor/indexer streams like vLLM",
+                    "measure stream overlap against vLLM DeepseekV4 attention",
+                ],
+            ),
+            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_hash_and_bias_router") => (
+                "partial",
+                &[
+                    "deepseek_v4_hash_router_manifest",
+                    "deepseek_v4_sqrtsoftplus_hash_router_reference",
+                    "cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke",
+                ],
+                &[
+                    "integrate hash routing by token id into decode layers",
+                    "load and apply e_score_correction_bias for non-hash V4 layers",
+                ],
+            ),
+            (HfArchitectureKind::DeepSeekV4, "deepseek_v4_megamoe_int8_fp4_experts") => (
+                "partial",
+                &[
+                    "mxfp4_e2m1_e8m0_block_dequant_reference",
+                    "cuda_mxfp4_e2m1_e8m0_block_dequant_smoke",
+                    "deepseek_routed_moe_reference",
+                    "cuda_deepseek_routed_moe_smoke",
+                ],
+                &[
+                    "implement V4 MegaMoE int8/fp4 expert kernels",
+                    "support expert-parallel physical/logical expert mapping",
+                    "benchmark MegaMoE against vLLM deep_gemm_mega_moe/FusedMoE",
+                ],
+            ),
+            _ => (
+                "missing",
+                &[],
+                &["no DeepSeek coverage mapping exists for this unit"],
+            ),
+        };
+
+    DeepSeekExecutionUnitCoverage {
+        unit,
+        status,
+        validated_primitives: validated_primitives
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+        remaining_gaps: remaining_gaps
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+    }
+}
+
+fn execution_unit_coverage_json(units: &[DeepSeekExecutionUnitCoverage]) -> String {
+    let mut out = String::from("[");
+    for (index, unit) in units.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "{{\"unit\":\"{}\",\"status\":\"{}\",\"validated_primitives\":{},\"remaining_gaps\":{}}}",
+            json_escape(&unit.unit),
+            unit.status,
+            json_string_array(&unit.validated_primitives),
+            json_string_array(&unit.remaining_gaps),
+        ));
+    }
+    out.push(']');
+    out
 }
 
 fn smoke_status_label(status: &nerva_cuda::smoke::status::SmokeStatus) -> &'static str {
