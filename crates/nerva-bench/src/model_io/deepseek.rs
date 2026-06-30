@@ -1,4 +1,7 @@
-use std::time::Instant;
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
@@ -22,6 +25,26 @@ pub(crate) struct DeepSeekCudaPrimitiveReport<'a> {
     pub(crate) name: &'a str,
     pub(crate) status: &'a str,
     pub(crate) summary_json: &'a str,
+}
+
+struct DeepSeekVllmReferenceSpec {
+    architecture: &'static str,
+    execution_unit: &'static str,
+    relative_path: &'static str,
+    required_symbols: &'static [&'static str],
+}
+
+struct DeepSeekVllmReferenceUnit {
+    architecture: &'static str,
+    execution_unit: &'static str,
+    relative_path: &'static str,
+    absolute_path: String,
+    status: &'static str,
+    size_bytes: u64,
+    fnv1a64: Option<u64>,
+    required_symbols: Vec<String>,
+    missing_symbols: Vec<String>,
+    error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +88,57 @@ pub(crate) fn run_deepseek_runtime_plan(config_path: Option<String>) -> Result<S
     let metadata = parse_hf_config_metadata(&config)
         .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
     deepseek_runtime_plan_json(&metadata)
+}
+
+pub(crate) fn run_deepseek_vllm_reference_audit(
+    vllm_root_arg: Option<String>,
+) -> Result<String, String> {
+    let vllm_root = PathBuf::from(vllm_root_arg.unwrap_or_else(|| "/root/vllm".to_string()));
+    let specs = deepseek_vllm_reference_specs();
+    let units = specs
+        .iter()
+        .map(|spec| read_vllm_reference_unit(&vllm_root, spec))
+        .collect::<Vec<_>>();
+    Ok(deepseek_vllm_reference_audit_json(&vllm_root, &units))
+}
+
+fn deepseek_vllm_reference_audit_json(
+    vllm_root: &Path,
+    units: &[DeepSeekVllmReferenceUnit],
+) -> String {
+    let ok = units.iter().filter(|unit| unit.status == "ok").count();
+    let missing_file = units
+        .iter()
+        .filter(|unit| unit.status == "missing_file")
+        .count();
+    let symbol_gap = units
+        .iter()
+        .filter(|unit| unit.status == "symbol_gap")
+        .count();
+    let failed = units.iter().filter(|unit| unit.status == "failed").count();
+    let status = if failed > 0 {
+        "failed"
+    } else if missing_file > 0 {
+        "missing_reference"
+    } else if symbol_gap > 0 {
+        "symbol_gap"
+    } else if ok == units.len() {
+        "ok"
+    } else {
+        "incomplete"
+    };
+
+    format!(
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-reference-audit-v1\",\"vllm_root\":\"{}\",\"reference_units_total\":{},\"reference_units_ok\":{},\"reference_units_missing_file\":{},\"reference_units_symbol_gap\":{},\"reference_units_failed\":{},\"runtime_parity_status\":\"vllm_reference_sources_pinned\",\"performance_status\":\"source_audit_only_not_runtime_benchmark\",\"claim_allowed\":false,\"units\":{}}}",
+        status,
+        json_escape(&vllm_root.display().to_string()),
+        units.len(),
+        ok,
+        missing_file,
+        symbol_gap,
+        failed,
+        deepseek_vllm_reference_units_json(units),
+    )
 }
 
 pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<String, String> {
@@ -662,6 +736,203 @@ fn smoke_status_label(status: &nerva_cuda::smoke::status::SmokeStatus) -> &'stat
     }
 }
 
+fn deepseek_vllm_reference_specs() -> Vec<DeepSeekVllmReferenceSpec> {
+    vec![
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v3_v32",
+            execution_unit: "v3_mla_moe_model",
+            relative_path: "vllm/model_executor/models/deepseek_v2.py",
+            required_symbols: &[
+                "class DeepseekV2MLAAttention",
+                "class DeepseekV2MoE",
+                "FusedMoE(",
+                "MultiHeadLatentAttentionWrapper",
+                "MLAAttentionSpec",
+                "DeepseekV32IndexerBackend",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v3.2_v4",
+            execution_unit: "sparse_indexer_metadata",
+            relative_path: "vllm/v1/attention/backends/mla/indexer.py",
+            required_symbols: &[
+                "class DeepseekV32IndexerBackend",
+                "class DeepseekV4IndexerBackend",
+                "compress_ratio",
+                "get_compressed_slot_mapping",
+                "DeepseekV32IndexerMetadataBuilder",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v3.2_v4",
+            execution_unit: "mla_kv_cache_specs",
+            relative_path: "vllm/v1/kv_cache_interface.py",
+            required_symbols: &[
+                "class MLAAttentionSpec",
+                "class SlidingWindowMLASpec",
+                "fp8_ds_mla",
+                "compress_ratio",
+                "real_page_size_bytes",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_attention_graph",
+            relative_path: "vllm/models/deepseek_v4/attention.py",
+            required_symbols: &[
+                "class DeepseekV4Attention",
+                "_resolve_dsv4_kv_cache_dtype",
+                "DeepseekCompressor",
+                "execute_in_parallel",
+                "MLAAttentionSpec",
+                "compress_ratio",
+                "fp8_ds_mla",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_compressor_cache",
+            relative_path: "vllm/models/deepseek_v4/compressor.py",
+            required_symbols: &[
+                "class DeepseekCompressor",
+                "compress_norm_rope_store_triton",
+                "compress_ratio",
+                "SlidingWindowMLASpec",
+                "alignment=576",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_sparse_mla_backend",
+            relative_path: "vllm/models/deepseek_v4/sparse_mla.py",
+            required_symbols: &[
+                "class DeepseekV4FlashMLABackend",
+                "FLASHMLA_SPARSE_DSV4",
+                "fp8_ds_mla",
+                "584",
+                "DeepseekV4FlashMLAMetadataBuilder",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_nvidia_megamoe_router_model",
+            relative_path: "vllm/models/deepseek_v4/nvidia/model.py",
+            required_symbols: &[
+                "class DeepseekV4MegaMoEExperts",
+                "prepare_megamoe_inputs",
+                "fused_topk_bias",
+                "class DeepseekV4MoE",
+                "class DeepseekV4ForCausalLM",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_megamoe_prepare_kernel",
+            relative_path: "vllm/models/deepseek_v4/nvidia/ops/prepare_megamoe.py",
+            required_symbols: &[
+                "def prepare_megamoe_inputs",
+                "_prepare_megamoe_inputs_kernel",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_fp8_o_projection",
+            relative_path: "vllm/models/deepseek_v4/nvidia/ops/o_proj.py",
+            required_symbols: &[
+                "def compute_fp8_einsum_recipe",
+                "def deep_gemm_fp8_o_proj",
+                "fused_inv_rope_fp8_quant",
+                "fp8_einsum",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_fused_compress_quant_cache",
+            relative_path: "vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py",
+            required_symbols: &[
+                "compress_norm_rope_store_triton",
+                "_fused_kv_compress_norm_rope_insert_sparse_attn",
+                "_fused_kv_compress_norm_rope_insert_indexer_attn",
+                "_fused_kv_compress_norm_rope_insert_indexer_mxfp4_attn",
+                "COMPRESS_RATIO",
+            ],
+        },
+    ]
+}
+
+fn read_vllm_reference_unit(
+    vllm_root: &Path,
+    spec: &DeepSeekVllmReferenceSpec,
+) -> DeepSeekVllmReferenceUnit {
+    let absolute = vllm_root.join(spec.relative_path);
+    let required_symbols = spec
+        .required_symbols
+        .iter()
+        .map(|symbol| (*symbol).to_string())
+        .collect::<Vec<_>>();
+    match std::fs::read(&absolute) {
+        Ok(bytes) => {
+            let source = String::from_utf8_lossy(&bytes);
+            let missing_symbols = spec
+                .required_symbols
+                .iter()
+                .filter(|symbol| !source.contains(**symbol))
+                .map(|symbol| (*symbol).to_string())
+                .collect::<Vec<_>>();
+            let status = if missing_symbols.is_empty() {
+                "ok"
+            } else {
+                "symbol_gap"
+            };
+            DeepSeekVllmReferenceUnit {
+                architecture: spec.architecture,
+                execution_unit: spec.execution_unit,
+                relative_path: spec.relative_path,
+                absolute_path: absolute.display().to_string(),
+                status,
+                size_bytes: bytes.len() as u64,
+                fnv1a64: Some(fnv1a64(&bytes)),
+                required_symbols,
+                missing_symbols,
+                error: None,
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DeepSeekVllmReferenceUnit {
+            architecture: spec.architecture,
+            execution_unit: spec.execution_unit,
+            relative_path: spec.relative_path,
+            absolute_path: absolute.display().to_string(),
+            status: "missing_file",
+            size_bytes: 0,
+            fnv1a64: None,
+            required_symbols: required_symbols.clone(),
+            missing_symbols: required_symbols,
+            error: Some("vLLM reference file is missing".to_string()),
+        },
+        Err(err) => DeepSeekVllmReferenceUnit {
+            architecture: spec.architecture,
+            execution_unit: spec.execution_unit,
+            relative_path: spec.relative_path,
+            absolute_path: absolute.display().to_string(),
+            status: "failed",
+            size_bytes: 0,
+            fnv1a64: None,
+            required_symbols,
+            missing_symbols: Vec::new(),
+            error: Some(format!("failed to read vLLM reference file: {err}")),
+        },
+    }
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 fn bench_primitive(
     name: &'static str,
     iterations: usize,
@@ -906,6 +1177,30 @@ fn cuda_primitives_json(primitives: &[DeepSeekCudaPrimitiveReport<'_>]) -> Strin
     out
 }
 
+fn deepseek_vllm_reference_units_json(units: &[DeepSeekVllmReferenceUnit]) -> String {
+    let mut out = String::from("[");
+    for (index, unit) in units.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "{{\"architecture\":\"{}\",\"execution_unit\":\"{}\",\"relative_path\":\"{}\",\"absolute_path\":\"{}\",\"status\":\"{}\",\"size_bytes\":{},\"fnv1a64\":{},\"required_symbols\":{},\"missing_symbols\":{},\"error\":{}}}",
+            unit.architecture,
+            json_escape(unit.execution_unit),
+            json_escape(unit.relative_path),
+            json_escape(&unit.absolute_path),
+            unit.status,
+            unit.size_bytes,
+            json_opt_hash(unit.fnv1a64),
+            json_string_array(&unit.required_symbols),
+            json_string_array(&unit.missing_symbols),
+            json_opt_string(unit.error.as_deref()),
+        ));
+    }
+    out.push(']');
+    out
+}
+
 fn deepseek_cuda_primitive_bench_samples_json(
     samples: &[DeepSeekCudaPrimitiveBenchSample],
 ) -> String {
@@ -935,6 +1230,10 @@ fn deepseek_cuda_primitive_bench_samples_json(
     }
     out.push(']');
     out
+}
+
+fn json_opt_hash(value: Option<u64>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| format!("\"0x{value:016x}\""))
 }
 
 fn json_opt_string(value: Option<&str>) -> String {

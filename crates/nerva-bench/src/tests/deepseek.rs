@@ -1,7 +1,7 @@
 use crate::model_io::deepseek::{
     DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
     deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
-    run_deepseek_runtime_plan,
+    run_deepseek_runtime_plan, run_deepseek_vllm_reference_audit,
 };
 
 #[test]
@@ -248,6 +248,155 @@ fn deepseek_cuda_primitive_bench_report_is_not_end_to_end_claim() {
     assert!(json.contains("/root/vllm/vllm/model_executor/models/deepseek_v2.py"));
     assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/nvidia/model.py"));
     assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/nvidia/ops/prepare_megamoe.py"));
+}
+
+#[test]
+fn deepseek_vllm_reference_audit_pins_expected_source_units() {
+    let dir = std::env::temp_dir().join(format!(
+        "nerva-bench-deepseek-vllm-audit-{}",
+        std::process::id()
+    ));
+    let root = dir.join("vllm-root");
+    write_vllm_reference_fixture(&root);
+
+    let json = run_deepseek_vllm_reference_audit(Some(root.to_string_lossy().into_owned()))
+        .expect("vLLM reference audit should scan fixture root");
+
+    assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-reference-audit-v1\""));
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"reference_units_total\":10"));
+    assert!(json.contains("\"reference_units_ok\":10"));
+    assert!(json.contains("\"reference_units_missing_file\":0"));
+    assert!(json.contains("\"reference_units_symbol_gap\":0"));
+    assert!(json.contains("\"runtime_parity_status\":\"vllm_reference_sources_pinned\""));
+    assert!(json.contains("\"performance_status\":\"source_audit_only_not_runtime_benchmark\""));
+    assert!(json.contains("\"claim_allowed\":false"));
+    assert!(json.contains("\"execution_unit\":\"v3_mla_moe_model\""));
+    assert!(json.contains("\"execution_unit\":\"v4_sparse_mla_backend\""));
+    assert!(json.contains("\"execution_unit\":\"v4_fused_compress_quant_cache\""));
+    assert!(json.contains("\"fnv1a64\":\"0x"));
+    assert!(json.contains("DeepseekV4FlashMLABackend"));
+    assert!(json.contains("\"missing_symbols\":[]"));
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn write_vllm_reference_fixture(root: &std::path::Path) {
+    write_fixture_file(
+        root,
+        "vllm/model_executor/models/deepseek_v2.py",
+        r#"
+class DeepseekV2MLAAttention: pass
+class DeepseekV2MoE: pass
+FusedMoE(
+MultiHeadLatentAttentionWrapper
+MLAAttentionSpec
+DeepseekV32IndexerBackend
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/v1/attention/backends/mla/indexer.py",
+        r#"
+class DeepseekV32IndexerBackend: pass
+class DeepseekV4IndexerBackend: pass
+compress_ratio
+get_compressed_slot_mapping
+DeepseekV32IndexerMetadataBuilder
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/v1/kv_cache_interface.py",
+        r#"
+class MLAAttentionSpec: pass
+class SlidingWindowMLASpec: pass
+fp8_ds_mla
+compress_ratio
+real_page_size_bytes
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/models/deepseek_v4/attention.py",
+        r#"
+class DeepseekV4Attention: pass
+_resolve_dsv4_kv_cache_dtype
+DeepseekCompressor
+execute_in_parallel
+MLAAttentionSpec
+compress_ratio
+fp8_ds_mla
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/models/deepseek_v4/compressor.py",
+        r#"
+class DeepseekCompressor: pass
+compress_norm_rope_store_triton
+compress_ratio
+SlidingWindowMLASpec
+alignment=576
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/models/deepseek_v4/sparse_mla.py",
+        r#"
+class DeepseekV4FlashMLABackend: pass
+FLASHMLA_SPARSE_DSV4
+fp8_ds_mla
+584
+DeepseekV4FlashMLAMetadataBuilder
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/models/deepseek_v4/nvidia/model.py",
+        r#"
+class DeepseekV4MegaMoEExperts: pass
+prepare_megamoe_inputs
+fused_topk_bias
+class DeepseekV4MoE: pass
+class DeepseekV4ForCausalLM: pass
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/models/deepseek_v4/nvidia/ops/prepare_megamoe.py",
+        r#"
+def prepare_megamoe_inputs(): pass
+_prepare_megamoe_inputs_kernel
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/models/deepseek_v4/nvidia/ops/o_proj.py",
+        r#"
+def compute_fp8_einsum_recipe(): pass
+def deep_gemm_fp8_o_proj(): pass
+fused_inv_rope_fp8_quant
+fp8_einsum
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py",
+        r#"
+compress_norm_rope_store_triton
+_fused_kv_compress_norm_rope_insert_sparse_attn
+_fused_kv_compress_norm_rope_insert_indexer_attn
+_fused_kv_compress_norm_rope_insert_indexer_mxfp4_attn
+COMPRESS_RATIO
+"#,
+    );
+}
+
+fn write_fixture_file(root: &std::path::Path, relative: &str, content: &str) {
+    let path = root.join(relative);
+    std::fs::create_dir_all(path.parent().expect("fixture file should have a parent")).unwrap();
+    std::fs::write(path, content).unwrap();
 }
 
 fn deepseek_v4_config() -> &'static str {
