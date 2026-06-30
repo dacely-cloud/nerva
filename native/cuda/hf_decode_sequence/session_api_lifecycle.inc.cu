@@ -239,6 +239,13 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       &session->deepseek_compressed_kv_bytes,
       &session->deepseek_indexer_state_bytes,
       &session->deepseek_indexer_kv_bytes);
+  if (session->deepseek_compressor_state_bytes != 0 ||
+      session->deepseek_compressed_kv_bytes != 0 ||
+      session->deepseek_indexer_state_bytes != 0 ||
+      session->deepseek_indexer_kv_bytes != 0) {
+    session->deepseek_runtime_counters_bytes =
+        kDeepSeekRuntimeCounterCount * sizeof(uint64_t);
+  }
   session->kv_block_table_bytes =
       static_cast<uint64_t>(session->kv_block_count) * sizeof(uint32_t);
   session->slots_bytes =
@@ -468,6 +475,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
         reinterpret_cast<void **>(&session->device_deepseek_indexer_kv),
         session->deepseek_indexer_kv_bytes);
   }
+  if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_runtime_counters),
+        session->deepseek_runtime_counters_bytes);
+  }
   if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_block_table),
                      session->kv_block_table_bytes);
@@ -616,6 +629,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   if (err == cudaSuccess && session->deepseek_indexer_kv_bytes != 0) {
     err = cudaMemsetAsync(session->device_deepseek_indexer_kv, 0,
                           session->deepseek_indexer_kv_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_runtime_counters, 0,
+                          session->deepseek_runtime_counters_bytes,
                           session->stream);
   }
   if (err == cudaSuccess) {
@@ -769,6 +787,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
                           session->deepseek_indexer_kv_bytes,
                           session->stream);
   }
+  if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_runtime_counters, 0,
+                          session->deepseek_runtime_counters_bytes,
+                          session->stream);
+  }
   const uint64_t prompt_bytes =
       static_cast<uint64_t>(request->prompt_token_count) * sizeof(uint32_t);
   if (err == cudaSuccess) {
@@ -857,14 +880,25 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
   if (err == cudaSuccess) err = cudaEventRecord(session->device_stop, session->stream);
   const uint64_t slots_bytes =
       static_cast<uint64_t>(context_steps) * sizeof(NervaCudaSyntheticTokenSlot);
+  uint64_t deepseek_runtime_counters[kDeepSeekRuntimeCounterCount] = {};
   if (err == cudaSuccess) {
     err = cudaMemcpyAsync(session->host_slots, session->device_slots, slots_bytes,
                           cudaMemcpyDeviceToHost, session->stream);
     out->d2h_bytes = slots_bytes;
   }
+  if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaMemcpyAsync(deepseek_runtime_counters,
+                          session->device_deepseek_runtime_counters,
+                          session->deepseek_runtime_counters_bytes,
+                          cudaMemcpyDeviceToHost, session->stream);
+    out->d2h_bytes += session->deepseek_runtime_counters_bytes;
+  }
   if (err == cudaSuccess) {
     err = cudaStreamSynchronize(session->stream);
     out->sync_calls += 1;
+  }
+  if (err == cudaSuccess) {
+    fill_deepseek_runtime_counter_result(out, deepseek_runtime_counters);
   }
   if (err == cudaSuccess) {
     float device_ms = 0.0f;
@@ -985,6 +1019,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
                           session->deepseek_indexer_kv_bytes,
                           session->stream);
   }
+  if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_runtime_counters, 0,
+                          session->deepseek_runtime_counters_bytes,
+                          session->stream);
+  }
   const uint64_t prompt_bytes =
       static_cast<uint64_t>(request->prompt_token_count) * sizeof(uint32_t);
   if (err == cudaSuccess) {
@@ -1064,6 +1103,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
   fill_session_result_header(session, out, request->steps, seed_token);
 
   cudaError_t err = cudaSuccess;
+  if (session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_runtime_counters, 0,
+                          session->deepseek_runtime_counters_bytes,
+                          session->stream);
+  }
   if (run_count != 0 && projection_batch_session_ready(session) &&
       !use_cublas_layer_path(session)) {
     err = ensure_session_cublas_resources(session);
@@ -1113,15 +1157,26 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
     err = cudaEventRecord(session->device_stop, session->stream);
   const uint64_t slots_bytes =
       static_cast<uint64_t>(request->steps) * sizeof(NervaCudaSyntheticTokenSlot);
+  uint64_t deepseek_runtime_counters[kDeepSeekRuntimeCounterCount] = {};
   if (err == cudaSuccess) {
     err = cudaMemcpyAsync(session->host_slots + slot_start,
                           session->device_slots + slot_start, slots_bytes,
                           cudaMemcpyDeviceToHost, session->stream);
     out->d2h_bytes = slots_bytes;
   }
+  if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaMemcpyAsync(deepseek_runtime_counters,
+                          session->device_deepseek_runtime_counters,
+                          session->deepseek_runtime_counters_bytes,
+                          cudaMemcpyDeviceToHost, session->stream);
+    out->d2h_bytes += session->deepseek_runtime_counters_bytes;
+  }
   if (err == cudaSuccess) {
     err = cudaStreamSynchronize(session->stream);
     out->sync_calls += 1;
+  }
+  if (err == cudaSuccess) {
+    fill_deepseek_runtime_counter_result(out, deepseek_runtime_counters);
   }
   if (err == cudaSuccess && run_count != 0) {
     float device_ms = 0.0f;

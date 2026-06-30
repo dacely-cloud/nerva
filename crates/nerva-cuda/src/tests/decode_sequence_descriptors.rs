@@ -1172,6 +1172,13 @@ fn deepseek_v4_compressed_dense_short_session_runs_through_sampling() {
         assert_eq!(summary.kv_tokens, 2);
         assert_eq!(summary.graph_replays, 2);
         assert!(summary.graph_nodes > 0);
+        assert_eq!(
+            summary.deepseek_compressor_state_writes,
+            summary.graph_replays
+        );
+        assert_eq!(summary.deepseek_compressed_kv_writes, 0);
+        assert_eq!(summary.deepseek_indexer_state_writes, 0);
+        assert_eq!(summary.deepseek_indexer_kv_writes, 0);
     });
 }
 
@@ -1206,6 +1213,13 @@ fn deepseek_v4_compressed_indexer_short_session_runs_through_sampling() {
         assert_eq!(summary.kv_tokens, 2);
         assert_eq!(summary.graph_replays, 2);
         assert!(summary.graph_nodes > 0);
+        assert_eq!(
+            summary.deepseek_compressor_state_writes,
+            summary.graph_replays
+        );
+        assert_eq!(summary.deepseek_compressed_kv_writes, 0);
+        assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
+        assert_eq!(summary.deepseek_indexer_kv_writes, 0);
     });
 }
 

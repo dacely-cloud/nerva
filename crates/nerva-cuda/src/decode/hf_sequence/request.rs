@@ -208,6 +208,10 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             sync_calls: out.sync_calls,
             host_causality_edges: out.host_causality_edges,
             hot_path_allocations: out.hot_path_allocations,
+            deepseek_compressor_state_writes: out.deepseek_compressor_state_writes,
+            deepseek_compressed_kv_writes: out.deepseek_compressed_kv_writes,
+            deepseek_indexer_state_writes: out.deepseek_indexer_state_writes,
+            deepseek_indexer_kv_writes: out.deepseek_indexer_kv_writes,
             error,
         }
     }

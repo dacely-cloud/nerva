@@ -68,6 +68,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint64_t deepseek_compressed_kv_bytes = 0;
   uint64_t deepseek_indexer_state_bytes = 0;
   uint64_t deepseek_indexer_kv_bytes = 0;
+  uint64_t deepseek_runtime_counters_bytes = 0;
   uint64_t kv_block_table_bytes = 0;
   uint64_t slots_bytes = 0;
   uint64_t prompt_bytes = 0;
@@ -118,6 +119,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint8_t *device_deepseek_compressed_kv = nullptr;
   float *device_deepseek_indexer_state = nullptr;
   uint8_t *device_deepseek_indexer_kv = nullptr;
+  uint64_t *device_deepseek_runtime_counters = nullptr;
   uint32_t *device_kv_block_table = nullptr;
   uint32_t *device_prompt_tokens = nullptr;
   NervaCudaSyntheticTokenSlot *host_slots = nullptr;

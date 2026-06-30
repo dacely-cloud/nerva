@@ -279,7 +279,11 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       session->kv_block_count, session->device_kv_block_table,
       session->vocab_size, session->device_prompt_tokens, prompt_token_count,
       session->device_slots,
-      session->device_projection_input);
+      session->device_projection_input, session->device_deepseek_compressor_state,
+      deepseek_v4_compressor_state_layer_offset_bytes(session, layer_index),
+      session->device_deepseek_indexer_state,
+      deepseek_v4_indexer_state_layer_offset_bytes(session, layer_index),
+      session->device_deepseek_runtime_counters);
   return cudaGetLastError();
 }
 

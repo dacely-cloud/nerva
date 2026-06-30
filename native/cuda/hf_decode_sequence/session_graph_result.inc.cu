@@ -27,6 +27,21 @@ void fill_session_result_header(const NervaCudaHfDecodeSequenceSession *session,
       session->planned_weight_descriptor_hash;
 }
 
+void fill_deepseek_runtime_counter_result(
+    NervaCudaHfDecodeSequenceResult *out, const uint64_t *counters) {
+  if (out == nullptr || counters == nullptr) {
+    return;
+  }
+  out->deepseek_compressor_state_writes =
+      counters[kDeepSeekRuntimeCounterCompressorStateWrites];
+  out->deepseek_compressed_kv_writes =
+      counters[kDeepSeekRuntimeCounterCompressedKvWrites];
+  out->deepseek_indexer_state_writes =
+      counters[kDeepSeekRuntimeCounterIndexerStateWrites];
+  out->deepseek_indexer_kv_writes =
+      counters[kDeepSeekRuntimeCounterIndexerKvWrites];
+}
+
 uint32_t observed_from_slot_range(uint32_t steps, uint32_t has_eos_token,
                                   uint32_t eos_token,
                                   const NervaCudaSyntheticTokenSlot *slots) {

@@ -46,6 +46,7 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_deepseek_indexer_state);
   cudaFree(session->device_deepseek_compressed_kv);
   cudaFree(session->device_deepseek_compressor_state);
+  cudaFree(session->device_deepseek_runtime_counters);
   cudaFree(session->device_kv_values);
   cudaFree(session->device_kv_keys);
   if (session->shared_weights == nullptr) {
@@ -137,6 +138,7 @@ uint64_t session_device_footprint(
          session->deepseek_compressed_kv_bytes +
          session->deepseek_indexer_state_bytes +
          session->deepseek_indexer_kv_bytes +
+         session->deepseek_runtime_counters_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
          session->experimental_rt_candidate_pages_bytes + sizeof(uint32_t) +
@@ -157,6 +159,7 @@ uint64_t session_fixed_footprint_without_prefill_chunk(
          session->deepseek_compressed_kv_bytes +
          session->deepseek_indexer_state_bytes +
          session->deepseek_indexer_kv_bytes +
+         session->deepseek_runtime_counters_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
          session->experimental_rt_candidate_pages_bytes + sizeof(uint32_t) +
@@ -282,6 +285,69 @@ uint64_t deepseek_v4_indexer_kv_token_bytes(
   return layout.deepseek_index_head_dim + scale_dim;
 }
 
+uint64_t deepseek_v4_compressor_state_layer_bytes(
+    const SequenceLayerLayout &layout, uint32_t kv_token_capacity) {
+  if (!layout_is_deepseek_v4_compressed_native(layout)) {
+    return 0;
+  }
+  const uint64_t coff = layout_deepseek_v4_compressor_coff(layout);
+  const uint64_t state_width =
+      coff * (layout.deepseek_qk_nope_head_dim +
+              layout.deepseek_qk_rope_head_dim);
+  return sat_mul_u64(sat_mul_u64(kv_token_capacity, state_width * 2u),
+                     sizeof(float));
+}
+
+uint64_t deepseek_v4_compressor_state_layer_offset_bytes(
+    const NervaCudaHfDecodeSequenceSession *session,
+    uint32_t target_layer_index) {
+  if (session == nullptr) {
+    return 0;
+  }
+  uint64_t offset = 0;
+  const uint32_t capped_layer =
+      std::min(target_layer_index,
+               static_cast<uint32_t>(session->host_layouts.size()));
+  for (uint32_t layer_index = 0; layer_index < capped_layer; ++layer_index) {
+    offset = sat_add_u64(
+        offset, deepseek_v4_compressor_state_layer_bytes(
+                    session->host_layouts[layer_index],
+                    session->kv_token_capacity));
+  }
+  return offset;
+}
+
+uint64_t deepseek_v4_indexer_state_layer_bytes(
+    const SequenceLayerLayout &layout, uint32_t kv_token_capacity) {
+  if (layout.deepseek_mode != kDeepSeekModeV4CompressedIndexer ||
+      layout.deepseek_index_head_dim == 0) {
+    return 0;
+  }
+  const uint64_t coff = layout_deepseek_v4_compressor_coff(layout);
+  const uint64_t state_width = coff * layout.deepseek_index_head_dim;
+  return sat_mul_u64(sat_mul_u64(kv_token_capacity, state_width * 2u),
+                     sizeof(float));
+}
+
+uint64_t deepseek_v4_indexer_state_layer_offset_bytes(
+    const NervaCudaHfDecodeSequenceSession *session,
+    uint32_t target_layer_index) {
+  if (session == nullptr) {
+    return 0;
+  }
+  uint64_t offset = 0;
+  const uint32_t capped_layer =
+      std::min(target_layer_index,
+               static_cast<uint32_t>(session->host_layouts.size()));
+  for (uint32_t layer_index = 0; layer_index < capped_layer; ++layer_index) {
+    offset = sat_add_u64(
+        offset, deepseek_v4_indexer_state_layer_bytes(
+                    session->host_layouts[layer_index],
+                    session->kv_token_capacity));
+  }
+  return offset;
+}
+
 void accumulate_deepseek_v4_compressed_runtime_bytes(
     const std::vector<SequenceLayerLayout> &layouts, uint32_t max_context_tokens,
     uint32_t kv_token_capacity, uint64_t *compressor_state_bytes,
@@ -295,30 +361,21 @@ void accumulate_deepseek_v4_compressed_runtime_bytes(
     if (!layout_is_deepseek_v4_compressed_native(layout)) {
       continue;
     }
-    const uint64_t coff = layout_deepseek_v4_compressor_coff(layout);
     const uint64_t compressed_capacity =
         deepseek_v4_compressed_token_capacity(max_context_tokens,
                                               layout.deepseek_compress_ratio);
-    const uint64_t state_width =
-        coff * (layout.deepseek_qk_nope_head_dim +
-                layout.deepseek_qk_rope_head_dim);
     main_state = sat_add_u64(
         main_state,
-        sat_mul_u64(sat_mul_u64(kv_token_capacity, state_width * 2u),
-                    sizeof(float)));
+        deepseek_v4_compressor_state_layer_bytes(layout, kv_token_capacity));
     main_kv = sat_add_u64(
         main_kv,
         sat_mul_u64(compressed_capacity,
                     deepseek_v4_main_compressed_kv_token_bytes(layout)));
 
     if (layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer) {
-      const uint64_t index_state_width =
-          coff * layout.deepseek_index_head_dim;
       idx_state = sat_add_u64(
           idx_state,
-          sat_mul_u64(
-              sat_mul_u64(kv_token_capacity, index_state_width * 2u),
-              sizeof(float)));
+          deepseek_v4_indexer_state_layer_bytes(layout, kv_token_capacity));
       idx_kv = sat_add_u64(
           idx_kv,
           sat_mul_u64(compressed_capacity,

@@ -70,6 +70,10 @@ pub(crate) fn empty_summary(
         sync_calls: 0,
         host_causality_edges: 0,
         hot_path_allocations: 0,
+        deepseek_compressor_state_writes: 0,
+        deepseek_compressed_kv_writes: 0,
+        deepseek_indexer_state_writes: 0,
+        deepseek_indexer_kv_writes: 0,
         error: Some(error),
     }
 }

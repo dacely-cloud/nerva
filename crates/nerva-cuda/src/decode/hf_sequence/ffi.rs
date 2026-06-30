@@ -123,6 +123,10 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) sync_calls: u64,
     pub(crate) host_causality_edges: u64,
     pub(crate) hot_path_allocations: u64,
+    pub(crate) deepseek_compressor_state_writes: u64,
+    pub(crate) deepseek_compressed_kv_writes: u64,
+    pub(crate) deepseek_indexer_state_writes: u64,
+    pub(crate) deepseek_indexer_kv_writes: u64,
 }
 
 #[repr(C)]

@@ -476,6 +476,10 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t sync_calls;
   uint64_t host_causality_edges;
   uint64_t hot_path_allocations;
+  uint64_t deepseek_compressor_state_writes;
+  uint64_t deepseek_compressed_kv_writes;
+  uint64_t deepseek_indexer_state_writes;
+  uint64_t deepseek_indexer_kv_writes;
 } NervaCudaHfDecodeSequenceResult;
 
 typedef struct NervaCudaHfDecodeSequenceLayoutPlanRequest {
