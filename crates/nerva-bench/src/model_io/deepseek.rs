@@ -3,6 +3,7 @@ use std::{
     time::Instant,
 };
 
+use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
 use nerva_cuda::deepseek_quant::dequant::{
@@ -323,6 +324,7 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
         bench_primitive("quant_fp8_e4m3fn_e8m0", iterations, bench_quant_fp8),
         bench_primitive("quant_mxfp4_e2m1_e8m0", iterations, bench_quant_mxfp4),
         bench_primitive("mla_decode_mqa", iterations, bench_mla_decode),
+        bench_primitive("kv_fp8_ds_mla_pack", iterations, bench_kv_fp8_ds_mla_pack),
         bench_primitive("routed_moe_forward", iterations, bench_moe_forward),
     ];
     Ok(deepseek_cuda_primitive_bench_report_json(
@@ -375,10 +377,12 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let moe = nerva_cuda::deepseek_moe::probe::deepseek_moe_smoke();
     let quant = nerva_cuda::deepseek_quant::probe::deepseek_quant_smoke();
     let router = nerva_cuda::deepseek_router::probe::deepseek_router_smoke();
+    let kv = nerva_cuda::deepseek_kv::probe::deepseek_kv_smoke();
     let mla_json = mla.to_json();
     let moe_json = moe.to_json();
     let quant_json = quant.to_json();
     let router_json = router.to_json();
+    let kv_json = kv.to_json();
     let primitives = [
         DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_mla_decode_mqa_smoke",
@@ -399,6 +403,11 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
             name: "cuda_deepseek_router_smoke",
             status: smoke_status_label(&router.status),
             summary_json: &router_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_fp8_ds_mla_kv_pack_smoke",
+            status: smoke_status_label(&kv.status),
+            summary_json: &kv_json,
         },
     ];
     deepseek_cuda_readiness_report_json(config_path, &primitives)
@@ -654,6 +663,8 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         primitives.push("deepseek_v4_hash_route_table_i64_loader".to_string());
         primitives.push("precision_moe_deepseek_v4_hash_route_table".to_string());
         primitives.push("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke".to_string());
+        primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_api".to_string());
+        primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_smoke".to_string());
     }
 
     primitives
@@ -794,9 +805,11 @@ fn coverage_for_unit(
                     "fp8_e4m3fn_e8m0_block_dequant_reference",
                     "cuda_fp8_e4m3fn_e8m0_dequant_api",
                     "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
+                    "cuda_deepseek_fp8_ds_mla_kv_pack_api",
+                    "cuda_deepseek_fp8_ds_mla_kv_pack_smoke",
                 ],
                 &[
-                    "write 584-byte/token fp8_ds_mla pages in decode",
+                    "integrate 584-byte/token fp8_ds_mla page writes into decode",
                     "match vLLM DeepseekV4 FlashMLA cache alignment",
                 ],
             ),
@@ -1275,6 +1288,29 @@ fn bench_mla_decode() -> DeepSeekPrimitiveMetrics {
         w_uk: &w_uk,
         w_uv: &w_uv,
     });
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_kv_fp8_ds_mla_pack() -> DeepSeekPrimitiveMetrics {
+    let nope = (0..448)
+        .map(|idx| (idx as u8).wrapping_mul(5).wrapping_add(3))
+        .collect::<Vec<_>>();
+    let rope = (0..64)
+        .map(|idx| 0x3f80u16.wrapping_add(idx as u16))
+        .collect::<Vec<_>>();
+    let scales = [0x7f, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x00];
+    let summary = deepseek_fp8_ds_mla_pack(4, 2, &nope, &rope, &scales);
     DeepSeekPrimitiveMetrics {
         status: summary.status,
         output_hash: summary.output_hash,

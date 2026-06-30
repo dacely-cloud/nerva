@@ -1,0 +1,77 @@
+use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
+use crate::deepseek_kv::summary::CudaDeepSeekKvSummary;
+use crate::smoke::status::SmokeStatus;
+
+const V4_NOPE_BYTES: usize = 448;
+const V4_ROPE_BF16_VALUES: usize = 64;
+const V4_SCALE_DIM: usize = 8;
+const V4_TOKEN_STRIDE: usize = V4_NOPE_BYTES + V4_ROPE_BF16_VALUES * 2;
+
+pub fn deepseek_kv_smoke() -> CudaDeepSeekKvSummary {
+    let block_size = 4u32;
+    let token_index = 2u32;
+    let nope = (0..V4_NOPE_BYTES)
+        .map(|idx| (idx as u8).wrapping_mul(3).wrapping_add(7))
+        .collect::<Vec<_>>();
+    let rope = (0..V4_ROPE_BF16_VALUES)
+        .map(|idx| 0x3f80u16.wrapping_add(idx as u16))
+        .collect::<Vec<_>>();
+    let scales = [0x7f, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x00];
+
+    let summary = deepseek_fp8_ds_mla_pack(block_size, token_index, &nope, &rope, &scales);
+    if summary.status != SmokeStatus::Ok {
+        return summary;
+    }
+
+    if summary.token_stride as usize != V4_TOKEN_STRIDE
+        || summary.scale_dim as usize != V4_SCALE_DIM
+        || summary.block_bytes as usize != block_size as usize * (V4_TOKEN_STRIDE + V4_SCALE_DIM)
+        || !v4_layout_matches(
+            &summary.output,
+            block_size as usize,
+            token_index as usize,
+            &nope,
+            &rope,
+            &scales,
+        )
+        || summary.kernel_launches != 1
+        || summary.sync_calls != 1
+        || summary.hot_path_allocations != 0
+    {
+        let mut failed = summary;
+        failed.status = SmokeStatus::Failed;
+        failed.error = Some("DeepSeek fp8_ds_mla KV smoke layout mismatch".to_string());
+        return failed;
+    }
+
+    summary
+}
+
+fn v4_layout_matches(
+    output: &[u8],
+    block_size: usize,
+    token_index: usize,
+    nope: &[u8],
+    rope: &[u16],
+    scales: &[u8],
+) -> bool {
+    let expected_block_bytes = block_size * (V4_TOKEN_STRIDE + V4_SCALE_DIM);
+    if output.len() != expected_block_bytes {
+        return false;
+    }
+    let token_base = token_index * V4_TOKEN_STRIDE;
+    let scale_base = block_size * V4_TOKEN_STRIDE + token_index * V4_SCALE_DIM;
+    if &output[token_base..token_base + V4_NOPE_BYTES] != nope {
+        return false;
+    }
+    for (idx, value) in rope.iter().copied().enumerate() {
+        let base = token_base + V4_NOPE_BYTES + idx * 2;
+        if output[base] != (value & 0xff) as u8 || output[base + 1] != (value >> 8) as u8 {
+            return false;
+        }
+    }
+    if &output[scale_base..scale_base + V4_SCALE_DIM] != scales {
+        return false;
+    }
+    true
+}
