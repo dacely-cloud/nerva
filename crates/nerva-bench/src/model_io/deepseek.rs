@@ -749,6 +749,33 @@ fn deepseek_vllm_reference_specs() -> Vec<DeepSeekVllmReferenceSpec> {
         },
         DeepSeekVllmReferenceSpec {
             architecture: "deepseek_v4",
+            execution_unit: "v4_mhc_torch_reference",
+            relative_path: "vllm/model_executor/kernels/mhc/torch.py",
+            required_symbols: &[
+                "def mhc_pre_torch",
+                "torch.matmul",
+                "torch.softmax",
+                "sinkhorn_repeat",
+                "def mhc_post_torch",
+                "torch.einsum",
+                "post_layer_mix.to(torch.float32)",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_mhc_tilelang_ops",
+            relative_path: "vllm/model_executor/kernels/mhc/tilelang.py",
+            required_symbols: &[
+                "def mhc_pre_tilelang",
+                "def mhc_post_tilelang",
+                "def mhc_fused_post_pre_tilelang",
+                "def hc_head_fused_kernel_tilelang",
+                "hc_head_fuse_tilelang",
+                "direct_register_custom_op",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
             execution_unit: "v4_mhc_tilelang_warmup",
             relative_path: "vllm/model_executor/warmup/deepseek_v4_mhc_warmup.py",
             required_symbols: &[
@@ -1561,6 +1588,8 @@ fn vllm_reference_units(architecture: HfArchitectureKind) -> Vec<String> {
             "/root/vllm/vllm/models/deepseek_v4/attention.py".to_string(),
             "/root/vllm/vllm/models/deepseek_v4/compressor.py".to_string(),
             "/root/vllm/vllm/models/deepseek_v4/sparse_mla.py".to_string(),
+            "/root/vllm/vllm/model_executor/kernels/mhc/torch.py".to_string(),
+            "/root/vllm/vllm/model_executor/kernels/mhc/tilelang.py".to_string(),
             "/root/vllm/vllm/models/deepseek_v4/common/ops/save_partial_states.py".to_string(),
             "/root/vllm/vllm/models/deepseek_v4/common/ops/fused_qk_rmsnorm.py".to_string(),
             "/root/vllm/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py".to_string(),

@@ -5,6 +5,10 @@ use crate::precision::block::moe::{
     select_moe_route_for_logits_with_hash_token,
 };
 use crate::reference::block::types::ReferenceTransformerBlock;
+use crate::reference::mhc::{
+    DeepSeekMhcConfig, deepseek_hc_head_torch_reference, deepseek_mhc_post_torch_reference,
+    deepseek_mhc_pre_torch_reference,
+};
 use crate::reference::moe::{
     DeepSeekRoutedMoeConfig, deepseek_routed_moe_forward, deepseek_swiglu,
 };
@@ -331,6 +335,68 @@ fn precision_moe_deepseek_v4_hash_router_requires_route_table() {
 }
 
 #[test]
+fn deepseek_v4_mhc_reference_matches_vllm_torch_zero_projection_case() {
+    let config = DeepSeekMhcConfig {
+        hc_mult: 2,
+        hidden_size: 1,
+        rms_eps: 1.0e-5,
+        hc_pre_eps: 0.1,
+        hc_sinkhorn_eps: 0.0,
+        hc_post_mult_value: 2.0,
+        sinkhorn_repeat: 1,
+    };
+    let residual = [1.0, 2.0];
+    let fn_weights = [0.0; 16];
+    let hc_scale = [1.0, 1.0, 1.0];
+    let hc_base = [0.0; 8];
+
+    let pre = deepseek_mhc_pre_torch_reference(&residual, &fn_weights, &hc_scale, &hc_base, config)
+        .unwrap();
+
+    assert_close_slice(&pre.post_mix, &[1.0, 1.0], 1.0e-6);
+    assert_close_slice(&pre.comb_mix, &[0.5, 0.5, 0.5, 0.5], 1.0e-6);
+    assert_close_slice(&pre.layer_input, &[1.8], 1.0e-6);
+
+    let post = deepseek_mhc_post_torch_reference(
+        &[3.0],
+        &residual,
+        &[1.0, 0.5],
+        &[0.5, 0.5, 0.5, 0.5],
+        2,
+        1,
+    )
+    .unwrap();
+    assert_close_slice(&post, &[4.5, 3.0], 1.0e-6);
+
+    let head =
+        deepseek_hc_head_torch_reference(&residual, &[0.0; 4], 1.0, &[0.0, 0.0], 2, 1, 1.0e-5, 0.1)
+            .unwrap();
+    assert_close_slice(&head, &[1.8], 1.0e-6);
+}
+
+#[test]
+fn deepseek_v4_mhc_reference_rejects_bad_shapes() {
+    let config = DeepSeekMhcConfig {
+        hc_mult: 2,
+        hidden_size: 1,
+        rms_eps: 1.0e-5,
+        hc_pre_eps: 0.1,
+        hc_sinkhorn_eps: 0.0,
+        hc_post_mult_value: 2.0,
+        sinkhorn_repeat: 1,
+    };
+
+    assert!(
+        deepseek_mhc_pre_torch_reference(&[1.0], &[0.0; 16], &[1.0; 3], &[0.0; 8], config).is_err()
+    );
+    assert!(deepseek_mhc_post_torch_reference(&[1.0], &[1.0, 2.0], &[1.0], &[1.0], 2, 1).is_err());
+    assert!(
+        deepseek_hc_head_torch_reference(&[1.0], &[0.0; 4], 1.0, &[0.0, 0.0], 2, 1, 1.0e-5, 0.1,)
+            .is_err()
+    );
+}
+
+#[test]
 fn deepseek_router_rejects_invalid_configs() {
     assert!(
         deepseek_v3_grouped_route(
@@ -473,5 +539,15 @@ fn softplus(value: f32) -> f32 {
         value.exp()
     } else {
         value.exp().ln_1p()
+    }
+}
+
+fn assert_close_slice(actual: &[f32], expected: &[f32], tolerance: f32) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected.iter()) {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "actual {actual} expected {expected} tolerance {tolerance}"
+        );
     }
 }

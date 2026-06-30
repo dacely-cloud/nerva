@@ -61,6 +61,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_api"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_smoke"));
     assert!(json.contains("deepseek_v4_mhc_warmup_plan_matches_vllm"));
+    assert!(json.contains("deepseek_v4_mhc_pre_post_head_reference_matches_vllm_torch"));
     assert!(json.contains("cuda_deepseek_fp8_ds_mla_kv_pack_api"));
     assert!(json.contains("cuda_deepseek_fp8_ds_mla_kv_pack_smoke"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
@@ -273,6 +274,7 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("cuda_deepseek_fp8_ds_mla_kv_pack_api"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_api"));
     assert!(json.contains("deepseek_v4_mhc_warmup_plan_matches_vllm"));
+    assert!(json.contains("deepseek_v4_mhc_pre_post_head_reference_matches_vllm_torch"));
     assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_api"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
     assert!(json.contains("cuda_deepseek_c128_topk_metadata_api"));
@@ -397,8 +399,8 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-reference-audit-v1\""));
     assert!(json.contains("\"status\":\"ok\""));
-    assert!(json.contains("\"reference_units_total\":16"));
-    assert!(json.contains("\"reference_units_ok\":16"));
+    assert!(json.contains("\"reference_units_total\":18"));
+    assert!(json.contains("\"reference_units_ok\":18"));
     assert!(json.contains("\"reference_units_missing_file\":0"));
     assert!(json.contains("\"reference_units_symbol_gap\":0"));
     assert!(json.contains("\"runtime_parity_status\":\"vllm_reference_sources_pinned\""));
@@ -406,6 +408,8 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("\"execution_unit\":\"v3_mla_moe_model\""));
     assert!(json.contains("\"execution_unit\":\"v4_sparse_mla_backend\""));
+    assert!(json.contains("\"execution_unit\":\"v4_mhc_torch_reference\""));
+    assert!(json.contains("\"execution_unit\":\"v4_mhc_tilelang_ops\""));
     assert!(json.contains("\"execution_unit\":\"v4_mhc_tilelang_warmup\""));
     assert!(json.contains("\"execution_unit\":\"v4_multi_stream_attention_overlap\""));
     assert!(json.contains("\"execution_unit\":\"v4_swa_cache_spec\""));
@@ -443,8 +447,8 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
     assert!(json.contains("\"runtime_contract_status\":\"unsupported\""));
     assert!(json.contains("\"vllm_reference_status\":\"ok\""));
-    assert!(json.contains("\"vllm_reference_units_total\":16"));
-    assert!(json.contains("\"vllm_reference_units_ok\":16"));
+    assert!(json.contains("\"vllm_reference_units_total\":18"));
+    assert!(json.contains("\"vllm_reference_units_ok\":18"));
     assert!(json.contains("\"runtime_units_total\":8"));
     assert!(json.contains("\"runtime_blocking_units_total\":8"));
     assert!(json.contains("\"runtime_units_partial\":8"));
@@ -498,6 +502,31 @@ return self.block_size // self.compress_ratio
 return self.storage_block_size * 584
 return self.block_size * 656
 _apply_alignment_padding
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/model_executor/kernels/mhc/torch.py",
+        r#"
+def mhc_pre_torch(): pass
+torch.matmul
+torch.softmax
+sinkhorn_repeat
+def mhc_post_torch(): pass
+torch.einsum
+post_layer_mix.to(torch.float32)
+"#,
+    );
+    write_fixture_file(
+        root,
+        "vllm/model_executor/kernels/mhc/tilelang.py",
+        r#"
+def mhc_pre_tilelang(): pass
+def mhc_post_tilelang(): pass
+def mhc_fused_post_pre_tilelang(): pass
+def hc_head_fused_kernel_tilelang(): pass
+hc_head_fuse_tilelang
+direct_register_custom_op
 "#,
     );
     write_fixture_file(

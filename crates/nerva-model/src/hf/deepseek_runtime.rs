@@ -708,6 +708,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
         primitives.push("deepseek_v4_mhc_compressor_indexer_manifest".to_string());
         primitives.push("deepseek_v4_mhc_warmup_plan_matches_vllm".to_string());
+        primitives.push("deepseek_v4_mhc_pre_post_head_reference_matches_vllm_torch".to_string());
         primitives.push("deepseek_v4_hash_router_manifest".to_string());
         primitives.push("mxfp4_e2m1_e8m0_block_dequant_reference".to_string());
         primitives.push("cuda_mxfp4_e2m1_e8m0_dequant_api".to_string());
@@ -947,6 +948,7 @@ fn coverage_for_unit(
             &[
                 "deepseek_v4_mhc_compressor_indexer_manifest",
                 "deepseek_v4_mhc_warmup_plan_matches_vllm",
+                "deepseek_v4_mhc_pre_post_head_reference_matches_vllm_torch",
                 "cuda_deepseek_qkv_rmsnorm_api",
                 "cuda_deepseek_qkv_rmsnorm_smoke",
                 "cuda_deepseek_fused_inv_rope_fp8_quant_api",
@@ -958,10 +960,10 @@ fn coverage_for_unit(
             ],
             &[
                 "execute MHC TileLang-equivalent warmup before first V4 request",
+                "port MHC pre/post/head reference math into CUDA runtime",
                 "integrate fused Q/KV RMSNorm into MHC pre-head runtime",
                 "integrate fused inverse RoPE FP8 quant into O projection runtime",
-                "implement remaining MHC pre/post-head transforms",
-                "verify MHC head/attention/FFN scale handling against vLLM",
+                "verify CUDA MHC head/attention/FFN scale handling against vLLM",
             ],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mla_swa_cache") => (
