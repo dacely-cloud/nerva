@@ -166,8 +166,9 @@ __global__ void hf_decode_rms_norm_f32_to_encoded_kernel(
 __global__ void hf_decode_prepare_first_attn_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout,
     SequenceLayerLayout first_layout, uint32_t dtype, uint32_t hidden,
-    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
-    uint32_t *step_cursor, uint32_t max_steps, const uint32_t *prompt_tokens,
+    uint32_t norm_weight_dtype, uint32_t attention_hidden,
+    uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, const uint32_t *prompt_tokens,
     uint32_t prompt_token_count, const NervaCudaSyntheticTokenSlot *slots,
     float rms_eps, float *scratch, uint16_t *projection_input) {
   __shared__ uint32_t current_position_shared;
@@ -194,8 +195,9 @@ __global__ void hf_decode_prepare_first_attn_norm_encode_kernel(
     s.input[index] = encoded_to_f32(encoded, dtype);
   }
   __syncthreads();
-  rms_norm_to_encoded(s.input, arena + first_layout.rms_attn, hidden, dtype,
-                      rms_eps, projection_input);
+  rms_norm_to_encoded_with_weight_dtype(s.input, arena + first_layout.rms_attn,
+                                        hidden, norm_weight_dtype, dtype,
+                                        rms_eps, projection_input);
 }
 
 __global__ void hf_layer_attention_encode_kernel(
@@ -791,9 +793,9 @@ __global__ void hf_layer_finish_kernel(
 
 __global__ void hf_layer_finish_next_attn_norm_encode_kernel(
     uint16_t *arena, uint64_t output_offset, SequenceLayerLayout next_layout,
-    uint32_t dtype, uint32_t hidden, uint32_t attention_hidden,
-    uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
-    uint32_t max_steps, float rms_eps, float *scratch,
+    uint32_t dtype, uint32_t next_norm_weight_dtype, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, float rms_eps, float *scratch,
     uint16_t *projection_input) {
   (void)step_cursor;
   (void)max_steps;
@@ -803,15 +805,17 @@ __global__ void hf_layer_finish_next_attn_norm_encode_kernel(
     s.input[index] = s.residual[index] + s.down[index];
   }
   __syncthreads();
-  rms_norm_to_encoded(s.input, arena + next_layout.rms_attn, hidden, dtype,
-                      rms_eps, projection_input);
+  rms_norm_to_encoded_with_weight_dtype(s.input, arena + next_layout.rms_attn,
+                                        hidden, next_norm_weight_dtype, dtype,
+                                        rms_eps, projection_input);
 }
 
 __global__ void hf_layer_finish_final_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t dtype,
-    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
-    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
-    float rms_eps, float *scratch, uint16_t *projection_input) {
+    uint32_t final_norm_weight_dtype, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, float rms_eps, float *scratch,
+    uint16_t *projection_input) {
   (void)step_cursor;
   (void)max_steps;
   LayerScratch s =
@@ -820,8 +824,9 @@ __global__ void hf_layer_finish_final_norm_encode_kernel(
     s.input[index] = s.residual[index] + s.down[index];
   }
   __syncthreads();
-  rms_norm_to_encoded(s.input, arena + arena_layout.final_norm, hidden, dtype,
-                      rms_eps, projection_input);
+  rms_norm_to_encoded_with_weight_dtype(s.input, arena + arena_layout.final_norm,
+                                        hidden, final_norm_weight_dtype, dtype,
+                                        rms_eps, projection_input);
 }
 
 __global__ void hf_final_norm_encode_kernel(

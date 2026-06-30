@@ -56,8 +56,9 @@ __global__ void hf_decode_prepare_input_kernel(
 __global__ void hf_decode_prepare_first_attn_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout,
     SequenceLayerLayout first_layout, uint32_t dtype, uint32_t hidden,
-    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
-    uint32_t *step_cursor, uint32_t max_steps, const uint32_t *prompt_tokens,
+    uint32_t norm_weight_dtype, uint32_t attention_hidden,
+    uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, const uint32_t *prompt_tokens,
     uint32_t prompt_token_count, const NervaCudaSyntheticTokenSlot *slots,
     float rms_eps, float *scratch, uint16_t *projection_input);
 
@@ -138,15 +139,16 @@ __global__ void hf_layer_finish_kernel(
     uint32_t *step_cursor, uint32_t max_steps, float *scratch);
 __global__ void hf_layer_finish_next_attn_norm_encode_kernel(
     uint16_t *arena, uint64_t output_offset, SequenceLayerLayout next_layout,
-    uint32_t dtype, uint32_t hidden, uint32_t attention_hidden,
-    uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
-    uint32_t max_steps, float rms_eps, float *scratch,
+    uint32_t dtype, uint32_t next_norm_weight_dtype, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, float rms_eps, float *scratch,
     uint16_t *projection_input);
 __global__ void hf_layer_finish_final_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint32_t dtype,
-    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
-    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
-    float rms_eps, float *scratch, uint16_t *projection_input);
+    uint32_t final_norm_weight_dtype, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, float rms_eps, float *scratch,
+    uint16_t *projection_input);
 __global__ void hf_final_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, uint64_t input_offset,
     uint32_t dtype, uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,

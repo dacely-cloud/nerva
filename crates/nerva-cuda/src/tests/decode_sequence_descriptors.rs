@@ -611,7 +611,7 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
 }
 
 #[test]
-fn deepseek_v32_session_create_passes_native_create_guard() {
+fn deepseek_v32_dense_session_runs_through_sampling() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
     let layer = tiny_deepseek_v32_descriptor_layer();
@@ -688,15 +688,17 @@ fn deepseek_v32_session_create_passes_native_create_guard() {
     );
 
     let summary = session.run(&[0], 2, None);
-    assert_eq!(summary.status, SmokeStatus::Failed);
-    assert!(
-        summary
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("cuda_error=801")),
-        "expected V3.2 runtime to reach remaining MLA attention guard, got {:?}",
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V3.2 DeepSeek dense path should run through sampling: {:?}",
         summary.error
     );
+    assert_eq!(summary.steps, 2);
+    assert_eq!(summary.tokens.len(), 2);
+    assert_eq!(summary.kv_tokens, 2);
+    assert_eq!(summary.graph_replays, 2);
+    assert!(summary.graph_nodes > 0);
 }
 
 #[test]
