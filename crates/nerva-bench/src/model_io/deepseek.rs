@@ -283,6 +283,7 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke".to_string(),
         "deepseek_vllm_kv_cache_spec_planner".to_string(),
         "deepseek_mla_decode_mqa_reference".to_string(),
+        "cuda_deepseek_mla_decode_api".to_string(),
         "cuda_deepseek_mla_decode_mqa_smoke".to_string(),
         "deepseek_routed_moe_reference".to_string(),
         "cuda_deepseek_routed_moe_smoke".to_string(),
@@ -338,6 +339,7 @@ fn coverage_for_unit(
                 &[
                     "deepseek_vllm_kv_cache_spec_planner",
                     "deepseek_mla_decode_mqa_reference",
+                    "cuda_deepseek_mla_decode_api",
                     "cuda_deepseek_mla_decode_mqa_smoke",
                 ],
                 &[
@@ -423,7 +425,11 @@ fn coverage_for_unit(
             ),
             (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mla_swa_cache") => (
                 "partial",
-                &["deepseek_vllm_kv_cache_spec_planner"],
+                &[
+                    "deepseek_vllm_kv_cache_spec_planner",
+                    "deepseek_mla_decode_mqa_reference",
+                    "cuda_deepseek_mla_decode_api",
+                ],
                 &[
                     "allocate and commit vLLM DeepseekV4 SWA cache pages",
                     "enforce sliding-window sparse attention semantics",
@@ -433,6 +439,8 @@ fn coverage_for_unit(
                 "partial",
                 &[
                     "deepseek_vllm_kv_cache_spec_planner",
+                    "deepseek_mla_decode_mqa_reference",
+                    "cuda_deepseek_mla_decode_api",
                     "fp8_e4m3fn_e8m0_block_dequant_reference",
                     "cuda_fp8_e4m3fn_e8m0_dequant_api",
                     "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",

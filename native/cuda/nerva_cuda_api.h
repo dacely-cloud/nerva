@@ -1181,6 +1181,45 @@ typedef struct NervaCudaDeepSeekMlaSmokeResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekMlaSmokeResult;
 
+typedef struct NervaCudaDeepSeekMlaDecodeRequest {
+  uint32_t heads;
+  uint32_t tokens;
+  uint32_t kv_lora_rank;
+  uint32_t qk_nope_head_dim;
+  uint32_t qk_rope_head_dim;
+  uint32_t v_head_dim;
+  float softmax_scale;
+  const float *q_nope;
+  const float *q_pe;
+  const float *kv_c;
+  const float *k_pe;
+  const float *w_uk;
+  const float *w_uv;
+  float *output;
+} NervaCudaDeepSeekMlaDecodeRequest;
+
+typedef struct NervaCudaDeepSeekMlaDecodeResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t decode_error;
+  uint32_t heads;
+  uint32_t tokens;
+  uint32_t kv_lora_rank;
+  uint32_t qk_nope_head_dim;
+  uint32_t qk_rope_head_dim;
+  uint32_t v_head_dim;
+  float softmax_scale;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekMlaDecodeResult;
+
 typedef struct NervaCudaDeepSeekMoeSmokeResult {
   int32_t status;
   int32_t cuda_error;
@@ -1280,6 +1319,9 @@ int nerva_cuda_deepseek_router_route(
     const NervaCudaDeepSeekRouterRouteRequest *request,
     NervaCudaDeepSeekRouterRouteResult *out);
 int nerva_cuda_deepseek_mla_smoke(NervaCudaDeepSeekMlaSmokeResult *out);
+int nerva_cuda_deepseek_mla_decode(
+    const NervaCudaDeepSeekMlaDecodeRequest *request,
+    NervaCudaDeepSeekMlaDecodeResult *out);
 int nerva_cuda_deepseek_moe_smoke(NervaCudaDeepSeekMoeSmokeResult *out);
 
 #ifdef __cplusplus

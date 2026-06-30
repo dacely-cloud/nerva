@@ -15,6 +15,7 @@ constexpr uint32_t kQkRopeHeadDim = 1;
 constexpr uint32_t kVHeadDim = 2;
 constexpr uint32_t kOutputValues = kHeads * kVHeadDim;
 constexpr float kSoftmaxScale = 0.7f;
+constexpr uint32_t kMaxDynamicKvLoraRank = 1024;
 
 constexpr float kQNope[kHeads * kQkNopeHeadDim] = {
     0.2f, -0.3f,
@@ -140,6 +141,92 @@ __global__ void deepseek_mla_smoke_kernel(float *output) {
   }
 }
 
+__global__ void deepseek_mla_decode_kernel(const float *q_nope,
+                                           const float *q_pe,
+                                           const float *kv_c,
+                                           const float *k_pe,
+                                           const float *w_uk,
+                                           const float *w_uv,
+                                           float *output,
+                                           uint32_t heads,
+                                           uint32_t tokens,
+                                           uint32_t kv_lora_rank,
+                                           uint32_t qk_nope_head_dim,
+                                           uint32_t qk_rope_head_dim,
+                                           uint32_t v_head_dim,
+                                           float softmax_scale,
+                                           int32_t *decode_error) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
+    return;
+  }
+  if (heads == 0 || tokens == 0 || kv_lora_rank == 0 ||
+      kv_lora_rank > kMaxDynamicKvLoraRank || qk_nope_head_dim == 0 ||
+      v_head_dim == 0) {
+    *decode_error = -1;
+    return;
+  }
+
+  for (uint32_t i = 0; i < heads * v_head_dim; ++i) {
+    output[i] = 0.0f;
+  }
+
+  float ql_nope[kMaxDynamicKvLoraRank];
+  float latent_output[kMaxDynamicKvLoraRank];
+
+  for (uint32_t head = 0; head < heads; ++head) {
+    for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+      float sum = 0.0f;
+      for (uint32_t nope = 0; nope < qk_nope_head_dim; ++nope) {
+        const uint32_t q_idx = head * qk_nope_head_dim + nope;
+        const uint32_t w_idx =
+            (latent * heads + head) * qk_nope_head_dim + nope;
+        sum += q_nope[q_idx] * w_uk[w_idx];
+      }
+      ql_nope[latent] = sum;
+      latent_output[latent] = 0.0f;
+    }
+
+    float local_m = -INFINITY;
+    float local_l = 0.0f;
+    for (uint32_t token = 0; token < tokens; ++token) {
+      const float *kv = kv_c + token * kv_lora_rank;
+      const float *k_pe_token = k_pe + token * qk_rope_head_dim;
+      const float *q_pe_head = q_pe + head * qk_rope_head_dim;
+      const float score =
+          (dot_device(ql_nope, kv, kv_lora_rank) +
+           dot_device(q_pe_head, k_pe_token, qk_rope_head_dim)) *
+          softmax_scale;
+      const float next_m = fmaxf(local_m, score);
+      const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+      const float new_scale = expf(score - next_m);
+      for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+        latent_output[latent] =
+            latent_output[latent] * old_scale + kv[latent] * new_scale;
+      }
+      local_l = local_l * old_scale + new_scale;
+      local_m = next_m;
+    }
+
+    if (local_l == 0.0f) {
+      *decode_error = -2;
+      return;
+    }
+    for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+      latent_output[latent] /= local_l;
+    }
+
+    for (uint32_t v = 0; v < v_head_dim; ++v) {
+      float sum = 0.0f;
+      for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+        const uint32_t w_idx = (latent * heads + head) * v_head_dim + v;
+        sum += latent_output[latent] * w_uv[w_idx];
+      }
+      output[head * v_head_dim + v] = sum;
+    }
+  }
+  *decode_error = 0;
+}
+
 float host_softmax_score(uint32_t head, uint32_t token) {
   float score = 0.0f;
   const float *kv = kKvC + token * kKvLoraRank;
@@ -250,6 +337,39 @@ int fail(NervaCudaDeepSeekMlaSmokeResult *out, cudaError_t err) {
   return -1;
 }
 
+void clear_decode_result(const NervaCudaDeepSeekMlaDecodeRequest *request,
+                         NervaCudaDeepSeekMlaDecodeResult *out) {
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  out->decode_error = -1;
+  if (request != nullptr) {
+    out->heads = request->heads;
+    out->tokens = request->tokens;
+    out->kv_lora_rank = request->kv_lora_rank;
+    out->qk_nope_head_dim = request->qk_nope_head_dim;
+    out->qk_rope_head_dim = request->qk_rope_head_dim;
+    out->v_head_dim = request->v_head_dim;
+    out->softmax_scale = request->softmax_scale;
+  }
+}
+
+int fail_decode(NervaCudaDeepSeekMlaDecodeResult *out, cudaError_t err) {
+  out->cuda_error = static_cast<int32_t>(err);
+  out->status = -1;
+  return -1;
+}
+
+bool validate_decode_request(const NervaCudaDeepSeekMlaDecodeRequest *request) {
+  return request != nullptr && request->q_nope != nullptr &&
+         request->q_pe != nullptr && request->kv_c != nullptr &&
+         request->k_pe != nullptr && request->w_uk != nullptr &&
+         request->w_uv != nullptr && request->output != nullptr &&
+         request->heads > 0 && request->tokens > 0 &&
+         request->kv_lora_rank > 0 &&
+         request->kv_lora_rank <= kMaxDynamicKvLoraRank &&
+         request->qk_nope_head_dim > 0 && request->v_head_dim > 0;
+}
+
 }  // namespace
 
 extern "C" int nerva_cuda_deepseek_mla_smoke(
@@ -325,6 +445,204 @@ cleanup:
 
   if (err != cudaSuccess) {
     return fail(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_deepseek_mla_decode(
+    const NervaCudaDeepSeekMlaDecodeRequest *request,
+    NervaCudaDeepSeekMlaDecodeResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_decode_result(request, out);
+  if (!validate_decode_request(request)) {
+    return -1;
+  }
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail_decode(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail_decode(out, cudaErrorNoDevice);
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail_decode(out, err);
+  }
+
+  float *d_q_nope = nullptr;
+  float *d_q_pe = nullptr;
+  float *d_kv_c = nullptr;
+  float *d_k_pe = nullptr;
+  float *d_w_uk = nullptr;
+  float *d_w_uv = nullptr;
+  float *d_output = nullptr;
+  float *h_output = nullptr;
+  int32_t *d_decode_error = nullptr;
+  int32_t h_decode_error = -1;
+  cudaStream_t stream = nullptr;
+
+  const uint64_t q_nope_bytes =
+      sizeof(float) * static_cast<uint64_t>(request->heads) *
+      request->qk_nope_head_dim;
+  const uint64_t q_pe_bytes =
+      sizeof(float) * static_cast<uint64_t>(request->heads) *
+      request->qk_rope_head_dim;
+  const uint64_t kv_c_bytes =
+      sizeof(float) * static_cast<uint64_t>(request->tokens) *
+      request->kv_lora_rank;
+  const uint64_t k_pe_bytes =
+      sizeof(float) * static_cast<uint64_t>(request->tokens) *
+      request->qk_rope_head_dim;
+  const uint64_t w_uk_bytes =
+      sizeof(float) * static_cast<uint64_t>(request->kv_lora_rank) *
+      request->heads * request->qk_nope_head_dim;
+  const uint64_t w_uv_bytes =
+      sizeof(float) * static_cast<uint64_t>(request->kv_lora_rank) *
+      request->heads * request->v_head_dim;
+  const uint64_t output_bytes =
+      sizeof(float) * static_cast<uint64_t>(request->heads) *
+      request->v_head_dim;
+  const uint64_t decode_error_bytes = sizeof(int32_t);
+
+  err = cudaMalloc(reinterpret_cast<void **>(&d_q_nope), q_nope_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_q_pe), q_pe_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_kv_c), kv_c_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_k_pe), k_pe_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_w_uk), w_uk_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_w_uv), w_uv_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_output), output_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_decode_error),
+                   decode_error_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  out->device_arena_bytes = q_nope_bytes + q_pe_bytes + kv_c_bytes +
+                            k_pe_bytes + w_uk_bytes + w_uv_bytes +
+                            output_bytes + decode_error_bytes;
+
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_output),
+                      output_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  out->pinned_host_bytes = output_bytes;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(d_q_nope,
+                        request->q_nope,
+                        q_nope_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_q_pe,
+                        request->q_pe,
+                        q_pe_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_kv_c,
+                        request->kv_c,
+                        kv_c_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_k_pe,
+                        request->k_pe,
+                        k_pe_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_w_uk,
+                        request->w_uk,
+                        w_uk_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_w_uv,
+                        request->w_uv,
+                        w_uv_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_decode_error,
+                        &h_decode_error,
+                        decode_error_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes = q_nope_bytes + q_pe_bytes + kv_c_bytes + k_pe_bytes +
+                   w_uk_bytes + w_uv_bytes + decode_error_bytes;
+
+  deepseek_mla_decode_kernel<<<1, 1, 0, stream>>>(
+      d_q_nope,
+      d_q_pe,
+      d_kv_c,
+      d_k_pe,
+      d_w_uk,
+      d_w_uv,
+      d_output,
+      request->heads,
+      request->tokens,
+      request->kv_lora_rank,
+      request->qk_nope_head_dim,
+      request->qk_rope_head_dim,
+      request->v_head_dim,
+      request->softmax_scale,
+      d_decode_error);
+  out->kernel_launches += 1;
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(h_output,
+                        d_output,
+                        output_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(&h_decode_error,
+                        d_decode_error,
+                        decode_error_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->d2h_bytes = output_bytes + decode_error_bytes;
+
+  err = cudaStreamSynchronize(stream);
+  out->sync_calls += 1;
+  if (err != cudaSuccess) goto cleanup;
+
+  out->decode_error = h_decode_error;
+  if (h_decode_error == 0) {
+    memcpy(request->output, h_output, output_bytes);
+    out->output_hash = hash_f32_bits(
+        request->output,
+        static_cast<uint32_t>(request->heads * request->v_head_dim));
+    out->status = 0;
+  }
+
+cleanup:
+  if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_output != nullptr) cudaFreeHost(h_output);
+  if (d_decode_error != nullptr) cudaFree(d_decode_error);
+  if (d_output != nullptr) cudaFree(d_output);
+  if (d_w_uv != nullptr) cudaFree(d_w_uv);
+  if (d_w_uk != nullptr) cudaFree(d_w_uk);
+  if (d_k_pe != nullptr) cudaFree(d_k_pe);
+  if (d_kv_c != nullptr) cudaFree(d_kv_c);
+  if (d_q_pe != nullptr) cudaFree(d_q_pe);
+  if (d_q_nope != nullptr) cudaFree(d_q_nope);
+
+  if (err != cudaSuccess) {
+    return fail_decode(out, err);
   }
   return out->status == 0 ? 0 : -1;
 }
