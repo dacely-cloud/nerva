@@ -683,6 +683,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke".to_string(),
         "deepseek_vllm_kv_cache_spec_planner".to_string(),
         "deepseek_mla_decode_mqa_reference".to_string(),
+        "deepseek_mla_prefill_causal_mqa_reference".to_string(),
         "cuda_deepseek_mla_decode_api".to_string(),
         "cuda_deepseek_mla_decode_mqa_smoke".to_string(),
         "deepseek_routed_moe_reference".to_string(),
@@ -867,6 +868,7 @@ fn coverage_for_unit(
             &[
                 "deepseek_vllm_kv_cache_spec_planner",
                 "deepseek_mla_decode_mqa_reference",
+                "deepseek_mla_prefill_causal_mqa_reference",
                 "cuda_deepseek_mla_decode_api",
                 "cuda_deepseek_mla_decode_mqa_smoke",
                 "cuda_hf_sequence_deepseek_descriptor_abi",
@@ -878,7 +880,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v3_mla_serial_prefill_cache_rows",
             ],
             &[
-                "replace serial MLA prefill with token-batched vLLM-equivalent MLA prefill",
+                "replace serial CUDA MLA prefill with token-batched vLLM-equivalent MLA prefill",
                 "consume DeepSeek native sequence layout offsets in MLA kernels",
                 "run direct full-size V3 MLA KV page differential against vLLM runtime",
                 "match vLLM DeepseekV2MLAAttention output numerics",
@@ -1031,6 +1033,7 @@ fn coverage_for_unit(
             &[
                 "deepseek_vllm_kv_cache_spec_planner",
                 "deepseek_mla_decode_mqa_reference",
+                "deepseek_mla_prefill_causal_mqa_reference",
                 "cuda_deepseek_mla_decode_api",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_v4_swa_window_runtime",
@@ -1049,6 +1052,7 @@ fn coverage_for_unit(
             &[
                 "deepseek_vllm_kv_cache_spec_planner",
                 "deepseek_mla_decode_mqa_reference",
+                "deepseek_mla_prefill_causal_mqa_reference",
                 "cuda_deepseek_mla_decode_api",
                 "fp8_e4m3fn_e8m0_block_dequant_reference",
                 "cuda_fp8_e4m3fn_e8m0_dequant_api",

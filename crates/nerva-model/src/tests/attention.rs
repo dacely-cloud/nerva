@@ -1,6 +1,7 @@
 use crate::attention::block::KvAttentionBlock;
 use crate::attention::exact::mla::{
-    DeepSeekMlaDecodeScratch, DeepSeekMlaDecodeShape, exact_deepseek_mla_decode_mqa_into,
+    DeepSeekMlaDecodeScratch, DeepSeekMlaDecodeShape, DeepSeekMlaPrefillScratch,
+    exact_deepseek_mla_decode_mqa_into, exact_deepseek_mla_prefill_causal_mqa_into,
 };
 use crate::attention::exact::run::exact_blockwise_attention_into;
 use crate::attention::scratch::BlockwiseAttentionScratch;
@@ -167,6 +168,82 @@ fn deepseek_mla_decode_mqa_matches_expanded_mha_reference() {
 }
 
 #[test]
+fn deepseek_mla_prefill_causal_mqa_matches_repeated_decode_reference() {
+    let shape = DeepSeekMlaDecodeShape::new(2, 3, 2, 1, 2);
+    let q_nope = [
+        0.2, -0.3, 0.4, 0.1, //
+        0.1, 0.5, -0.2, 0.3, //
+        -0.4, 0.25, 0.6, -0.1,
+    ];
+    let q_pe = [
+        0.15, -0.25, //
+        0.05, 0.35, //
+        -0.1, 0.2,
+    ];
+    let kv_c = [
+        0.3, -0.1, 0.2, //
+        -0.4, 0.5, 0.1, //
+        0.2, 0.4, -0.3,
+    ];
+    let k_pe = [0.05, -0.2, 0.3];
+    let w_uk_lnp = [
+        0.3, -0.2, 0.1, 0.4, //
+        -0.5, 0.2, 0.6, -0.1, //
+        0.7, 0.3, -0.2, 0.5,
+    ];
+    let w_uv_lnv = [
+        0.2, -0.4, 0.5, 0.1, //
+        -0.3, 0.6, 0.4, -0.2, //
+        0.7, 0.2, -0.1, 0.3,
+    ];
+    let softmax_scale = 0.7;
+    let tokens = 3;
+    let mut prefill_scratch = DeepSeekMlaPrefillScratch::new(shape, tokens).unwrap();
+    let mut prefill_output = [0.0; 12];
+
+    exact_deepseek_mla_prefill_causal_mqa_into(
+        shape,
+        tokens,
+        &q_nope,
+        &q_pe,
+        &kv_c,
+        &k_pe,
+        &w_uk_lnp,
+        &w_uv_lnv,
+        softmax_scale,
+        &mut prefill_scratch,
+        &mut prefill_output,
+    )
+    .unwrap();
+
+    let mut decode_scratch = DeepSeekMlaDecodeScratch::new(shape).unwrap();
+    let mut decode_output = [0.0; 4];
+    for token in 0..tokens {
+        exact_deepseek_mla_decode_mqa_into(
+            shape,
+            &q_nope[token * shape.q_nope_len().unwrap()..][..shape.q_nope_len().unwrap()],
+            &q_pe[token * shape.q_pe_len().unwrap()..][..shape.q_pe_len().unwrap()],
+            &kv_c[..(token + 1) * shape.kv_lora_rank],
+            &k_pe[..token + 1],
+            &w_uk_lnp,
+            &w_uv_lnv,
+            softmax_scale,
+            &mut decode_scratch,
+            &mut decode_output,
+        )
+        .unwrap();
+        let actual =
+            &prefill_output[token * shape.output_len().unwrap()..][..shape.output_len().unwrap()];
+        for (actual, expected) in actual.iter().zip(decode_output.iter()) {
+            assert!(
+                (actual - expected).abs() < 1e-6,
+                "token={token} actual={actual} expected={expected}"
+            );
+        }
+    }
+}
+
+#[test]
 fn deepseek_mla_decode_shape_covers_v3_and_v4_profiles() {
     let v3 = DeepSeekMlaDecodeShape::new(128, 512, 128, 64, 128);
     v3.validate().unwrap();
@@ -181,6 +258,47 @@ fn deepseek_mla_decode_shape_covers_v3_and_v4_profiles() {
     assert_eq!(v4.q_pe_len().unwrap(), 4_096);
     assert_eq!(v4.w_uk_len().unwrap(), 14_680_064);
     assert_eq!(v4.w_uv_len().unwrap(), 16_777_216);
+}
+
+#[test]
+fn deepseek_mla_prefill_rejects_bad_token_shapes() {
+    let shape = DeepSeekMlaDecodeShape::new(1, 2, 1, 1, 1);
+    let mut scratch = DeepSeekMlaPrefillScratch::new(shape, 1).unwrap();
+    let mut output = [0.0; 1];
+
+    assert!(
+        exact_deepseek_mla_prefill_causal_mqa_into(
+            shape,
+            2,
+            &[1.0, 1.0],
+            &[1.0, 1.0],
+            &[1.0, 0.0, 0.5, 0.25],
+            &[1.0, 0.0],
+            &[1.0, 1.0],
+            &[1.0, 1.0],
+            1.0,
+            &mut scratch,
+            &mut output,
+        )
+        .is_err()
+    );
+
+    assert!(
+        exact_deepseek_mla_prefill_causal_mqa_into(
+            shape,
+            1,
+            &[1.0],
+            &[1.0],
+            &[1.0],
+            &[1.0],
+            &[1.0, 1.0],
+            &[1.0, 1.0],
+            1.0,
+            &mut scratch,
+            &mut output,
+        )
+        .is_err()
+    );
 }
 
 #[test]
