@@ -1024,6 +1024,89 @@ typedef struct NervaCudaExperimentalRtCandidateBenchResult {
   char reason[192];
 } NervaCudaExperimentalRtCandidateBenchResult;
 
+typedef struct NervaCudaDeepSeekQuantSmokeResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t fp8_rows;
+  uint32_t fp8_cols;
+  uint32_t fp8_block_rows;
+  uint32_t fp8_block_cols;
+  uint32_t mxfp4_rows;
+  uint32_t mxfp4_packed_cols;
+  uint32_t mxfp4_scale_packed_cols;
+  uint64_t fp8_output_hash;
+  uint64_t mxfp4_output_hash;
+  uint64_t fp8_mismatches;
+  uint64_t mxfp4_mismatches;
+  float fp8_max_abs_diff;
+  float mxfp4_max_abs_diff;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekQuantSmokeResult;
+
+typedef struct NervaCudaDeepSeekRouterSmokeResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t v3_num_experts;
+  uint32_t v3_num_groups;
+  uint32_t v3_top_k_groups;
+  uint32_t v3_top_k;
+  uint32_t v4_num_experts;
+  uint32_t v4_top_k;
+  uint32_t v4_hash_top_k;
+  uint32_t v3_expert_ids[2];
+  uint32_t v4_expert_ids[2];
+  uint32_t v4_hash_expert_ids[3];
+  float v3_weights[2];
+  float v4_weights[2];
+  float v4_hash_weights[3];
+  uint64_t v3_output_hash;
+  uint64_t v4_output_hash;
+  uint64_t v4_hash_output_hash;
+  uint64_t v3_mismatches;
+  uint64_t v4_mismatches;
+  uint64_t v4_hash_mismatches;
+  float v3_max_abs_diff;
+  float v4_max_abs_diff;
+  float v4_hash_max_abs_diff;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekRouterSmokeResult;
+
+typedef struct NervaCudaDeepSeekMlaSmokeResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t heads;
+  uint32_t tokens;
+  uint32_t kv_lora_rank;
+  uint32_t qk_nope_head_dim;
+  uint32_t qk_rope_head_dim;
+  uint32_t v_head_dim;
+  float softmax_scale;
+  float output[4];
+  uint64_t output_hash;
+  uint64_t mismatches;
+  float max_abs_diff;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekMlaSmokeResult;
+
 int nerva_cuda_device_smoke(NervaCudaDeviceSmokeResult *out);
 int nerva_cuda_synthetic_graph_smoke(uint32_t steps,
                                      uint32_t ring_capacity,
@@ -1088,6 +1171,9 @@ int nerva_cuda_projection_bench(const NervaCudaProjectionBenchRequest *request,
 int nerva_cuda_experimental_rt_candidate_bench(
     const NervaCudaExperimentalRtCandidateBenchRequest *request,
     NervaCudaExperimentalRtCandidateBenchResult *out);
+int nerva_cuda_deepseek_quant_smoke(NervaCudaDeepSeekQuantSmokeResult *out);
+int nerva_cuda_deepseek_router_smoke(NervaCudaDeepSeekRouterSmokeResult *out);
+int nerva_cuda_deepseek_mla_smoke(NervaCudaDeepSeekMlaSmokeResult *out);
 
 #ifdef __cplusplus
 }

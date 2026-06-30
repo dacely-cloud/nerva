@@ -4,7 +4,7 @@ use crate::{
     cli::model::precision::precision_model_pair_json,
     model_io::{
         config::{run_layout_probe, run_manifest_probe, run_metadata_probe},
-        deepseek::run_deepseek_runtime_plan,
+        deepseek::{run_deepseek_cuda_readiness, run_deepseek_runtime_plan},
         resident::{
             run_hotset_probe, run_resident_shard_probe, run_resident_weight_probe,
             run_weight_execution_probe,
@@ -47,6 +47,13 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "cuda-block" => Ok(nerva_cuda::block::probe::tiny_block_smoke().to_json()),
         "cuda-loaded-block" => Ok(nerva_cuda::block::probe::loaded_tiny_block_smoke().to_json()),
         "cuda-attention" => Ok(nerva_cuda::attention::probe::tiered_attention_smoke().to_json()),
+        "cuda-deepseek-mla" => Ok(nerva_cuda::deepseek_mla::probe::deepseek_mla_smoke().to_json()),
+        "cuda-deepseek-quant" => {
+            Ok(nerva_cuda::deepseek_quant::probe::deepseek_quant_smoke().to_json())
+        }
+        "cuda-deepseek-router" => {
+            Ok(nerva_cuda::deepseek_router::probe::deepseek_router_smoke().to_json())
+        }
         "cuda-sampler" => Ok(nerva_cuda::sampler::probe::greedy_sampler_smoke().to_json()),
         "cuda-tiny-decode" => {
             let steps = parse_optional_u32(args.first().cloned(), 8, "steps")?;
@@ -123,6 +130,7 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "layout" => run_layout_probe(args.first().cloned()),
         "manifest" => run_manifest_probe(args.first().cloned()),
         "deepseek-runtime-plan" => run_deepseek_runtime_plan(args.first().cloned()),
+        "deepseek-cuda-readiness" => run_deepseek_cuda_readiness(args.first().cloned()),
         "safetensors" => run_safetensors_probe(args.first().cloned(), args.get(1).cloned()),
         "safetensors-shards" => run_safetensors_shard_probe(
             args.first().cloned(),

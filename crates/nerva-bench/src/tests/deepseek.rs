@@ -1,4 +1,6 @@
-use crate::model_io::deepseek::run_deepseek_runtime_plan;
+use crate::model_io::deepseek::{
+    DeepSeekCudaPrimitiveReport, deepseek_cuda_readiness_report_json, run_deepseek_runtime_plan,
+};
 
 #[test]
 fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
@@ -24,11 +26,16 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("fp8_e4m3fn_decode_matches_torch"));
     assert!(json.contains("e8m0_scale_upcast_matches_vllm_raw_exponent_path"));
+    assert!(json.contains("cuda_fp8_e4m3fn_e8m0_block_dequant_smoke"));
     assert!(json.contains("deepseek_mla_decode_mqa_reference"));
+    assert!(json.contains("cuda_deepseek_mla_decode_mqa_smoke"));
     assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
+    assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
     assert!(json.contains("deepseek_v4_mhc_compressor_indexer_manifest"));
     assert!(json.contains("mxfp4_e2m1_e8m0_block_dequant_reference"));
+    assert!(json.contains("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke"));
     assert!(json.contains("deepseek_v4_sqrtsoftplus_hash_router_reference"));
+    assert!(json.contains("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke"));
     assert!(json.contains("deepseek_v4_mhc_pre_post_head"));
     assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/attention.py"));
 
@@ -54,13 +61,90 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("\"dense_mlp_layers\":3"));
     assert!(json.contains("deepseek_v32_sparse_attention_indexer"));
     assert!(json.contains("fp8_e4m3fn_e8m0_block_dequant_reference"));
+    assert!(json.contains("cuda_fp8_e4m3fn_e8m0_block_dequant_smoke"));
     assert!(json.contains("deepseek_mla_decode_mqa_reference"));
+    assert!(json.contains("cuda_deepseek_mla_decode_mqa_smoke"));
     assert!(json.contains("deepseek_v3_grouped_sigmoid_router_reference"));
+    assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
     assert!(json.contains("\"runtime_status\":\"unsupported\""));
     assert!(json.contains("\"claim_allowed\":false"));
 
     let _ = std::fs::remove_file(config_path);
     let _ = std::fs::remove_dir(dir);
+}
+
+#[test]
+fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
+    let dir = std::env::temp_dir().join(format!(
+        "nerva-bench-deepseek-cuda-readiness-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config_path = dir.join("config.json");
+    std::fs::write(&config_path, deepseek_v4_config()).unwrap();
+    let primitives = [
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_mla_decode_mqa_smoke",
+            status: "ok",
+            summary_json: "{\"status\":\"ok\",\"mismatches\":0}",
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_quant_block_dequant_smoke",
+            status: "ok",
+            summary_json: "{\"status\":\"ok\",\"fp8_mismatches\":0,\"mxfp4_mismatches\":0}",
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_router_smoke",
+            status: "ok",
+            summary_json: "{\"status\":\"ok\",\"v4_hash_mismatches\":0}",
+        },
+    ];
+
+    let json = deepseek_cuda_readiness_report_json(
+        Some(config_path.to_string_lossy().into_owned()),
+        &primitives,
+    )
+    .expect("deepseek CUDA readiness should parse V4 config");
+
+    assert!(json.contains("\"schema\":\"nerva-deepseek-cuda-readiness-v1\""));
+    assert!(json.contains("\"status\":\"primitive_smokes_ok\""));
+    assert!(json.contains("\"architecture\":\"deepseek_v4\""));
+    assert!(json.contains("\"primitive_status\":\"ok\""));
+    assert!(json.contains("\"primitive_smokes_passed\":3"));
+    assert!(json.contains("\"primitive_smokes_total\":3"));
+    assert!(json.contains("\"cuda_deepseek_mla_decode_mqa_smoke\""));
+    assert!(json.contains("\"cuda_deepseek_quant_block_dequant_smoke\""));
+    assert!(json.contains("\"cuda_deepseek_router_smoke\""));
+    assert!(json.contains("deepseek_v4_megamoe_int8_fp4_experts"));
+    assert!(json.contains("\"runtime_parity_status\":\"not_verified\""));
+    assert!(json.contains("\"performance_status\":\"not_benchmarked\""));
+    assert!(json.contains("\"claim_allowed\":false"));
+    assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/attention.py"));
+
+    let _ = std::fs::remove_file(config_path);
+    let _ = std::fs::remove_dir(dir);
+}
+
+#[test]
+fn deepseek_cuda_readiness_without_config_reports_unknown_architecture() {
+    let primitives = [DeepSeekCudaPrimitiveReport {
+        name: "cuda_deepseek_mla_decode_mqa_smoke",
+        status: "unavailable",
+        summary_json: "{\"status\":\"unavailable\"}",
+    }];
+
+    let json = deepseek_cuda_readiness_report_json(None, &primitives)
+        .expect("readiness without config should still report smoke status");
+
+    assert!(json.contains("\"status\":\"primitive_smokes_incomplete\""));
+    assert!(json.contains("\"architecture\":null"));
+    assert!(json.contains("\"primitive_status\":\"unavailable\""));
+    assert!(json.contains("\"primitive_smokes_passed\":0"));
+    assert!(json.contains("\"primitive_smokes_total\":1"));
+    assert!(json.contains("\"implemented_primitives\":[]"));
+    assert!(json.contains("\"required_execution_units\":[]"));
+    assert!(json.contains("\"vllm_reference_units\":[]"));
+    assert!(json.contains("\"claim_allowed\":false"));
 }
 
 fn deepseek_v4_config() -> &'static str {

@@ -5,6 +5,12 @@ use nerva_model::hf::parser::parse_hf_config_metadata;
 
 use crate::json::{json_escape, json_string_array};
 
+pub(crate) struct DeepSeekCudaPrimitiveReport<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) status: &'a str,
+    pub(crate) summary_json: &'a str,
+}
+
 pub(crate) fn run_deepseek_runtime_plan(config_path: Option<String>) -> Result<String, String> {
     let path =
         config_path.ok_or_else(|| "deepseek-runtime-plan requires config.json".to_string())?;
@@ -13,6 +19,102 @@ pub(crate) fn run_deepseek_runtime_plan(config_path: Option<String>) -> Result<S
     let metadata = parse_hf_config_metadata(&config)
         .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
     deepseek_runtime_plan_json(&metadata)
+}
+
+pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result<String, String> {
+    let mla = nerva_cuda::deepseek_mla::probe::deepseek_mla_smoke();
+    let quant = nerva_cuda::deepseek_quant::probe::deepseek_quant_smoke();
+    let router = nerva_cuda::deepseek_router::probe::deepseek_router_smoke();
+    let mla_json = mla.to_json();
+    let quant_json = quant.to_json();
+    let router_json = router.to_json();
+    let primitives = [
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_mla_decode_mqa_smoke",
+            status: smoke_status_label(&mla.status),
+            summary_json: &mla_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_quant_block_dequant_smoke",
+            status: smoke_status_label(&quant.status),
+            summary_json: &quant_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_router_smoke",
+            status: smoke_status_label(&router.status),
+            summary_json: &router_json,
+        },
+    ];
+    deepseek_cuda_readiness_report_json(config_path, &primitives)
+}
+
+pub(crate) fn deepseek_cuda_readiness_report_json(
+    config_path: Option<String>,
+    primitives: &[DeepSeekCudaPrimitiveReport<'_>],
+) -> Result<String, String> {
+    let metadata = match config_path {
+        Some(path) => {
+            let config = std::fs::read_to_string(&path)
+                .map_err(|err| format!("failed to read {path}: {err}"))?;
+            let metadata = parse_hf_config_metadata(&config)
+                .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+            if !metadata.architecture.is_deepseek() {
+                return Err(format!(
+                    "deepseek-cuda-readiness requires a DeepSeek architecture, got {}",
+                    metadata.architecture.as_str()
+                ));
+            }
+            Some(metadata)
+        }
+        None => None,
+    };
+    let metadata_ref = metadata.as_ref();
+    let architecture = metadata_ref.map(|metadata| metadata.architecture.as_str());
+    let implemented = metadata_ref.map_or_else(Vec::new, implemented_primitives);
+    let required = metadata_ref.map_or_else(Vec::new, required_execution_units);
+    let vllm_refs = metadata_ref.map_or_else(Vec::new, |metadata| {
+        vllm_reference_units(metadata.architecture)
+    });
+    let passed = primitives
+        .iter()
+        .filter(|primitive| primitive.status == "ok")
+        .count();
+    let failed = primitives
+        .iter()
+        .filter(|primitive| primitive.status == "failed")
+        .count();
+    let unavailable = primitives
+        .iter()
+        .filter(|primitive| primitive.status == "unavailable")
+        .count();
+    let primitive_status = if failed > 0 {
+        "failed"
+    } else if unavailable > 0 {
+        "unavailable"
+    } else if passed == primitives.len() {
+        "ok"
+    } else {
+        "incomplete"
+    };
+    let readiness_status = if primitive_status == "ok" {
+        "primitive_smokes_ok"
+    } else {
+        "primitive_smokes_incomplete"
+    };
+
+    Ok(format!(
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-cuda-readiness-v1\",\"architecture\":{},\"primitive_status\":\"{}\",\"primitive_smokes_passed\":{},\"primitive_smokes_total\":{},\"cuda_primitives\":{},\"implemented_primitives\":{},\"required_execution_units\":{},\"remaining_required_execution_units\":{},\"vllm_reference_units\":{},\"runtime_parity_status\":\"not_verified\",\"performance_status\":\"not_benchmarked\",\"claim_allowed\":false}}",
+        readiness_status,
+        json_opt_architecture(architecture),
+        primitive_status,
+        passed,
+        primitives.len(),
+        cuda_primitives_json(primitives),
+        json_string_array(&implemented),
+        json_string_array(&required),
+        json_string_array(&required),
+        json_string_array(&vllm_refs),
+    ))
 }
 
 pub(crate) fn deepseek_runtime_plan_json(metadata: &HfModelMetadata) -> Result<String, String> {
@@ -152,18 +254,55 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         "fp8_e4m3fn_decode_matches_torch".to_string(),
         "e8m0_scale_upcast_matches_vllm_raw_exponent_path".to_string(),
         "fp8_e4m3fn_e8m0_block_dequant_reference".to_string(),
+        "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke".to_string(),
         "deepseek_mla_decode_mqa_reference".to_string(),
+        "cuda_deepseek_mla_decode_mqa_smoke".to_string(),
         "deepseek_v3_grouped_sigmoid_router_reference".to_string(),
+        "cuda_deepseek_v3_grouped_sigmoid_router_smoke".to_string(),
     ];
 
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
         primitives.push("deepseek_v4_mhc_compressor_indexer_manifest".to_string());
         primitives.push("deepseek_v4_hash_router_manifest".to_string());
         primitives.push("mxfp4_e2m1_e8m0_block_dequant_reference".to_string());
+        primitives.push("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke".to_string());
         primitives.push("deepseek_v4_sqrtsoftplus_hash_router_reference".to_string());
+        primitives.push("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke".to_string());
     }
 
     primitives
+}
+
+fn smoke_status_label(status: &nerva_cuda::smoke::status::SmokeStatus) -> &'static str {
+    match status {
+        nerva_cuda::smoke::status::SmokeStatus::Ok => "ok",
+        nerva_cuda::smoke::status::SmokeStatus::Unavailable => "unavailable",
+        nerva_cuda::smoke::status::SmokeStatus::Failed => "failed",
+    }
+}
+
+fn cuda_primitives_json(primitives: &[DeepSeekCudaPrimitiveReport<'_>]) -> String {
+    let mut out = String::from("[");
+    for (index, primitive) in primitives.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "{{\"name\":\"{}\",\"status\":\"{}\",\"summary\":{}}}",
+            json_escape(primitive.name),
+            json_escape(primitive.status),
+            primitive.summary_json,
+        ));
+    }
+    out.push(']');
+    out
+}
+
+fn json_opt_architecture(value: Option<&str>) -> String {
+    value.map_or_else(
+        || "null".to_string(),
+        |value| format!("\"{}\"", json_escape(value)),
+    )
 }
 
 fn vllm_reference_units(architecture: HfArchitectureKind) -> Vec<String> {
