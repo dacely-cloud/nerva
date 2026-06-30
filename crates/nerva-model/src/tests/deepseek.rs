@@ -4,6 +4,7 @@ use crate::hf::deepseek::{
     deepseek_mla_dimensions, plan_deepseek_vllm_kv_cache,
     plan_deepseek_vllm_kv_cache_with_block_size,
 };
+use crate::hf::deepseek_runtime::deepseek_runtime_weight_contract;
 use crate::hf::deepseek_runtime::{DeepSeekAttentionExecutionKind, deepseek_layer_execution_plan};
 use crate::hf::metadata::HfMlpLayerKind;
 use crate::hf::parser::parse_hf_config_metadata;
@@ -288,6 +289,90 @@ fn deepseek_layer_execution_plan_matches_vllm_v3_v32_and_v4_modes() {
 }
 
 #[test]
+fn deepseek_runtime_weight_contract_binds_execution_modes_to_layer_roles() {
+    let v3 = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
+    let v3_contract = deepseek_runtime_weight_contract(&v3).unwrap();
+    assert!(has_role(
+        &v3_contract.layers[0],
+        WeightBlockRole::DeepSeekQALoraProjection
+    ));
+    assert!(has_role(
+        &v3_contract.layers[0],
+        WeightBlockRole::GateScaleInv
+    ));
+    assert!(!has_role(
+        &v3_contract.layers[0],
+        WeightBlockRole::RouterProjection
+    ));
+    assert!(has_role(
+        &v3_contract.layers[3],
+        WeightBlockRole::RouterCorrectionBias
+    ));
+    assert!(has_role(
+        &v3_contract.layers[3],
+        WeightBlockRole::ExpertGateScaleInv
+    ));
+
+    let v32 = parse_hf_config_metadata(deepseek_v32_config()).unwrap();
+    let v32_contract = deepseek_runtime_weight_contract(&v32).unwrap();
+    assert!(
+        v32_contract
+            .layers
+            .iter()
+            .all(|layer| has_role(layer, WeightBlockRole::DeepSeekIndexerWeightsProjection))
+    );
+    assert!(
+        v32_contract
+            .layers
+            .iter()
+            .all(|layer| has_role(layer, WeightBlockRole::DeepSeekIndexerKeyNormBias))
+    );
+
+    let v4 = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
+    let v4_contract = deepseek_runtime_weight_contract(&v4).unwrap();
+    assert!(has_role(
+        &v4_contract.layers[0],
+        WeightBlockRole::DeepSeekV4HcAttnBase
+    ));
+    assert!(has_role(
+        &v4_contract.layers[0],
+        WeightBlockRole::DeepSeekV4HashRouteTable
+    ));
+    assert!(!has_role(
+        &v4_contract.layers[0],
+        WeightBlockRole::DeepSeekV4CompressorWkvProjection
+    ));
+    assert!(has_role(
+        &v4_contract.layers[2],
+        WeightBlockRole::DeepSeekV4CompressorWkvProjection
+    ));
+    assert!(has_role(
+        &v4_contract.layers[2],
+        WeightBlockRole::DeepSeekV4IndexerWqBProjection
+    ));
+    assert!(has_role(
+        &v4_contract.layers[2],
+        WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection
+    ));
+    assert!(has_role(
+        &v4_contract.layers[3],
+        WeightBlockRole::DeepSeekV4CompressorWkvProjection
+    ));
+    assert!(!has_role(
+        &v4_contract.layers[3],
+        WeightBlockRole::DeepSeekV4IndexerWqBProjection
+    ));
+    assert!(has_role(
+        &v4_contract.layers[3],
+        WeightBlockRole::RouterCorrectionBias
+    ));
+    assert!(has_role(
+        &v4_contract.layers[3],
+        WeightBlockRole::DeepSeekV4ExpertGateScale
+    ));
+}
+
+#[test]
 fn deepseek_vllm_kv_plan_rejects_invalid_block_and_cache_dtype_combinations() {
     let v3 = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
     let error = plan_deepseek_vllm_kv_cache(&v3, "fp8_ds_mla").unwrap_err();
@@ -533,6 +618,13 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         128,
         DType::F8E8M0,
     );
+}
+
+fn has_role(
+    layer: &crate::hf::deepseek_runtime::DeepSeekLayerWeightContract,
+    role: WeightBlockRole,
+) -> bool {
+    layer.roles.contains(&role)
 }
 
 fn assert_entry(

@@ -3,6 +3,8 @@ use nerva_core::types::error::{NervaError, Result};
 use crate::hf::architecture::HfArchitectureKind;
 use crate::hf::deepseek::plan_deepseek_vllm_kv_cache;
 use crate::hf::metadata::{HfMlpLayerKind, HfModelMetadata};
+use crate::weights::layout::entry::WeightBlockRole;
+use crate::weights::layout::plan::plan_hf_weight_layout;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeepSeekExecutionUnitCoverage {
@@ -67,6 +69,18 @@ pub struct DeepSeekLayerExecutionPlan {
     pub cache_dtype_str: String,
     pub default_block_size: usize,
     pub layers: Vec<DeepSeekLayerExecution>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeepSeekLayerWeightContract {
+    pub execution: DeepSeekLayerExecution,
+    pub roles: Vec<WeightBlockRole>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeepSeekRuntimeWeightContract {
+    pub architecture: HfArchitectureKind,
+    pub layers: Vec<DeepSeekLayerWeightContract>,
 }
 
 pub fn deepseek_layer_execution_plan(
@@ -190,6 +204,42 @@ pub fn deepseek_layer_execution_plan(
     })
 }
 
+pub fn deepseek_runtime_weight_contract(
+    metadata: &HfModelMetadata,
+) -> Result<DeepSeekRuntimeWeightContract> {
+    let execution_plan = deepseek_layer_execution_plan(metadata)?;
+    let weight_plan = plan_hf_weight_layout(metadata)?;
+    let mut layers = Vec::with_capacity(execution_plan.layers.len());
+
+    for execution in execution_plan.layers {
+        let roles = weight_plan
+            .blocks
+            .iter()
+            .filter(|block| block.layer == Some(execution.layer as u32))
+            .map(|block| block.role)
+            .collect::<Vec<_>>();
+        let required_roles = required_roles_for_execution(metadata, &execution);
+        for required in required_roles {
+            if !roles.contains(&required) {
+                return Err(NervaError::InvalidArgument {
+                    reason: format!(
+                        "DeepSeek layer {} {:?} is missing runtime weight role {}",
+                        execution.layer,
+                        execution.attention_kind,
+                        required.as_str(),
+                    ),
+                });
+            }
+        }
+        layers.push(DeepSeekLayerWeightContract { execution, roles });
+    }
+
+    Ok(DeepSeekRuntimeWeightContract {
+        architecture: metadata.architecture,
+        layers,
+    })
+}
+
 fn layer_execution(
     metadata: &HfModelMetadata,
     layer: usize,
@@ -218,6 +268,201 @@ fn layer_execution(
             .get(layer)
             .is_some_and(|kind| *kind == HfMlpLayerKind::SparseMoe),
     }
+}
+
+fn required_roles_for_execution(
+    metadata: &HfModelMetadata,
+    execution: &DeepSeekLayerExecution,
+) -> Vec<WeightBlockRole> {
+    let mut roles = vec![WeightBlockRole::AttentionNorm];
+    match execution.attention_kind {
+        DeepSeekAttentionExecutionKind::V3Mla
+        | DeepSeekAttentionExecutionKind::V32MlaWithIndexer => {
+            push_deepseek_v3_attention_roles(&mut roles);
+            if execution.uses_sparse_indexer {
+                push_deepseek_v32_indexer_roles(&mut roles);
+            }
+        }
+        DeepSeekAttentionExecutionKind::V4SlidingWindowMla
+        | DeepSeekAttentionExecutionKind::V4CompressedMla
+        | DeepSeekAttentionExecutionKind::V4CompressedMlaWithSparseIndexer => {
+            push_deepseek_v4_attention_roles(&mut roles);
+            if execution.uses_compressor {
+                push_deepseek_v4_compressor_roles(&mut roles, false);
+            }
+            if execution.uses_sparse_indexer {
+                push_deepseek_v4_sparse_indexer_roles(&mut roles);
+                push_deepseek_v4_compressor_roles(&mut roles, true);
+            }
+        }
+    }
+
+    roles.push(WeightBlockRole::MlpNorm);
+    if execution.uses_moe {
+        push_deepseek_moe_roles(metadata, execution.layer, &mut roles);
+    } else {
+        push_deepseek_dense_mlp_roles(&mut roles);
+    }
+    roles
+}
+
+fn push_deepseek_v3_attention_roles(roles: &mut Vec<WeightBlockRole>) {
+    roles.extend([
+        WeightBlockRole::DeepSeekQALoraProjection,
+        WeightBlockRole::DeepSeekQALoraScaleInv,
+        WeightBlockRole::DeepSeekQALoraNorm,
+        WeightBlockRole::DeepSeekQBProjection,
+        WeightBlockRole::DeepSeekQBScaleInv,
+        WeightBlockRole::DeepSeekKvAProjection,
+        WeightBlockRole::DeepSeekKvAScaleInv,
+        WeightBlockRole::DeepSeekKvANorm,
+        WeightBlockRole::DeepSeekKvBProjection,
+        WeightBlockRole::DeepSeekKvBScaleInv,
+        WeightBlockRole::OutputProjection,
+        WeightBlockRole::DeepSeekOutputScaleInv,
+    ]);
+}
+
+fn push_deepseek_v32_indexer_roles(roles: &mut Vec<WeightBlockRole>) {
+    roles.extend([
+        WeightBlockRole::DeepSeekIndexerQueryProjection,
+        WeightBlockRole::DeepSeekIndexerQueryScaleInv,
+        WeightBlockRole::DeepSeekIndexerKeyProjection,
+        WeightBlockRole::DeepSeekIndexerKeyScaleInv,
+        WeightBlockRole::DeepSeekIndexerKeyNorm,
+        WeightBlockRole::DeepSeekIndexerKeyNormBias,
+        WeightBlockRole::DeepSeekIndexerWeightsProjection,
+    ]);
+}
+
+fn push_deepseek_v4_attention_roles(roles: &mut Vec<WeightBlockRole>) {
+    roles.extend([
+        WeightBlockRole::DeepSeekV4HcAttnBase,
+        WeightBlockRole::DeepSeekV4HcAttnFn,
+        WeightBlockRole::DeepSeekV4HcAttnScale,
+        WeightBlockRole::DeepSeekV4HcFfnBase,
+        WeightBlockRole::DeepSeekV4HcFfnFn,
+        WeightBlockRole::DeepSeekV4HcFfnScale,
+        WeightBlockRole::DeepSeekV4AttentionSink,
+        WeightBlockRole::DeepSeekV4WqAProjection,
+        WeightBlockRole::DeepSeekV4WqAScale,
+        WeightBlockRole::DeepSeekV4WqBProjection,
+        WeightBlockRole::DeepSeekV4WqBScale,
+        WeightBlockRole::DeepSeekV4QNorm,
+        WeightBlockRole::DeepSeekV4WkvProjection,
+        WeightBlockRole::DeepSeekV4WkvScale,
+        WeightBlockRole::DeepSeekV4KvNorm,
+        WeightBlockRole::DeepSeekV4WoAProjection,
+        WeightBlockRole::DeepSeekV4WoAScale,
+        WeightBlockRole::DeepSeekV4WoBProjection,
+        WeightBlockRole::DeepSeekV4WoBScale,
+    ]);
+}
+
+fn push_deepseek_v4_compressor_roles(roles: &mut Vec<WeightBlockRole>, indexer: bool) {
+    if indexer {
+        roles.extend([
+            WeightBlockRole::DeepSeekV4IndexerCompressorApe,
+            WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection,
+            WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection,
+            WeightBlockRole::DeepSeekV4IndexerCompressorNorm,
+        ]);
+    } else {
+        roles.extend([
+            WeightBlockRole::DeepSeekV4CompressorApe,
+            WeightBlockRole::DeepSeekV4CompressorWkvProjection,
+            WeightBlockRole::DeepSeekV4CompressorWgateProjection,
+            WeightBlockRole::DeepSeekV4CompressorNorm,
+        ]);
+    }
+}
+
+fn push_deepseek_v4_sparse_indexer_roles(roles: &mut Vec<WeightBlockRole>) {
+    roles.extend([
+        WeightBlockRole::DeepSeekV4IndexerWqBProjection,
+        WeightBlockRole::DeepSeekV4IndexerWqBScale,
+        WeightBlockRole::DeepSeekV4IndexerWeightsProjection,
+    ]);
+}
+
+fn push_deepseek_dense_mlp_roles(roles: &mut Vec<WeightBlockRole>) {
+    roles.extend([
+        WeightBlockRole::GateProjection,
+        WeightBlockRole::GateScaleInv,
+        WeightBlockRole::UpProjection,
+        WeightBlockRole::UpScaleInv,
+        WeightBlockRole::DownProjection,
+        WeightBlockRole::DownScaleInv,
+    ]);
+}
+
+fn push_deepseek_moe_roles(
+    metadata: &HfModelMetadata,
+    layer: usize,
+    roles: &mut Vec<WeightBlockRole>,
+) {
+    roles.push(WeightBlockRole::RouterProjection);
+    if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
+        if layer < metadata.num_hash_layers.unwrap_or(0) {
+            roles.push(WeightBlockRole::DeepSeekV4HashRouteTable);
+        } else {
+            roles.push(WeightBlockRole::RouterCorrectionBias);
+        }
+        push_deepseek_v4_moe_projection_roles(metadata, roles);
+        return;
+    }
+    if metadata.topk_method.as_deref() == Some("noaux_tc") {
+        roles.push(WeightBlockRole::RouterCorrectionBias);
+    }
+    push_deepseek_v3_moe_projection_roles(metadata, roles);
+}
+
+fn push_deepseek_v3_moe_projection_roles(
+    metadata: &HfModelMetadata,
+    roles: &mut Vec<WeightBlockRole>,
+) {
+    if metadata.shared_expert_intermediate_size.unwrap_or(0) > 0 {
+        roles.extend([
+            WeightBlockRole::SharedExpertGateProjection,
+            WeightBlockRole::SharedExpertGateScaleInv,
+            WeightBlockRole::SharedExpertUpProjection,
+            WeightBlockRole::SharedExpertUpScaleInv,
+            WeightBlockRole::SharedExpertDownProjection,
+            WeightBlockRole::SharedExpertDownScaleInv,
+        ]);
+    }
+    roles.extend([
+        WeightBlockRole::ExpertGateProjection,
+        WeightBlockRole::ExpertGateScaleInv,
+        WeightBlockRole::ExpertUpProjection,
+        WeightBlockRole::ExpertUpScaleInv,
+        WeightBlockRole::ExpertDownProjection,
+        WeightBlockRole::ExpertDownScaleInv,
+    ]);
+}
+
+fn push_deepseek_v4_moe_projection_roles(
+    metadata: &HfModelMetadata,
+    roles: &mut Vec<WeightBlockRole>,
+) {
+    if metadata.shared_expert_intermediate_size.unwrap_or(0) > 0 {
+        roles.extend([
+            WeightBlockRole::SharedExpertGateProjection,
+            WeightBlockRole::DeepSeekV4SharedExpertGateScale,
+            WeightBlockRole::SharedExpertUpProjection,
+            WeightBlockRole::DeepSeekV4SharedExpertUpScale,
+            WeightBlockRole::SharedExpertDownProjection,
+            WeightBlockRole::DeepSeekV4SharedExpertDownScale,
+        ]);
+    }
+    roles.extend([
+        WeightBlockRole::ExpertGateProjection,
+        WeightBlockRole::DeepSeekV4ExpertGateScale,
+        WeightBlockRole::ExpertUpProjection,
+        WeightBlockRole::DeepSeekV4ExpertUpScale,
+        WeightBlockRole::ExpertDownProjection,
+        WeightBlockRole::DeepSeekV4ExpertDownScale,
+    ]);
 }
 
 fn deepseek_runtime_cache_dtype(architecture: HfArchitectureKind) -> &'static str {
