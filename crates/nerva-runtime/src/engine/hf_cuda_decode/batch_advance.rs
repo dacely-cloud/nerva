@@ -156,8 +156,8 @@ mod tests {
     use nerva_cuda::smoke::status::SmokeStatus;
 
     use super::{
-        CudaDecodeBatchAdvanceConfig, CudaDecodeBatchAdvanceMode, advance_decode_loops_once,
-        batch_tokens_by_loop, safe_to_fallback_after_batch_rejection, successful_batch_advance,
+        advance_decode_loops_once, batch_tokens_by_loop, safe_to_fallback_after_batch_rejection,
+        successful_batch_advance, CudaDecodeBatchAdvanceConfig, CudaDecodeBatchAdvanceMode,
     };
 
     fn batch_summary(
@@ -199,6 +199,7 @@ mod tests {
             projection_kernel_launches: 0,
             scatter_kernel_launches: 0,
             dependency_kernel_launches: 0,
+            experimental_rt_selector_launches: 0,
             sampling_kernel_launches: 0,
             sync_calls: 0,
             hot_path_allocations: 0,

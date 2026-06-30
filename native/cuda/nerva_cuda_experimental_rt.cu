@@ -260,14 +260,22 @@ struct OptixCandidateParams {
   uint32_t pages;
   uint32_t query_count;
   uint32_t candidates_per_query;
+  uint32_t layer_index;
+  uint32_t layer_count;
   uint32_t grid_width;
   uint32_t current_page;
   uint32_t local_pages;
   uint32_t sink_pages;
+  const uint32_t *step_cursor;
+  uint32_t page_tokens_for_step;
+  uint32_t dynamic_step;
   float cell_size;
   const float *queries;
   uint32_t query_dims;
   uint32_t query_derived_pages;
+  uint32_t descriptor_geometry;
+  float descriptor_scale;
+  float descriptor_plane_stride;
 };
 
 struct EmptySbtData {
@@ -288,10 +296,16 @@ struct OptixCandidateSelector {
   OptixPipeline pipeline = nullptr;
   OptixTraversableHandle traversable = 0;
   const float *queries = nullptr;
+  const uint32_t *step_cursor = nullptr;
   uint32_t query_dims = 0;
   uint32_t query_derived_pages = 0;
+  uint32_t descriptor_geometry = 0;
+  uint32_t layer_count = 1;
+  uint32_t dynamic_step = 0;
   uint32_t grid_width = 0;
   float cell_size = 0.0f;
+  float descriptor_scale = 16.0f;
+  float descriptor_plane_stride = 4.0f;
   OptixProgramGroup raygen_prog_group = nullptr;
   OptixProgramGroup miss_prog_group = nullptr;
   OptixProgramGroup hitgroup_prog_group = nullptr;
@@ -315,14 +329,22 @@ struct OptixCandidateParams {
   unsigned int pages;
   unsigned int query_count;
   unsigned int candidates_per_query;
+  unsigned int layer_index;
+  unsigned int layer_count;
   unsigned int grid_width;
   unsigned int current_page;
   unsigned int local_pages;
   unsigned int sink_pages;
+  const unsigned int* step_cursor;
+  unsigned int page_tokens_for_step;
+  unsigned int dynamic_step;
   float cell_size;
   const float* queries;
   unsigned int query_dims;
   unsigned int query_derived_pages;
+  unsigned int descriptor_geometry;
+  float descriptor_scale;
+  float descriptor_plane_stride;
 };
 
 extern "C" {
@@ -387,9 +409,23 @@ extern "C" __global__ void __raygen__candidate() {
     return;
   }
 
-  const unsigned int pages = params.pages;
-  const unsigned int current_page =
+  unsigned int pages = params.pages;
+  unsigned int current_page =
       params.current_page < pages ? params.current_page : pages - 1u;
+  if (params.dynamic_step != 0u && params.step_cursor != 0 &&
+      params.page_tokens_for_step != 0u) {
+    const unsigned int position = params.step_cursor[0];
+    unsigned int active_pages =
+        (position + params.page_tokens_for_step) / params.page_tokens_for_step;
+    if (active_pages == 0u) {
+      active_pages = 1u;
+    }
+    pages = active_pages < params.pages ? active_pages : params.pages;
+    current_page = position / params.page_tokens_for_step;
+    if (current_page >= pages) {
+      current_page = pages - 1u;
+    }
+  }
   const unsigned int sink_pages = min_u32(params.sink_pages, pages);
   const unsigned int raw_local_pages = min_u32(params.local_pages, pages);
   unsigned int local_start =
@@ -404,6 +440,9 @@ extern "C" __global__ void __raygen__candidate() {
   const unsigned int local_limit = sink_pages + local_pages;
 
   unsigned int target = 0u;
+  const unsigned int descriptor_geometry =
+      params.descriptor_geometry != 0u && params.query_derived_pages != 0u &&
+      params.query_dims >= 2u && params.queries != 0;
   if (slot < sink_pages) {
     target = slot;
   } else if (slot < local_limit && local_pages != 0u) {
@@ -439,15 +478,43 @@ extern "C" __global__ void __raygen__candidate() {
       target = far_start + ((center + far_pages + far_slot - half) % far_pages);
     }
   }
-  const unsigned int x_index = target % params.grid_width;
-  const unsigned int y_index = target / params.grid_width;
-  const float x = static_cast<float>(x_index) * params.cell_size;
-  const float y = static_cast<float>(y_index) * params.cell_size;
+  const unsigned long long out_index =
+      static_cast<unsigned long long>(query) * params.candidates_per_query + slot;
+  if (descriptor_geometry &&
+      (slot < local_limit || local_start <= sink_pages)) {
+    params.candidate_pages[out_index] = target < pages ? target : pages - 1u;
+    return;
+  }
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 1.0f;
+  if (descriptor_geometry) {
+    const unsigned long long query_base =
+        static_cast<unsigned long long>(query) * params.query_dims;
+    const float qx = fminf(1.0f, fmaxf(-1.0f, params.queries[query_base]));
+    const float qy =
+        fminf(1.0f, fmaxf(-1.0f, params.queries[query_base + 1ull]));
+    const unsigned int far_slot =
+        slot >= local_limit ? slot - local_limit : 0u;
+    const float angle = static_cast<float>(far_slot) * 2.39996323f;
+    const float radius = far_slot == 0u ? 0.0f : 0.11f + 0.035f * far_slot;
+    x = qx * params.descriptor_scale + cosf(angle) * radius;
+    y = qy * params.descriptor_scale + sinf(angle) * radius;
+    const unsigned int layer =
+        params.layer_index < params.layer_count ? params.layer_index : 0u;
+    const unsigned int plane = layer * params.query_count + query;
+    z = static_cast<float>(plane) * params.descriptor_plane_stride + 1.0f;
+  } else {
+    const unsigned int x_index = target % params.grid_width;
+    const unsigned int y_index = target / params.grid_width;
+    x = static_cast<float>(x_index) * params.cell_size;
+    y = static_cast<float>(y_index) * params.cell_size;
+  }
 
   float3 origin;
   origin.x = x;
   origin.y = y;
-  origin.z = 1.0f;
+  origin.z = z;
   float3 direction;
   direction.x = 0.0f;
   direction.y = 0.0f;
@@ -466,8 +533,6 @@ extern "C" __global__ void __raygen__candidate() {
              1,
              0,
              hit);
-  const unsigned long long out_index =
-      static_cast<unsigned long long>(query) * params.candidates_per_query + slot;
   params.candidate_pages[out_index] = hit % pages;
 }
 
@@ -666,7 +731,10 @@ bool create_optix_candidate_selector(
     OptixCandidateSelector *state,
     NervaCudaExperimentalRtCandidateBenchResult *out,
     const float *queries = nullptr, uint32_t query_dims = 0,
-    uint32_t query_derived_pages = 0) {
+    uint32_t query_derived_pages = 0,
+    const uint32_t *step_cursor = nullptr,
+    const float *page_descriptors = nullptr,
+    uint32_t page_descriptor_dims = 0, uint32_t layer_count = 1) {
   if (out->rt_core_capable == 0) {
     set_optix_fallback_reason(out, "device capability",
                               "compute capability is below RTX-era GPUs");
@@ -692,19 +760,83 @@ bool create_optix_candidate_selector(
     return false;
   }
 
+  const bool descriptor_geometry =
+      page_descriptors != nullptr && page_descriptor_dims >= 2u &&
+      queries != nullptr && query_dims >= 2u && layer_count != 0u;
   const uint32_t grid_width = ceil_sqrt_u32(request->pages);
   constexpr float cell_size = 2.0f;
-  constexpr float half_size = 0.45f;
-  std::vector<RtVertex> vertices(static_cast<size_t>(request->pages) * 3u);
-  for (uint32_t page = 0; page < request->pages; ++page) {
-    const float x = static_cast<float>(page % grid_width) * cell_size;
-    const float y = static_cast<float>(page / grid_width) * cell_size;
-    vertices[static_cast<size_t>(page) * 3u + 0u] =
-        RtVertex{x - half_size, y - half_size, 0.0f};
-    vertices[static_cast<size_t>(page) * 3u + 1u] =
-        RtVertex{x + half_size, y - half_size, 0.0f};
-    vertices[static_cast<size_t>(page) * 3u + 2u] =
-        RtVertex{x, y + half_size, 0.0f};
+  constexpr float grid_half_size = 0.45f;
+  constexpr float descriptor_scale = 16.0f;
+  constexpr float descriptor_half_size = 0.42f;
+  constexpr float descriptor_plane_stride = 4.0f;
+  const uint64_t descriptor_primitives =
+      static_cast<uint64_t>(layer_count) * request->query_count * request->pages;
+  const uint64_t primitive_count =
+      descriptor_geometry ? descriptor_primitives : request->pages;
+  if (primitive_count == 0 || primitive_count > UINT32_MAX) {
+    set_optix_fallback_reason(out, "geometry build",
+                              "descriptor primitive count is invalid");
+    return false;
+  }
+  std::vector<float> host_page_descriptors;
+  if (descriptor_geometry) {
+    const uint64_t descriptor_floats = descriptor_primitives * page_descriptor_dims;
+    if (descriptor_floats == 0 ||
+        descriptor_floats > (UINT64_MAX / sizeof(float))) {
+      set_optix_fallback_reason(out, "descriptor copy",
+                                "descriptor buffer size is invalid");
+      return false;
+    }
+    host_page_descriptors.resize(static_cast<size_t>(descriptor_floats));
+    err = cudaMemcpyAsync(host_page_descriptors.data(), page_descriptors,
+                          descriptor_floats * sizeof(float),
+                          cudaMemcpyDeviceToHost, stream);
+    if (err == cudaSuccess) {
+      err = cudaStreamSynchronize(stream);
+    }
+    if (err != cudaSuccess) {
+      set_optix_fallback_reason(out, "descriptor copy",
+                                cudaGetErrorString(err));
+      return false;
+    }
+  }
+  std::vector<RtVertex> vertices(static_cast<size_t>(primitive_count) * 3u);
+  for (uint64_t primitive = 0; primitive < primitive_count; ++primitive) {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float half_size = grid_half_size;
+    if (descriptor_geometry) {
+      const uint32_t page =
+          static_cast<uint32_t>(primitive % request->pages);
+      const uint32_t head =
+          static_cast<uint32_t>((primitive / request->pages) %
+                                request->query_count);
+      const uint32_t layer =
+          static_cast<uint32_t>(primitive /
+                                (static_cast<uint64_t>(request->pages) *
+                                 request->query_count));
+      const uint64_t descriptor_index =
+          (((static_cast<uint64_t>(layer) * request->query_count + head) *
+            request->pages) +
+           page) *
+          page_descriptor_dims;
+      x = host_page_descriptors[descriptor_index] * descriptor_scale;
+      y = host_page_descriptors[descriptor_index + 1ull] * descriptor_scale;
+      z = static_cast<float>(layer * request->query_count + head) *
+          descriptor_plane_stride;
+      half_size = descriptor_half_size;
+    } else {
+      const uint32_t page = static_cast<uint32_t>(primitive);
+      x = static_cast<float>(page % grid_width) * cell_size;
+      y = static_cast<float>(page / grid_width) * cell_size;
+    }
+    vertices[static_cast<size_t>(primitive) * 3u + 0u] =
+        RtVertex{x - half_size, y - half_size, z};
+    vertices[static_cast<size_t>(primitive) * 3u + 1u] =
+        RtVertex{x + half_size, y - half_size, z};
+    vertices[static_cast<size_t>(primitive) * 3u + 2u] =
+        RtVertex{x, y + half_size, z};
   }
 
   CUdeviceptr d_vertices = 0;
@@ -797,11 +929,17 @@ bool create_optix_candidate_selector(
   state->grid_width = grid_width;
   state->cell_size = cell_size;
   state->queries = queries;
+  state->step_cursor = step_cursor;
   state->query_dims = query_dims;
   state->query_derived_pages =
       queries != nullptr && query_dims >= 2u && query_derived_pages != 0u
           ? 1u
           : 0u;
+  state->descriptor_geometry = descriptor_geometry ? 1u : 0u;
+  state->layer_count = layer_count == 0u ? 1u : layer_count;
+  state->dynamic_step = step_cursor != nullptr ? 1u : 0u;
+  state->descriptor_scale = descriptor_scale;
+  state->descriptor_plane_stride = descriptor_plane_stride;
 
   std::string optix_input;
   if (!compile_optix_candidate_input(out, &optix_input, out)) {
@@ -925,16 +1063,24 @@ bool create_optix_candidate_selector(
   params.handle = state->traversable;
   params.candidate_pages = candidate_pages;
   params.queries = state->queries;
+  params.step_cursor = state->step_cursor;
   params.pages = request->pages;
   params.query_count = request->query_count;
   params.candidates_per_query = request->candidates_per_query;
+  params.layer_index = 0;
+  params.layer_count = state->layer_count;
   params.query_dims = state->query_dims;
   params.query_derived_pages = state->query_derived_pages;
+  params.descriptor_geometry = state->descriptor_geometry;
+  params.page_tokens_for_step = request->page_tokens;
+  params.dynamic_step = state->dynamic_step;
   params.grid_width = state->grid_width;
   params.current_page = request->pages - 1u;
   params.local_pages = 0;
   params.sink_pages = 0;
   params.cell_size = state->cell_size;
+  params.descriptor_scale = state->descriptor_scale;
+  params.descriptor_plane_stride = state->descriptor_plane_stride;
   err = cudaMalloc(reinterpret_cast<void **>(&state->params), sizeof(params));
   if (err != cudaSuccess) {
     set_optix_fallback_reason(out, "cudaMalloc(params)",
@@ -2930,10 +3076,13 @@ struct NervaCudaRtCandidateSelectorHandle {
 #endif
 };
 
-extern "C" int nerva_cuda_rt_candidate_selector_create(
+int nerva_cuda_rt_candidate_selector_create_impl(
     uint32_t pages, uint32_t page_tokens, uint32_t query_count,
-    uint32_t candidates_per_query, uint32_t *candidate_pages, void *stream,
-    void **selector_out, int32_t *cuda_error_out) {
+    uint32_t candidates_per_query, uint32_t *candidate_pages,
+    const float *queries, uint32_t query_dims, const uint32_t *step_cursor,
+    const float *page_descriptors, uint32_t page_descriptor_dims,
+    uint32_t layer_count,
+    void *stream, void **selector_out, int32_t *cuda_error_out) {
   if (cuda_error_out != nullptr) {
     *cuda_error_out = static_cast<int32_t>(cudaSuccess);
   }
@@ -2996,7 +3145,10 @@ extern "C" int nerva_cuda_rt_candidate_selector_create(
   cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
   if (!create_optix_candidate_selector(&handle->request, candidate_pages,
                                        cuda_stream, &handle->selector,
-                                       &handle->result)) {
+                                       &handle->result, queries, query_dims,
+                                       queries == nullptr ? 0u : 1u,
+                                       step_cursor, page_descriptors,
+                                       page_descriptor_dims, layer_count)) {
     cleanup_optix_selector(&handle->selector, &handle->result);
     if (cuda_error_out != nullptr) {
       *cuda_error_out =
@@ -3018,9 +3170,45 @@ extern "C" int nerva_cuda_rt_candidate_selector_create(
 #endif
 }
 
+extern "C" int nerva_cuda_rt_candidate_selector_create(
+    uint32_t pages, uint32_t page_tokens, uint32_t query_count,
+    uint32_t candidates_per_query, uint32_t *candidate_pages, void *stream,
+    void **selector_out, int32_t *cuda_error_out) {
+  return nerva_cuda_rt_candidate_selector_create_impl(
+      pages, page_tokens, query_count, candidates_per_query, candidate_pages,
+      nullptr, 0, nullptr, nullptr, 0, 1u, stream, selector_out,
+      cuda_error_out);
+}
+
+extern "C" int nerva_cuda_rt_candidate_selector_create_with_queries(
+    uint32_t pages, uint32_t page_tokens, uint32_t query_count,
+    uint32_t candidates_per_query, uint32_t *candidate_pages,
+    const float *queries, uint32_t query_dims, const uint32_t *step_cursor,
+    void *stream, void **selector_out, int32_t *cuda_error_out) {
+  return nerva_cuda_rt_candidate_selector_create_impl(
+      pages, page_tokens, query_count, candidates_per_query, candidate_pages,
+      queries, query_dims, step_cursor, nullptr, 0, 1u, stream, selector_out,
+      cuda_error_out);
+}
+
+extern "C" int
+nerva_cuda_rt_candidate_selector_create_with_query_page_descriptors(
+    uint32_t pages, uint32_t page_tokens, uint32_t layer_count,
+    uint32_t query_count, uint32_t candidates_per_query,
+    uint32_t *candidate_pages, const float *queries, uint32_t query_dims,
+    const float *page_descriptors, uint32_t page_descriptor_dims,
+    const uint32_t *step_cursor, void *stream, void **selector_out,
+    int32_t *cuda_error_out) {
+  return nerva_cuda_rt_candidate_selector_create_impl(
+      pages, page_tokens, query_count, candidates_per_query, candidate_pages,
+      queries, query_dims, step_cursor, page_descriptors, page_descriptor_dims,
+      layer_count, stream, selector_out, cuda_error_out);
+}
+
 extern "C" int nerva_cuda_rt_candidate_selector_launch(
     void *selector, void *stream, uint32_t active_pages, uint32_t current_page,
-    uint32_t local_pages, uint32_t sink_pages, int32_t *cuda_error_out) {
+    uint32_t local_pages, uint32_t sink_pages, uint32_t layer_index,
+    int32_t *cuda_error_out) {
   if (cuda_error_out != nullptr) {
     *cuda_error_out = static_cast<int32_t>(cudaSuccess);
   }
@@ -3041,16 +3229,25 @@ extern "C" int nerva_cuda_rt_candidate_selector_launch(
   params.handle = handle->selector.traversable;
   params.candidate_pages = handle->candidate_pages;
   params.queries = handle->selector.queries;
+  params.step_cursor = handle->selector.step_cursor;
   params.pages = pages;
   params.query_count = handle->request.query_count;
   params.candidates_per_query = handle->request.candidates_per_query;
+  params.layer_index =
+      layer_index < handle->selector.layer_count ? layer_index : 0u;
+  params.layer_count = handle->selector.layer_count;
   params.query_dims = handle->selector.query_dims;
   params.query_derived_pages = handle->selector.query_derived_pages;
+  params.descriptor_geometry = handle->selector.descriptor_geometry;
+  params.page_tokens_for_step = handle->request.page_tokens;
+  params.dynamic_step = handle->selector.dynamic_step;
   params.grid_width = handle->selector.grid_width;
   params.current_page = current_page < pages ? current_page : pages - 1u;
   params.local_pages = local_pages;
   params.sink_pages = sink_pages;
   params.cell_size = handle->selector.cell_size;
+  params.descriptor_scale = handle->selector.descriptor_scale;
+  params.descriptor_plane_stride = handle->selector.descriptor_plane_stride;
   cudaError_t err = cudaMemcpyAsync(
       reinterpret_cast<void *>(handle->selector.params), &params,
       sizeof(params), cudaMemcpyHostToDevice,

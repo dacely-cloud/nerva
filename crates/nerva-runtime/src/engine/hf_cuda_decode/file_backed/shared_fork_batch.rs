@@ -14,7 +14,7 @@ use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::tokenizer::stop_token_ids;
 
 use crate::engine::hf_cuda_decode::continuous_batch::{
-    CudaDecodeLoopBatchEntry, advance_continuous_decode_batch_once,
+    advance_continuous_decode_batch_once, CudaDecodeLoopBatchEntry,
 };
 use crate::engine::hf_cuda_decode::file_backed::session::create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling;
 use crate::engine::hf_cuda_decode::projection_batch::{
@@ -94,6 +94,7 @@ pub struct HfCudaSharedForkBatchSchedulerSummary {
     pub batch_projection_kernel_launches: u64,
     pub batch_scatter_kernel_launches: u64,
     pub batch_dependency_kernel_launches: u64,
+    pub batch_experimental_rt_selector_launches: u64,
     pub batch_sampling_kernel_launches: u64,
     pub batch_sync_calls: u64,
     pub batch_hot_path_allocations: u64,
@@ -522,6 +523,7 @@ fn accumulate_batch_summary(
     out.batch_projection_kernel_launches += batch.projection_kernel_launches;
     out.batch_scatter_kernel_launches += batch.scatter_kernel_launches;
     out.batch_dependency_kernel_launches += batch.dependency_kernel_launches;
+    out.batch_experimental_rt_selector_launches += batch.experimental_rt_selector_launches;
     out.batch_sampling_kernel_launches += batch.sampling_kernel_launches;
     out.batch_sync_calls += batch.sync_calls;
     out.batch_hot_path_allocations += batch.hot_path_allocations;

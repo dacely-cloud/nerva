@@ -229,7 +229,18 @@ extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
     const bool use_fused_qk_selector =
         use_shared_warp_gqa &&
         experimental_rt_qk_fused_selector_active(session, attention_chunks);
-    if (!use_fused_qk_selector) {
+    const bool use_query_descriptor_selector =
+        experimental_rt_query_descriptor_selector_active(session, attention_chunks);
+    local_err = launch_experimental_rt_query_descriptor_selector(
+        session, request->layer_index, attention_chunks, best->stream);
+    if (local_err != cudaSuccess) {
+      return local_err;
+    }
+    if (use_query_descriptor_selector) {
+      out->dependency_kernel_launches += 2;
+      out->experimental_rt_selector_launches += 1;
+    }
+    if (!use_fused_qk_selector && !use_query_descriptor_selector) {
       local_err = launch_experimental_rt_qk_page_selector(
           session, request->layer_index, attention_chunks, max_steps, best->stream);
       if (local_err != cudaSuccess) {

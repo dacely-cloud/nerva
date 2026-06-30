@@ -6,8 +6,8 @@ use nerva_cuda::experimental_rt::probe::experimental_rt_candidate_bench;
 use nerva_cuda::experimental_rt::summary::CudaExperimentalRtCandidateBenchSummary;
 use nerva_model::hf::tokenizer::encode_text_prompt;
 use nerva_runtime::engine::hf_cuda_decode::file_backed::shared_fork_batch::{
-    HfCudaSharedForkBatchOutput, HfCudaSharedForkBatchSchedulerSummary,
-    run_hf_causal_lm_cuda_shared_fork_batch_probe,
+    run_hf_causal_lm_cuda_shared_fork_batch_probe, HfCudaSharedForkBatchOutput,
+    HfCudaSharedForkBatchSchedulerSummary,
 };
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
@@ -521,7 +521,7 @@ fn ratio(numerator: f64, denominator: f64) -> f64 {
 
 fn scheduler_json(summary: &HfCudaSharedForkBatchSchedulerSummary) -> String {
     format!(
-        "{{\"scheduler_steps\":{},\"batched_steps\":{},\"batch_groups\":{},\"fallback_steps\":{},\"batch_failed_steps\":{},\"observed_tokens\":{},\"batch_observed_tokens\":{},\"fallback_observed_tokens\":{},\"batch_projection_elapsed_ns\":{},\"batch_qkv_elapsed_ns\":{},\"batch_attention_output_elapsed_ns\":{},\"batch_gate_up_elapsed_ns\":{},\"batch_down_elapsed_ns\":{},\"batch_lm_head_elapsed_ns\":{},\"batch_pack_kernel_launches\":{},\"batch_projection_kernel_launches\":{},\"batch_scatter_kernel_launches\":{},\"batch_dependency_kernel_launches\":{},\"batch_sampling_kernel_launches\":{},\"batch_sync_calls\":{},\"batch_hot_path_allocations\":{},\"last_plan_reason\":\"{}\",\"last_batch_reason\":\"{}\"}}",
+        "{{\"scheduler_steps\":{},\"batched_steps\":{},\"batch_groups\":{},\"fallback_steps\":{},\"batch_failed_steps\":{},\"observed_tokens\":{},\"batch_observed_tokens\":{},\"fallback_observed_tokens\":{},\"batch_projection_elapsed_ns\":{},\"batch_qkv_elapsed_ns\":{},\"batch_attention_output_elapsed_ns\":{},\"batch_gate_up_elapsed_ns\":{},\"batch_down_elapsed_ns\":{},\"batch_lm_head_elapsed_ns\":{},\"batch_pack_kernel_launches\":{},\"batch_projection_kernel_launches\":{},\"batch_scatter_kernel_launches\":{},\"batch_dependency_kernel_launches\":{},\"batch_experimental_rt_selector_launches\":{},\"batch_sampling_kernel_launches\":{},\"batch_sync_calls\":{},\"batch_hot_path_allocations\":{},\"last_plan_reason\":\"{}\",\"last_batch_reason\":\"{}\"}}",
         summary.scheduler_steps,
         summary.batched_steps,
         summary.batch_groups,
@@ -540,6 +540,7 @@ fn scheduler_json(summary: &HfCudaSharedForkBatchSchedulerSummary) -> String {
         summary.batch_projection_kernel_launches,
         summary.batch_scatter_kernel_launches,
         summary.batch_dependency_kernel_launches,
+        summary.batch_experimental_rt_selector_launches,
         summary.batch_sampling_kernel_launches,
         summary.batch_sync_calls,
         summary.batch_hot_path_allocations,

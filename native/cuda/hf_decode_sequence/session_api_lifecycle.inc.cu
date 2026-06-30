@@ -188,8 +188,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->experimental_rt_local_window_tokens =
       request->experimental_rt_local_window_tokens;
   session->experimental_rt_sink_tokens = request->experimental_rt_sink_tokens;
+  session->experimental_rt_kv_descriptor_selector =
+      experimental_rt_kv_descriptor_selector_enabled();
+  session->experimental_rt_query_descriptor_selector =
+      session->experimental_rt_kv_descriptor_selector != 0
+          ? 1u
+          : experimental_rt_query_descriptor_selector_enabled();
   session->experimental_rt_query_key_selector =
-      experimental_rt_query_key_selector_enabled();
+      session->experimental_rt_query_descriptor_selector == 0
+          ? experimental_rt_query_key_selector_enabled()
+          : 0u;
   session->experimental_rt_query_key_fused_selector =
       session->experimental_rt_query_key_selector == 0
           ? 0u
@@ -837,6 +845,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
       out->graph_replays += 1;
       out->graph_launches += 1;
       out->kernel_launches += out->graph_nodes == 0 ? 1 : out->graph_nodes;
+      if (session->cached_experimental_rt_sparse_attention_active != 0 &&
+          session->experimental_rt_query_descriptor_selector != 0) {
+        out->experimental_rt_selector_launches += session->layer_count;
+      }
     }
   }
   if (err == cudaSuccess) err = cudaEventRecord(session->device_stop, session->stream);
@@ -983,6 +995,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
                     request->has_eos_token, request->eos_token, out);
   }
   if (err == cudaSuccess) {
+    err = initialize_experimental_rt_kv_descriptor_selector_after_prefill(
+        session, request->prompt_token_count);
+  }
+  if (err == cudaSuccess) {
     stash_prefill_metrics(session, out);
     session->active_prompt_token_count = request->prompt_token_count;
     session->active_has_eos_token = request->has_eos_token;
@@ -1088,6 +1104,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
       out->graph_replays += 1;
       out->graph_launches += 1;
       out->kernel_launches += out->graph_nodes == 0 ? 1 : out->graph_nodes;
+      if (session->cached_experimental_rt_sparse_attention_active != 0 &&
+          session->experimental_rt_query_descriptor_selector != 0) {
+        out->experimental_rt_selector_launches += session->layer_count;
+      }
     }
   }
   if (err == cudaSuccess && run_count != 0)

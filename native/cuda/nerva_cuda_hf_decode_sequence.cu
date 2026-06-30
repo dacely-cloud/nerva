@@ -29,9 +29,23 @@ extern "C" int nerva_cuda_rt_candidate_selector_create(
     uint32_t pages, uint32_t page_tokens, uint32_t query_count,
     uint32_t candidates_per_query, uint32_t *candidate_pages, void *stream,
     void **selector_out, int32_t *cuda_error_out);
+extern "C" int nerva_cuda_rt_candidate_selector_create_with_queries(
+    uint32_t pages, uint32_t page_tokens, uint32_t query_count,
+    uint32_t candidates_per_query, uint32_t *candidate_pages,
+    const float *queries, uint32_t query_dims, const uint32_t *step_cursor,
+    void *stream, void **selector_out, int32_t *cuda_error_out);
+extern "C" int
+nerva_cuda_rt_candidate_selector_create_with_query_page_descriptors(
+    uint32_t pages, uint32_t page_tokens, uint32_t layer_count,
+    uint32_t query_count, uint32_t candidates_per_query,
+    uint32_t *candidate_pages, const float *queries, uint32_t query_dims,
+    const float *page_descriptors, uint32_t page_descriptor_dims,
+    const uint32_t *step_cursor, void *stream, void **selector_out,
+    int32_t *cuda_error_out);
 extern "C" int nerva_cuda_rt_candidate_selector_launch(
     void *selector, void *stream, uint32_t active_pages, uint32_t current_page,
-    uint32_t local_pages, uint32_t sink_pages, int32_t *cuda_error_out);
+    uint32_t local_pages, uint32_t sink_pages, uint32_t layer_index,
+    int32_t *cuda_error_out);
 extern "C" void nerva_cuda_rt_candidate_selector_destroy(void *selector);
 
 #if NERVA_HAVE_CUDNN_FRONTEND

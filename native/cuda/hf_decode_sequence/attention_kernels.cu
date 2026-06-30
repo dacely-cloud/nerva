@@ -159,6 +159,114 @@ __global__ void hf_experimental_qk_page_selector_kernel(
   }
 }
 
+__global__ void hf_experimental_rt_query_descriptor_kernel(
+    uint32_t hidden, uint32_t heads, uint32_t kv_heads, uint32_t head_dim,
+    uint32_t intermediate, float *scratch, float *query_descriptors) {
+  const uint32_t kv_head = blockIdx.x;
+  if (kv_head >= kv_heads || kv_heads == 0 || heads % kv_heads != 0 ||
+      head_dim == 0 || query_descriptors == nullptr) {
+    return;
+  }
+  const uint32_t attention_hidden = heads * head_dim;
+  const uint32_t kv_hidden = kv_heads * head_dim;
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const uint32_t representative_head = kv_head * (heads / kv_heads);
+  const uint32_t q_base = representative_head * head_dim;
+  if (threadIdx.x == 0) {
+    query_descriptors[static_cast<uint64_t>(kv_head) * 2ull] = 0.0f;
+    query_descriptors[static_cast<uint64_t>(kv_head) * 2ull + 1ull] = 0.0f;
+  }
+  __syncthreads();
+  float proj0 = 0.0f;
+  float proj1 = 0.0f;
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+    const float value = s.q[q_base + offset];
+    uint32_t hash0 = offset * 747796405u + 0x9e3779b9u;
+    hash0 ^= hash0 >> 16;
+    hash0 *= 0x7feb352du;
+    hash0 ^= hash0 >> 15;
+    uint32_t hash1 = offset * 2891336453u + 0x85ebca6bu;
+    hash1 ^= hash1 >> 16;
+    hash1 *= 0x846ca68bu;
+    hash1 ^= hash1 >> 15;
+    proj0 += (hash0 & 1u ? value : -value);
+    proj1 += (hash1 & 1u ? value : -value);
+  }
+  proj0 = block_sum(proj0);
+  proj1 = block_sum(proj1);
+  if (threadIdx.x == 0) {
+    const float scale = rsqrtf(static_cast<float>(head_dim));
+    query_descriptors[static_cast<uint64_t>(kv_head) * 2ull] =
+        tanhf(proj0 * scale * 0.25f);
+    query_descriptors[static_cast<uint64_t>(kv_head) * 2ull + 1ull] =
+        tanhf(proj1 * scale * 0.25f);
+  }
+}
+
+template <uint32_t DType>
+__global__ void hf_experimental_rt_page_descriptor_kernel(
+    uint32_t layer_count, uint32_t pages, uint32_t active_tokens,
+    uint32_t kv_heads, uint32_t head_dim, const uint16_t *kv_keys,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    float *page_descriptors) {
+  const uint32_t layer_index = blockIdx.z;
+  const uint32_t kv_head = blockIdx.x;
+  const uint32_t page = blockIdx.y;
+  if (layer_index >= layer_count || kv_head >= kv_heads || page >= pages ||
+      kv_heads == 0 || head_dim == 0 || kv_keys == nullptr ||
+      kv_block_table == nullptr || page_descriptors == nullptr) {
+    return;
+  }
+  const uint64_t out =
+      (((static_cast<uint64_t>(layer_index) * kv_heads + kv_head) * pages) +
+       page) *
+      2ull;
+  if (active_tokens == 0 ||
+      page * kDecodeAttentionChunkTokens >= active_tokens) {
+    if (threadIdx.x == 0) {
+      page_descriptors[out] = 100.0f;
+      page_descriptors[out + 1ull] = 100.0f;
+    }
+    return;
+  }
+  const uint32_t page_begin = page * kDecodeAttentionChunkTokens;
+  uint32_t token = page_begin + kDecodeAttentionChunkTokens / 2u;
+  if (token >= active_tokens) {
+    token = active_tokens - 1u;
+  }
+  const uint32_t kv_hidden = kv_heads * head_dim;
+  const uint32_t kv_start = kv_head * head_dim;
+  const uint32_t logical_block = token / kKvCacheBlockTokens;
+  const uint32_t block_offset = token - logical_block * kKvCacheBlockTokens;
+  const uint64_t token_base =
+      kv_cache_page_offset(layer_index, kv_block_count,
+                           kv_block_table[logical_block], block_offset,
+                           kv_hidden, kv_start);
+  float proj0 = 0.0f;
+  float proj1 = 0.0f;
+  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
+    const float value = encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+    uint32_t hash0 = offset * 747796405u + 0x9e3779b9u;
+    hash0 ^= hash0 >> 16;
+    hash0 *= 0x7feb352du;
+    hash0 ^= hash0 >> 15;
+    uint32_t hash1 = offset * 2891336453u + 0x85ebca6bu;
+    hash1 ^= hash1 >> 16;
+    hash1 *= 0x846ca68bu;
+    hash1 ^= hash1 >> 15;
+    proj0 += (hash0 & 1u ? value : -value);
+    proj1 += (hash1 & 1u ? value : -value);
+  }
+  proj0 = block_sum(proj0);
+  proj1 = block_sum(proj1);
+  if (threadIdx.x == 0) {
+    const float scale = rsqrtf(static_cast<float>(head_dim));
+    page_descriptors[out] = tanhf(proj0 * scale * 0.25f);
+    page_descriptors[out + 1ull] = tanhf(proj1 * scale * 0.25f);
+  }
+}
+
 template <uint32_t DType>
 __global__ void hf_layer_attention_chunk_kernel(
     uint32_t layer_index, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
@@ -941,6 +1049,34 @@ void launch_hf_experimental_qk_page_selector_kernel(
             step_cursor, max_steps, selected_pages, local_window_tokens,
             sink_tokens, scratch, kv_keys, kv_block_count, kv_block_table,
             candidate_pages);
+  }
+}
+
+void launch_hf_experimental_rt_query_descriptor_kernel(
+    cudaStream_t stream, uint32_t hidden, uint32_t heads, uint32_t kv_heads,
+    uint32_t head_dim, uint32_t intermediate, float *scratch,
+    float *query_descriptors) {
+  hf_experimental_rt_query_descriptor_kernel<<<kv_heads, 128, 0, stream>>>(
+      hidden, heads, kv_heads, head_dim, intermediate, scratch,
+      query_descriptors);
+}
+
+void launch_hf_experimental_rt_page_descriptor_kernel(
+    cudaStream_t stream, uint32_t dtype, uint32_t layer_count, uint32_t pages,
+    uint32_t active_tokens, uint32_t kv_heads, uint32_t head_dim,
+    const uint16_t *kv_keys, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, float *page_descriptors) {
+  const dim3 grid(kv_heads, pages, layer_count);
+  if (dtype == kDTypeBF16) {
+    hf_experimental_rt_page_descriptor_kernel<kDTypeBF16>
+        <<<grid, 128, 0, stream>>>(layer_count, pages, active_tokens, kv_heads,
+                                   head_dim, kv_keys, kv_block_count,
+                                   kv_block_table, page_descriptors);
+  } else {
+    hf_experimental_rt_page_descriptor_kernel<kDTypeF16>
+        <<<grid, 128, 0, stream>>>(layer_count, pages, active_tokens, kv_heads,
+                                   head_dim, kv_keys, kv_block_count,
+                                   kv_block_table, page_descriptors);
   }
 }
 

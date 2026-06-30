@@ -36,6 +36,18 @@ fn qwen3_dense_config_requires_qk_norm_tensors() {
 }
 
 #[test]
+fn qwen3_dense_config_accepts_null_sliding_window() {
+    let config = qwen3_dense_config().replace(
+        r#""rope_theta": 1000000.0,"#,
+        r#""rope_theta": 1000000.0,
+        "sliding_window": null,"#,
+    );
+    let metadata = parse_hf_config_metadata(&config).unwrap();
+    assert_eq!(metadata.architecture, HfArchitectureKind::Qwen3);
+    assert_eq!(metadata.sliding_window, None);
+}
+
+#[test]
 fn qwen3_5_config_preserves_attention_layer_types() {
     let metadata = parse_hf_config_metadata(qwen3_5_hybrid_config()).unwrap();
     assert_eq!(metadata.architecture, HfArchitectureKind::Qwen35);
@@ -119,12 +131,10 @@ fn qwen3_5_real_4b_config_uses_language_model_prefix() {
             && entry.role == WeightBlockRole::FinalNorm
             && entry.rows == 2560
     }));
-    assert!(
-        !manifest
-            .entries
-            .iter()
-            .any(|entry| entry.role == WeightBlockRole::LmHead)
-    );
+    assert!(!manifest
+        .entries
+        .iter()
+        .any(|entry| entry.role == WeightBlockRole::LmHead));
     assert!(manifest.entries.iter().any(|entry| {
         entry.name == "model.language_model.layers.0.linear_attn.in_proj_qkv.weight"
             && entry.role == WeightBlockRole::LinearQkvProjection
@@ -794,12 +804,10 @@ fn qwen2_moe_real_a27b_config_uses_split_and_shared_expert_manifest() {
             && entry.layer == Some(0)
             && (entry.rows, entry.cols) == (2048, 1)
     }));
-    assert!(
-        !manifest
-            .entries
-            .iter()
-            .any(|entry| entry.name == "model.layers.0.self_attn.o_proj.bias")
-    );
+    assert!(!manifest
+        .entries
+        .iter()
+        .any(|entry| entry.name == "model.layers.0.self_attn.o_proj.bias"));
     assert!(manifest.entries.iter().any(|entry| {
         entry.name == "model.layers.0.mlp.experts.0.gate_proj.weight"
             && entry.role == WeightBlockRole::ExpertGateProjection

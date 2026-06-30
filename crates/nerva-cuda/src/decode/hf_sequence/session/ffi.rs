@@ -366,6 +366,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceLayerProjectionBatchExecuteResult {
     pub(crate) projection_kernel_launches: u64,
     pub(crate) scatter_kernel_launches: u64,
     pub(crate) dependency_kernel_launches: u64,
+    pub(crate) experimental_rt_selector_launches: u64,
     pub(crate) sync_calls: u64,
     pub(crate) hot_path_allocations: u64,
 }
@@ -410,6 +411,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceBatchAdvanceResult {
     pub(crate) projection_kernel_launches: u64,
     pub(crate) scatter_kernel_launches: u64,
     pub(crate) dependency_kernel_launches: u64,
+    pub(crate) experimental_rt_selector_launches: u64,
     pub(crate) sampling_kernel_launches: u64,
     pub(crate) sync_calls: u64,
     pub(crate) hot_path_allocations: u64,

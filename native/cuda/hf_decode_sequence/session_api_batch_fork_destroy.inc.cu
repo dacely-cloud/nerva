@@ -195,6 +195,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_batch_advance_one(
     out->projection_kernel_launches += layer_out.projection_kernel_launches;
     out->scatter_kernel_launches += layer_out.scatter_kernel_launches;
     out->dependency_kernel_launches += layer_out.dependency_kernel_launches;
+    out->experimental_rt_selector_launches +=
+        layer_out.experimental_rt_selector_launches;
     out->sync_calls += layer_out.sync_calls;
     out->hot_path_allocations += layer_out.hot_path_allocations;
   }
@@ -373,6 +375,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
   session->experimental_rt_local_window_tokens =
       parent->experimental_rt_local_window_tokens;
   session->experimental_rt_sink_tokens = parent->experimental_rt_sink_tokens;
+  session->experimental_rt_query_descriptor_selector =
+      parent->experimental_rt_query_descriptor_selector;
+  session->experimental_rt_kv_descriptor_selector =
+      parent->experimental_rt_kv_descriptor_selector;
   session->experimental_rt_query_key_selector =
       parent->experimental_rt_query_key_selector;
   session->experimental_rt_query_key_fused_selector =

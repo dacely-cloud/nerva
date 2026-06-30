@@ -8,6 +8,10 @@ pub(crate) fn optional_usize(config_json: &str, key: &'static str) -> Result<Opt
     let Some(value) = find_top_level_json_value(config_json, key)? else {
         return Ok(None);
     };
+    let value = value.trim();
+    if value == "null" {
+        return Ok(None);
+    }
     if value.starts_with('-') {
         return Err(NervaError::InvalidArgument {
             reason: format!("HF config field {key} must be unsigned"),

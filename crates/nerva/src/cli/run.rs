@@ -3,13 +3,13 @@ use nerva_model::hf::tokenizer::{
     decode_generated_text, encode_text_prompt, format_prompt_for_model, stop_token_ids,
 };
 use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
-    HfCudaDeviceGenerateOutput, HfCudaRtDecodeConfig, HfCudaSamplerConfig,
     run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress,
+    HfCudaDeviceGenerateOutput, HfCudaRtDecodeConfig, HfCudaSamplerConfig,
 };
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 use crate::cli::args::{
-    AUTO_CONTEXT_MARGIN, DEFAULT_OUTPUT_TOKENS, DEFAULT_QUEUE_CAPACITY, parse_args,
+    parse_args, AUTO_CONTEXT_MARGIN, DEFAULT_OUTPUT_TOKENS, DEFAULT_QUEUE_CAPACITY,
 };
 use crate::cli::model::{detect_cuda_compute_capability, resolve_model_path, resolve_prompt_text};
 use crate::cli::ui::logger::NervaCliLogger;
@@ -272,23 +272,38 @@ fn generate_json_output(
     let rt_local_tokens = rt_local_pages.saturating_mul(rt_page_tokens);
     let rt_sink_page_tokens = rt_sink_pages.saturating_mul(rt_page_tokens);
     let rt_far_tokens = rt_far_pages.saturating_mul(rt_page_tokens);
-    let rt_selector_policy = rt_selector_policy(
-        output.stream.create.experimental_rt_decode_requested,
-        output.stream.create.experimental_rt_decode_enabled,
-        output.stream.create.experimental_rt_mode,
-        experimental_rt_qk_selector_from_env(),
-        experimental_rt_qk_fused_selector_from_env(),
-    );
+    let experimental_rt_kv_descriptor_selector = experimental_rt_kv_descriptor_selector_from_env();
+    let experimental_rt_query_descriptor_selector = experimental_rt_kv_descriptor_selector
+        || experimental_rt_query_descriptor_selector_from_env();
     let experimental_rt_qk_selector = experimental_rt_qk_selector_from_env();
     let experimental_rt_qk_fused_selector = experimental_rt_qk_fused_selector_from_env();
-    let rt_core_page_selector =
-        output.stream.create.experimental_rt_decode_enabled && !experimental_rt_qk_selector;
-    let semantic_page_selection = experimental_rt_qk_selector;
-    let semantic_rt_retrieval = false;
+    let rt_decode_effective_enabled = output.stream.create.experimental_rt_decode_requested
+        && (output.stream.create.experimental_rt_decode_enabled
+            || output.stream.start.experimental_rt_sparse_attention_active
+            || output.stream.start.experimental_rt_selector_launches > 0
+            || output.stream.chunks.iter().any(|chunk| {
+                chunk.experimental_rt_sparse_attention_chunks > 0
+                    || chunk.experimental_rt_selector_launches > 0
+            }));
+    let rt_selector_policy = rt_selector_policy(
+        output.stream.create.experimental_rt_decode_requested,
+        rt_decode_effective_enabled,
+        output.stream.create.experimental_rt_mode,
+        experimental_rt_kv_descriptor_selector,
+        experimental_rt_query_descriptor_selector,
+        experimental_rt_qk_selector,
+        experimental_rt_qk_fused_selector,
+    );
+    let rt_core_page_selector = rt_decode_effective_enabled
+        && (experimental_rt_query_descriptor_selector || !experimental_rt_qk_selector);
+    let semantic_page_selection = rt_decode_effective_enabled
+        && (experimental_rt_kv_descriptor_selector || experimental_rt_qk_selector);
+    let semantic_rt_retrieval =
+        rt_decode_effective_enabled && experimental_rt_kv_descriptor_selector;
     let experimental_prefill_local_window_tokens =
         experimental_prefill_local_window_tokens_from_env();
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"selector_policy\":\"{}\",\"rt_core_page_selector\":{},\"semantic_page_selection\":{},\"semantic_rt_retrieval\":{},\"query_key_aware_selector\":{},\"query_key_fused_selector\":{},\"page_tokens\":{},\"pages\":{},\"selected_pages\":{},\"local_pages\":{},\"sink_pages\":{},\"far_pages\":{},\"selected_tokens\":{},\"local_page_tokens\":{},\"sink_page_tokens\":{},\"far_tokens\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"experimental_prefill_local_window_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
+        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"selector_policy\":\"{}\",\"rt_core_page_selector\":{},\"semantic_page_selection\":{},\"semantic_rt_retrieval\":{},\"kv_page_descriptor_selector\":{},\"live_query_descriptor_selector\":{},\"query_key_aware_selector\":{},\"query_key_fused_selector\":{},\"page_tokens\":{},\"pages\":{},\"selected_pages\":{},\"local_pages\":{},\"sink_pages\":{},\"far_pages\":{},\"selected_tokens\":{},\"local_page_tokens\":{},\"sink_page_tokens\":{},\"far_tokens\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"experimental_prefill_local_window_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
         json_escape(output.backend),
         env!("CARGO_PKG_VERSION"),
         json_escape(path),
@@ -299,12 +314,14 @@ fn generate_json_output(
         sampler.top_k,
         sampler.seed,
         output.stream.create.experimental_rt_decode_requested,
-        output.stream.create.experimental_rt_decode_enabled,
+        rt_decode_effective_enabled,
         rt_mode_name(output.stream.create.experimental_rt_mode),
         rt_selector_policy,
         rt_core_page_selector,
         semantic_page_selection,
         semantic_rt_retrieval,
+        experimental_rt_kv_descriptor_selector,
+        experimental_rt_query_descriptor_selector,
         experimental_rt_qk_selector,
         experimental_rt_qk_fused_selector,
         rt_page_tokens,
@@ -393,6 +410,8 @@ fn rt_selector_policy(
     requested: bool,
     enabled: bool,
     mode: u32,
+    kv_descriptor_selector: bool,
+    query_descriptor_selector: bool,
     qk_selector: bool,
     qk_fused_selector: bool,
 ) -> &'static str {
@@ -400,6 +419,10 @@ fn rt_selector_policy(
         "none"
     } else if !enabled {
         "unavailable_or_dense_fallback"
+    } else if kv_descriptor_selector {
+        "optix_kv_page_descriptor_selector"
+    } else if query_descriptor_selector {
+        "optix_live_query_descriptor_page_pattern"
     } else if qk_selector && qk_fused_selector {
         "cuda_qk_fused_attention_page_selector"
     } else if qk_selector {
@@ -409,6 +432,14 @@ fn rt_selector_policy(
     } else {
         "optix_synthetic_sink_local_far_page_pattern"
     }
+}
+
+fn experimental_rt_kv_descriptor_selector_from_env() -> bool {
+    env_truthy("NERVA_EXPERIMENTAL_RT_KV_DESCRIPTOR")
+}
+
+fn experimental_rt_query_descriptor_selector_from_env() -> bool {
+    env_truthy("NERVA_EXPERIMENTAL_RT_QUERY_DESCRIPTOR")
 }
 
 fn experimental_rt_qk_selector_from_env() -> bool {

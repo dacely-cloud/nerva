@@ -96,7 +96,7 @@ struct ClapGenerateArgs {
     temperature: f32,
     #[arg(long = "top-p", default_value_t = DEFAULT_TOP_P)]
     top_p: f32,
-    #[arg(long = "top-k", default_value_t = DEFAULT_TOP_K)]
+    #[arg(long = "top-k", default_value_t = DEFAULT_TOP_K, value_parser = parse_top_k_count)]
     top_k: u32,
     #[arg(long = "seed", default_value_t = DEFAULT_SEED)]
     seed: u64,
@@ -218,9 +218,22 @@ pub(crate) fn parse_token_count(value: &str) -> Result<usize, String> {
         .ok_or_else(|| format!("token count is too large: {value}"))
 }
 
+fn parse_top_k_count(value: &str) -> Result<u32, String> {
+    let trimmed = value.trim();
+    if trimmed.contains('.') {
+        return Err(format!(
+            "--top-k must be an integer candidate count; 0 disables top-k. \
+             Use --top-p {trimmed} for probability/nucleus sampling."
+        ));
+    }
+    let count = parse_token_count(trimmed)
+        .map_err(|_| format!("--top-k must be an integer candidate count; got {value}"))?;
+    u32::try_from(count).map_err(|_| format!("--top-k is too large: {value}"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PromptFormat, parse_args, parse_token_count};
+    use super::{parse_args, parse_token_count, PromptFormat};
 
     #[test]
     fn parses_k_token_counts() {
@@ -350,6 +363,19 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         assert!(parse_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_fractional_top_k_with_sampling_hint() {
+        let args = [
+            "-m", "qwen3-8b", "-p", "hello", "--top-p", "0.5", "--top-k", "0.5",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let error = parse_args(&args).unwrap_err();
+        assert!(error.contains("--top-k must be an integer candidate count"));
+        assert!(error.contains("Use --top-p 0.5"));
     }
 
     #[test]

@@ -31,6 +31,12 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t experimental_rt_selector_cached_sink_pages = 0;
   void *experimental_rt_selector = nullptr;
   uint32_t *device_experimental_rt_candidate_pages = nullptr;
+  float *device_experimental_rt_query_descriptors = nullptr;
+  float *device_experimental_rt_page_descriptors = nullptr;
+  uint64_t experimental_rt_query_descriptor_bytes = 0;
+  uint64_t experimental_rt_page_descriptor_bytes = 0;
+  uint32_t experimental_rt_query_descriptor_selector = 0;
+  uint32_t experimental_rt_kv_descriptor_selector = 0;
   uint32_t experimental_rt_query_key_selector = 0;
   uint32_t experimental_rt_query_key_fused_selector = 0;
   uint32_t experimental_prefill_local_window_tokens = 0;
