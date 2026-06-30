@@ -194,15 +194,21 @@ bool layout_is_deepseek_v3_mla(const SequenceLayerLayout &layout) {
           layout.deepseek_mode == kDeepSeekModeV32MlaIndexer);
 }
 
-bool layout_is_deepseek_v4_swa_dense(const SequenceLayerLayout &layout) {
-  return layout.attention_kind == kAttentionKindDeepSeekMla &&
-         layout.deepseek_mode == kDeepSeekModeV4Swa &&
-         layout.mlp_kind == kMlpKindDense;
+bool layout_is_deepseek_v4_swa_native(const SequenceLayerLayout &layout) {
+  if (layout.attention_kind != kAttentionKindDeepSeekMla ||
+      layout.deepseek_mode != kDeepSeekModeV4Swa) {
+    return false;
+  }
+  if (layout.mlp_kind == kMlpKindDense) {
+    return true;
+  }
+  return layout.mlp_kind == kMlpKindSparseMoe &&
+         (layout.deepseek_flags & kDeepSeekFlagHashRouter) == 0;
 }
 
 bool layout_is_native_deepseek_session(const SequenceLayerLayout &layout) {
   return layout_is_deepseek_v3_mla(layout) ||
-         layout_is_deepseek_v4_swa_dense(layout);
+         layout_is_deepseek_v4_swa_native(layout);
 }
 
 uint64_t layout_deepseek_v3_qk_head_dim(const SequenceLayerLayout &layout) {
@@ -230,7 +236,7 @@ uint64_t layout_deepseek_v3_kv_cache_width(const SequenceLayerLayout &layout,
 
 uint64_t layout_deepseek_kv_cache_width(const SequenceLayerLayout &layout,
                                         uint64_t fallback_kv_hidden) {
-  if (layout_is_deepseek_v4_swa_dense(layout)) {
+  if (layout_is_deepseek_v4_swa_native(layout)) {
     return layout.deepseek_qk_nope_head_dim + layout.deepseek_qk_rope_head_dim;
   }
   return layout_deepseek_v3_kv_cache_width(layout, fallback_kv_hidden);
@@ -260,7 +266,7 @@ uint64_t layout_deepseek_v3_value_rows(const SequenceLayerLayout &layout,
 
 uint64_t layer_attention_workspace_rows(const SequenceLayerLayout &layout,
                                         uint64_t attention_hidden) {
-  if (layout_is_deepseek_v4_swa_dense(layout)) {
+  if (layout_is_deepseek_v4_swa_native(layout)) {
     return std::max<uint64_t>(attention_hidden, layout.deepseek_q_lora_rank);
   }
   if (!layout_is_deepseek_v3_mla(layout)) return attention_hidden;

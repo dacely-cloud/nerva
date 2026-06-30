@@ -100,10 +100,12 @@ bool has_unsupported_deepseek_layers(const NervaCudaHfDecodeChainLayer *layers,
       const bool supported_v3 =
           layer.deepseek_mode == kDeepSeekModeV3Mla ||
           layer.deepseek_mode == kDeepSeekModeV32MlaIndexer;
-      const bool supported_v4_swa_dense =
+      const bool supported_v4_swa =
           layer.deepseek_mode == kDeepSeekModeV4Swa &&
-          layer.mlp_kind == kMlpKindDense;
-      if (!supported_v3 && !supported_v4_swa_dense) {
+          (layer.mlp_kind == kMlpKindDense ||
+           (layer.mlp_kind == kMlpKindSparseMoe &&
+            (layer.deepseek_flags & kDeepSeekFlagHashRouter) == 0));
+      if (!supported_v3 && !supported_v4_swa) {
         return true;
       }
     }

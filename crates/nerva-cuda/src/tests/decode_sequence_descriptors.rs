@@ -925,6 +925,110 @@ fn deepseek_v4_swa_dense_session_runs_through_sampling() {
 }
 
 #[test]
+fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let mut layer = tiny_deepseek_v4_swa_dense_descriptor_layer();
+    layer.mlp_kind = CUDA_HF_MLP_SPARSE_MOE;
+    layer.moe_intermediate = 4;
+    layer.shared_expert_intermediate = 2;
+    layer.num_experts = 2;
+    layer.experts_per_token = 1;
+    layer.norm_topk_prob = true;
+    layer.deepseek = layer.deepseek.map(|mut deepseek| {
+        deepseek.flags |= CUDA_HF_DEEPSEEK_FLAG_MOE | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS;
+        deepseek.routed_scaling_factor = 1.0;
+        deepseek
+    });
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept tiny V4 SWA sparse MoE layer");
+    assert_ne!(plan.w_router, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.w_expert_gate_up, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.w_expert_down, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+
+    let weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: plan.resident_weight_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        max_context_tokens: 4,
+        rms_eps: 1e-5,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: Default::default(),
+    };
+
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V4 SWA sparse MoE DeepSeek should pass session creation: {:?}",
+        created.summary.error
+    );
+    let mut session = created
+        .session
+        .expect("V4 SWA sparse MoE session handle should exist");
+
+    let summary = session.run(&[0], 2, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V4 SWA sparse MoE DeepSeek path should run through sampling: {:?}",
+        summary.error
+    );
+    assert_eq!(summary.steps, 2);
+    assert_eq!(summary.tokens.len(), 2);
+    assert_eq!(summary.kv_tokens, 2);
+    assert_eq!(summary.graph_replays, 2);
+    assert!(summary.graph_nodes > 0);
+}
+
+#[test]
 fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     let layer = tiny_deepseek_v4_descriptor_layer();
     let layers = [layer];

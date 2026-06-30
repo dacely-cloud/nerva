@@ -267,7 +267,7 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
 cudaError_t launch_deepseek_v4_swa_dense_projection_step(
     NervaCudaHfDecodeSequenceSession *session, const SequenceLayerLayout &layout,
     uint32_t layer_index, uint32_t max_steps) {
-  if (!layout_is_deepseek_v4_swa_dense(layout)) {
+  if (!layout_is_deepseek_v4_swa_native(layout)) {
     return cudaErrorInvalidValue;
   }
   hf_deepseek_v4_swa_dense_layer_kernel<<<1, 1, 0, session->stream>>>(
@@ -324,8 +324,8 @@ cudaError_t launch_cublas_layer_session_step(
        ++layer_index) {
     const SequenceLayerLayout layout = session->host_layouts[layer_index];
     const bool is_deepseek_v3 = layout_is_deepseek_v3_mla(layout);
-    const bool is_deepseek_v4_swa_dense =
-        layout_is_deepseek_v4_swa_dense(layout);
+    const bool is_deepseek_v4_swa_native =
+        layout_is_deepseek_v4_swa_native(layout);
     const uint32_t layer_attention_hidden = static_cast<uint32_t>(
         layer_attention_workspace_rows(layout, attention_hidden));
     const uint32_t layer_kv_hidden = static_cast<uint32_t>(
@@ -333,7 +333,7 @@ cudaError_t launch_cublas_layer_session_step(
     if (is_deepseek_v3) {
       err = launch_deepseek_v3_mla_projection_step(
           session, layout, layer_index, max_steps);
-    } else if (is_deepseek_v4_swa_dense) {
+    } else if (is_deepseek_v4_swa_native) {
       err = launch_deepseek_v4_swa_dense_projection_step(
           session, layout, layer_index, max_steps);
     } else {
@@ -345,7 +345,7 @@ cudaError_t launch_cublas_layer_session_step(
           static_cast<uint32_t>(packed_shape.qkv_rows), session->hidden, 1,
           session->dtype, 0.0f, scratch.q);
     }
-    if (!is_deepseek_v3 && !is_deepseek_v4_swa_dense) {
+    if (!is_deepseek_v3 && !is_deepseek_v4_swa_native) {
     if (err == cudaSuccess && layout.w_q_gate != kMissingOffset) {
       err = project_encoded_rows(
           session, nullptr, session->device_arena + layout.w_q_gate,
