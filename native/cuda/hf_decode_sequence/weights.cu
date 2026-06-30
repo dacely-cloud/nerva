@@ -709,13 +709,13 @@ void pack_deepseek_v4_attention(SequenceLayerLayout &layout, uint64_t &cursor,
   }
 }
 
-void pack_deepseek_dense_mlp(uint64_t &cursor, uint64_t hidden,
-                             uint64_t intermediate) {
-  push(cursor, fp8_slots(intermediate, hidden));
+void pack_deepseek_dense_mlp(SequenceLayerLayout &layout, uint64_t &cursor,
+                             uint64_t hidden, uint64_t intermediate) {
+  layout.w_gate = push(cursor, fp8_slots(intermediate, hidden));
   push(cursor, scale_f32_slots(intermediate, hidden));
-  push(cursor, fp8_slots(intermediate, hidden));
+  layout.w_up = push(cursor, fp8_slots(intermediate, hidden));
   push(cursor, scale_f32_slots(intermediate, hidden));
-  push(cursor, fp8_slots(hidden, intermediate));
+  layout.w_down = push(cursor, fp8_slots(hidden, intermediate));
   push(cursor, scale_f32_slots(hidden, intermediate));
 }
 
@@ -807,7 +807,7 @@ void pack_deepseek_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   }
   layout.rms_mlp = push(cursor, deepseek_norm_slots(layer, hidden));
   if (layer.mlp_kind != kMlpKindSparseMoe) {
-    pack_deepseek_dense_mlp(cursor, hidden, intermediate);
+    pack_deepseek_dense_mlp(layout, cursor, hidden, intermediate);
   } else if (deepseek_is_v4(layer.deepseek_mode)) {
     pack_deepseek_v4_moe(layout, cursor, layer, hidden, vocab_size);
   } else {
