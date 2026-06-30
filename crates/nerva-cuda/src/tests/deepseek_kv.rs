@@ -1,6 +1,9 @@
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
-use crate::deepseek_kv::probe::deepseek_kv_smoke;
-use crate::deepseek_kv::summary::CudaDeepSeekKvSummary;
+use crate::deepseek_kv::probe::{deepseek_compressed_slot_mapping_smoke, deepseek_kv_smoke};
+use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
+use crate::deepseek_kv::summary::{
+    CudaDeepSeekCompressedSlotMappingSummary, CudaDeepSeekKvSummary,
+};
 use crate::smoke::status::SmokeStatus;
 
 #[test]
@@ -35,6 +38,39 @@ fn deepseek_kv_summary_serializes_vllm_layout_metrics() {
 }
 
 #[test]
+fn deepseek_compressed_slot_mapping_summary_serializes_vllm_metadata() {
+    let summary = CudaDeepSeekCompressedSlotMappingSummary {
+        status: SmokeStatus::Ok,
+        return_code: 0,
+        cuda_error: 0,
+        num_tokens: 9,
+        num_reqs: 2,
+        block_table_stride: 4,
+        block_size: 4,
+        compress_ratio: 4,
+        valid_slots: 2,
+        pad_slots: 7,
+        output_hash: 99,
+        output_slots: vec![-1, -1, 81, -1, -1, 120, -1, -1, -1],
+        device_arena_bytes: 200,
+        pinned_host_bytes: 72,
+        h2d_bytes: 60,
+        d2h_bytes: 72,
+        kernel_launches: 1,
+        sync_calls: 1,
+        hot_path_allocations: 0,
+        error: None,
+    };
+
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"num_tokens\":9"));
+    assert!(json.contains("\"compress_ratio\":4"));
+    assert!(json.contains("\"valid_slots\":2"));
+    assert!(json.contains("\"pad_slots\":7"));
+}
+
+#[test]
 fn deepseek_kv_smoke_is_repeatable_when_device_is_available() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
@@ -50,6 +86,33 @@ fn deepseek_kv_smoke_is_repeatable_when_device_is_available() {
     assert_eq!(second.token_stride, 576);
     assert_eq!(second.scale_dim, 8);
     assert_eq!(second.block_bytes, 2336);
+    assert_eq!(second.output_hash, first.output_hash);
+    assert_eq!(second.kernel_launches, 1);
+    assert_eq!(second.sync_calls, 1);
+    assert_eq!(second.hot_path_allocations, 0);
+}
+
+#[test]
+fn deepseek_compressed_slot_mapping_smoke_is_repeatable_when_device_is_available() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let first = deepseek_compressed_slot_mapping_smoke();
+    if first.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let second = deepseek_compressed_slot_mapping_smoke();
+    assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    assert_eq!(second.num_tokens, 9);
+    assert_eq!(second.num_reqs, 2);
+    assert_eq!(second.block_size, 4);
+    assert_eq!(second.compress_ratio, 4);
+    assert_eq!(second.valid_slots, 2);
+    assert_eq!(second.pad_slots, 7);
+    assert_eq!(
+        second.output_slots,
+        vec![-1, -1, 81, -1, -1, 120, -1, -1, -1]
+    );
     assert_eq!(second.output_hash, first.output_hash);
     assert_eq!(second.kernel_launches, 1);
     assert_eq!(second.sync_calls, 1);
@@ -88,5 +151,30 @@ fn deepseek_fp8_ds_mla_pack_matches_vllm_block_offsets() {
         &scales
     );
     assert!(summary.output[..token_base].iter().all(|byte| *byte == 0));
+    assert!(summary.output_hash != 0);
+}
+
+#[test]
+fn deepseek_compressed_slot_mapping_matches_vllm_kernel_math() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let query_start_loc = [0, 5, 9];
+    let seq_lens = [10, 7];
+    let block_table = [
+        20, 21, 22, 23, // request 0
+        30, 31, 32, 33, // request 1
+    ];
+    let summary =
+        deepseek_compressed_slot_mapping(&query_start_loc, &seq_lens, &block_table, 4, 4, 4);
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(
+        summary.output_slots,
+        vec![-1, -1, 81, -1, -1, 120, -1, -1, -1]
+    );
+    assert_eq!(summary.valid_slots, 2);
+    assert_eq!(summary.pad_slots, 7);
     assert!(summary.output_hash != 0);
 }

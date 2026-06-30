@@ -1,5 +1,8 @@
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
-use crate::deepseek_kv::summary::CudaDeepSeekKvSummary;
+use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
+use crate::deepseek_kv::summary::{
+    CudaDeepSeekCompressedSlotMappingSummary, CudaDeepSeekKvSummary,
+};
 use crate::smoke::status::SmokeStatus;
 
 const V4_NOPE_BYTES: usize = 448;
@@ -41,6 +44,37 @@ pub fn deepseek_kv_smoke() -> CudaDeepSeekKvSummary {
         let mut failed = summary;
         failed.status = SmokeStatus::Failed;
         failed.error = Some("DeepSeek fp8_ds_mla KV smoke layout mismatch".to_string());
+        return failed;
+    }
+
+    summary
+}
+
+pub fn deepseek_compressed_slot_mapping_smoke() -> CudaDeepSeekCompressedSlotMappingSummary {
+    let query_start_loc = [0, 5, 9];
+    let seq_lens = [10, 7];
+    let block_table = [
+        20, 21, 22, 23, // request 0
+        30, 31, 32, 33, // request 1
+    ];
+    let expected = [-1, -1, 81, -1, -1, 120, -1, -1, -1];
+
+    let summary =
+        deepseek_compressed_slot_mapping(&query_start_loc, &seq_lens, &block_table, 4, 4, 4);
+    if summary.status != SmokeStatus::Ok {
+        return summary;
+    }
+
+    if summary.output_slots != expected
+        || summary.valid_slots != 2
+        || summary.pad_slots != 7
+        || summary.kernel_launches != 1
+        || summary.sync_calls != 1
+        || summary.hot_path_allocations != 0
+    {
+        let mut failed = summary;
+        failed.status = SmokeStatus::Failed;
+        failed.error = Some("DeepSeek compressed slot mapping smoke mismatch".to_string());
         return failed;
     }
 

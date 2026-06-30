@@ -1251,6 +1251,39 @@ typedef struct NervaCudaDeepSeekKvFp8DsMlaPackResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekKvFp8DsMlaPackResult;
 
+typedef struct NervaCudaDeepSeekCompressedSlotMappingRequest {
+  uint32_t num_tokens;
+  uint32_t num_reqs;
+  uint32_t block_table_stride;
+  uint32_t block_size;
+  uint32_t compress_ratio;
+  const int32_t *query_start_loc;
+  const int32_t *seq_lens;
+  const int32_t *block_table;
+  int64_t *output_slots;
+} NervaCudaDeepSeekCompressedSlotMappingRequest;
+
+typedef struct NervaCudaDeepSeekCompressedSlotMappingResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t num_tokens;
+  uint32_t num_reqs;
+  uint32_t block_table_stride;
+  uint32_t block_size;
+  uint32_t compress_ratio;
+  uint32_t valid_slots;
+  uint32_t pad_slots;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekCompressedSlotMappingResult;
+
 typedef struct NervaCudaDeepSeekMoeSmokeResult {
   int32_t status;
   int32_t cuda_error;
@@ -1393,6 +1426,9 @@ int nerva_cuda_deepseek_mla_decode(
 int nerva_cuda_deepseek_kv_fp8_ds_mla_pack(
     const NervaCudaDeepSeekKvFp8DsMlaPackRequest *request,
     NervaCudaDeepSeekKvFp8DsMlaPackResult *out);
+int nerva_cuda_deepseek_compressed_slot_mapping(
+    const NervaCudaDeepSeekCompressedSlotMappingRequest *request,
+    NervaCudaDeepSeekCompressedSlotMappingResult *out);
 int nerva_cuda_deepseek_moe_smoke(NervaCudaDeepSeekMoeSmokeResult *out);
 int nerva_cuda_deepseek_moe_forward(
     const NervaCudaDeepSeekMoeForwardRequest *request,

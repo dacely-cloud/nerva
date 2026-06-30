@@ -60,6 +60,9 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
             Ok(nerva_cuda::deepseek_router::probe::deepseek_router_smoke().to_json())
         }
         "cuda-deepseek-kv" => Ok(nerva_cuda::deepseek_kv::probe::deepseek_kv_smoke().to_json()),
+        "cuda-deepseek-compressed-slots" => {
+            Ok(nerva_cuda::deepseek_kv::probe::deepseek_compressed_slot_mapping_smoke().to_json())
+        }
         "cuda-sampler" => Ok(nerva_cuda::sampler::probe::greedy_sampler_smoke().to_json()),
         "cuda-tiny-decode" => {
             let steps = parse_optional_u32(args.first().cloned(), 8, "steps")?;

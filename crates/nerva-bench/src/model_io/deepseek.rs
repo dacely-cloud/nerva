@@ -4,6 +4,7 @@ use std::{
 };
 
 use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
+use nerva_cuda::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
 use nerva_cuda::deepseek_quant::dequant::{
@@ -325,6 +326,11 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
         bench_primitive("quant_mxfp4_e2m1_e8m0", iterations, bench_quant_mxfp4),
         bench_primitive("mla_decode_mqa", iterations, bench_mla_decode),
         bench_primitive("kv_fp8_ds_mla_pack", iterations, bench_kv_fp8_ds_mla_pack),
+        bench_primitive(
+            "compressed_slot_mapping",
+            iterations,
+            bench_compressed_slot_mapping,
+        ),
         bench_primitive("routed_moe_forward", iterations, bench_moe_forward),
     ];
     Ok(deepseek_cuda_primitive_bench_report_json(
@@ -378,11 +384,13 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let quant = nerva_cuda::deepseek_quant::probe::deepseek_quant_smoke();
     let router = nerva_cuda::deepseek_router::probe::deepseek_router_smoke();
     let kv = nerva_cuda::deepseek_kv::probe::deepseek_kv_smoke();
+    let compressed_slots = nerva_cuda::deepseek_kv::probe::deepseek_compressed_slot_mapping_smoke();
     let mla_json = mla.to_json();
     let moe_json = moe.to_json();
     let quant_json = quant.to_json();
     let router_json = router.to_json();
     let kv_json = kv.to_json();
+    let compressed_slots_json = compressed_slots.to_json();
     let primitives = [
         DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_mla_decode_mqa_smoke",
@@ -408,6 +416,11 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
             name: "cuda_deepseek_fp8_ds_mla_kv_pack_smoke",
             status: smoke_status_label(&kv.status),
             summary_json: &kv_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_compressed_slot_mapping_smoke",
+            status: smoke_status_label(&compressed_slots.status),
+            summary_json: &compressed_slots_json,
         },
     ];
     deepseek_cuda_readiness_report_json(config_path, &primitives)
@@ -666,6 +679,13 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_api".to_string());
         primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_smoke".to_string());
     }
+    if matches!(
+        metadata.architecture,
+        HfArchitectureKind::DeepSeekV32 | HfArchitectureKind::DeepSeekV4
+    ) {
+        primitives.push("cuda_deepseek_compressed_slot_mapping_api".to_string());
+        primitives.push("cuda_deepseek_compressed_slot_mapping_smoke".to_string());
+    }
 
     primitives
 }
@@ -728,7 +748,11 @@ fn coverage_for_unit(
             ),
             (HfArchitectureKind::DeepSeekV32, "deepseek_v32_sparse_attention_indexer") => (
                 "partial",
-                &["deepseek_vllm_kv_cache_spec_planner"],
+                &[
+                    "deepseek_vllm_kv_cache_spec_planner",
+                    "cuda_deepseek_compressed_slot_mapping_api",
+                    "cuda_deepseek_compressed_slot_mapping_smoke",
+                ],
                 &[
                     "implement V3.2 sparse indexer query/key/weights runtime",
                     "store vLLM-compatible indexer cache pages",
@@ -815,7 +839,11 @@ fn coverage_for_unit(
             ),
             (HfArchitectureKind::DeepSeekV4, "deepseek_v4_c4_c128_compressor") => (
                 "partial",
-                &["deepseek_v4_mhc_compressor_indexer_manifest"],
+                &[
+                    "deepseek_v4_mhc_compressor_indexer_manifest",
+                    "cuda_deepseek_compressed_slot_mapping_api",
+                    "cuda_deepseek_compressed_slot_mapping_smoke",
+                ],
                 &[
                     "implement C4/C128 compressor kernels",
                     "verify compressed-token cache selection against vLLM",
@@ -826,6 +854,8 @@ fn coverage_for_unit(
                 &[
                     "deepseek_vllm_kv_cache_spec_planner",
                     "deepseek_v4_mhc_compressor_indexer_manifest",
+                    "cuda_deepseek_compressed_slot_mapping_api",
+                    "cuda_deepseek_compressed_slot_mapping_smoke",
                 ],
                 &[
                     "implement DeepseekV4 indexer runtime",
@@ -1311,6 +1341,29 @@ fn bench_kv_fp8_ds_mla_pack() -> DeepSeekPrimitiveMetrics {
         .collect::<Vec<_>>();
     let scales = [0x7f, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x00];
     let summary = deepseek_fp8_ds_mla_pack(4, 2, &nope, &rope, &scales);
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_compressed_slot_mapping() -> DeepSeekPrimitiveMetrics {
+    let query_start_loc = [0, 5, 9];
+    let seq_lens = [10, 7];
+    let block_table = [
+        20, 21, 22, 23, // request 0
+        30, 31, 32, 33, // request 1
+    ];
+    let summary =
+        deepseek_compressed_slot_mapping(&query_start_loc, &seq_lens, &block_table, 4, 4, 4);
     DeepSeekPrimitiveMetrics {
         status: summary.status,
         output_hash: summary.output_hash,
