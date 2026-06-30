@@ -281,10 +281,14 @@ fn generate_json_output(
     );
     let experimental_rt_qk_selector = experimental_rt_qk_selector_from_env();
     let experimental_rt_qk_fused_selector = experimental_rt_qk_fused_selector_from_env();
+    let rt_core_page_selector = output.stream.create.experimental_rt_decode_enabled
+        && !experimental_rt_qk_selector;
+    let semantic_page_selection = experimental_rt_qk_selector;
+    let semantic_rt_retrieval = false;
     let experimental_prefill_local_window_tokens =
         experimental_prefill_local_window_tokens_from_env();
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"selector_policy\":\"{}\",\"query_key_aware_selector\":{},\"query_key_fused_selector\":{},\"page_tokens\":{},\"pages\":{},\"selected_pages\":{},\"local_pages\":{},\"sink_pages\":{},\"far_pages\":{},\"selected_tokens\":{},\"local_page_tokens\":{},\"sink_page_tokens\":{},\"far_tokens\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"experimental_prefill_local_window_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
+        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"selector_policy\":\"{}\",\"rt_core_page_selector\":{},\"semantic_page_selection\":{},\"semantic_rt_retrieval\":{},\"query_key_aware_selector\":{},\"query_key_fused_selector\":{},\"page_tokens\":{},\"pages\":{},\"selected_pages\":{},\"local_pages\":{},\"sink_pages\":{},\"far_pages\":{},\"selected_tokens\":{},\"local_page_tokens\":{},\"sink_page_tokens\":{},\"far_tokens\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"experimental_prefill_local_window_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
         json_escape(output.backend),
         env!("CARGO_PKG_VERSION"),
         json_escape(path),
@@ -298,6 +302,9 @@ fn generate_json_output(
         output.stream.create.experimental_rt_decode_enabled,
         rt_mode_name(output.stream.create.experimental_rt_mode),
         rt_selector_policy,
+        rt_core_page_selector,
+        semantic_page_selection,
+        semantic_rt_retrieval,
         experimental_rt_qk_selector,
         experimental_rt_qk_fused_selector,
         rt_page_tokens,

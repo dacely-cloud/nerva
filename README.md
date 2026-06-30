@@ -487,6 +487,8 @@ Current knobs:
 
 ```bash
 cargo run -p nerva-bench -- experimental-rt 524288 8 512 64 64 36
+NERVA_EXPERIMENTAL_RT_SEMANTIC_OPTIX=1 \
+  cargo run -p nerva-bench -- experimental-rt 524288 8 512 64 64 36
 cargo run -p nerva-bench -- experimental-rt-sweep 524288 8 1024 64 64 1 36
 cargo run -p nerva-bench -- experimental-rt-matrix 16 64 36
 cargo run -p nerva -- -m qwen3-8b -p "Tell me a story" -c 32768 -o 2048 \
@@ -499,6 +501,8 @@ NERVA_EXPERIMENTAL_RT_QK_SELECTOR=1 NERVA_EXPERIMENTAL_RT_QK_FUSED=1 \
 
 The current Qwen decode path has three selector policies. The default sparse RT policy uses OptiX traversal to produce a sink/local/far page pattern and then runs the normal CUDA selected-page attention path. For semantic experiments, `NERVA_EXPERIMENTAL_RT_QK_SELECTOR=1` switches the Qwen decode integration to a CUDA query/key-aware page selector that scores real KV keys with the live query and still reuses the existing decode, attention, KV, graph, and sampler machinery. `NERVA_EXPERIMENTAL_RT_QK_FUSED=1` folds that Q/K far-page choice into the shared-warp attention kernel, removing the extra selector kernel launches. Both Q/K policies are semantic CUDA experiments, not semantic RT-core retrieval; JSON labels them as `cuda_qk_representative_page_selector` and `cuda_qk_fused_attention_page_selector`.
 
+The RT microbench also has a query-derived OptiX selector behind `NERVA_EXPERIMENTAL_RT_SEMANTIC_OPTIX=1`. That path passes the synthetic query descriptors into the OptiX raygen program and derives the target page from those descriptors instead of hashing `query_id`. It is a measured building block for semantic RT page selection, not a Qwen decode integration yet. Qwen JSON now reports `rt_core_page_selector`, `semantic_page_selection`, and `semantic_rt_retrieval` separately so the synthetic RT path cannot be mistaken for semantic RT retrieval.
+
 The measured 512k-token synthetic selector point on an RTX 5090 is:
 
 | Field | Value |
@@ -510,6 +514,8 @@ The measured 512k-token synthetic selector point on an RTX 5090 is:
 | Dense selector | 28.664 us |
 | OptiX selector | 9.485 us |
 | OptiX selector + CUDA rerank | 13.644 us |
+| Query-derived OptiX selector | 9.135 us |
+| Query-derived OptiX selector + CUDA rerank | 13.279 us |
 | Selector speedup | 3.02x |
 | Selector + rerank speedup | 2.10x |
 | Estimated RT attention KV fraction | 78,125 ppm |

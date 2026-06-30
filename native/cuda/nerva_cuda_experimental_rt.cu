@@ -6,6 +6,7 @@
 #include <new>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <string>
@@ -208,6 +209,15 @@ uint32_t ceil_sqrt_u32(uint32_t value) {
   return root;
 }
 
+bool env_truthy(const char *name) {
+  const char *value = getenv(name);
+  if (value == nullptr || value[0] == '\0') {
+    return false;
+  }
+  return value[0] == '1' || value[0] == 'y' || value[0] == 'Y' ||
+         value[0] == 't' || value[0] == 'T';
+}
+
 void set_optix_fallback_reason(NervaCudaExperimentalRtCandidateBenchResult *out,
                                const char *stage, const char *detail) {
   char message[192];
@@ -245,6 +255,9 @@ struct OptixCandidateParams {
   uint32_t local_pages;
   uint32_t sink_pages;
   float cell_size;
+  const float *queries;
+  uint32_t query_dims;
+  uint32_t query_derived_pages;
 };
 
 struct EmptySbtData {
@@ -264,6 +277,9 @@ struct OptixCandidateSelector {
   OptixModule module = nullptr;
   OptixPipeline pipeline = nullptr;
   OptixTraversableHandle traversable = 0;
+  const float *queries = nullptr;
+  uint32_t query_dims = 0;
+  uint32_t query_derived_pages = 0;
   uint32_t grid_width = 0;
   float cell_size = 0.0f;
   OptixProgramGroup raygen_prog_group = nullptr;
@@ -294,6 +310,9 @@ struct OptixCandidateParams {
   unsigned int local_pages;
   unsigned int sink_pages;
   float cell_size;
+  const float* queries;
+  unsigned int query_dims;
+  unsigned int query_derived_pages;
 };
 
 extern "C" {
@@ -321,6 +340,27 @@ static __forceinline__ __device__ unsigned int query_center_page(
     return half + (seed % span);
   }
   return seed % pages;
+}
+
+static __forceinline__ __device__ unsigned int query_descriptor_center_page(
+    unsigned int query, unsigned int pages) {
+  if (pages == 0u || params.queries == 0 || params.query_dims < 2u ||
+      params.query_derived_pages == 0u) {
+    return pages == 0u ? 0u : query % pages;
+  }
+  const unsigned long long base =
+      static_cast<unsigned long long>(query) * params.query_dims;
+  const float q0 = params.queries[base];
+  const float q1 = params.queries[base + 1ull];
+  if (!(q1 < -1.0e-20f || q1 > 1.0e-20f)) {
+    return query % pages;
+  }
+  const float center_position = -0.5f * q0 / q1;
+  float normalized = center_position;
+  normalized = fminf(1.0f, fmaxf(0.0f, normalized));
+  const float scaled = normalized * static_cast<float>(pages - 1u);
+  unsigned int page = static_cast<unsigned int>(floorf(scaled + 0.5f));
+  return page < pages ? page : pages - 1u;
 }
 
 static __forceinline__ __device__ unsigned int min_u32(unsigned int a,
@@ -371,8 +411,20 @@ extern "C" __global__ void __raygen__candidate() {
           params.candidates_per_query > local_limit
               ? params.candidates_per_query - local_limit
               : 1u;
-      const unsigned int center =
-          query_center_page(query, far_pages, far_candidates);
+      unsigned int center = 0u;
+      if (params.query_derived_pages != 0u) {
+        const unsigned int global_center =
+            query_descriptor_center_page(query, pages);
+        if (global_center < far_start) {
+          center = 0u;
+        } else if (global_center >= far_end) {
+          center = far_pages - 1u;
+        } else {
+          center = global_center - far_start;
+        }
+      } else {
+        center = query_center_page(query, far_pages, far_candidates);
+      }
       const unsigned int half = far_candidates / 2u;
       target = far_start + ((center + far_pages + far_slot - half) % far_pages);
     }
@@ -602,7 +654,9 @@ bool create_optix_candidate_selector(
     const NervaCudaExperimentalRtCandidateBenchRequest *request,
     uint32_t *candidate_pages, cudaStream_t stream,
     OptixCandidateSelector *state,
-    NervaCudaExperimentalRtCandidateBenchResult *out) {
+    NervaCudaExperimentalRtCandidateBenchResult *out,
+    const float *queries = nullptr, uint32_t query_dims = 0,
+    uint32_t query_derived_pages = 0) {
   if (out->rt_core_capable == 0) {
     set_optix_fallback_reason(out, "device capability",
                               "compute capability is below RTX-era GPUs");
@@ -732,6 +786,12 @@ bool create_optix_candidate_selector(
   state->traversable = gas_handle;
   state->grid_width = grid_width;
   state->cell_size = cell_size;
+  state->queries = queries;
+  state->query_dims = query_dims;
+  state->query_derived_pages =
+      queries != nullptr && query_dims >= 2u && query_derived_pages != 0u
+          ? 1u
+          : 0u;
 
   std::string optix_input;
   if (!compile_optix_candidate_input(out, &optix_input, out)) {
@@ -854,9 +914,12 @@ bool create_optix_candidate_selector(
   OptixCandidateParams params{};
   params.handle = state->traversable;
   params.candidate_pages = candidate_pages;
+  params.queries = state->queries;
   params.pages = request->pages;
   params.query_count = request->query_count;
   params.candidates_per_query = request->candidates_per_query;
+  params.query_dims = state->query_dims;
+  params.query_derived_pages = state->query_derived_pages;
   params.grid_width = state->grid_width;
   params.current_page = request->pages - 1u;
   params.local_pages = 0;
@@ -2967,9 +3030,12 @@ extern "C" int nerva_cuda_rt_candidate_selector_launch(
   OptixCandidateParams params{};
   params.handle = handle->selector.traversable;
   params.candidate_pages = handle->candidate_pages;
+  params.queries = handle->selector.queries;
   params.pages = pages;
   params.query_count = handle->request.query_count;
   params.candidates_per_query = handle->request.candidates_per_query;
+  params.query_dims = handle->selector.query_dims;
+  params.query_derived_pages = handle->selector.query_derived_pages;
   params.grid_width = handle->selector.grid_width;
   params.current_page = current_page < pages ? current_page : pages - 1u;
   params.local_pages = local_pages;
@@ -3405,20 +3471,37 @@ extern "C" int nerva_cuda_experimental_rt_candidate_bench(
   out->kernel_launches += request->warmup_iterations + request->iterations;
 
   bool used_optix_selector = false;
+  const bool use_semantic_optix_selector =
+      env_truthy("NERVA_EXPERIMENTAL_RT_SEMANTIC_OPTIX");
 #if NERVA_HAVE_OPTIX_HEADERS
   if (out->optix_headers_available != 0) {
     OptixCandidateSelector optix_selector{};
     if (create_optix_candidate_selector(request, candidate_pages, stream,
-                                        &optix_selector, out)) {
+                                        &optix_selector, out,
+                                        use_semantic_optix_selector ? queries
+                                                                    : nullptr,
+                                        use_semantic_optix_selector
+                                            ? request->dims
+                                            : 0u,
+                                        use_semantic_optix_selector ? 1u
+                                                                    : 0u)) {
       used_optix_selector =
           time_optix_selector(request, &optix_selector, stream, start, stop,
                               &out->software_selector_total_ns, out);
       if (used_optix_selector) {
-        set_cstr(out->backend, sizeof(out->backend),
-                 "optix_rt_candidate_selector");
-        set_cstr(out->reason, sizeof(out->reason),
-                 "OptiX hardware traversal generated score-aligned synthetic "
-                 "page candidates; exact rerank remains CUDA");
+        if (use_semantic_optix_selector) {
+          set_cstr(out->backend, sizeof(out->backend),
+                   "optix_rt_query_descriptor_candidate_selector");
+          set_cstr(out->reason, sizeof(out->reason),
+                   "OptiX hardware traversal derived page candidates from "
+                   "query descriptors; exact rerank remains CUDA");
+        } else {
+          set_cstr(out->backend, sizeof(out->backend),
+                   "optix_rt_candidate_selector");
+          set_cstr(out->reason, sizeof(out->reason),
+                   "OptiX hardware traversal generated score-aligned synthetic "
+                   "page candidates; exact rerank remains CUDA");
+        }
         out->real_rt_backend_available = 1;
       }
     }
