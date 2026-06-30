@@ -72,6 +72,12 @@ struct DeepSeekVllmReferenceUnit {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+struct DeepSeekArtifactMetric {
+    value: f64,
+    source: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DeepSeekCudaPrimitiveBenchSample {
     pub(crate) name: String,
     pub(crate) status: &'static str,
@@ -412,19 +418,19 @@ fn deepseek_vllm_compare_json(
         _ => false,
     };
 
-    let vllm_tps = find_first_json_number_field(vllm_json, "tokens_per_second")?;
-    let nerva_tps = find_first_json_number_field(nerva_json, "tokens_per_second")?;
-    let throughput_speedup = match (nerva_tps, vllm_tps) {
-        (Some(nerva), Some(vllm)) if vllm > 0.0 => Some(nerva / vllm),
+    let vllm_tps = find_deepseek_throughput_metric(vllm_json)?;
+    let nerva_tps = find_deepseek_throughput_metric(nerva_json)?;
+    let throughput_speedup = match (&nerva_tps, &vllm_tps) {
+        (Some(nerva), Some(vllm)) if vllm.value > 0.0 => Some(nerva.value / vllm.value),
         _ => None,
     };
     let throughput_comparable = throughput_speedup.is_some();
     let throughput_ok = throughput_speedup.is_some_and(|speedup| speedup >= 1.0);
 
-    let vllm_p99 = find_deepseek_p99_ms(vllm_json)?;
-    let nerva_p99 = find_deepseek_p99_ms(nerva_json)?;
-    let p99_ratio = match (nerva_p99, vllm_p99) {
-        (Some(nerva), Some(vllm)) if vllm > 0.0 => Some(nerva / vllm),
+    let vllm_p99 = find_deepseek_p99_metric(vllm_json)?;
+    let nerva_p99 = find_deepseek_p99_metric(nerva_json)?;
+    let p99_ratio = match (&nerva_p99, &vllm_p99) {
+        (Some(nerva), Some(vllm)) if vllm.value > 0.0 => Some(nerva.value / vllm.value),
         _ => None,
     };
     let latency_comparable = p99_ratio.is_some();
@@ -447,7 +453,7 @@ fn deepseek_vllm_compare_json(
     let throughput_claim_allowed = token_parity && text_parity && throughput_ok;
 
     Ok(format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-compare-v1\",\"vllm_artifact\":\"{}\",\"nerva_artifact\":\"{}\",\"source_formats\":{{\"vllm\":\"{}\",\"nerva\":\"{}\"}},\"token_parity\":{},\"text_parity\":{},\"matched_tokens\":{},\"mismatched_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"first_mismatch_index\":{},\"vllm_token_hash\":{},\"nerva_token_hash\":{},\"vllm_generated_tokens\":{},\"nerva_generated_tokens\":{},\"vllm_tokens_per_second\":{},\"nerva_tokens_per_second\":{},\"throughput_speedup_vs_vllm\":{},\"throughput_comparable\":{},\"throughput_ok\":{},\"vllm_p99_ms\":{},\"nerva_p99_ms\":{},\"p99_ratio_vs_vllm\":{},\"latency_comparable\":{},\"latency_ok\":{},\"throughput_claim_allowed\":{},\"claim_allowed\":{},\"blocking_reasons\":{}}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-compare-v1\",\"vllm_artifact\":\"{}\",\"nerva_artifact\":\"{}\",\"source_formats\":{{\"vllm\":\"{}\",\"nerva\":\"{}\"}},\"token_parity\":{},\"text_parity\":{},\"matched_tokens\":{},\"mismatched_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"first_mismatch_index\":{},\"vllm_token_hash\":{},\"nerva_token_hash\":{},\"vllm_generated_tokens\":{},\"nerva_generated_tokens\":{},\"vllm_tokens_per_second\":{},\"vllm_throughput_source\":{},\"nerva_tokens_per_second\":{},\"nerva_throughput_source\":{},\"throughput_speedup_vs_vllm\":{},\"throughput_comparable\":{},\"throughput_ok\":{},\"vllm_p99_ms\":{},\"vllm_p99_source\":{},\"nerva_p99_ms\":{},\"nerva_p99_source\":{},\"p99_ratio_vs_vllm\":{},\"latency_comparable\":{},\"latency_ok\":{},\"throughput_claim_allowed\":{},\"claim_allowed\":{},\"blocking_reasons\":{}}}",
         status,
         json_escape(vllm_artifact_path),
         json_escape(nerva_artifact_path),
@@ -464,13 +470,17 @@ fn deepseek_vllm_compare_json(
         nerva_token_hash,
         vllm_tokens.len(),
         nerva_tokens.len(),
-        json_opt_f64(vllm_tps),
-        json_opt_f64(nerva_tps),
+        json_opt_metric_value(vllm_tps.as_ref()),
+        json_opt_metric_source(vllm_tps.as_ref()),
+        json_opt_metric_value(nerva_tps.as_ref()),
+        json_opt_metric_source(nerva_tps.as_ref()),
         json_opt_f64(throughput_speedup),
         throughput_comparable,
         throughput_ok,
-        json_opt_f64(vllm_p99),
-        json_opt_f64(nerva_p99),
+        json_opt_metric_value(vllm_p99.as_ref()),
+        json_opt_metric_source(vllm_p99.as_ref()),
+        json_opt_metric_value(nerva_p99.as_ref()),
+        json_opt_metric_source(nerva_p99.as_ref()),
         json_opt_f64(p99_ratio),
         latency_comparable,
         latency_ok,
@@ -2165,19 +2175,85 @@ fn deepseek_compare_blocking_reasons(
     reasons
 }
 
-fn find_deepseek_p99_ms(source: &str) -> Result<Option<f64>, String> {
-    for key in ["token_p99_ms", "p99_ms", "decode_p99_ms"] {
+fn find_deepseek_throughput_metric(source: &str) -> Result<Option<DeepSeekArtifactMetric>, String> {
+    for key in [
+        "post_load_tokens_per_second",
+        "critical_path_tokens_per_second",
+        "decode_tokens_per_second",
+        "tokens_per_second",
+        "end_to_end_tokens_per_second",
+    ] {
         if let Some(value) = find_first_json_number_field(source, key)? {
-            return Ok(Some(value));
+            return Ok(Some(DeepSeekArtifactMetric { value, source: key }));
         }
     }
     Ok(None)
 }
 
-fn find_first_json_number_field(source: &str, key: &str) -> Result<Option<f64>, String> {
-    let Some(start) = find_json_value_start_for_key(source, key)? else {
+fn find_deepseek_p99_metric(source: &str) -> Result<Option<DeepSeekArtifactMetric>, String> {
+    for key in ["token_p99_ms", "p99_ms", "decode_p99_ms"] {
+        if let Some(value) = find_first_json_number_field(source, key)? {
+            return Ok(Some(DeepSeekArtifactMetric { value, source: key }));
+        }
+    }
+    if let Some(value) = token_wall_latency_p99_ms(source)? {
+        return Ok(Some(DeepSeekArtifactMetric {
+            value,
+            source: "token_critical_paths.wall_latency_ns",
+        }));
+    }
+    Ok(None)
+}
+
+fn token_wall_latency_p99_ms(source: &str) -> Result<Option<f64>, String> {
+    let mut latencies = find_all_json_number_fields(source, "wall_latency_ns")?;
+    if latencies.is_empty() {
         return Ok(None);
-    };
+    }
+    latencies.sort_by(|left, right| left.total_cmp(right));
+    let rank = ((latencies.len() as f64) * 0.99).ceil().max(1.0) as usize;
+    let index = rank.saturating_sub(1).min(latencies.len() - 1);
+    Ok(Some(latencies[index] / 1_000_000.0))
+}
+
+fn json_opt_metric_value(metric: Option<&DeepSeekArtifactMetric>) -> String {
+    json_opt_f64(metric.map(|metric| metric.value))
+}
+
+fn json_opt_metric_source(metric: Option<&DeepSeekArtifactMetric>) -> String {
+    metric
+        .map(|metric| format!("\"{}\"", json_escape(metric.source)))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn find_all_json_number_fields(source: &str, key: &str) -> Result<Vec<f64>, String> {
+    let bytes = source.as_bytes();
+    let mut index = 0usize;
+    let mut values = Vec::new();
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let (field, after_field) = parse_json_string_at(source, index)?;
+        index = after_field;
+        if field != key {
+            continue;
+        }
+        let colon = skip_json_ws(bytes, after_field);
+        if bytes.get(colon) != Some(&b':') {
+            return Err(format!("JSON key {key} is missing ':'"));
+        }
+        let start = skip_json_ws(bytes, colon + 1);
+        if let Some(value) = parse_json_number_at(source, key, start)? {
+            values.push(value);
+        }
+        index = start.saturating_add(1);
+    }
+    Ok(values)
+}
+
+fn parse_json_number_at(source: &str, key: &str, start: usize) -> Result<Option<f64>, String> {
     let bytes = source.as_bytes();
     if bytes.get(start..start + 4) == Some(b"null") {
         return Ok(None);
@@ -2196,6 +2272,13 @@ fn find_first_json_number_field(source: &str, key: &str) -> Result<Option<f64>, 
         .parse::<f64>()
         .map(Some)
         .map_err(|_| format!("JSON key {key} is not a valid f64"))
+}
+
+fn find_first_json_number_field(source: &str, key: &str) -> Result<Option<f64>, String> {
+    let Some(start) = find_json_value_start_for_key(source, key)? else {
+        return Ok(None);
+    };
+    parse_json_number_at(source, key, start)
 }
 
 fn find_first_json_string_field(source: &str, key: &str) -> Result<Option<String>, String> {

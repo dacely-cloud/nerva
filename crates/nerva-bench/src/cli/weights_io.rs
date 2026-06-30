@@ -6,7 +6,7 @@ use crate::model_io::config::{
 };
 use crate::model_io::deepseek::{
     run_deepseek_cuda_primitive_bench, run_deepseek_cuda_readiness, run_deepseek_runtime_plan,
-    run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_parity_gate,
+    run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_compare, run_deepseek_vllm_parity_gate,
     run_deepseek_vllm_reference_audit,
 };
 use crate::model_io::resident::{
@@ -42,6 +42,10 @@ pub(crate) fn dispatch(
             run_deepseek_vllm_parity_gate(args.next(), args.next()),
         )),
         Some("deepseek-vllm-benchmark-plan") => Some(run_deepseek_vllm_benchmark_plan_cli(args)),
+        Some("deepseek-vllm-compare") => Some(exit::print_json_result(run_deepseek_vllm_compare(
+            args.next(),
+            args.next(),
+        ))),
         Some("safetensors") => Some(exit::print_json_result(run_safetensors_probe(
             args.next(),
             args.next(),

@@ -591,7 +591,7 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
     .unwrap();
     std::fs::write(
         &nerva_path,
-        r#"{"status":"ok","schema":"nerva-hf-cuda-generate-v1","tokens":[11,22,33],"generated_text":"same","perf":{"tokens_per_second":125.0,"token_p99_ms":9.0}}"#,
+        r#"{"status":"ok","schema":"nerva-hf-cuda-generate-v1","tokens":[11,22,33],"generated_text":"same","post_load_tokens_per_second":125.0,"critical_path_tokens_per_second":130.0,"chunks":[{"tokens_per_second":999.0}],"token_critical_paths":[{"wall_latency_ns":7000000},{"wall_latency_ns":8000000},{"wall_latency_ns":9000000}]}"#,
     )
     .unwrap();
 
@@ -606,9 +606,13 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
     assert!(json.contains("\"token_parity\":true"));
     assert!(json.contains("\"text_parity\":true"));
     assert!(json.contains("\"throughput_speedup_vs_vllm\":1.25"));
+    assert!(json.contains("\"vllm_throughput_source\":\"tokens_per_second\""));
+    assert!(json.contains("\"nerva_throughput_source\":\"post_load_tokens_per_second\""));
     assert!(json.contains("\"throughput_claim_allowed\":true"));
     assert!(json.contains("\"vllm_p99_ms\":10.0"));
+    assert!(json.contains("\"vllm_p99_source\":\"p99_ms\""));
     assert!(json.contains("\"nerva_p99_ms\":9.0"));
+    assert!(json.contains("\"nerva_p99_source\":\"token_critical_paths.wall_latency_ns\""));
     assert!(json.contains("\"p99_ratio_vs_vllm\":0.9"));
     assert!(json.contains("\"latency_ok\":true"));
     assert!(json.contains("\"claim_allowed\":true"));
