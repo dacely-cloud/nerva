@@ -1,5 +1,9 @@
-use crate::deepseek_kv::c4_indexer_topk::deepseek_c4_indexer_topk;
-use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
+use crate::deepseek_kv::c4_indexer_topk::{
+    deepseek_c4_indexer_topk, deepseek_c4_indexer_topk_reference,
+};
+use crate::deepseek_kv::c128_topk::{
+    deepseek_c128_topk_metadata, deepseek_c128_topk_metadata_reference,
+};
 use crate::deepseek_kv::compress_cache::{
     DEEPSEEK_COMPRESS_SCALE_E8M0, DEEPSEEK_COMPRESS_SCALE_F32, DEEPSEEK_COMPRESS_SCALE_MXFP4,
     deepseek_compress_norm_rope_fp8_cache,
@@ -150,6 +154,40 @@ fn deepseek_c128_topk_metadata_summary_serializes_vllm_metadata() {
     assert!(json.contains("\"num_prefill_tokens\":2"));
     assert!(json.contains("\"compress_ratio\":128"));
     assert!(json.contains("\"prefill_entries\":7"));
+}
+
+#[test]
+fn deepseek_c128_topk_metadata_reference_matches_vllm_kernel_math() {
+    let positions = [127, 255, 383, 511];
+    let token_to_req = [0, 1, 0, 1];
+    let block_table = [
+        40, 41, 42, 43, // request 0
+        50, 51, 52, 53, // request 1
+    ];
+    let slot_mapping = [10, -1, 12, 13];
+
+    let reference = deepseek_c128_topk_metadata_reference(
+        &positions,
+        2,
+        &token_to_req,
+        &block_table,
+        4,
+        &slot_mapping,
+        2,
+        128,
+        4,
+    )
+    .unwrap();
+
+    assert_eq!(
+        reference.global_decode,
+        vec![80, -1, -1, -1, 100, 101, -1, -1]
+    );
+    assert_eq!(reference.decode_lens, vec![1, 0]);
+    assert_eq!(reference.prefill_local, vec![0, 1, 2, -1, 0, 1, 2, 3]);
+    assert_eq!(reference.valid_decode_tokens, 1);
+    assert_eq!(reference.decode_entries, 1);
+    assert_eq!(reference.prefill_entries, 7);
 }
 
 #[test]
@@ -362,16 +400,31 @@ fn deepseek_c128_topk_metadata_smoke_is_repeatable_when_device_is_available() {
 
     let second = deepseek_c128_topk_metadata_smoke();
     assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    let reference = deepseek_c128_topk_metadata_reference(
+        &[127, 255, 383, 511],
+        2,
+        &[0, 1, 0, 1],
+        &[
+            40, 41, 42, 43, // request 0
+            50, 51, 52, 53, // request 1
+        ],
+        4,
+        &[10, -1, 12, 13],
+        2,
+        128,
+        4,
+    )
+    .unwrap();
     assert_eq!(second.num_tokens, 4);
     assert_eq!(second.num_decode_tokens, 2);
     assert_eq!(second.num_prefill_tokens, 2);
     assert_eq!(second.compress_ratio, 128);
-    assert_eq!(second.global_decode, vec![80, -1, -1, -1, 100, 101, -1, -1]);
-    assert_eq!(second.decode_lens, vec![1, 0]);
-    assert_eq!(second.prefill_local, vec![0, 1, 2, -1, 0, 1, 2, 3]);
-    assert_eq!(second.valid_decode_tokens, 1);
-    assert_eq!(second.decode_entries, 1);
-    assert_eq!(second.prefill_entries, 7);
+    assert_eq!(second.global_decode, reference.global_decode);
+    assert_eq!(second.decode_lens, reference.decode_lens);
+    assert_eq!(second.prefill_local, reference.prefill_local);
+    assert_eq!(second.valid_decode_tokens, reference.valid_decode_tokens);
+    assert_eq!(second.decode_entries, reference.decode_entries);
+    assert_eq!(second.prefill_entries, reference.prefill_entries);
     assert_eq!(second.output_hash, first.output_hash);
     assert_eq!(second.kernel_launches, 1);
     assert_eq!(second.sync_calls, 1);
@@ -389,13 +442,17 @@ fn deepseek_c4_indexer_topk_smoke_is_repeatable_when_device_is_available() {
 
     let second = deepseek_c4_indexer_topk_smoke();
     assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    let (query, key_cache, weights, context_lens) = c4_indexer_topk_fixture();
+    let (reference_indices, reference_scores) =
+        deepseek_c4_indexer_topk_reference(&query, &key_cache, &weights, &context_lens, 2, 2, 2, 2)
+            .unwrap();
     assert_eq!(second.num_tokens, 2);
     assert_eq!(second.num_heads, 2);
     assert_eq!(second.head_dim, 2);
     assert_eq!(second.max_compressed_tokens, 4);
     assert_eq!(second.topk_tokens, 2);
-    assert_eq!(second.topk_indices, vec![2, 0, 0, 1]);
-    assert!(scores_close(&second.topk_scores, &[1.5, 1.0, 2.0, 0.5]));
+    assert_eq!(second.topk_indices, reference_indices);
+    assert!(scores_close(&second.topk_scores, &reference_scores));
     assert_eq!(second.valid_tokens, 2);
     assert_eq!(second.selected_entries, 4);
     assert_eq!(second.output_hash, first.output_hash);
@@ -661,15 +718,24 @@ fn deepseek_c128_topk_metadata_matches_vllm_decode_and_prefill_math() {
         return;
     }
 
-    assert_eq!(
-        summary.global_decode,
-        vec![80, -1, -1, -1, 100, 101, -1, -1]
-    );
-    assert_eq!(summary.decode_lens, vec![1, 0]);
-    assert_eq!(summary.prefill_local, vec![0, 1, 2, -1, 0, 1, 2, 3]);
-    assert_eq!(summary.valid_decode_tokens, 1);
-    assert_eq!(summary.decode_entries, 1);
-    assert_eq!(summary.prefill_entries, 7);
+    let reference = deepseek_c128_topk_metadata_reference(
+        &positions,
+        2,
+        &token_to_req,
+        &block_table,
+        4,
+        &slot_mapping,
+        2,
+        128,
+        4,
+    )
+    .unwrap();
+    assert_eq!(summary.global_decode, reference.global_decode);
+    assert_eq!(summary.decode_lens, reference.decode_lens);
+    assert_eq!(summary.prefill_local, reference.prefill_local);
+    assert_eq!(summary.valid_decode_tokens, reference.valid_decode_tokens);
+    assert_eq!(summary.decode_entries, reference.decode_entries);
+    assert_eq!(summary.prefill_entries, reference.prefill_entries);
     assert!(summary.output_hash != 0);
 }
 
@@ -678,16 +744,38 @@ fn deepseek_c4_indexer_topk_matches_vllm_local_weighted_score_math() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
     let (query, key_cache, weights, context_lens) = c4_indexer_topk_fixture();
+    let (reference_indices, reference_scores) =
+        deepseek_c4_indexer_topk_reference(&query, &key_cache, &weights, &context_lens, 2, 2, 2, 2)
+            .unwrap();
     let summary = deepseek_c4_indexer_topk(&query, &key_cache, &weights, &context_lens, 2, 2, 2, 2);
     if summary.status != SmokeStatus::Ok {
         return;
     }
 
-    assert_eq!(summary.topk_indices, vec![2, 0, 0, 1]);
-    assert!(scores_close(&summary.topk_scores, &[1.5, 1.0, 2.0, 0.5]));
+    assert_eq!(summary.topk_indices, reference_indices);
+    assert!(scores_close(&summary.topk_scores, &reference_scores));
     assert_eq!(summary.valid_tokens, 2);
     assert_eq!(summary.selected_entries, 4);
     assert!(summary.output_hash != 0);
+}
+
+#[test]
+fn deepseek_c4_indexer_topk_reference_tie_breaks_lower_slot() {
+    let query = vec![1.0, 0.0];
+    let key_cache = vec![
+        1.0, 0.0, // slot 0
+        1.0, 0.0, // slot 1
+        0.5, 0.0, // slot 2
+    ];
+    let weights = vec![1.0];
+    let context_lens = vec![3];
+
+    let (indices, scores) =
+        deepseek_c4_indexer_topk_reference(&query, &key_cache, &weights, &context_lens, 1, 1, 2, 2)
+            .unwrap();
+
+    assert_eq!(indices, vec![0, 1]);
+    assert!(scores_close(&scores, &[1.0, 1.0]));
 }
 
 #[test]

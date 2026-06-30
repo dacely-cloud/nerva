@@ -773,8 +773,10 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_compressed_slot_mapping_smoke".to_string());
     }
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
+        primitives.push("deepseek_c128_topk_metadata_reference".to_string());
         primitives.push("cuda_deepseek_c128_topk_metadata_api".to_string());
         primitives.push("cuda_deepseek_c128_topk_metadata_smoke".to_string());
+        primitives.push("deepseek_c4_indexer_topk_reference".to_string());
         primitives.push("cuda_deepseek_c4_indexer_topk_api".to_string());
         primitives.push("cuda_deepseek_c4_indexer_topk_smoke".to_string());
         primitives.push("cuda_deepseek_save_partial_states_api".to_string());
@@ -1101,8 +1103,10 @@ fn coverage_for_unit(
                 "deepseek_compressed_slot_mapping_reference",
                 "cuda_deepseek_compressed_slot_mapping_api",
                 "cuda_deepseek_compressed_slot_mapping_smoke",
+                "deepseek_c128_topk_metadata_reference",
                 "cuda_deepseek_c128_topk_metadata_api",
                 "cuda_deepseek_c128_topk_metadata_smoke",
+                "deepseek_c4_indexer_topk_reference",
                 "cuda_deepseek_c4_indexer_topk_api",
                 "cuda_deepseek_c4_indexer_topk_smoke",
                 "cuda_hf_sequence_deepseek_v4_index_topk_descriptor",

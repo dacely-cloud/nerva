@@ -1,5 +1,9 @@
-use crate::deepseek_kv::c4_indexer_topk::deepseek_c4_indexer_topk;
-use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
+use crate::deepseek_kv::c4_indexer_topk::{
+    deepseek_c4_indexer_topk, deepseek_c4_indexer_topk_reference,
+};
+use crate::deepseek_kv::c128_topk::{
+    deepseek_c128_topk_metadata, deepseek_c128_topk_metadata_reference,
+};
 use crate::deepseek_kv::compress_cache::{
     CudaDeepSeekCompressNormRopeFp8CacheInput, DEEPSEEK_COMPRESS_SCALE_E8M0,
     DEEPSEEK_COMPRESS_SCALE_MXFP4, deepseek_compress_norm_rope_fp8_cache,
@@ -124,15 +128,37 @@ pub fn deepseek_c128_topk_metadata_smoke() -> CudaDeepSeekC128TopkMetadataSummar
         50, 51, 52, 53, // request 1
     ];
     let slot_mapping = [10, -1, 12, 13];
-    let expected_global = [
-        80, -1, -1, -1, // decode token 0, valid
-        100, 101, -1, -1, // decode token 1, invalid slot but row is populated
-    ];
-    let expected_decode_lens = [1, 0];
-    let expected_prefill = [
-        0, 1, 2, -1, // prefill token 0
-        0, 1, 2, 3, // prefill token 1
-    ];
+    let expected = match deepseek_c128_topk_metadata_reference(
+        &positions,
+        2,
+        &token_to_req,
+        &block_table,
+        4,
+        &slot_mapping,
+        2,
+        128,
+        4,
+    ) {
+        Ok(expected) => expected,
+        Err(err) => {
+            let mut failed = deepseek_c128_topk_metadata(
+                &positions,
+                2,
+                &token_to_req,
+                &block_table,
+                4,
+                &slot_mapping,
+                2,
+                128,
+                4,
+            );
+            failed.status = SmokeStatus::Failed;
+            failed.error = Some(format!(
+                "DeepSeek C128A top-k metadata reference failed: {err}"
+            ));
+            return failed;
+        }
+    };
 
     let summary = deepseek_c128_topk_metadata(
         &positions,
@@ -149,12 +175,12 @@ pub fn deepseek_c128_topk_metadata_smoke() -> CudaDeepSeekC128TopkMetadataSummar
         return summary;
     }
 
-    if summary.global_decode != expected_global
-        || summary.decode_lens != expected_decode_lens
-        || summary.prefill_local != expected_prefill
-        || summary.valid_decode_tokens != 1
-        || summary.decode_entries != 1
-        || summary.prefill_entries != 7
+    if summary.global_decode != expected.global_decode
+        || summary.decode_lens != expected.decode_lens
+        || summary.prefill_local != expected.prefill_local
+        || summary.valid_decode_tokens != expected.valid_decode_tokens
+        || summary.decode_entries != expected.decode_entries
+        || summary.prefill_entries != expected.prefill_entries
         || summary.kernel_launches != 1
         || summary.sync_calls != 1
         || summary.hot_path_allocations != 0
@@ -170,13 +196,32 @@ pub fn deepseek_c128_topk_metadata_smoke() -> CudaDeepSeekC128TopkMetadataSummar
 
 pub fn deepseek_c4_indexer_topk_smoke() -> CudaDeepSeekC4IndexerTopkSummary {
     let (query, key_cache, weights, context_lens) = c4_indexer_topk_fixture();
+    let (expected_indices, expected_scores) = match deepseek_c4_indexer_topk_reference(
+        &query,
+        &key_cache,
+        &weights,
+        &context_lens,
+        2,
+        2,
+        2,
+        2,
+    ) {
+        Ok(expected) => expected,
+        Err(err) => {
+            let mut failed =
+                deepseek_c4_indexer_topk(&query, &key_cache, &weights, &context_lens, 2, 2, 2, 2);
+            failed.status = SmokeStatus::Failed;
+            failed.error = Some(format!("DeepSeek C4 indexer top-k reference failed: {err}"));
+            return failed;
+        }
+    };
     let summary = deepseek_c4_indexer_topk(&query, &key_cache, &weights, &context_lens, 2, 2, 2, 2);
     if summary.status != SmokeStatus::Ok {
         return summary;
     }
 
-    if summary.topk_indices != vec![2, 0, 0, 1]
-        || !scores_close(&summary.topk_scores, &[1.5, 1.0, 2.0, 0.5])
+    if summary.topk_indices != expected_indices
+        || !scores_close(&summary.topk_scores, &expected_scores)
         || summary.valid_tokens != 2
         || summary.selected_entries != 4
         || summary.kernel_launches != 2
