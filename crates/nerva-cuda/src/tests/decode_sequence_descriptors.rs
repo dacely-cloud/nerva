@@ -1179,6 +1179,7 @@ fn deepseek_v4_compressed_dense_short_session_runs_through_sampling() {
         assert_eq!(summary.deepseek_compressed_kv_writes, 0);
         assert_eq!(summary.deepseek_indexer_state_writes, 0);
         assert_eq!(summary.deepseek_indexer_kv_writes, 0);
+        assert_eq!(summary.deepseek_compressed_kv_attention_reads, 0);
     });
 }
 
@@ -1220,6 +1221,7 @@ fn deepseek_v4_compressed_indexer_short_session_runs_through_sampling() {
         assert_eq!(summary.deepseek_compressed_kv_writes, 0);
         assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
         assert_eq!(summary.deepseek_indexer_kv_writes, 0);
+        assert_eq!(summary.deepseek_compressed_kv_attention_reads, 0);
     });
 }
 
@@ -1260,11 +1262,12 @@ fn deepseek_v4_compressed_indexer_writes_first_boundary_cache() {
         assert_eq!(summary.deepseek_compressed_kv_writes, 1);
         assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
         assert_eq!(summary.deepseek_indexer_kv_writes, 0);
+        assert_eq!(summary.deepseek_compressed_kv_attention_reads, 1);
     });
 }
 
 #[test]
-fn deepseek_v4_compressed_indexer_rejects_after_first_boundary_until_attention_reads_cache() {
+fn deepseek_v4_compressed_indexer_runs_past_first_boundary_with_compressed_attention() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
     let layer = tiny_deepseek_v4_descriptor_layer();
@@ -1285,18 +1288,22 @@ fn deepseek_v4_compressed_indexer_rejects_after_first_boundary_until_attention_r
         let summary = session.run(&[0], 5, None);
         assert_eq!(
             summary.status,
-            SmokeStatus::Failed,
-            "context past compress_ratio must fail until attention reads native compressed cache"
-        );
-        assert!(
-            summary
-                .error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("cuda_error="),
-            "failure should be surfaced as a CUDA runtime status: {:?}",
+            SmokeStatus::Ok,
+            "context past compress_ratio should read native compressed cache: {:?}",
             summary.error
         );
+        assert_eq!(summary.steps, 5);
+        assert_eq!(summary.tokens.len(), 5);
+        assert_eq!(summary.kv_tokens, 5);
+        assert_eq!(summary.graph_replays, 5);
+        assert_eq!(
+            summary.deepseek_compressor_state_writes,
+            summary.graph_replays
+        );
+        assert_eq!(summary.deepseek_compressed_kv_writes, 1);
+        assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
+        assert_eq!(summary.deepseek_indexer_kv_writes, 0);
+        assert_eq!(summary.deepseek_compressed_kv_attention_reads, 2);
     });
 }
 

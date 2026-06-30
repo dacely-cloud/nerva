@@ -480,6 +480,7 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t deepseek_compressed_kv_writes;
   uint64_t deepseek_indexer_state_writes;
   uint64_t deepseek_indexer_kv_writes;
+  uint64_t deepseek_compressed_kv_attention_reads;
 } NervaCudaHfDecodeSequenceResult;
 
 typedef struct NervaCudaHfDecodeSequenceLayoutPlanRequest {

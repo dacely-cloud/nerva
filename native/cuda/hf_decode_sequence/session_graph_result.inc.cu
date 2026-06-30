@@ -40,6 +40,8 @@ void fill_deepseek_runtime_counter_result(
       counters[kDeepSeekRuntimeCounterIndexerStateWrites];
   out->deepseek_indexer_kv_writes =
       counters[kDeepSeekRuntimeCounterIndexerKvWrites];
+  out->deepseek_compressed_kv_attention_reads =
+      counters[kDeepSeekRuntimeCounterCompressedKvAttentionReads];
 }
 
 uint32_t observed_from_slot_range(uint32_t steps, uint32_t has_eos_token,

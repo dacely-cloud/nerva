@@ -127,6 +127,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) deepseek_compressed_kv_writes: u64,
     pub(crate) deepseek_indexer_state_writes: u64,
     pub(crate) deepseek_indexer_kv_writes: u64,
+    pub(crate) deepseek_compressed_kv_attention_reads: u64,
 }
 
 #[repr(C)]

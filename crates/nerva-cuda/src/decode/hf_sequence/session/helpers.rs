@@ -120,6 +120,7 @@ pub(super) fn summary_from_run(
         deepseek_compressed_kv_writes: out.deepseek_compressed_kv_writes,
         deepseek_indexer_state_writes: out.deepseek_indexer_state_writes,
         deepseek_indexer_kv_writes: out.deepseek_indexer_kv_writes,
+        deepseek_compressed_kv_attention_reads: out.deepseek_compressed_kv_attention_reads,
         error: (return_code != 0 || out.status != 0).then(|| run_error(return_code, out)),
     }
 }

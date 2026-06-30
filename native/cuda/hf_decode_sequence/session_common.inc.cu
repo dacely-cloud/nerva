@@ -486,11 +486,9 @@ uint32_t session_deepseek_v4_compressed_context_limit(
 
 cudaError_t validate_deepseek_v4_compressed_context(
     const NervaCudaHfDecodeSequenceSession *session, uint32_t context_steps) {
-  const uint32_t limit = session_deepseek_v4_compressed_context_limit(session);
-  if (limit == 0 || context_steps <= limit) {
-    return cudaSuccess;
-  }
-  return cudaErrorNotSupported;
+  (void)session;
+  (void)context_steps;
+  return cudaSuccess;
 }
 
 uint64_t layout_deepseek_v3_qk_head_dim(const SequenceLayerLayout &layout) {

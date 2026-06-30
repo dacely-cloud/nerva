@@ -74,6 +74,7 @@ pub(crate) fn empty_summary(
         deepseek_compressed_kv_writes: 0,
         deepseek_indexer_state_writes: 0,
         deepseek_indexer_kv_writes: 0,
+        deepseek_compressed_kv_attention_reads: 0,
         error: Some(error),
     }
 }
