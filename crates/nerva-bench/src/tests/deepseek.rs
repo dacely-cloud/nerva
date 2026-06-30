@@ -561,6 +561,7 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"--vllm-root\""));
     assert!(json.contains("\"--max-model-len\""));
     assert!(json.contains("\"--max-tokens\""));
+    assert!(json.contains("\"--runs\""));
     assert!(json.contains("same greedy sampler temperature=0 top_p=1 top_k=0 seed=0"));
     assert!(json.contains("run deepseek-vllm-compare on the two JSON artifacts"));
 
@@ -578,7 +579,7 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
     let nerva_path = dir.join("nerva.json");
     std::fs::write(
         &vllm_path,
-        r#"{"status":"ok","schema":"nerva-vllm-generate-v1","tokens":[11,22,33],"generated_text":"same","tokens_per_second":100.0}"#,
+        r#"{"status":"ok","schema":"nerva-vllm-generate-v1","tokens":[11,22,33],"generated_text":"same","tokens_per_second":100.0,"request_p99_ms":30.0,"p99_ms":10.0}"#,
     )
     .unwrap();
     std::fs::write(
@@ -594,13 +595,16 @@ fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
     .expect("DeepSeek vLLM comparison should parse generated artifacts");
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-compare-v1\""));
-    assert!(json.contains("\"status\":\"throughput_ok_latency_missing\""));
+    assert!(json.contains("\"status\":\"ok\""));
     assert!(json.contains("\"token_parity\":true"));
     assert!(json.contains("\"text_parity\":true"));
     assert!(json.contains("\"throughput_speedup_vs_vllm\":1.25"));
     assert!(json.contains("\"throughput_claim_allowed\":true"));
-    assert!(json.contains("\"claim_allowed\":false"));
-    assert!(json.contains("p99 latency is missing from one or both artifacts"));
+    assert!(json.contains("\"vllm_p99_ms\":10.0"));
+    assert!(json.contains("\"nerva_p99_ms\":9.0"));
+    assert!(json.contains("\"p99_ratio_vs_vllm\":0.9"));
+    assert!(json.contains("\"latency_ok\":true"));
+    assert!(json.contains("\"claim_allowed\":true"));
 
     let mismatch_path = dir.join("nerva-mismatch.json");
     std::fs::write(

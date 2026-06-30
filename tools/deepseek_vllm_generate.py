@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vllm-root", default="/root/vllm")
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
+    parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--trust-remote-code", action="store_true", default=True)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--disable-log-stats", action="store_true", default=True)
@@ -50,8 +51,18 @@ def token_ids_from_output(output: Any) -> list[int]:
     return [int(token) for token in token_ids]
 
 
+def percentile(values: list[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    rank = max(1, int(quantile * len(sorted_values) + 0.999999))
+    return sorted_values[min(rank - 1, len(sorted_values) - 1)]
+
+
 def main() -> None:
     args = parse_args()
+    if args.runs <= 0:
+        raise SystemExit("--runs must be positive")
     prompt, prompt_mode = resolve_prompt(args.prompt)
 
     vllm_root = Path(args.vllm_root).resolve()
@@ -83,14 +94,28 @@ def main() -> None:
 
     tokenizer = llm.get_tokenizer()
     prompt_token_ids = tokenizer.encode(prompt)
-    started = time.perf_counter_ns()
-    outputs = llm.generate([prompt], sampling_params=sampling, use_tqdm=False)
-    elapsed_ns = time.perf_counter_ns() - started
+    outputs = None
+    latency_samples_ns: list[int] = []
+    total_elapsed_ns = 0
+    for _ in range(args.runs):
+        started = time.perf_counter_ns()
+        outputs = llm.generate([prompt], sampling_params=sampling, use_tqdm=False)
+        elapsed_ns = time.perf_counter_ns() - started
+        latency_samples_ns.append(elapsed_ns)
+        total_elapsed_ns += elapsed_ns
+
+    if outputs is None:
+        raise SystemExit("vLLM generation did not run")
     candidate = outputs[0].outputs[0]
     generated_token_ids = token_ids_from_output(candidate)
     generated_tokens = len(generated_token_ids)
+    best_elapsed_ns = min(latency_samples_ns)
+    request_p50_ms = percentile([sample / 1_000_000.0 for sample in latency_samples_ns], 0.50)
+    request_p95_ms = percentile([sample / 1_000_000.0 for sample in latency_samples_ns], 0.95)
+    request_p99_ms = percentile([sample / 1_000_000.0 for sample in latency_samples_ns], 0.99)
+    token_p99_ms = request_p99_ms / generated_tokens if generated_tokens > 0 else 0.0
     tokens_per_second = (
-        generated_tokens * 1_000_000_000.0 / elapsed_ns if elapsed_ns > 0 else 0.0
+        generated_tokens * 1_000_000_000.0 / best_elapsed_ns if best_elapsed_ns > 0 else 0.0
     )
 
     print(
@@ -107,6 +132,7 @@ def main() -> None:
                 "prompt_token_ids": [int(token) for token in prompt_token_ids],
                 "max_model_len": args.max_model_len,
                 "max_tokens": args.max_tokens,
+                "runs": args.runs,
                 "sampler": {
                     "temperature": args.temperature,
                     "top_p": args.top_p,
@@ -117,8 +143,16 @@ def main() -> None:
                 "tokens": generated_token_ids,
                 "generated_text": candidate.text,
                 "finish_reason": candidate.finish_reason,
-                "elapsed_wall_ns": elapsed_ns,
+                "elapsed_wall_ns": best_elapsed_ns,
+                "total_elapsed_wall_ns": total_elapsed_ns,
                 "tokens_per_second": tokens_per_second,
+                "request_p50_ms": request_p50_ms,
+                "request_p95_ms": request_p95_ms,
+                "request_p99_ms": request_p99_ms,
+                "p99_ms": token_p99_ms,
+                "latency_samples_ms": [
+                    sample / 1_000_000.0 for sample in latency_samples_ns
+                ],
             },
             separators=(",", ":"),
         )
