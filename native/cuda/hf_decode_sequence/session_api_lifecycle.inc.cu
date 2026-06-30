@@ -235,6 +235,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       kv_cache_width * sizeof(uint16_t) * 2;
   accumulate_deepseek_v4_compressed_runtime_bytes(
       layouts, request->max_context_tokens, session->kv_token_capacity,
+      &session->deepseek_swa_kv_bytes,
       &session->deepseek_compressor_state_bytes,
       &session->deepseek_compressed_kv_bytes,
       &session->deepseek_indexer_state_bytes,
@@ -247,6 +248,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     }
   }
   if (has_deepseek_layout || session->deepseek_compressor_state_bytes != 0 ||
+      session->deepseek_swa_kv_bytes != 0 ||
       session->deepseek_compressed_kv_bytes != 0 ||
       session->deepseek_indexer_state_bytes != 0 ||
       session->deepseek_indexer_kv_bytes != 0) {
@@ -310,6 +312,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   out->prefill_chunk_tokens = session->prefill_chunk_tokens;
   out->head_threads = session->head_threads;
   out->resident_weight_bytes = session->resident_weight_bytes;
+  out->deepseek_v4_swa_kv_bytes = session->deepseek_swa_kv_bytes;
   out->resident_kv_bytes = session_resident_kv_bytes(session);
   out->device_arena_bytes = session_device_footprint(session);
   out->pinned_host_bytes = session->slots_bytes + host_weight_bytes;
@@ -457,6 +460,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     failure_stage = kCreateStageKvValuesAlloc;
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_values),
                      session->kv_bytes / 2);
+  }
+  if (err == cudaSuccess && session->deepseek_swa_kv_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_deepseek_swa_kv),
+                     session->deepseek_swa_kv_bytes);
   }
   if (err == cudaSuccess && session->deepseek_compressor_state_bytes != 0) {
     failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
@@ -627,6 +635,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
                           session->deepseek_compressor_state_bytes,
                           session->stream);
   }
+  if (err == cudaSuccess && session->deepseek_swa_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_swa_kv, 0,
+                          session->deepseek_swa_kv_bytes, session->stream);
+  }
   if (err == cudaSuccess && session->deepseek_compressed_kv_bytes != 0) {
     err = cudaMemsetAsync(session->device_deepseek_compressed_kv, 0,
                           session->deepseek_compressed_kv_bytes,
@@ -782,6 +794,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
     err = cudaMemsetAsync(session->device_deepseek_compressor_state, 0,
                           session->deepseek_compressor_state_bytes,
                           session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_swa_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_swa_kv, 0,
+                          session->deepseek_swa_kv_bytes, session->stream);
   }
   if (err == cudaSuccess && session->deepseek_compressed_kv_bytes != 0) {
     err = cudaMemsetAsync(session->device_deepseek_compressed_kv, 0,
@@ -1014,6 +1030,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
     err = cudaMemsetAsync(session->device_deepseek_compressor_state, 0,
                           session->deepseek_compressor_state_bytes,
                           session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_swa_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_swa_kv, 0,
+                          session->deepseek_swa_kv_bytes, session->stream);
   }
   if (err == cudaSuccess && session->deepseek_compressed_kv_bytes != 0) {
     err = cudaMemsetAsync(session->device_deepseek_compressed_kv, 0,

@@ -60,6 +60,7 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_deepseek_indexer_state);
   cudaFree(session->device_deepseek_compressed_kv);
   cudaFree(session->device_deepseek_compressor_state);
+  cudaFree(session->device_deepseek_swa_kv);
   cudaFree(session->device_deepseek_runtime_counters);
   cudaFree(session->device_kv_values);
   cudaFree(session->device_kv_keys);
@@ -148,6 +149,7 @@ uint64_t session_device_footprint(
          session->decode_seq_len_bytes + session->linear_gdn_conv_state_bytes +
          session->linear_gdn_recurrent_state_bytes +
          session->packed_qkv_bytes + session->packed_gate_up_bytes + session->kv_bytes +
+         session->deepseek_swa_kv_bytes +
          session->deepseek_compressor_state_bytes +
          session->deepseek_compressed_kv_bytes +
          session->deepseek_indexer_state_bytes +
@@ -169,6 +171,7 @@ uint64_t session_fixed_footprint_without_prefill_chunk(
          session->decode_seq_len_bytes + session->linear_gdn_conv_state_bytes +
          session->linear_gdn_recurrent_state_bytes +
          session->packed_qkv_bytes + session->packed_gate_up_bytes + session->kv_bytes +
+         session->deepseek_swa_kv_bytes +
          session->deepseek_compressor_state_bytes +
          session->deepseek_compressed_kv_bytes +
          session->deepseek_indexer_state_bytes +
@@ -196,6 +199,7 @@ uint64_t session_resident_kv_bytes(
     return 0;
   }
   uint64_t bytes = session->kv_bytes;
+  bytes = sat_add_u64(bytes, session->deepseek_swa_kv_bytes);
   bytes = sat_add_u64(bytes, session->deepseek_compressor_state_bytes);
   bytes = sat_add_u64(bytes, session->deepseek_compressed_kv_bytes);
   bytes = sat_add_u64(bytes, session->deepseek_indexer_state_bytes);
@@ -305,6 +309,18 @@ uint64_t deepseek_v4_main_compressed_kv_page_bytes(
                                   kDeepSeekV4PackedKvAlignmentBytes);
 }
 
+uint64_t deepseek_v4_swa_kv_page_bytes(const SequenceLayerLayout &layout) {
+  const uint64_t token_bytes =
+      deepseek_v4_main_compressed_kv_token_bytes(layout);
+  if (token_bytes == 0) {
+    return 0;
+  }
+  const uint64_t real_page_bytes =
+      sat_mul_u64(kDeepSeekV4PackedKvDefaultBlockTokens, token_bytes);
+  return deepseek_v4_round_up_u64(real_page_bytes,
+                                  kDeepSeekV4PackedKvAlignmentBytes);
+}
+
 uint64_t deepseek_v4_indexer_kv_token_bytes(
     const SequenceLayerLayout &layout) {
   if (layout.deepseek_index_head_dim == 0) {
@@ -340,6 +356,51 @@ uint64_t deepseek_v4_main_compressed_kv_layer_bytes(
       deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio);
   const uint64_t blocks = block_tokens == 0 ? 0 : compressed_capacity / block_tokens;
   return sat_mul_u64(blocks, deepseek_v4_main_compressed_kv_page_bytes(layout));
+}
+
+uint64_t deepseek_v4_swa_kv_layer_bytes(
+    const SequenceLayerLayout &layout, uint32_t max_context_tokens) {
+  if (!layout_is_deepseek_v4_swa_native(layout) &&
+      !layout_is_deepseek_v4_compressed_native(layout)) {
+    return 0;
+  }
+  const uint64_t blocks =
+      (static_cast<uint64_t>(max_context_tokens) +
+       kDeepSeekV4PackedKvDefaultBlockTokens - 1u) /
+      kDeepSeekV4PackedKvDefaultBlockTokens;
+  return sat_mul_u64(blocks, deepseek_v4_swa_kv_page_bytes(layout));
+}
+
+uint64_t deepseek_v4_swa_kv_layer_offset_bytes(
+    const NervaCudaHfDecodeSequenceSession *session,
+    uint32_t target_layer_index) {
+  if (session == nullptr) {
+    return 0;
+  }
+  uint64_t offset = 0;
+  const uint32_t capped_layer =
+      std::min(target_layer_index,
+               static_cast<uint32_t>(session->host_layouts.size()));
+  for (uint32_t layer_index = 0; layer_index < capped_layer; ++layer_index) {
+    offset = sat_add_u64(
+        offset, deepseek_v4_swa_kv_layer_bytes(session->host_layouts[layer_index],
+                                               session->max_context_tokens));
+  }
+  return offset;
+}
+
+uint32_t deepseek_v4_swa_kv_block_count(
+    const NervaCudaHfDecodeSequenceSession *session,
+    const SequenceLayerLayout &layout) {
+  if (session == nullptr ||
+      (!layout_is_deepseek_v4_swa_native(layout) &&
+       !layout_is_deepseek_v4_compressed_native(layout))) {
+    return 0;
+  }
+  return static_cast<uint32_t>(
+      (static_cast<uint64_t>(session->max_context_tokens) +
+       kDeepSeekV4PackedKvDefaultBlockTokens - 1u) /
+      kDeepSeekV4PackedKvDefaultBlockTokens);
 }
 
 uint64_t deepseek_v4_main_compressed_kv_layer_offset_bytes(
@@ -475,14 +536,17 @@ uint64_t deepseek_v4_indexer_state_layer_offset_bytes(
 
 void accumulate_deepseek_v4_compressed_runtime_bytes(
     const std::vector<SequenceLayerLayout> &layouts, uint32_t max_context_tokens,
-    uint32_t kv_token_capacity, uint64_t *compressor_state_bytes,
-    uint64_t *compressed_kv_bytes, uint64_t *indexer_state_bytes,
-    uint64_t *indexer_kv_bytes) {
+    uint32_t kv_token_capacity, uint64_t *swa_kv_bytes,
+    uint64_t *compressor_state_bytes, uint64_t *compressed_kv_bytes,
+    uint64_t *indexer_state_bytes, uint64_t *indexer_kv_bytes) {
+  uint64_t swa_kv = 0;
   uint64_t main_state = 0;
   uint64_t main_kv = 0;
   uint64_t idx_state = 0;
   uint64_t idx_kv = 0;
   for (const SequenceLayerLayout &layout : layouts) {
+    swa_kv = sat_add_u64(
+        swa_kv, deepseek_v4_swa_kv_layer_bytes(layout, max_context_tokens));
     if (!layout_is_deepseek_v4_compressed_native(layout)) {
       continue;
     }
@@ -503,6 +567,7 @@ void accumulate_deepseek_v4_compressed_runtime_bytes(
           deepseek_v4_indexer_kv_layer_bytes(layout, max_context_tokens));
     }
   }
+  if (swa_kv_bytes != nullptr) *swa_kv_bytes = swa_kv;
   if (compressor_state_bytes != nullptr) *compressor_state_bytes = main_state;
   if (compressed_kv_bytes != nullptr) *compressed_kv_bytes = main_kv;
   if (indexer_state_bytes != nullptr) *indexer_state_bytes = idx_state;

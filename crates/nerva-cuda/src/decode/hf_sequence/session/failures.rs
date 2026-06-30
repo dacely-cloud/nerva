@@ -40,6 +40,7 @@ pub(super) fn failed_create_summary(
         experimental_rt_sink_tokens: request.experimental_rt.sink_tokens,
         deepseek_v4_attention_aux_streams: 0,
         deepseek_v4_attention_events: 0,
+        deepseek_v4_swa_kv_bytes: 0,
         resident_kv_bytes: 0,
         device_arena_bytes: 0,
         device_total_memory_bytes: None,

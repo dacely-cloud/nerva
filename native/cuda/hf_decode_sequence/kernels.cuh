@@ -148,6 +148,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     const uint32_t *kv_block_table, uint32_t vocab_size,
     const uint32_t *prompt_tokens, uint32_t prompt_token_count,
     const NervaCudaSyntheticTokenSlot *slots, uint16_t *projection_input,
+    uint8_t *deepseek_swa_kv, uint64_t deepseek_swa_kv_offset_bytes,
+    uint32_t deepseek_swa_kv_block_count,
     float *deepseek_compressor_state,
     uint64_t deepseek_compressor_state_offset_bytes,
     uint8_t *deepseek_compressed_kv,

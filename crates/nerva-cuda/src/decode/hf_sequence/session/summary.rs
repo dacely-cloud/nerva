@@ -35,6 +35,7 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
     pub experimental_rt_sink_tokens: u32,
     pub deepseek_v4_attention_aux_streams: u32,
     pub deepseek_v4_attention_events: u32,
+    pub deepseek_v4_swa_kv_bytes: u64,
     pub resident_kv_bytes: u64,
     pub device_arena_bytes: u64,
     pub device_total_memory_bytes: Option<usize>,
@@ -50,7 +51,7 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
 impl CudaHfDecodeSequenceSessionCreateSummary {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"status\":\"{}\",\"failure_stage\":{},\"failure_stage_label\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"experimental_rt_decode_requested\":{},\"experimental_rt_decode_enabled\":{},\"experimental_rt_mode\":{},\"experimental_rt_page_tokens\":{},\"experimental_rt_pages\":{},\"experimental_rt_local_window_tokens\":{},\"experimental_rt_sink_tokens\":{},\"deepseek_v4_attention_aux_streams\":{},\"deepseek_v4_attention_events\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            "{{\"status\":\"{}\",\"failure_stage\":{},\"failure_stage_label\":\"{}\",\"dtype\":{},\"hidden\":{},\"heads\":{},\"kv_heads\":{},\"head_dim\":{},\"intermediate\":{},\"vocab_size\":{},\"layer_count\":{},\"max_context_tokens\":{},\"prefill_chunk_tokens\":{},\"head_threads\":{},\"resident_weight_bytes\":{},\"planned_weight_blocks\":{},\"planned_gpu_resident_blocks\":{},\"planned_gpu_staged_blocks\":{},\"planned_weight_bytes\":{},\"descriptor_gpu_resident_H2D_bytes\":{},\"descriptor_gpu_staged_H2D_bytes\":{},\"planned_weight_descriptor_count\":{},\"planned_weight_descriptor_hash\":{},\"experimental_rt_decode_requested\":{},\"experimental_rt_decode_enabled\":{},\"experimental_rt_mode\":{},\"experimental_rt_page_tokens\":{},\"experimental_rt_pages\":{},\"experimental_rt_local_window_tokens\":{},\"experimental_rt_sink_tokens\":{},\"deepseek_v4_attention_aux_streams\":{},\"deepseek_v4_attention_events\":{},\"deepseek_v4_swa_kv_bytes\":{},\"resident_kv_bytes\":{},\"device_arena_bytes\":{},\"device_total_memory_bytes\":{},\"device_free_memory_bytes\":{},\"fits_device_free_memory\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
             status_str(&self.status),
             self.failure_stage,
             create_stage_label(self.failure_stage),
@@ -83,6 +84,7 @@ impl CudaHfDecodeSequenceSessionCreateSummary {
             self.experimental_rt_sink_tokens,
             self.deepseek_v4_attention_aux_streams,
             self.deepseek_v4_attention_events,
+            self.deepseek_v4_swa_kv_bytes,
             self.resident_kv_bytes,
             self.device_arena_bytes,
             json_opt_usize(self.device_total_memory_bytes),
@@ -141,6 +143,7 @@ pub(crate) fn create_summary_from_result(
         experimental_rt_sink_tokens: out.experimental_rt_sink_tokens,
         deepseek_v4_attention_aux_streams: out.deepseek_v4_attention_aux_streams,
         deepseek_v4_attention_events: out.deepseek_v4_attention_events,
+        deepseek_v4_swa_kv_bytes: out.deepseek_v4_swa_kv_bytes,
         resident_kv_bytes: out.resident_kv_bytes,
         device_arena_bytes: out.device_arena_bytes,
         device_total_memory_bytes,

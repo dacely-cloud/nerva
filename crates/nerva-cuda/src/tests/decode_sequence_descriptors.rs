@@ -1558,6 +1558,10 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
                 created.summary.deepseek_v4_attention_events, 4,
                 "V4 SWA attention sessions should provision aux stream events"
             );
+            assert_eq!(
+                created.summary.deepseek_v4_swa_kv_bytes, 576,
+                "V4 SWA must reserve one vLLM-aligned fp8_ds_mla page"
+            );
             swa_kv_bytes = Some(created.summary.resident_kv_bytes);
         },
     );
@@ -1583,6 +1587,10 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
         assert_eq!(
             created.summary.deepseek_v4_attention_events, 4,
             "V4 attention sessions should provision fan-out/join events for aux streams"
+        );
+        assert_eq!(
+            created.summary.deepseek_v4_swa_kv_bytes, 576,
+            "V4 compressed-indexer layers still reserve the local SWA fp8_ds_mla page"
         );
         assert!(
             created.summary.resident_kv_bytes > swa_kv_bytes,
@@ -1621,7 +1629,11 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
             "V4 C128 attention sessions should provision aux stream events"
         );
         assert_eq!(
-            created.summary.resident_kv_bytes - 2048,
+            created.summary.deepseek_v4_swa_kv_bytes, 2304,
+            "V4 SWA cache must reserve four 64-token fp8_ds_mla pages for 256 tokens"
+        );
+        assert_eq!(
+            created.summary.resident_kv_bytes - 2048 - created.summary.deepseek_v4_swa_kv_bytes,
             4096 + 576 + 4096 + 576,
             "V4 C128 compressed/indexer runtime caches must reserve two-token vLLM-aligned packed pages"
         );

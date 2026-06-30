@@ -755,6 +755,112 @@ __device__ float deepseek_session_read_fp8_ds_mla_compressed_kv(
   return deepseek_session_bf16_bits_to_f32(bits);
 }
 
+__device__ bool deepseek_session_write_fp8_ds_mla_swa_kv(
+    uint8_t *kv_cache, uint64_t kv_offset_bytes, uint32_t block_count,
+    const SequenceLayerLayout &layout, uint32_t position, const float *kv) {
+  const uint32_t nope = layout.deepseek_qk_nope_head_dim;
+  const uint32_t rope = layout.deepseek_qk_rope_head_dim;
+  const uint32_t head_dim = nope + rope;
+  if (kv_cache == nullptr || kv == nullptr || head_dim == 0) {
+    return false;
+  }
+  const uint32_t block =
+      position / kDeepSeekV4PackedKvDefaultBlockTokens;
+  if (block >= block_count) {
+    return false;
+  }
+  const uint32_t token_stride = nope + rope * 2u;
+  const uint32_t scale_dim = nope / 64u + 1u;
+  const uint32_t kv_pos =
+      position % kDeepSeekV4PackedKvDefaultBlockTokens;
+  const uint64_t block_stride = deepseek_v4_round_up_u64(
+      static_cast<uint64_t>(kDeepSeekV4PackedKvDefaultBlockTokens) *
+          static_cast<uint64_t>(token_stride + scale_dim),
+      kDeepSeekV4PackedKvAlignmentBytes);
+  uint8_t *block_ptr =
+      kv_cache + kv_offset_bytes + static_cast<uint64_t>(block) * block_stride;
+  uint8_t *data_ptr = block_ptr + static_cast<uint64_t>(kv_pos) * token_stride;
+  uint8_t *scale_ptr =
+      block_ptr +
+      static_cast<uint64_t>(kDeepSeekV4PackedKvDefaultBlockTokens) *
+          token_stride +
+      static_cast<uint64_t>(kv_pos) * scale_dim;
+  const uint32_t quant_block = 64u;
+  for (uint32_t scale_index = 0; scale_index < scale_dim; ++scale_index) {
+    const uint32_t start = scale_index * quant_block;
+    const uint32_t end =
+        start + quant_block < nope ? start + quant_block : nope;
+    float absmax = 0.0f;
+    for (uint32_t dim = start; dim < end; ++dim) {
+      const float quant_input = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(kv[dim]));
+      absmax = fmaxf(absmax, fabsf(quant_input));
+    }
+    const float raw = fmaxf(absmax, 1.0e-4f) / 448.0f;
+    const float scale = exp2f(ceilf(log2f(raw)));
+    scale_ptr[scale_index] =
+        start < nope ? deepseek_session_encode_e8m0_scale(scale) : 0u;
+    for (uint32_t dim = start; dim < end; ++dim) {
+      const float quant_input = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(kv[dim]));
+      const float scaled = fminf(fmaxf(quant_input / scale, -448.0f), 448.0f);
+      data_ptr[dim] = deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
+    }
+  }
+  for (uint32_t dim = nope; dim < head_dim; ++dim) {
+    const uint16_t bits = deepseek_session_f32_to_bf16_bits(kv[dim]);
+    const uint32_t rope_local = dim - nope;
+    data_ptr[nope + rope_local * 2u] = static_cast<uint8_t>(bits & 0xffu);
+    data_ptr[nope + rope_local * 2u + 1u] =
+        static_cast<uint8_t>(bits >> 8u);
+  }
+  return true;
+}
+
+__device__ float deepseek_session_read_fp8_ds_mla_swa_kv(
+    const uint8_t *kv_cache, uint64_t kv_offset_bytes, uint32_t block_count,
+    const SequenceLayerLayout &layout, uint32_t position, uint32_t dim) {
+  const uint32_t nope = layout.deepseek_qk_nope_head_dim;
+  const uint32_t rope = layout.deepseek_qk_rope_head_dim;
+  const uint32_t head_dim = nope + rope;
+  if (kv_cache == nullptr || dim >= head_dim) {
+    return 0.0f;
+  }
+  const uint32_t block =
+      position / kDeepSeekV4PackedKvDefaultBlockTokens;
+  if (block >= block_count) {
+    return 0.0f;
+  }
+  const uint32_t token_stride = nope + rope * 2u;
+  const uint32_t scale_dim = nope / 64u + 1u;
+  const uint32_t kv_pos =
+      position % kDeepSeekV4PackedKvDefaultBlockTokens;
+  const uint64_t block_stride = deepseek_v4_round_up_u64(
+      static_cast<uint64_t>(kDeepSeekV4PackedKvDefaultBlockTokens) *
+          static_cast<uint64_t>(token_stride + scale_dim),
+      kDeepSeekV4PackedKvAlignmentBytes);
+  const uint8_t *block_ptr =
+      kv_cache + kv_offset_bytes + static_cast<uint64_t>(block) * block_stride;
+  const uint8_t *data_ptr =
+      block_ptr + static_cast<uint64_t>(kv_pos) * token_stride;
+  const uint8_t *scale_ptr =
+      block_ptr +
+      static_cast<uint64_t>(kDeepSeekV4PackedKvDefaultBlockTokens) *
+          token_stride +
+      static_cast<uint64_t>(kv_pos) * scale_dim;
+  if (dim < nope) {
+    const uint32_t scale_index = dim / 64u;
+    const float scale =
+        nerva::deepseek::e8m0_exponent_bits_to_f32(scale_ptr[scale_index]);
+    return nerva::deepseek::f8_e4m3fn_bits_to_f32(data_ptr[dim]) * scale;
+  }
+  const uint32_t rope_local = dim - nope;
+  const uint32_t offset = nope + rope_local * 2u;
+  const uint16_t bits = static_cast<uint16_t>(data_ptr[offset]) |
+                        (static_cast<uint16_t>(data_ptr[offset + 1u]) << 8u);
+  return deepseek_session_bf16_bits_to_f32(bits);
+}
+
 __device__ float deepseek_session_read_indexer_fp8_compressed_kv(
     const uint8_t *kv_cache, uint64_t kv_offset_bytes,
     uint32_t compressed_block_count, const SequenceLayerLayout &layout,
@@ -1684,6 +1790,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     const uint32_t *kv_block_table, uint32_t vocab_size,
     const uint32_t *prompt_tokens, uint32_t prompt_token_count,
     const NervaCudaSyntheticTokenSlot *slots, uint16_t *projection_input,
+    uint8_t *deepseek_swa_kv, uint64_t deepseek_swa_kv_offset_bytes,
+    uint32_t deepseek_swa_kv_block_count,
     float *deepseek_compressor_state,
     uint64_t deepseek_compressor_state_offset_bytes,
     uint8_t *deepseek_compressed_kv,
@@ -1998,13 +2106,19 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     }
   }
 
-  const uint64_t write_base =
-      kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
-                          position, head_dim, 0);
-  for (uint32_t dim = 0; dim < head_dim; ++dim) {
-    const uint16_t encoded = f32_to_encoded(s.k[dim], dtype);
-    kv_keys[write_base + dim] = encoded;
-    kv_values[write_base + dim] = encoded;
+  const bool use_packed_swa_kv =
+      deepseek_session_write_fp8_ds_mla_swa_kv(
+          deepseek_swa_kv, deepseek_swa_kv_offset_bytes,
+          deepseek_swa_kv_block_count, layout, position, s.k);
+  if (!use_packed_swa_kv) {
+    const uint64_t write_base =
+        kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
+                            position, head_dim, 0);
+    for (uint32_t dim = 0; dim < head_dim; ++dim) {
+      const uint16_t encoded = f32_to_encoded(s.k[dim], dtype);
+      kv_keys[write_base + dim] = encoded;
+      kv_values[write_base + dim] = encoded;
+    }
   }
 
   const float attn_scale = rsqrtf(static_cast<float>(head_dim));
@@ -2098,8 +2212,13 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
                               token, head_dim, 0);
       float score = 0.0f;
       for (uint32_t dim = 0; dim < head_dim; ++dim) {
-        score += s.q[head_start + dim] *
-                 encoded_to_f32(kv_keys[token_base + dim], dtype);
+        const float key_value =
+            use_packed_swa_kv
+                ? deepseek_session_read_fp8_ds_mla_swa_kv(
+                      deepseek_swa_kv, deepseek_swa_kv_offset_bytes,
+                      deepseek_swa_kv_block_count, layout, token, dim)
+                : encoded_to_f32(kv_keys[token_base + dim], dtype);
+        score += s.q[head_start + dim] * key_value;
       }
       score *= attn_scale;
       const float next_m = fmaxf(local_m, score);
@@ -2107,9 +2226,14 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
       const float new_scale = expf(score - next_m);
       for (uint32_t dim = 0; dim < head_dim; ++dim) {
         const uint32_t out = head_start + dim;
+        const float value =
+            use_packed_swa_kv
+                ? deepseek_session_read_fp8_ds_mla_swa_kv(
+                      deepseek_swa_kv, deepseek_swa_kv_offset_bytes,
+                      deepseek_swa_kv_block_count, layout, token, dim)
+                : encoded_to_f32(kv_values[token_base + dim], dtype);
         s.attn[out] =
-            s.attn[out] * old_scale +
-            encoded_to_f32(kv_values[token_base + dim], dtype) * new_scale;
+            s.attn[out] * old_scale + value * new_scale;
       }
       local_l = local_l * old_scale + new_scale;
       local_m = next_m;

@@ -418,6 +418,15 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
   session->packed_qkv_bytes = parent->packed_qkv_bytes;
   session->packed_gate_up_bytes = parent->packed_gate_up_bytes;
   session->kv_bytes = parent->kv_bytes;
+  session->deepseek_swa_kv_bytes = parent->deepseek_swa_kv_bytes;
+  session->deepseek_compressor_state_bytes =
+      parent->deepseek_compressor_state_bytes;
+  session->deepseek_compressed_kv_bytes =
+      parent->deepseek_compressed_kv_bytes;
+  session->deepseek_indexer_state_bytes = parent->deepseek_indexer_state_bytes;
+  session->deepseek_indexer_kv_bytes = parent->deepseek_indexer_kv_bytes;
+  session->deepseek_runtime_counters_bytes =
+      parent->deepseek_runtime_counters_bytes;
   session->kv_block_table_bytes = parent->kv_block_table_bytes;
   session->slots_bytes = parent->slots_bytes;
   session->prompt_bytes = parent->prompt_bytes;
@@ -550,6 +559,41 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_values),
                      session->kv_bytes / 2);
   }
+  if (err == cudaSuccess && session->deepseek_swa_kv_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(reinterpret_cast<void **>(&session->device_deepseek_swa_kv),
+                     session->deepseek_swa_kv_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_compressor_state_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_compressor_state),
+        session->deepseek_compressor_state_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_compressed_kv_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_compressed_kv),
+        session->deepseek_compressed_kv_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_state_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_indexer_state),
+        session->deepseek_indexer_state_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_indexer_kv_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_indexer_kv),
+        session->deepseek_indexer_kv_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
+    failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_runtime_counters),
+        session->deepseek_runtime_counters_bytes);
+  }
   if (err == cudaSuccess) {
     err = cudaMalloc(reinterpret_cast<void **>(&session->device_kv_block_table),
                      session->kv_block_table_bytes);
@@ -634,6 +678,40 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
         session->device_kv_block_table, session->kv_block_count);
     err = cudaGetLastError();
   }
+  if (err == cudaSuccess && !clone_active_state &&
+      session->deepseek_swa_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_swa_kv, 0,
+                          session->deepseek_swa_kv_bytes, session->stream);
+  }
+  if (err == cudaSuccess && !clone_active_state &&
+      session->deepseek_compressor_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_compressor_state, 0,
+                          session->deepseek_compressor_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && !clone_active_state &&
+      session->deepseek_compressed_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_compressed_kv, 0,
+                          session->deepseek_compressed_kv_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && !clone_active_state &&
+      session->deepseek_indexer_state_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_indexer_state, 0,
+                          session->deepseek_indexer_state_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && !clone_active_state &&
+      session->deepseek_indexer_kv_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_indexer_kv, 0,
+                          session->deepseek_indexer_kv_bytes, session->stream);
+  }
+  if (err == cudaSuccess && !clone_active_state &&
+      session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_runtime_counters, 0,
+                          session->deepseek_runtime_counters_bytes,
+                          session->stream);
+  }
   if (err == cudaSuccess && !clone_active_state) {
     failure_stage = kCreateStageProjectionPlanAutotune;
     err = autotune_session_lt_gemv_plans(session);
@@ -667,6 +745,48 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_fork_shared_weights(
     err = cudaMemcpyAsync(session->device_kv_values, parent->device_kv_values,
                           session->kv_bytes / 2, cudaMemcpyDeviceToDevice,
                           session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state &&
+      session->deepseek_swa_kv_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_swa_kv,
+                          parent->device_deepseek_swa_kv,
+                          session->deepseek_swa_kv_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state &&
+      session->deepseek_compressor_state_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_compressor_state,
+                          parent->device_deepseek_compressor_state,
+                          session->deepseek_compressor_state_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state &&
+      session->deepseek_compressed_kv_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_compressed_kv,
+                          parent->device_deepseek_compressed_kv,
+                          session->deepseek_compressed_kv_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state &&
+      session->deepseek_indexer_state_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_indexer_state,
+                          parent->device_deepseek_indexer_state,
+                          session->deepseek_indexer_state_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state &&
+      session->deepseek_indexer_kv_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_indexer_kv,
+                          parent->device_deepseek_indexer_kv,
+                          session->deepseek_indexer_kv_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && clone_active_state &&
+      session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_runtime_counters,
+                          parent->device_deepseek_runtime_counters,
+                          session->deepseek_runtime_counters_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
   }
   if (err == cudaSuccess && clone_active_state) {
     session->active_prompt_token_count = parent->active_prompt_token_count;

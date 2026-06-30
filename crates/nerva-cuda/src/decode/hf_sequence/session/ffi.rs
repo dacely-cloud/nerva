@@ -82,6 +82,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionCreateResult {
     pub(crate) experimental_rt_sink_tokens: u32,
     pub(crate) deepseek_v4_attention_aux_streams: u32,
     pub(crate) deepseek_v4_attention_events: u32,
+    pub(crate) deepseek_v4_swa_kv_bytes: u64,
     pub(crate) resident_kv_bytes: u64,
     pub(crate) device_arena_bytes: u64,
     pub(crate) pinned_host_bytes: u64,

@@ -633,6 +633,7 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
   uint32_t experimental_rt_sink_tokens;
   uint32_t deepseek_v4_attention_aux_streams;
   uint32_t deepseek_v4_attention_events;
+  uint64_t deepseek_v4_swa_kv_bytes;
   uint64_t resident_kv_bytes;
   uint64_t device_arena_bytes;
   uint64_t pinned_host_bytes;

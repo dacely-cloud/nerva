@@ -623,6 +623,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_index_topk_descriptor".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_window_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut".to_string());
@@ -808,8 +809,9 @@ fn coverage_for_unit(
                 "cuda_deepseek_mla_decode_api",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_v4_swa_window_runtime",
+                "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime",
             ],
-            &["allocate and commit vLLM DeepseekV4 SWA cache pages"],
+            &["verify V4 SWA fp8_ds_mla page contents against vLLM FlashMLA"],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_fp8_ds_mla_cache") => (
             "partial",
