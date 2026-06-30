@@ -2,8 +2,9 @@ use crate::decode::hf_chain::layer::{
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR,
     CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
-    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer,
+    CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::layout_plan::{
@@ -182,6 +183,50 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     assert!(descriptor.w_gate.is_null());
     assert_eq!(descriptor.deepseek_mode, deepseek.mode);
     assert_eq!(descriptor.deepseek_flags, deepseek.flags);
+}
+
+#[test]
+fn deepseek_v3_mla_shape_matches_vllm_contract() {
+    let deepseek = CudaHfDeepSeekLayer {
+        mode: CUDA_HF_DEEPSEEK_MODE_V3_MLA,
+        flags: 0,
+        hc_mult: 0,
+        q_lora_rank: 1536,
+        kv_lora_rank: 512,
+        o_lora_rank: 0,
+        o_groups: 0,
+        qk_nope_head_dim: 128,
+        qk_rope_head_dim: 64,
+        v_head_dim: 128,
+        compress_ratio: 1,
+        index_n_heads: 0,
+        index_head_dim: 0,
+    };
+
+    assert!(deepseek.is_v3_mla());
+    assert!(!deepseek.is_v4_mla());
+    assert_eq!(deepseek.qk_head_dim(), Some(192));
+
+    let shape = deepseek
+        .v3_mla_shape(128)
+        .expect("DeepSeek V3 dimensions should form an MLA shape");
+    assert_eq!(shape.num_heads, 128);
+    assert_eq!(shape.qk_head_dim, 192);
+    assert_eq!(shape.q_rows, 24_576);
+    assert_eq!(shape.kv_cache_width, 576);
+    assert_eq!(shape.kv_b_rows, 32_768);
+    assert_eq!(shape.value_rows, 16_384);
+}
+
+#[test]
+fn deepseek_v4_mla_shape_does_not_reuse_v3_cache_contract() {
+    let deepseek = tiny_deepseek_v4_descriptor_layer()
+        .deepseek
+        .expect("fixture should carry DeepSeek metadata");
+
+    assert!(deepseek.is_v4_mla());
+    assert!(!deepseek.is_v3_mla());
+    assert_eq!(deepseek.v3_mla_shape(2), None);
 }
 
 #[test]

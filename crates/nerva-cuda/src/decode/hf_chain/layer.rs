@@ -74,6 +74,80 @@ pub struct CudaHfDeepSeekLayer {
     pub index_head_dim: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CudaHfDeepSeekMlaShape {
+    pub num_heads: usize,
+    pub qk_head_dim: usize,
+    pub q_rows: usize,
+    pub kv_cache_width: usize,
+    pub kv_b_rows: usize,
+    pub value_rows: usize,
+}
+
+impl CudaHfDeepSeekLayer {
+    pub fn is_v3_mla(self) -> bool {
+        matches!(
+            self.mode,
+            CUDA_HF_DEEPSEEK_MODE_V3_MLA | CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER
+        )
+    }
+
+    pub fn is_v4_mla(self) -> bool {
+        matches!(
+            self.mode,
+            CUDA_HF_DEEPSEEK_MODE_V4_SWA
+                | CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED
+                | CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER
+        )
+    }
+
+    pub fn qk_head_dim(self) -> Option<usize> {
+        checked_add(
+            self.qk_nope_head_dim,
+            self.qk_rope_head_dim,
+            "DeepSeek MLA qk head dim",
+        )
+        .ok()
+    }
+
+    pub fn v3_mla_shape(self, num_heads: usize) -> Option<CudaHfDeepSeekMlaShape> {
+        if !self.is_v3_mla()
+            || num_heads == 0
+            || self.kv_lora_rank == 0
+            || self.qk_nope_head_dim == 0
+            || self.qk_rope_head_dim == 0
+            || self.v_head_dim == 0
+        {
+            return None;
+        }
+        let qk_head_dim = self.qk_head_dim()?;
+        let q_rows = checked_mul(num_heads, qk_head_dim, "DeepSeek V3 MLA q rows").ok()?;
+        let kv_cache_width = checked_add(
+            self.kv_lora_rank,
+            self.qk_rope_head_dim,
+            "DeepSeek V3 MLA KV cache width",
+        )
+        .ok()?;
+        let kv_b_head_rows = checked_add(
+            self.qk_nope_head_dim,
+            self.v_head_dim,
+            "DeepSeek V3 MLA KV-B head rows",
+        )
+        .ok()?;
+        let kv_b_rows = checked_mul(num_heads, kv_b_head_rows, "DeepSeek V3 MLA KV-B rows").ok()?;
+        let value_rows =
+            checked_mul(num_heads, self.v_head_dim, "DeepSeek V3 MLA value rows").ok()?;
+        Some(CudaHfDeepSeekMlaShape {
+            num_heads,
+            qk_head_dim,
+            q_rows,
+            kv_cache_width,
+            kv_b_rows,
+            value_rows,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct CudaHfLinearGdnLayer<'a> {
     pub key_heads: usize,
