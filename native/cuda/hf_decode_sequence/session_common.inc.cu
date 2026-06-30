@@ -258,9 +258,11 @@ uint64_t deepseek_v4_compressed_token_capacity(uint32_t max_context_tokens,
   const uint64_t compressed_tokens =
       (static_cast<uint64_t>(max_context_tokens) + compress_ratio - 1u) /
       compress_ratio;
+  const uint32_t block_tokens =
+      deepseek_v4_packed_kv_block_tokens(compress_ratio);
   const uint64_t blocks =
-      (compressed_tokens + kKvCacheBlockTokens - 1u) / kKvCacheBlockTokens;
-  return blocks * kKvCacheBlockTokens;
+      (compressed_tokens + block_tokens - 1u) / block_tokens;
+  return blocks * block_tokens;
 }
 
 uint64_t deepseek_v4_main_compressed_kv_token_bytes(
@@ -275,6 +277,20 @@ uint64_t deepseek_v4_main_compressed_kv_token_bytes(
   return token_stride + scale_dim;
 }
 
+uint64_t deepseek_v4_main_compressed_kv_page_bytes(
+    const SequenceLayerLayout &layout) {
+  const uint64_t token_bytes =
+      deepseek_v4_main_compressed_kv_token_bytes(layout);
+  if (token_bytes == 0) {
+    return 0;
+  }
+  const uint64_t real_page_bytes = sat_mul_u64(
+      deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio),
+      token_bytes);
+  return deepseek_v4_round_up_u64(real_page_bytes,
+                                  kDeepSeekV4PackedKvAlignmentBytes);
+}
+
 uint64_t deepseek_v4_indexer_kv_token_bytes(
     const SequenceLayerLayout &layout) {
   if (layout.deepseek_index_head_dim == 0) {
@@ -285,6 +301,19 @@ uint64_t deepseek_v4_indexer_kv_token_bytes(
   return layout.deepseek_index_head_dim + scale_dim;
 }
 
+uint64_t deepseek_v4_indexer_kv_page_bytes(
+    const SequenceLayerLayout &layout) {
+  const uint64_t token_bytes = deepseek_v4_indexer_kv_token_bytes(layout);
+  if (token_bytes == 0) {
+    return 0;
+  }
+  const uint64_t real_page_bytes = sat_mul_u64(
+      deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio),
+      token_bytes);
+  return deepseek_v4_round_up_u64(real_page_bytes,
+                                  kDeepSeekV4PackedKvAlignmentBytes);
+}
+
 uint64_t deepseek_v4_main_compressed_kv_layer_bytes(
     const SequenceLayerLayout &layout, uint32_t max_context_tokens) {
   if (!layout_is_deepseek_v4_compressed_native(layout)) {
@@ -293,8 +322,10 @@ uint64_t deepseek_v4_main_compressed_kv_layer_bytes(
   const uint64_t compressed_capacity =
       deepseek_v4_compressed_token_capacity(max_context_tokens,
                                             layout.deepseek_compress_ratio);
-  return sat_mul_u64(compressed_capacity,
-                     deepseek_v4_main_compressed_kv_token_bytes(layout));
+  const uint64_t block_tokens =
+      deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio);
+  const uint64_t blocks = block_tokens == 0 ? 0 : compressed_capacity / block_tokens;
+  return sat_mul_u64(blocks, deepseek_v4_main_compressed_kv_page_bytes(layout));
 }
 
 uint64_t deepseek_v4_main_compressed_kv_layer_offset_bytes(
@@ -325,7 +356,11 @@ uint32_t deepseek_v4_compressed_kv_block_count(
   const uint64_t compressed_capacity =
       deepseek_v4_compressed_token_capacity(session->max_context_tokens,
                                             layout.deepseek_compress_ratio);
-  return static_cast<uint32_t>(compressed_capacity / kKvCacheBlockTokens);
+  const uint32_t block_tokens =
+      deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio);
+  return block_tokens == 0
+             ? 0
+             : static_cast<uint32_t>(compressed_capacity / block_tokens);
 }
 
 uint64_t deepseek_v4_indexer_kv_layer_bytes(
@@ -336,8 +371,10 @@ uint64_t deepseek_v4_indexer_kv_layer_bytes(
   const uint64_t compressed_capacity =
       deepseek_v4_compressed_token_capacity(max_context_tokens,
                                             layout.deepseek_compress_ratio);
-  return sat_mul_u64(compressed_capacity,
-                     deepseek_v4_indexer_kv_token_bytes(layout));
+  const uint64_t block_tokens =
+      deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio);
+  const uint64_t blocks = block_tokens == 0 ? 0 : compressed_capacity / block_tokens;
+  return sat_mul_u64(blocks, deepseek_v4_indexer_kv_page_bytes(layout));
 }
 
 uint64_t deepseek_v4_indexer_kv_layer_offset_bytes(

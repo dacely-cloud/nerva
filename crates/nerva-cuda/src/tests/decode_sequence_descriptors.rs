@@ -1574,6 +1574,33 @@ fn deepseek_v4_compressed_indexer_session_reserves_compressor_runtime_caches() {
             created.summary.resident_kv_bytes,
             swa_kv_bytes
         );
+        assert_eq!(
+            created.summary.resident_kv_bytes - swa_kv_bytes,
+            512 + 576 + 512 + 576,
+            "V4 C4 compressed/indexer runtime caches must reserve vLLM-aligned packed pages"
+        );
+    });
+
+    let mut c128_layer = tiny_deepseek_v4_descriptor_layer();
+    c128_layer.deepseek = c128_layer.deepseek.map(|mut deepseek| {
+        deepseek.compress_ratio = 128;
+        deepseek
+    });
+    with_tiny_deepseek_v4_descriptor_session(c128_layer, 256, |created| {
+        if created.summary.status == SmokeStatus::Unavailable {
+            return;
+        }
+        assert_eq!(
+            created.summary.status,
+            SmokeStatus::Ok,
+            "V4 C128 compressed-indexer session should create: {:?}",
+            created.summary.error
+        );
+        assert_eq!(
+            created.summary.resident_kv_bytes - 2048,
+            4096 + 576 + 4096 + 576,
+            "V4 C128 compressed/indexer runtime caches must reserve two-token vLLM-aligned packed pages"
+        );
     });
 }
 

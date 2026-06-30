@@ -570,7 +570,9 @@ __device__ bool deepseek_session_write_fp8_ds_mla_compressed_kv(
   const uint32_t coff = compress_ratio == 4 ? 2u : 1u;
   const uint32_t state_width = coff * head_dim;
   const uint32_t compressed_slot = position / compress_ratio;
-  const uint32_t compressed_block = compressed_slot / kKvCacheBlockTokens;
+  const uint32_t packed_block_tokens =
+      deepseek_v4_packed_kv_block_tokens(compress_ratio);
+  const uint32_t compressed_block = compressed_slot / packed_block_tokens;
   if (head_dim == 0 || head_dim > kDeepSeekSessionMaxCompressHeadSize ||
       compressed_block >= compressed_block_count) {
     return false;
@@ -583,15 +585,16 @@ __device__ bool deepseek_session_write_fp8_ds_mla_compressed_kv(
   const uint32_t rope = layout.deepseek_qk_rope_head_dim;
   const uint32_t token_stride = nope + rope * 2u;
   const uint32_t scale_dim = nope / 64u + 1u;
-  const uint32_t kv_pos = compressed_slot % kKvCacheBlockTokens;
-  const uint64_t block_stride =
-      static_cast<uint64_t>(kKvCacheBlockTokens) *
-      static_cast<uint64_t>(token_stride + scale_dim);
+  const uint32_t kv_pos = compressed_slot % packed_block_tokens;
+  const uint64_t block_stride = deepseek_v4_round_up_u64(
+      static_cast<uint64_t>(packed_block_tokens) *
+          static_cast<uint64_t>(token_stride + scale_dim),
+      kDeepSeekV4PackedKvAlignmentBytes);
   uint8_t *block_ptr = kv_cache + kv_offset_bytes +
                        static_cast<uint64_t>(compressed_block) * block_stride;
   uint8_t *data_ptr = block_ptr + static_cast<uint64_t>(kv_pos) * token_stride;
   uint8_t *scale_ptr =
-      block_ptr + static_cast<uint64_t>(kKvCacheBlockTokens) * token_stride +
+      block_ptr + static_cast<uint64_t>(packed_block_tokens) * token_stride +
       static_cast<uint64_t>(kv_pos) * scale_dim;
   const uint32_t quant_block = 64u;
   const uint32_t blocks = scale_dim;
@@ -656,7 +659,9 @@ __device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
   const uint32_t coff = compress_ratio == 4 ? 2u : 1u;
   const uint32_t state_width = coff * head_dim;
   const uint32_t compressed_slot = position / compress_ratio;
-  const uint32_t compressed_block = compressed_slot / kKvCacheBlockTokens;
+  const uint32_t packed_block_tokens =
+      deepseek_v4_packed_kv_block_tokens(compress_ratio);
+  const uint32_t compressed_block = compressed_slot / packed_block_tokens;
   if (head_dim > kDeepSeekSessionMaxCompressHeadSize ||
       compressed_block >= compressed_block_count) {
     return false;
@@ -666,15 +671,16 @@ __device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
       kv_block_table, position, compress_ratio, compressed);
 
   const uint32_t token_stride = head_dim;
-  const uint32_t kv_pos = compressed_slot % kKvCacheBlockTokens;
-  const uint64_t block_stride =
-      static_cast<uint64_t>(kKvCacheBlockTokens) *
-      static_cast<uint64_t>(token_stride + scale_dim);
+  const uint32_t kv_pos = compressed_slot % packed_block_tokens;
+  const uint64_t block_stride = deepseek_v4_round_up_u64(
+      static_cast<uint64_t>(packed_block_tokens) *
+          static_cast<uint64_t>(token_stride + scale_dim),
+      kDeepSeekV4PackedKvAlignmentBytes);
   uint8_t *block_ptr = kv_cache + kv_offset_bytes +
                        static_cast<uint64_t>(compressed_block) * block_stride;
   uint8_t *data_ptr = block_ptr + static_cast<uint64_t>(kv_pos) * token_stride;
   uint8_t *scale_ptr =
-      block_ptr + static_cast<uint64_t>(kKvCacheBlockTokens) * token_stride +
+      block_ptr + static_cast<uint64_t>(packed_block_tokens) * token_stride +
       static_cast<uint64_t>(kv_pos) * scale_dim;
 
   const uint32_t rope = layout.deepseek_qk_rope_head_dim <= head_dim
@@ -715,23 +721,26 @@ __device__ float deepseek_session_read_fp8_ds_mla_compressed_kv(
   if (kv_cache == nullptr || dim >= head_dim) {
     return 0.0f;
   }
-  const uint32_t compressed_block = compressed_slot / kKvCacheBlockTokens;
+  const uint32_t packed_block_tokens =
+      deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio);
+  const uint32_t compressed_block = compressed_slot / packed_block_tokens;
   if (compressed_block >= compressed_block_count) {
     return 0.0f;
   }
   const uint32_t token_stride = nope + rope * 2u;
   const uint32_t scale_dim = nope / 64u + 1u;
-  const uint32_t kv_pos = compressed_slot % kKvCacheBlockTokens;
-  const uint64_t block_stride =
-      static_cast<uint64_t>(kKvCacheBlockTokens) *
-      static_cast<uint64_t>(token_stride + scale_dim);
+  const uint32_t kv_pos = compressed_slot % packed_block_tokens;
+  const uint64_t block_stride = deepseek_v4_round_up_u64(
+      static_cast<uint64_t>(packed_block_tokens) *
+          static_cast<uint64_t>(token_stride + scale_dim),
+      kDeepSeekV4PackedKvAlignmentBytes);
   const uint8_t *block_ptr =
       kv_cache + kv_offset_bytes +
       static_cast<uint64_t>(compressed_block) * block_stride;
   const uint8_t *data_ptr =
       block_ptr + static_cast<uint64_t>(kv_pos) * token_stride;
   const uint8_t *scale_ptr =
-      block_ptr + static_cast<uint64_t>(kKvCacheBlockTokens) * token_stride +
+      block_ptr + static_cast<uint64_t>(packed_block_tokens) * token_stride +
       static_cast<uint64_t>(kv_pos) * scale_dim;
   if (dim < nope) {
     const uint32_t scale_index = dim / 64u;
@@ -756,21 +765,24 @@ __device__ float deepseek_session_read_indexer_fp8_compressed_kv(
       scale_dim < sizeof(float)) {
     return 0.0f;
   }
-  const uint32_t compressed_block = compressed_slot / kKvCacheBlockTokens;
+  const uint32_t packed_block_tokens =
+      deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio);
+  const uint32_t compressed_block = compressed_slot / packed_block_tokens;
   if (compressed_block >= compressed_block_count) {
     return 0.0f;
   }
-  const uint32_t kv_pos = compressed_slot % kKvCacheBlockTokens;
-  const uint64_t block_stride =
-      static_cast<uint64_t>(kKvCacheBlockTokens) *
-      static_cast<uint64_t>(head_dim + scale_dim);
+  const uint32_t kv_pos = compressed_slot % packed_block_tokens;
+  const uint64_t block_stride = deepseek_v4_round_up_u64(
+      static_cast<uint64_t>(packed_block_tokens) *
+          static_cast<uint64_t>(head_dim + scale_dim),
+      kDeepSeekV4PackedKvAlignmentBytes);
   const uint8_t *block_ptr =
       kv_cache + kv_offset_bytes +
       static_cast<uint64_t>(compressed_block) * block_stride;
   const uint8_t *data_ptr =
       block_ptr + static_cast<uint64_t>(kv_pos) * head_dim;
   const uint8_t *scale_ptr =
-      block_ptr + static_cast<uint64_t>(kKvCacheBlockTokens) * head_dim +
+      block_ptr + static_cast<uint64_t>(packed_block_tokens) * head_dim +
       static_cast<uint64_t>(kv_pos) * scale_dim;
   const uint32_t scale_index = dim / 128u;
   const float scale =
@@ -981,7 +993,9 @@ __device__ uint32_t deepseek_session_compressed_attention_count(
   }
   uint32_t compressed_tokens =
       (position + 1u) / layout.deepseek_compress_ratio;
-  const uint32_t capacity = compressed_block_count * kKvCacheBlockTokens;
+  const uint32_t capacity =
+      compressed_block_count *
+      deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio);
   if (compressed_tokens > capacity) {
     compressed_tokens = capacity;
   }

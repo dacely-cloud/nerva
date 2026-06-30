@@ -54,6 +54,9 @@ constexpr uint32_t kPrefillChunkBaseTokens = 1024;
 constexpr uint32_t kPrefillChunkMaxTokens = 8192;
 constexpr uint32_t kProjectionBatchWorkspaceTokens = 32;
 constexpr uint32_t kKvCacheBlockTokens = 16;
+constexpr uint32_t kDeepSeekV4PackedKvDefaultBlockTokens = 64;
+constexpr uint32_t kDeepSeekV4PackedKvC128BlockTokens = 2;
+constexpr uint32_t kDeepSeekV4PackedKvAlignmentBytes = 576;
 constexpr uint32_t kDecodeAttentionChunkTokens = 64;
 constexpr uint32_t kGroupedGqaHeads = 4;
 constexpr uint32_t kGroupedGqaThreadsPerHead = 64;
@@ -76,6 +79,25 @@ constexpr uint64_t kFnvPrime = 0x00000100000001b3ull;
 constexpr size_t kCublasWorkspaceBytes = 64ull * 1024ull * 1024ull;
 constexpr uint64_t kDescriptorStreamStagingBytes = 64ull * 1024ull * 1024ull;
 constexpr uint64_t kPrefillAutotuneSafetyBytes = 256ull * 1024ull * 1024ull;
+
+__host__ __device__ inline uint32_t deepseek_v4_packed_kv_block_tokens(
+    uint32_t compress_ratio) {
+  return compress_ratio >= 128u ? kDeepSeekV4PackedKvC128BlockTokens
+                                : kDeepSeekV4PackedKvDefaultBlockTokens;
+}
+
+__host__ __device__ inline uint64_t deepseek_v4_round_up_u64(
+    uint64_t value, uint64_t alignment) {
+  if (alignment == 0) {
+    return value;
+  }
+  const uint64_t remainder = value % alignment;
+  if (remainder == 0) {
+    return value;
+  }
+  const uint64_t add = alignment - remainder;
+  return value > UINT64_MAX - add ? UINT64_MAX : value + add;
+}
 
 struct SequenceArenaLayout {
   uint64_t embeddings;
