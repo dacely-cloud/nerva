@@ -724,6 +724,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("mxfp4_e2m1_e8m0_block_dequant_reference".to_string());
         primitives.push("cuda_mxfp4_e2m1_e8m0_dequant_api".to_string());
         primitives.push("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke".to_string());
+        primitives.push("cuda_deepseek_megamoe_prepare_api".to_string());
+        primitives.push("cuda_deepseek_megamoe_prepare_smoke".to_string());
         primitives.push("deepseek_v4_sqrtsoftplus_hash_router_reference".to_string());
         primitives.push("precision_moe_deepseek_v4_sqrtsoftplus_router".to_string());
         primitives.push("deepseek_v4_hash_route_table_i64_loader".to_string());
@@ -1129,6 +1131,8 @@ fn coverage_for_unit(
                 "mxfp4_e2m1_e8m0_block_dequant_reference",
                 "cuda_mxfp4_e2m1_e8m0_dequant_api",
                 "cuda_mxfp4_e2m1_e8m0_block_dequant_smoke",
+                "cuda_deepseek_megamoe_prepare_api",
+                "cuda_deepseek_megamoe_prepare_smoke",
                 "deepseek_routed_moe_reference",
                 "cuda_deepseek_routed_moe_api",
                 "cuda_deepseek_routed_moe_smoke",

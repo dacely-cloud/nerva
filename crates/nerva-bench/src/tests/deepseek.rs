@@ -50,6 +50,8 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("mxfp4_e2m1_e8m0_block_dequant_reference"));
     assert!(json.contains("cuda_mxfp4_e2m1_e8m0_dequant_api"));
     assert!(json.contains("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke"));
+    assert!(json.contains("cuda_deepseek_megamoe_prepare_api"));
+    assert!(json.contains("cuda_deepseek_megamoe_prepare_smoke"));
     assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_api"));
     assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_smoke"));
     assert!(json.contains("deepseek_v4_sqrtsoftplus_hash_router_reference"));

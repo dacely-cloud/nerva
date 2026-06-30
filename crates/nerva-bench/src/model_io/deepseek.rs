@@ -11,6 +11,9 @@ use nerva_cuda::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use nerva_cuda::deepseek_mla::qkv_norm::deepseek_qkv_rmsnorm;
 use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
+use nerva_cuda::deepseek_moe::prepare::{
+    CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare,
+};
 use nerva_cuda::deepseek_quant::dequant::{
     deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_mxfp4_e2m1_e8m0_dequant,
 };
@@ -541,6 +544,7 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
             bench_compress_norm_rope_mxfp4_cache,
         ),
         bench_primitive("routed_moe_forward", iterations, bench_moe_forward),
+        bench_primitive("megamoe_prepare", iterations, bench_megamoe_prepare),
     ];
     Ok(deepseek_cuda_primitive_bench_report_json(
         iterations, &samples,
@@ -1681,6 +1685,41 @@ fn bench_moe_forward() -> DeepSeekPrimitiveMetrics {
     DeepSeekPrimitiveMetrics {
         status: summary.status,
         output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_megamoe_prepare() -> DeepSeekPrimitiveMetrics {
+    let num_tokens = 2usize;
+    let hidden_size = 128usize;
+    let top_k = 3usize;
+    let mut hidden_states = vec![0.0f32; num_tokens * hidden_size];
+    for hidden in 0..hidden_size {
+        hidden_states[hidden] = ((hidden % 11) as f32 - 5.0) * 0.125;
+        hidden_states[hidden_size + hidden] = ((hidden % 7) as f32 - 3.0) * -0.25;
+    }
+    let topk_ids = [5i64, 2, 1, 7, 4, 3];
+    let topk_weights = [0.5f32, 0.25, 0.125, 0.75, 0.125, 0.0625];
+    let is_padding = [0u8, 1u8];
+    let summary = deepseek_megamoe_prepare(CudaDeepSeekMegaMoePrepareInput {
+        num_tokens: num_tokens as u32,
+        hidden_size: hidden_size as u32,
+        top_k: top_k as u32,
+        hidden_states: &hidden_states,
+        topk_ids: &topk_ids,
+        topk_weights: &topk_weights,
+        is_padding: Some(&is_padding),
+    });
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.x_fp8_hash ^ summary.x_scales_hash ^ summary.topk_hash,
         device_arena_bytes: summary.device_arena_bytes,
         pinned_host_bytes: summary.pinned_host_bytes,
         h2d_bytes: summary.h2d_bytes,

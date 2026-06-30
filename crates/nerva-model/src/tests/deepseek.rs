@@ -223,6 +223,28 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
         );
     }
 
+    let megamoe = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v4_megamoe_int8_fp4_experts")
+        .expect("DeepSeek V4 should report MegaMoE coverage");
+    assert_eq!(megamoe.status, "partial");
+    for primitive in [
+        "cuda_deepseek_megamoe_prepare_api",
+        "cuda_deepseek_megamoe_prepare_smoke",
+    ] {
+        assert!(
+            primitives.iter().any(|item| item == primitive),
+            "missing DeepSeek V4 MegaMoE primitive coverage entry: {primitive}"
+        );
+        assert!(
+            megamoe
+                .validated_primitives
+                .iter()
+                .any(|item| item == primitive),
+            "missing DeepSeek V4 MegaMoE validated primitive: {primitive}"
+        );
+    }
+
     let parity = coverage
         .iter()
         .find(|unit| unit.unit == "deepseek_v4_vllm_e2e_parity")
