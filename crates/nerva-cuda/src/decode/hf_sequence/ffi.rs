@@ -137,6 +137,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) deepseek_v4_bias_router_selections: u64,
     pub(crate) deepseek_v4_hash_router_selections: u64,
     pub(crate) deepseek_raw_attention_tokens_scanned: u64,
+    pub(crate) deepseek_sparse_attention_output_hash: u64,
 }
 
 #[repr(C)]

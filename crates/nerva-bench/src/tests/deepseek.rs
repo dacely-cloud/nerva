@@ -124,6 +124,7 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_sparse_topk_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_sparse_topk_selection_hash"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_sparse_attention_consumes_topk"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v32_sparse_attention_output_hash"));
     assert!(json.contains("run V3.2 sparse MLA attention output differential against vLLM"));
     assert!(json.contains("\"runtime_status\":\"unsupported\""));
     assert!(json.contains("\"claim_allowed\":false"));

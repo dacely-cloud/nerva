@@ -133,6 +133,7 @@ pub(super) fn failed_run_summary(
         deepseek_v4_bias_router_selections: 0,
         deepseek_v4_hash_router_selections: 0,
         deepseek_raw_attention_tokens_scanned: 0,
+        deepseek_sparse_attention_output_hash: 0,
         error: Some(error),
     }
 }

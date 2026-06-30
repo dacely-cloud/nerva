@@ -131,6 +131,7 @@ pub(super) fn summary_from_run(
         deepseek_v4_bias_router_selections: out.deepseek_v4_bias_router_selections,
         deepseek_v4_hash_router_selections: out.deepseek_v4_hash_router_selections,
         deepseek_raw_attention_tokens_scanned: out.deepseek_raw_attention_tokens_scanned,
+        deepseek_sparse_attention_output_hash: out.deepseek_sparse_attention_output_hash,
         error: (return_code != 0 || out.status != 0).then(|| run_error(return_code, out)),
     }
 }

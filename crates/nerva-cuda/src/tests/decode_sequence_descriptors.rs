@@ -1365,6 +1365,7 @@ fn deepseek_v32_sparse_topk_selects_same_slots_as_vllm_decode_scorer() {
         .as_mut()
         .expect("tiny DeepSeek V3.2 layer should carry DeepSeek metadata");
     deepseek.q_lora_rank = 4;
+    deepseek.kv_lora_rank = 4;
     deepseek.index_topk = 1;
     deepseek.index_n_heads = 1;
     deepseek.index_head_dim = 4;
@@ -1395,7 +1396,7 @@ fn deepseek_v32_sparse_topk_selects_same_slots_as_vllm_decode_scorer() {
             1.0,
         );
     }
-    for dim in 0..2usize {
+    for dim in 0..4usize {
         write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
     }
 
@@ -1405,10 +1406,20 @@ fn deepseek_v32_sparse_topk_selects_same_slots_as_vllm_decode_scorer() {
     }
     write_arena_f32(&mut weight_storage, plan.deepseek_q_a_scale, 1.0);
 
-    for row in 0..3usize {
-        write_arena_byte(&mut weight_storage, plan.w_k, row * hidden, one_fp8);
+    for row in 0..4usize {
+        write_arena_byte(&mut weight_storage, plan.w_k, row * hidden + row, one_fp8);
     }
     write_arena_f32(&mut weight_storage, plan.deepseek_kv_a_scale, 1.0);
+
+    for (col, weight) in [1.0f32, 2.0, 3.0, 4.0].into_iter().enumerate() {
+        write_arena_byte(
+            &mut weight_storage,
+            plan.w_v,
+            4 + col,
+            f32_to_f8_e4m3fn_bits_nearest(weight),
+        );
+    }
+    write_arena_f32(&mut weight_storage, plan.deepseek_kv_b_scale, 1.0);
 
     for row in 0..4usize {
         write_arena_byte(
@@ -1505,6 +1516,24 @@ fn deepseek_v32_sparse_topk_selects_same_slots_as_vllm_decode_scorer() {
     assert_eq!(
         summary.deepseek_sparse_topk_selection_hash, expected_hash,
         "V3.2 sparse top-k should select slots 0, 1, 2 like the vLLM decode scorer"
+    );
+    let expected_attention_hash =
+        [2.0f32, 4.0, 6.0]
+            .into_iter()
+            .enumerate()
+            .fold(0u64, |acc, (position, value)| {
+                let active_head = ((position as u64) + 1) * 1_315_423_911u64
+                    ^ 2_654_435_761u64
+                    ^ 97_531u64
+                    ^ f32_to_bf16_bits(value) as u64;
+                let zero_head = ((position as u64) + 1) * 1_315_423_911u64
+                    ^ (2u64 * 2_654_435_761u64)
+                    ^ 97_531u64;
+                acc + active_head + zero_head
+            });
+    assert_eq!(
+        summary.deepseek_sparse_attention_output_hash, expected_attention_hash,
+        "V3.2 sparse MLA attention output should match the selected-token value projection"
     );
 }
 

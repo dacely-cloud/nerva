@@ -60,6 +60,8 @@ void fill_deepseek_runtime_counter_result(
       counters[kDeepSeekRuntimeCounterV4HashRouterSelections];
   out->deepseek_raw_attention_tokens_scanned =
       counters[kDeepSeekRuntimeCounterRawAttentionTokensScanned];
+  out->deepseek_sparse_attention_output_hash =
+      counters[kDeepSeekRuntimeCounterSparseAttentionOutputHash];
 }
 
 uint32_t observed_from_slot_range(uint32_t steps, uint32_t has_eos_token,

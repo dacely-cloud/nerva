@@ -1908,7 +1908,21 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
                                           layout.deepseek_kv_b_scale,
                                           kv_b_rows, kv_b_cols, row, latent);
       }
-      projection_input[head * v_head + value] = f32_to_encoded(sum, dtype);
+      const uint16_t encoded = f32_to_encoded(sum, dtype);
+      projection_input[head * v_head + value] = encoded;
+      if (use_sparse_attention && deepseek_runtime_counters != nullptr) {
+        const unsigned long long term =
+            (static_cast<unsigned long long>(position) + 1ull) *
+                1315423911ull ^
+            (static_cast<unsigned long long>(head) + 1ull) * 2654435761ull ^
+            (static_cast<unsigned long long>(value) + 1ull) * 97531ull ^
+            static_cast<unsigned long long>(encoded);
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterSparseAttentionOutputHash),
+            term);
+      }
     }
   }
 }

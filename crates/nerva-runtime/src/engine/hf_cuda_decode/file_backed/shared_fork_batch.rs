@@ -291,6 +291,21 @@ fn forked_active_start_summary(root: &CudaHfDecodeSequenceSummary) -> CudaHfDeco
     summary.sync_calls = 0;
     summary.host_causality_edges = 0;
     summary.hot_path_allocations = 0;
+    summary.deepseek_compressor_state_writes = 0;
+    summary.deepseek_compressed_kv_writes = 0;
+    summary.deepseek_indexer_state_writes = 0;
+    summary.deepseek_indexer_kv_writes = 0;
+    summary.deepseek_compressed_kv_attention_reads = 0;
+    summary.deepseek_compressed_kv_attention_slots_scanned = 0;
+    summary.deepseek_sparse_topk_selections = 0;
+    summary.deepseek_sparse_topk_slots_selected = 0;
+    summary.deepseek_sparse_topk_candidates_scored = 0;
+    summary.deepseek_sparse_topk_selection_hash = 0;
+    summary.deepseek_v3_grouped_router_selections = 0;
+    summary.deepseek_v4_bias_router_selections = 0;
+    summary.deepseek_v4_hash_router_selections = 0;
+    summary.deepseek_raw_attention_tokens_scanned = 0;
+    summary.deepseek_sparse_attention_output_hash = 0;
     summary
 }
 
