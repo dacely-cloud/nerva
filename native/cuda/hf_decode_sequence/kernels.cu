@@ -33,10 +33,12 @@ __device__ bool deepseek_session_sparse_score_is_better(
     float candidate, int32_t slot, float current, int32_t current_slot);
 
 __device__ void deepseek_session_publish_v4_mhc_pre_state(
-    const uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    const uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden,
     uint32_t position, float rms_eps, const float *layer_input,
     float *deepseek_mhc_residual, float *deepseek_mhc_post_mix,
-    float *deepseek_mhc_comb_mix);
+    float *deepseek_mhc_comb_mix, float *temp_layer_input,
+    uint16_t *projection_input);
 
 __global__ void hf_deinterleave_q_gate_projection_kernel(
     const uint16_t *packed, uint16_t *q, uint16_t *q_gate,
@@ -2502,16 +2504,20 @@ __global__ void hf_deepseek_v3_sparse_moe_encode_kernel(
 }
 
 __device__ void deepseek_session_publish_v4_mhc_pre_state(
-    const uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    const uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden,
     uint32_t position, float rms_eps, const float *layer_input,
     float *deepseek_mhc_residual, float *deepseek_mhc_post_mix,
-    float *deepseek_mhc_comb_mix) {
+    float *deepseek_mhc_comb_mix, float *temp_layer_input,
+    uint16_t *projection_input) {
   const uint32_t hc_mult = layout.deepseek_hc_mult;
   if (arena == nullptr || layer_input == nullptr ||
       deepseek_mhc_residual == nullptr || deepseek_mhc_post_mix == nullptr ||
-      deepseek_mhc_comb_mix == nullptr || hidden == 0 || hc_mult == 0 ||
-      hc_mult > kDeepSeekSessionMaxMhcHcMult ||
+      deepseek_mhc_comb_mix == nullptr || temp_layer_input == nullptr ||
+      projection_input == nullptr || hidden == 0 || hc_mult == 0 ||
+      dtype > kDTypeBF16 || hc_mult > kDeepSeekSessionMaxMhcHcMult ||
       layout.deepseek_hc_sinkhorn_iters == 0 ||
+      layout.rms_attn == kMissingOffset ||
       layout.deepseek_hc_attn_base == kMissingOffset ||
       layout.deepseek_hc_attn_fn == kMissingOffset ||
       layout.deepseek_hc_attn_scale == kMissingOffset) {
@@ -2557,10 +2563,13 @@ __device__ void deepseek_session_publish_v4_mhc_pre_state(
     mixes[mix] = value * rms_scale;
   }
 
+  const float hc_scale0 =
+      f32_from_u16_slots(arena + layout.deepseek_hc_attn_scale, 0);
   const float hc_scale1 =
       f32_from_u16_slots(arena + layout.deepseek_hc_attn_scale, 1);
   const float hc_scale2 =
       f32_from_u16_slots(arena + layout.deepseek_hc_attn_scale, 2);
+  const float hc_pre_eps = layout.deepseek_hc_eps;
   const float hc_sinkhorn_eps = layout.deepseek_hc_eps;
   const float hc_post_mult =
       isfinite(layout.deepseek_hc_post_alpha) &&
@@ -2568,7 +2577,13 @@ __device__ void deepseek_session_publish_v4_mhc_pre_state(
           ? layout.deepseek_hc_post_alpha
           : 1.0f;
 
+  float pre_mix[kDeepSeekSessionMaxMhcHcMult];
   for (uint32_t channel = 0; channel < hc_mult; ++channel) {
+    pre_mix[channel] =
+        sigmoid(mixes[channel] * hc_scale0 +
+                f32_from_u16_slots(arena + layout.deepseek_hc_attn_base,
+                                   channel)) +
+        hc_pre_eps;
     deepseek_mhc_post_mix[static_cast<uint64_t>(position) * hc_mult +
                           channel] =
         sigmoid(mixes[hc_mult + channel] * hc_scale1 +
@@ -2643,6 +2658,29 @@ __device__ void deepseek_session_publish_v4_mhc_pre_state(
   for (uint32_t index = 0; index < hc_mult * hc_mult; ++index) {
     deepseek_mhc_comb_mix[comb_offset + index] = comb[index];
   }
+
+  float layer_input_sumsq = 0.0f;
+  for (uint32_t dim = 0; dim < hidden; ++dim) {
+    float value = 0.0f;
+    for (uint32_t channel = 0; channel < hc_mult; ++channel) {
+      value += pre_mix[channel] *
+               deepseek_mhc_residual
+                   [token_residual_offset +
+                    static_cast<uint64_t>(channel) * hidden + dim];
+    }
+    layer_input_sumsq += value * value;
+    temp_layer_input[dim] =
+        deepseek_session_bf16_bits_to_f32(deepseek_session_f32_to_bf16_bits(
+            value));
+  }
+  const float norm_scale =
+      rsqrtf(layer_input_sumsq / static_cast<float>(hidden) + rms_eps);
+  for (uint32_t dim = 0; dim < hidden; ++dim) {
+    const float normed =
+        temp_layer_input[dim] * norm_scale *
+        encoded_to_f32(arena[layout.rms_attn + dim], kDTypeBF16);
+    projection_input[dim] = f32_to_encoded(normed, dtype);
+  }
 }
 
 __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
@@ -2700,8 +2738,9 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
       layer_scratch_ptrs(scratch, hidden, heads * head_dim, head_dim, intermediate);
   const uint32_t attention_hidden = heads * head_dim;
   deepseek_session_publish_v4_mhc_pre_state(
-      arena, layout, hidden, position, rms_eps, s.input,
-      deepseek_mhc_residual, deepseek_mhc_post_mix, deepseek_mhc_comb_mix);
+      arena, layout, dtype, hidden, position, rms_eps, s.input,
+      deepseek_mhc_residual, deepseek_mhc_post_mix, deepseek_mhc_comb_mix,
+      s.mlp_norm, projection_input);
   for (uint32_t row = 0; row < q_lora_rank; ++row) {
     float sum = 0.0f;
     for (uint32_t col = 0; col < hidden; ++col) {
