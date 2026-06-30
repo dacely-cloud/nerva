@@ -1,7 +1,7 @@
 use crate::model_io::deepseek::{
     DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
     deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
-    run_deepseek_runtime_plan, run_deepseek_vllm_reference_audit,
+    run_deepseek_runtime_plan, run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
 };
 
 #[test]
@@ -277,6 +277,45 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
     assert!(json.contains("\"fnv1a64\":\"0x"));
     assert!(json.contains("DeepseekV4FlashMLABackend"));
     assert!(json.contains("\"missing_symbols\":[]"));
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
+    let dir = std::env::temp_dir().join(format!(
+        "nerva-bench-deepseek-vllm-gate-{}",
+        std::process::id()
+    ));
+    let vllm_root = dir.join("vllm-root");
+    write_vllm_reference_fixture(&vllm_root);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config_path = dir.join("config.json");
+    std::fs::write(&config_path, deepseek_v4_config()).unwrap();
+
+    let json = run_deepseek_vllm_parity_gate(
+        Some(config_path.to_string_lossy().into_owned()),
+        Some(vllm_root.to_string_lossy().into_owned()),
+    )
+    .expect("DeepSeek parity gate should parse config and fixture references");
+
+    assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-parity-gate-v1\""));
+    assert!(json.contains("\"status\":\"runtime_blocked\""));
+    assert!(json.contains("\"architecture\":\"deepseek_v4\""));
+    assert!(json.contains("\"runtime_contract_status\":\"unsupported\""));
+    assert!(json.contains("\"vllm_reference_status\":\"ok\""));
+    assert!(json.contains("\"vllm_reference_units_total\":10"));
+    assert!(json.contains("\"vllm_reference_units_ok\":10"));
+    assert!(json.contains("\"runtime_units_total\":8"));
+    assert!(json.contains("\"runtime_blocking_units_total\":8"));
+    assert!(json.contains("\"runtime_units_partial\":7"));
+    assert!(json.contains("\"runtime_units_missing\":1"));
+    assert!(json.contains("\"deepseek_v4_parallel_attention_gemm_streams\""));
+    assert!(json.contains("\"runtime_parity_status\":\"blocked_before_end_to_end_parity\""));
+    assert!(json.contains("\"performance_status\":\"blocked_until_runtime_units_complete\""));
+    assert!(json.contains("\"claim_allowed\":false"));
+    assert!(json.contains("\"performance_comparison_allowed\":false"));
+    assert!(json.contains("integrate hash and bias routing into CUDA exact runtime decode layers"));
 
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -102,6 +102,176 @@ pub(crate) fn run_deepseek_vllm_reference_audit(
     Ok(deepseek_vllm_reference_audit_json(&vllm_root, &units))
 }
 
+pub(crate) fn run_deepseek_vllm_parity_gate(
+    config_path: Option<String>,
+    vllm_root_arg: Option<String>,
+) -> Result<String, String> {
+    let config_path =
+        config_path.ok_or_else(|| "deepseek-vllm-parity-gate requires config.json".to_string())?;
+    let config = std::fs::read_to_string(&config_path)
+        .map_err(|err| format!("failed to read {config_path}: {err}"))?;
+    let metadata = parse_hf_config_metadata(&config)
+        .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+    if !metadata.architecture.is_deepseek() {
+        return Err(format!(
+            "deepseek-vllm-parity-gate requires a DeepSeek architecture, got {}",
+            metadata.architecture.as_str()
+        ));
+    }
+
+    let vllm_root = PathBuf::from(vllm_root_arg.unwrap_or_else(|| "/root/vllm".to_string()));
+    let specs = deepseek_vllm_reference_specs();
+    let vllm_units = specs
+        .iter()
+        .map(|spec| read_vllm_reference_unit(&vllm_root, spec))
+        .collect::<Vec<_>>();
+    Ok(deepseek_vllm_parity_gate_json(
+        &config_path,
+        &vllm_root,
+        &metadata,
+        &vllm_units,
+    ))
+}
+
+fn deepseek_vllm_parity_gate_json(
+    config_path: &str,
+    vllm_root: &Path,
+    metadata: &HfModelMetadata,
+    vllm_units: &[DeepSeekVllmReferenceUnit],
+) -> String {
+    let runtime_contract = match validate_exact_runtime_contract(metadata) {
+        Ok(()) => RuntimeContractReport {
+            status: "supported",
+            reason: "exact runtime contract accepts this DeepSeek config".to_string(),
+        },
+        Err(err) => RuntimeContractReport {
+            status: "unsupported",
+            reason: format!("{err:?}"),
+        },
+    };
+    let execution_units = execution_unit_coverage(metadata);
+    let runtime_blockers = execution_units
+        .iter()
+        .filter(|unit| unit.status != "complete" && unit.status != "optional_missing")
+        .cloned()
+        .collect::<Vec<_>>();
+    let runtime_missing = execution_units
+        .iter()
+        .filter(|unit| unit.status == "missing")
+        .count();
+    let runtime_partial = execution_units
+        .iter()
+        .filter(|unit| unit.status == "partial")
+        .count();
+    let vllm_ok = vllm_units.iter().filter(|unit| unit.status == "ok").count();
+    let vllm_missing = vllm_units
+        .iter()
+        .filter(|unit| unit.status == "missing_file")
+        .count();
+    let vllm_symbol_gap = vllm_units
+        .iter()
+        .filter(|unit| unit.status == "symbol_gap")
+        .count();
+    let vllm_failed = vllm_units
+        .iter()
+        .filter(|unit| unit.status == "failed")
+        .count();
+    let vllm_reference_status = if vllm_failed > 0 {
+        "failed"
+    } else if vllm_missing > 0 {
+        "missing_reference"
+    } else if vllm_symbol_gap > 0 {
+        "symbol_gap"
+    } else if vllm_ok == vllm_units.len() {
+        "ok"
+    } else {
+        "incomplete"
+    };
+    let claim_allowed = runtime_contract.status == "supported"
+        && runtime_blockers.is_empty()
+        && vllm_reference_status == "ok";
+    let status = if claim_allowed {
+        "ready"
+    } else if vllm_reference_status != "ok" {
+        "reference_blocked"
+    } else {
+        "runtime_blocked"
+    };
+    let blocking_reasons = deepseek_parity_blocking_reasons(
+        &runtime_contract,
+        &runtime_blockers,
+        vllm_reference_status,
+    );
+    let next_runtime_units = runtime_blockers
+        .iter()
+        .map(|unit| unit.unit.clone())
+        .collect::<Vec<_>>();
+
+    format!(
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-parity-gate-v1\",\"architecture\":\"{}\",\"config_path\":\"{}\",\"vllm_root\":\"{}\",\"runtime_contract_status\":\"{}\",\"runtime_contract_reason\":\"{}\",\"runtime_units_total\":{},\"runtime_units_partial\":{},\"runtime_units_missing\":{},\"runtime_blocking_units_total\":{},\"required_execution_units\":{},\"implemented_primitives\":{},\"execution_unit_status\":{},\"runtime_blocking_units\":{},\"next_runtime_units\":{},\"vllm_reference_status\":\"{}\",\"vllm_reference_units_total\":{},\"vllm_reference_units_ok\":{},\"vllm_reference_units_missing_file\":{},\"vllm_reference_units_symbol_gap\":{},\"vllm_reference_units_failed\":{},\"vllm_reference_units\":{},\"runtime_parity_status\":\"{}\",\"performance_status\":\"{}\",\"blocking_reasons\":{},\"claim_allowed\":{},\"performance_comparison_allowed\":{}}}",
+        status,
+        metadata.architecture.as_str(),
+        json_escape(config_path),
+        json_escape(&vllm_root.display().to_string()),
+        runtime_contract.status,
+        json_escape(&runtime_contract.reason),
+        execution_units.len(),
+        runtime_partial,
+        runtime_missing,
+        runtime_blockers.len(),
+        json_string_array(&required_execution_units(metadata)),
+        json_string_array(&implemented_primitives(metadata)),
+        execution_unit_coverage_json(&execution_units),
+        execution_unit_coverage_json(&runtime_blockers),
+        json_string_array(&next_runtime_units),
+        vllm_reference_status,
+        vllm_units.len(),
+        vllm_ok,
+        vllm_missing,
+        vllm_symbol_gap,
+        vllm_failed,
+        deepseek_vllm_reference_units_json(vllm_units),
+        if claim_allowed {
+            "verified_ready_for_end_to_end_parity"
+        } else {
+            "blocked_before_end_to_end_parity"
+        },
+        if claim_allowed {
+            "ready_for_vllm_runtime_benchmark"
+        } else {
+            "blocked_until_runtime_units_complete"
+        },
+        json_string_array(&blocking_reasons),
+        claim_allowed,
+        claim_allowed,
+    )
+}
+
+fn deepseek_parity_blocking_reasons(
+    runtime_contract: &RuntimeContractReport,
+    runtime_blockers: &[DeepSeekExecutionUnitCoverage],
+    vllm_reference_status: &str,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if runtime_contract.status != "supported" {
+        reasons.push(runtime_contract.reason.clone());
+    }
+    if vllm_reference_status != "ok" {
+        reasons.push(format!(
+            "vLLM reference audit status is {vllm_reference_status}"
+        ));
+    }
+    for unit in runtime_blockers {
+        reasons.push(format!(
+            "{} is {}; remaining gaps: {}",
+            unit.unit,
+            unit.status,
+            unit.remaining_gaps.join("; ")
+        ));
+    }
+    reasons
+}
+
 fn deepseek_vllm_reference_audit_json(
     vllm_root: &Path,
     units: &[DeepSeekVllmReferenceUnit],
