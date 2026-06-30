@@ -1485,6 +1485,40 @@ typedef struct NervaCudaDeepSeekQKvRmsNormResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekQKvRmsNormResult;
 
+typedef struct NervaCudaDeepSeekMhcHeadRequest {
+  uint32_t tokens;
+  uint32_t hc_mult;
+  uint32_t hidden_size;
+  float rms_eps;
+  float hc_eps;
+  float hc_scale;
+  const float *hidden_states;
+  const float *fn_weights;
+  const float *hc_base;
+  float *output;
+} NervaCudaDeepSeekMhcHeadRequest;
+
+typedef struct NervaCudaDeepSeekMhcHeadResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t mhc_error;
+  uint32_t tokens;
+  uint32_t hc_mult;
+  uint32_t hidden_size;
+  float rms_eps;
+  float hc_eps;
+  float hc_scale;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekMhcHeadResult;
+
 typedef struct NervaCudaDeepSeekKvFp8DsMlaPackRequest {
   uint32_t block_size;
   uint32_t token_index;
@@ -1893,6 +1927,9 @@ int nerva_cuda_deepseek_mla_decode(
 int nerva_cuda_deepseek_qkv_rmsnorm(
     const NervaCudaDeepSeekQKvRmsNormRequest *request,
     NervaCudaDeepSeekQKvRmsNormResult *out);
+int nerva_cuda_deepseek_mhc_head(
+    const NervaCudaDeepSeekMhcHeadRequest *request,
+    NervaCudaDeepSeekMhcHeadResult *out);
 int nerva_cuda_deepseek_kv_fp8_ds_mla_pack(
     const NervaCudaDeepSeekKvFp8DsMlaPackRequest *request,
     NervaCudaDeepSeekKvFp8DsMlaPackResult *out);
