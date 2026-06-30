@@ -104,6 +104,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources"));
     assert!(json.contains("cuda_hf_sequence_deepseek_descriptor_abi"));
     assert!(json.contains("cuda_hf_sequence_deepseek_footprint_accounting"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_packed_kv_footprint_accounting"));
     assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
     assert!(json.contains("cuda_hf_sequence_deepseek_execution_guard"));
     assert!(json.contains("deepseek_v4_mhc_pre_post_head"));
@@ -156,6 +157,7 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v3_grouped_router_runtime"));
     assert!(json.contains("deepseek_compressed_slot_mapping_reference"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_packed_kv_footprint_accounting"));
     assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
     assert!(json.contains("\"unit\":\"deepseek_v32_sparse_attention_indexer\""));
     assert!(json.contains("\"v4_mhc_warmup_max_tokens\":null"));

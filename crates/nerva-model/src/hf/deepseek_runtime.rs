@@ -769,6 +769,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_smoke".to_string());
     }
     if metadata.architecture == HfArchitectureKind::DeepSeekV32 {
+        primitives.push("cuda_hf_sequence_deepseek_packed_kv_footprint_accounting".to_string());
         primitives.push("cuda_deepseek_v32_fp8_ds_mla_kv_pack_token_row".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v32_fp8_ds_mla_page_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v32_fp8_ds_mla_page_contents".to_string());
@@ -793,6 +794,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_compressed_slot_mapping_smoke".to_string());
     }
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
+        primitives.push("cuda_hf_sequence_deepseek_packed_kv_footprint_accounting".to_string());
         primitives.push("deepseek_c128_topk_metadata_reference".to_string());
         primitives.push("cuda_deepseek_c128_topk_metadata_api".to_string());
         primitives.push("cuda_deepseek_c128_topk_metadata_smoke".to_string());
@@ -939,6 +941,7 @@ fn coverage_for_unit(
                 "cuda_deepseek_compressed_slot_mapping_api",
                 "cuda_deepseek_compressed_slot_mapping_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
                 "cuda_deepseek_v32_fp8_ds_mla_kv_pack_token_row",
                 "cuda_hf_sequence_deepseek_v32_fp8_ds_mla_page_runtime",
                 "cuda_hf_sequence_deepseek_v32_fp8_ds_mla_page_contents",
@@ -1018,6 +1021,7 @@ fn coverage_for_unit(
             &[
                 "deepseek_vllm_kv_cache_spec_planner",
                 "deepseek_v32_manifest_adds_indexer_and_f32_norms",
+                "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
                 "cuda_hf_sequence_deepseek_v32_fp8_ds_mla_page_contents",
                 "cuda_hf_sequence_deepseek_v32_sparse_attention_output_hash",
             ],
@@ -1063,6 +1067,7 @@ fn coverage_for_unit(
                 "deepseek_mla_prefill_causal_mqa_reference",
                 "cuda_deepseek_mla_decode_api",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
                 "cuda_hf_sequence_deepseek_v4_swa_window_runtime",
                 "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime",
                 "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_contents",
@@ -1087,6 +1092,7 @@ fn coverage_for_unit(
                 "cuda_deepseek_fp8_ds_mla_kv_pack_api",
                 "cuda_deepseek_fp8_ds_mla_kv_pack_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
                 "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_runtime",
                 "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_contents",
                 "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_fullsize_page_contents",
@@ -1113,6 +1119,7 @@ fn coverage_for_unit(
                 "cuda_deepseek_compressed_slot_mapping_api",
                 "cuda_deepseek_compressed_slot_mapping_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
                 "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_fullsize_page_contents",
                 "cuda_hf_sequence_deepseek_v4_c128_fp8_ds_mla_page_contents",
             ],
@@ -1142,6 +1149,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v4_sparse_attention_swa_plus_topk",
                 "cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
             ],
             &[
                 "run full-size V4 C4 sparse top-k differential against vLLM runtime",
@@ -1202,6 +1210,7 @@ fn coverage_for_unit(
             &[
                 "deepseek_v4_mhc_compressor_indexer_manifest",
                 "deepseek_vllm_kv_cache_spec_planner",
+                "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
                 "cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime",
                 "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_fullsize_page_contents",
                 "cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime",

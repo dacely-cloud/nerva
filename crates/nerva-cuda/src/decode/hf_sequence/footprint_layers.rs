@@ -1,11 +1,21 @@
 use crate::decode::hf_chain::layer::{
+    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN,
     CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_SPARSE_MOE,
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_MLP_DENSE,
+    CUDA_HF_MLP_SPARSE_MOE,
 };
+
+const DEEPSEEK_V32_PACKED_KV_BLOCK_TOKENS: u64 = 64;
+const DEEPSEEK_V32_PACKED_KV_NOPE_BYTES: u64 = 512;
+const DEEPSEEK_V32_PACKED_KV_SCALE_BYTES: u64 = 16;
+const DEEPSEEK_V32_PACKED_KV_ROPE_VALUES: u64 = 64;
+const DEEPSEEK_V32_INDEXER_KV_BLOCK_TOKENS: u64 = 64;
+const DEEPSEEK_V4_PACKED_KV_DEFAULT_BLOCK_TOKENS: u64 = 64;
+const DEEPSEEK_V4_PACKED_KV_C128_BLOCK_TOKENS: u64 = 2;
+const DEEPSEEK_V4_PACKED_KV_ALIGNMENT_BYTES: u64 = 576;
 
 pub(crate) fn deepseek_static_elements(
     layers: &[CudaHfDecodeChainLayer<'_>],
@@ -80,6 +90,29 @@ pub(crate) fn deepseek_v4_mhc_runtime_bytes(
         comb_mix,
         "DeepSeek V4 mHC runtime bytes",
     )
+}
+
+pub(crate) fn deepseek_runtime_kv_bytes(
+    layers: &[CudaHfDecodeChainLayer<'_>],
+    context_tokens: u64,
+    kv_token_capacity: u64,
+) -> Result<u64, String> {
+    layers.iter().try_fold(0u64, |total, layer| {
+        let Some(deepseek) = layer
+            .deepseek
+            .filter(|_| layer.attention_kind == CUDA_HF_ATTENTION_DEEPSEEK_MLA)
+        else {
+            return Ok(total);
+        };
+        let layer_bytes = if deepseek.is_v3_mla() {
+            deepseek_v32_runtime_kv_bytes(deepseek, context_tokens)?
+        } else if deepseek.is_v4_mla() {
+            deepseek_v4_runtime_kv_bytes(layer, deepseek, context_tokens, kv_token_capacity)?
+        } else {
+            0
+        };
+        checked_add(total, layer_bytes, "DeepSeek runtime KV bytes")
+    })
 }
 
 pub(crate) fn layer_elements(
@@ -793,6 +826,292 @@ fn deepseek_metadata(layer: &CudaHfDecodeChainLayer<'_>) -> Result<CudaHfDeepSee
         .ok_or_else(|| "CUDA HF decode DeepSeek MLA layer is missing metadata".to_string())
 }
 
+fn deepseek_v32_runtime_kv_bytes(
+    deepseek: CudaHfDeepSeekLayer,
+    context_tokens: u64,
+) -> Result<u64, String> {
+    let mut total = 0u64;
+    if deepseek.kv_lora_rank as u64 == DEEPSEEK_V32_PACKED_KV_NOPE_BYTES
+        && deepseek.qk_rope_head_dim as u64 == DEEPSEEK_V32_PACKED_KV_ROPE_VALUES
+    {
+        let token_bytes = checked_add(
+            checked_add(
+                DEEPSEEK_V32_PACKED_KV_NOPE_BYTES,
+                DEEPSEEK_V32_PACKED_KV_SCALE_BYTES,
+                "DeepSeek V3.2 packed MLA token bytes",
+            )?,
+            checked_mul(
+                DEEPSEEK_V32_PACKED_KV_ROPE_VALUES,
+                2,
+                "DeepSeek V3.2 packed MLA rope bytes",
+            )?,
+            "DeepSeek V3.2 packed MLA token bytes",
+        )?;
+        total = checked_add(
+            total,
+            packed_page_bytes(
+                context_tokens,
+                DEEPSEEK_V32_PACKED_KV_BLOCK_TOKENS,
+                token_bytes,
+                1,
+                "DeepSeek V3.2 packed MLA KV",
+            )?,
+            "DeepSeek V3.2 runtime KV bytes",
+        )?;
+    }
+    if deepseek.flags & CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER != 0 && deepseek.index_head_dim != 0 {
+        let index_head_dim = deepseek.index_head_dim as u64;
+        let token_bytes = checked_add(
+            index_head_dim,
+            checked_mul(
+                index_head_dim.div_ceil(128),
+                4,
+                "DeepSeek V3.2 indexer KV scale",
+            )?,
+            "DeepSeek V3.2 indexer KV token bytes",
+        )?;
+        total = checked_add(
+            total,
+            packed_page_bytes(
+                context_tokens,
+                DEEPSEEK_V32_INDEXER_KV_BLOCK_TOKENS,
+                token_bytes,
+                1,
+                "DeepSeek V3.2 indexer KV",
+            )?,
+            "DeepSeek V3.2 runtime KV bytes",
+        )?;
+        if deepseek.q_lora_rank != 0 && deepseek.index_n_heads != 0 {
+            let query_bytes = checked_mul(
+                deepseek.index_n_heads as u64,
+                index_head_dim,
+                "DeepSeek V3.2 indexer query bytes",
+            )?;
+            let q_scale_offset = round_up(query_bytes, 4)?;
+            let token_bytes = checked_add(
+                checked_add(
+                    q_scale_offset,
+                    checked_mul(
+                        deepseek.index_n_heads as u64,
+                        4,
+                        "DeepSeek V3.2 indexer query scale bytes",
+                    )?,
+                    "DeepSeek V3.2 indexer query state bytes",
+                )?,
+                checked_mul(
+                    deepseek.index_n_heads as u64,
+                    4,
+                    "DeepSeek V3.2 indexer weights state bytes",
+                )?,
+                "DeepSeek V3.2 indexer query state bytes",
+            )?;
+            total = checked_add(
+                total,
+                checked_mul(
+                    context_tokens,
+                    token_bytes,
+                    "DeepSeek V3.2 indexer query state layer bytes",
+                )?,
+                "DeepSeek V3.2 runtime KV bytes",
+            )?;
+        }
+    }
+    Ok(total)
+}
+
+fn deepseek_v4_runtime_kv_bytes(
+    layer: &CudaHfDecodeChainLayer<'_>,
+    deepseek: CudaHfDeepSeekLayer,
+    context_tokens: u64,
+    kv_token_capacity: u64,
+) -> Result<u64, String> {
+    if layer.mlp_kind != CUDA_HF_MLP_SPARSE_MOE && layer.mlp_kind != CUDA_HF_MLP_DENSE {
+        return Ok(0);
+    }
+    let mut total = packed_page_bytes(
+        context_tokens,
+        DEEPSEEK_V4_PACKED_KV_DEFAULT_BLOCK_TOKENS,
+        deepseek_v4_main_compressed_kv_token_bytes(deepseek)?,
+        DEEPSEEK_V4_PACKED_KV_ALIGNMENT_BYTES,
+        "DeepSeek V4 SWA KV",
+    )?;
+
+    if !matches!(
+        deepseek.mode,
+        CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED | CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER
+    ) || deepseek.compress_ratio <= 1
+    {
+        return Ok(total);
+    }
+
+    let compressed_capacity =
+        deepseek_v4_compressed_token_capacity(context_tokens, deepseek.compress_ratio as u64)?;
+    let compressed_block_tokens = deepseek_v4_packed_kv_block_tokens(deepseek.compress_ratio);
+    total = checked_add(
+        total,
+        packed_page_bytes(
+            compressed_capacity,
+            compressed_block_tokens,
+            deepseek_v4_main_compressed_kv_token_bytes(deepseek)?,
+            DEEPSEEK_V4_PACKED_KV_ALIGNMENT_BYTES,
+            "DeepSeek V4 compressed KV",
+        )?,
+        "DeepSeek V4 runtime KV bytes",
+    )?;
+    total = checked_add(
+        total,
+        deepseek_v4_compressor_state_layer_bytes(deepseek, kv_token_capacity)?,
+        "DeepSeek V4 runtime KV bytes",
+    )?;
+
+    if deepseek.mode == CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER && deepseek.index_head_dim != 0
+    {
+        total = checked_add(
+            total,
+            packed_page_bytes(
+                compressed_capacity,
+                compressed_block_tokens,
+                deepseek_v4_indexer_kv_token_bytes(deepseek)?,
+                DEEPSEEK_V4_PACKED_KV_ALIGNMENT_BYTES,
+                "DeepSeek V4 indexer KV",
+            )?,
+            "DeepSeek V4 runtime KV bytes",
+        )?;
+        total = checked_add(
+            total,
+            deepseek_v4_indexer_state_layer_bytes(deepseek, kv_token_capacity)?,
+            "DeepSeek V4 runtime KV bytes",
+        )?;
+    }
+
+    Ok(total)
+}
+
+fn deepseek_v4_compressed_token_capacity(
+    context_tokens: u64,
+    compress_ratio: u64,
+) -> Result<u64, String> {
+    if context_tokens == 0 || compress_ratio == 0 {
+        return Ok(0);
+    }
+    let compressed_tokens = context_tokens.div_ceil(compress_ratio);
+    let block_tokens = deepseek_v4_packed_kv_block_tokens(compress_ratio as usize);
+    let blocks = compressed_tokens.div_ceil(block_tokens);
+    checked_mul(
+        blocks,
+        block_tokens,
+        "DeepSeek V4 compressed token capacity",
+    )
+}
+
+fn deepseek_v4_main_compressed_kv_token_bytes(
+    deepseek: CudaHfDeepSeekLayer,
+) -> Result<u64, String> {
+    let nope = deepseek.qk_nope_head_dim as u64;
+    let rope = deepseek.qk_rope_head_dim as u64;
+    if nope == 0 && rope == 0 {
+        return Ok(0);
+    }
+    checked_add(
+        checked_add(
+            nope,
+            checked_mul(rope, 2, "DeepSeek V4 KV rope bytes")?,
+            "DeepSeek V4 KV token stride",
+        )?,
+        nope / 64 + 1,
+        "DeepSeek V4 KV token bytes",
+    )
+}
+
+fn deepseek_v4_indexer_kv_token_bytes(deepseek: CudaHfDeepSeekLayer) -> Result<u64, String> {
+    let index_head_dim = deepseek.index_head_dim as u64;
+    checked_add(
+        index_head_dim,
+        checked_mul(
+            index_head_dim.div_ceil(128),
+            4,
+            "DeepSeek V4 indexer KV scale bytes",
+        )?,
+        "DeepSeek V4 indexer KV token bytes",
+    )
+}
+
+fn deepseek_v4_compressor_state_layer_bytes(
+    deepseek: CudaHfDeepSeekLayer,
+    kv_token_capacity: u64,
+) -> Result<u64, String> {
+    let state_width = checked_mul(
+        deepseek_v4_compressor_coff(deepseek),
+        checked_add(
+            deepseek.qk_nope_head_dim as u64,
+            deepseek.qk_rope_head_dim as u64,
+            "DeepSeek V4 compressor state width",
+        )?,
+        "DeepSeek V4 compressor state width",
+    )?;
+    checked_mul(
+        checked_mul(
+            kv_token_capacity,
+            checked_mul(state_width, 2, "DeepSeek V4 compressor state slots")?,
+            "DeepSeek V4 compressor state",
+        )?,
+        4,
+        "DeepSeek V4 compressor state bytes",
+    )
+}
+
+fn deepseek_v4_indexer_state_layer_bytes(
+    deepseek: CudaHfDeepSeekLayer,
+    kv_token_capacity: u64,
+) -> Result<u64, String> {
+    let state_width = checked_mul(
+        deepseek_v4_compressor_coff(deepseek),
+        deepseek.index_head_dim as u64,
+        "DeepSeek V4 indexer state width",
+    )?;
+    checked_mul(
+        checked_mul(
+            kv_token_capacity,
+            checked_mul(state_width, 2, "DeepSeek V4 indexer state slots")?,
+            "DeepSeek V4 indexer state",
+        )?,
+        4,
+        "DeepSeek V4 indexer state bytes",
+    )
+}
+
+fn deepseek_v4_compressor_coff(deepseek: CudaHfDeepSeekLayer) -> u64 {
+    if deepseek.compress_ratio == 4 {
+        2
+    } else {
+        1
+    }
+}
+
+fn deepseek_v4_packed_kv_block_tokens(compress_ratio: usize) -> u64 {
+    if compress_ratio >= 128 {
+        DEEPSEEK_V4_PACKED_KV_C128_BLOCK_TOKENS
+    } else {
+        DEEPSEEK_V4_PACKED_KV_DEFAULT_BLOCK_TOKENS
+    }
+}
+
+fn packed_page_bytes(
+    token_capacity: u64,
+    block_tokens: u64,
+    token_bytes: u64,
+    alignment: u64,
+    label: &str,
+) -> Result<u64, String> {
+    if token_capacity == 0 || block_tokens == 0 || token_bytes == 0 {
+        return Ok(0);
+    }
+    let blocks = token_capacity.div_ceil(block_tokens);
+    let page_bytes = checked_mul(block_tokens, token_bytes, label)?;
+    let aligned_page_bytes = round_up(page_bytes, alignment)?;
+    checked_mul(blocks, aligned_page_bytes, label)
+}
+
 fn deepseek_norm_slots(mode: u32, rows: u64) -> Result<u64, String> {
     if mode == CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER {
         f32_slots(rows, 1, "DeepSeek V3.2 norm")
@@ -815,7 +1134,11 @@ fn optional_len(value: Option<&[u16]>) -> Result<u64, String> {
 }
 
 fn marker(value: Option<&[u16]>, elements: u64) -> u64 {
-    if value.is_some() { elements } else { 0 }
+    if value.is_some() {
+        elements
+    } else {
+        0
+    }
 }
 
 fn bf16_slots(rows: u64, cols: u64, label: &str) -> Result<u64, String> {
@@ -870,6 +1193,17 @@ fn byte_slots(rows: u64, cols: u64, bytes_per_element: u64, label: &str) -> Resu
 
 fn scale_dim(value: u64) -> u64 {
     value.div_ceil(128)
+}
+
+fn round_up(value: u64, alignment: u64) -> Result<u64, String> {
+    if alignment <= 1 {
+        return Ok(value);
+    }
+    let remainder = value % alignment;
+    if remainder == 0 {
+        return Ok(value);
+    }
+    checked_add(value, alignment - remainder, "aligned byte count")
 }
 
 fn checked_add(left: u64, right: u64, label: &str) -> Result<u64, String> {

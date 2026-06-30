@@ -1,5 +1,5 @@
 use crate::decode::hf_chain::layer::{
-    CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN, CudaHfDecodeChainLayer,
+    CudaHfDecodeChainLayer, CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN,
 };
 use crate::decode::hf_sequence::request::CudaHfDecodeSequenceRequest;
 use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
@@ -96,6 +96,17 @@ pub fn estimate_sequence_footprint(
         checked_mul(layer_count, kv_token_capacity, "KV layer tokens")?,
         checked_mul(kv_cache_width, U16_BYTES * 2, "KV token bytes")?,
         "resident KV bytes",
+    )?;
+    let deepseek_runtime_kv_bytes =
+        crate::decode::hf_sequence::footprint_layers::deepseek_runtime_kv_bytes(
+            request.layers,
+            context_tokens,
+            kv_token_capacity,
+        )?;
+    let resident_kv_bytes = checked_add(
+        resident_kv_bytes,
+        deepseek_runtime_kv_bytes,
+        "resident DeepSeek runtime KV bytes",
     )?;
     let deepseek_mhc_runtime_bytes =
         crate::decode::hf_sequence::footprint_layers::deepseek_v4_mhc_runtime_bytes(

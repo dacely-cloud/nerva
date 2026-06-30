@@ -169,6 +169,7 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
         "cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime",
         "cuda_hf_sequence_deepseek_v4_mhc_head_final_norm_runtime",
         "cuda_hf_sequence_deepseek_v4_mhc_native_profile_runtime",
+        "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
     ] {
         assert!(
             primitives.iter().any(|item| item == primitive),
@@ -200,6 +201,7 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
     for primitive in [
         "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_nonzero_page_contents",
         "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_fullsize_page_contents",
+        "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
     ] {
         assert!(
             primitives.iter().any(|item| item == primitive),

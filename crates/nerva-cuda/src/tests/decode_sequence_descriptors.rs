@@ -1,30 +1,30 @@
 use crate::decode::hf_chain::layer::{
+    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR,
     CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
-    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::layout_plan::{
-    CUDA_HF_SEQUENCE_MISSING_OFFSET, CudaHfDecodeSequenceLayoutPlanRequest,
+    CudaHfDecodeSequenceLayoutPlanRequest, CUDA_HF_SEQUENCE_MISSING_OFFSET,
 };
 use crate::decode::hf_sequence::request::{
-    CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
-    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
+    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest, CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
 };
 use crate::decode::hf_sequence::session::request::{
-    CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX, CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX,
-    CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL, CudaHfDecodeSequenceExperimentalRtConfig,
-    CudaHfDecodeSequenceSessionConfig, CudaHfDecodeSequenceSessionCreateOutput,
+    CudaHfDecodeSequenceExperimentalRtConfig, CudaHfDecodeSequenceSessionConfig,
+    CudaHfDecodeSequenceSessionCreateOutput, CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX,
+    CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX, CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL,
 };
 use crate::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{
-    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
-    CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
+    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -2091,6 +2091,7 @@ fn declared_deepseek_v4_descriptor_footprint_counts_storage_widths_and_hc_blocks
 
     assert_eq!(footprint.resident_weight_bytes, 1306);
     assert_eq!(footprint.layout_bytes, 632);
+    assert_eq!(footprint.resident_kv_bytes, 2992);
 }
 
 #[test]
@@ -2251,7 +2252,7 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, plan.resident_weight_bytes);
-    assert_eq!(footprint.resident_kv_bytes, 192);
+    assert_eq!(footprint.resident_kv_bytes, 616);
     assert_eq!(footprint.scratch_bytes, 200);
 }
 
