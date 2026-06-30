@@ -6,6 +6,8 @@
 
 #include <stdint.h>
 
+constexpr uint32_t kDeepSeekSessionMaxCompressHeadSize = 512;
+
 
 
 __global__ void hf_deinterleave_q_gate_projection_kernel(
@@ -566,7 +568,8 @@ __device__ bool deepseek_session_write_fp8_ds_mla_compressed_kv(
   const uint32_t state_width = coff * head_dim;
   const uint32_t compressed_slot = position / compress_ratio;
   const uint32_t compressed_block = compressed_slot / kKvCacheBlockTokens;
-  if (head_dim == 0 || compressed_block >= compressed_block_count) {
+  if (head_dim == 0 || head_dim > kDeepSeekSessionMaxCompressHeadSize ||
+      compressed_block >= compressed_block_count) {
     return false;
   }
   deepseek_session_compress_state_to_scratch(
@@ -651,7 +654,8 @@ __device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
   const uint32_t state_width = coff * head_dim;
   const uint32_t compressed_slot = position / compress_ratio;
   const uint32_t compressed_block = compressed_slot / kKvCacheBlockTokens;
-  if (compressed_block >= compressed_block_count) {
+  if (head_dim > kDeepSeekSessionMaxCompressHeadSize ||
+      compressed_block >= compressed_block_count) {
     return false;
   }
   deepseek_session_compress_state_to_scratch(
@@ -1601,12 +1605,14 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     }
   }
 
+  float deepseek_compressed_scratch[kDeepSeekSessionMaxCompressHeadSize];
   if (deepseek_session_write_fp8_ds_mla_compressed_kv(
           arena, deepseek_compressor_state,
           deepseek_compressor_state_offset_bytes, deepseek_compressed_kv,
           deepseek_compressed_kv_offset_bytes,
           deepseek_compressed_kv_block_count, layout, kv_block_count,
-          kv_block_table, position, rms_eps, rope_theta, s.attn)) {
+          kv_block_table, position, rms_eps, rope_theta,
+          deepseek_compressed_scratch)) {
     if (deepseek_runtime_counters != nullptr) {
       atomicAdd(
           reinterpret_cast<unsigned long long *>(
@@ -1619,7 +1625,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
           arena, deepseek_indexer_state, deepseek_indexer_state_offset_bytes,
           deepseek_indexer_kv, deepseek_indexer_kv_offset_bytes,
           deepseek_indexer_kv_block_count, layout, kv_block_count,
-          kv_block_table, position, rms_eps, rope_theta, s.attn)) {
+          kv_block_table, position, rms_eps, rope_theta,
+          deepseek_compressed_scratch)) {
     if (deepseek_runtime_counters != nullptr) {
       atomicAdd(
           reinterpret_cast<unsigned long long *>(
