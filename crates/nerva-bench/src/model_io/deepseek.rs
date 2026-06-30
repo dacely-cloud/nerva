@@ -1,3 +1,15 @@
+use std::time::Instant;
+
+use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
+use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
+use nerva_cuda::deepseek_quant::dequant::{
+    deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_mxfp4_e2m1_e8m0_dequant,
+};
+use nerva_cuda::deepseek_router::route::{
+    deepseek_router_route_v3_grouped_sigmoid, deepseek_router_route_v4_hash,
+    deepseek_router_route_v4_sqrtsoftplus,
+};
+use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::hf::architecture::HfArchitectureKind;
 use nerva_model::hf::contract::validate_exact_runtime_contract;
 use nerva_model::hf::deepseek::plan_deepseek_vllm_kv_cache;
@@ -12,6 +24,39 @@ pub(crate) struct DeepSeekCudaPrimitiveReport<'a> {
     pub(crate) summary_json: &'a str,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DeepSeekCudaPrimitiveBenchSample {
+    pub(crate) name: String,
+    pub(crate) status: &'static str,
+    pub(crate) requested_iterations: usize,
+    pub(crate) executed_iterations: usize,
+    pub(crate) total_wall_ns: u128,
+    pub(crate) avg_wall_ns: u128,
+    pub(crate) output_hash: u64,
+    pub(crate) device_arena_bytes: u64,
+    pub(crate) pinned_host_bytes: u64,
+    pub(crate) h2d_bytes_per_iter: u64,
+    pub(crate) d2h_bytes_per_iter: u64,
+    pub(crate) kernel_launches_per_iter: u64,
+    pub(crate) sync_calls_per_iter: u64,
+    pub(crate) hot_path_allocations_per_iter: u64,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct DeepSeekPrimitiveMetrics {
+    status: SmokeStatus,
+    output_hash: u64,
+    device_arena_bytes: u64,
+    pinned_host_bytes: u64,
+    h2d_bytes: u64,
+    d2h_bytes: u64,
+    kernel_launches: u64,
+    sync_calls: u64,
+    hot_path_allocations: u64,
+    error: Option<String>,
+}
+
 pub(crate) fn run_deepseek_runtime_plan(config_path: Option<String>) -> Result<String, String> {
     let path =
         config_path.ok_or_else(|| "deepseek-runtime-plan requires config.json".to_string())?;
@@ -20,6 +65,65 @@ pub(crate) fn run_deepseek_runtime_plan(config_path: Option<String>) -> Result<S
     let metadata = parse_hf_config_metadata(&config)
         .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
     deepseek_runtime_plan_json(&metadata)
+}
+
+pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<String, String> {
+    if iterations == 0 {
+        return Err("iterations must be greater than zero".to_string());
+    }
+
+    let samples = vec![
+        bench_primitive("router_v3_grouped_sigmoid", iterations, bench_router_v3),
+        bench_primitive("router_v4_sqrtsoftplus", iterations, bench_router_v4),
+        bench_primitive("router_v4_hash", iterations, bench_router_v4_hash),
+        bench_primitive("quant_fp8_e4m3fn_e8m0", iterations, bench_quant_fp8),
+        bench_primitive("quant_mxfp4_e2m1_e8m0", iterations, bench_quant_mxfp4),
+        bench_primitive("mla_decode_mqa", iterations, bench_mla_decode),
+        bench_primitive("routed_moe_forward", iterations, bench_moe_forward),
+    ];
+    Ok(deepseek_cuda_primitive_bench_report_json(
+        iterations, &samples,
+    ))
+}
+
+pub(crate) fn deepseek_cuda_primitive_bench_report_json(
+    iterations: usize,
+    samples: &[DeepSeekCudaPrimitiveBenchSample],
+) -> String {
+    let ok = samples
+        .iter()
+        .filter(|sample| sample.status == "ok")
+        .count();
+    let failed = samples
+        .iter()
+        .filter(|sample| sample.status == "failed")
+        .count();
+    let unavailable = samples
+        .iter()
+        .filter(|sample| sample.status == "unavailable")
+        .count();
+    let status = if failed > 0 {
+        "failed"
+    } else if unavailable > 0 {
+        "unavailable"
+    } else if ok == samples.len() {
+        "ok"
+    } else {
+        "incomplete"
+    };
+    let refs = deepseek_vllm_reference_units();
+
+    format!(
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-cuda-primitive-bench-v1\",\"iterations\":{},\"primitive_samples_total\":{},\"primitive_samples_ok\":{},\"primitive_samples_unavailable\":{},\"primitive_samples_failed\":{},\"runtime_parity_status\":\"primitive_microbench_only\",\"performance_status\":\"not_vllm_end_to_end_comparable\",\"claim_allowed\":false,\"vllm_reference_units\":{},\"samples\":{}}}",
+        status,
+        iterations,
+        samples.len(),
+        ok,
+        unavailable,
+        failed,
+        json_string_array(&refs),
+        deepseek_cuda_primitive_bench_samples_json(samples),
+    )
 }
 
 pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result<String, String> {
@@ -558,6 +662,233 @@ fn smoke_status_label(status: &nerva_cuda::smoke::status::SmokeStatus) -> &'stat
     }
 }
 
+fn bench_primitive(
+    name: &'static str,
+    iterations: usize,
+    mut op: impl FnMut() -> DeepSeekPrimitiveMetrics,
+) -> DeepSeekCudaPrimitiveBenchSample {
+    let mut last = None;
+    let mut executed = 0usize;
+    let start = Instant::now();
+    for _ in 0..iterations {
+        let metrics = op();
+        executed += 1;
+        let terminal = metrics.status != SmokeStatus::Ok;
+        last = Some(metrics);
+        if terminal {
+            break;
+        }
+    }
+    let total_wall_ns = start.elapsed().as_nanos();
+    let avg_wall_ns = total_wall_ns / executed.max(1) as u128;
+    let metrics = last.expect("bench primitive should execute at least once");
+
+    DeepSeekCudaPrimitiveBenchSample {
+        name: name.to_string(),
+        status: smoke_status_label(&metrics.status),
+        requested_iterations: iterations,
+        executed_iterations: executed,
+        total_wall_ns,
+        avg_wall_ns,
+        output_hash: metrics.output_hash,
+        device_arena_bytes: metrics.device_arena_bytes,
+        pinned_host_bytes: metrics.pinned_host_bytes,
+        h2d_bytes_per_iter: metrics.h2d_bytes,
+        d2h_bytes_per_iter: metrics.d2h_bytes,
+        kernel_launches_per_iter: metrics.kernel_launches,
+        sync_calls_per_iter: metrics.sync_calls,
+        hot_path_allocations_per_iter: metrics.hot_path_allocations,
+        error: metrics.error,
+    }
+}
+
+fn bench_router_v3() -> DeepSeekPrimitiveMetrics {
+    let summary = deepseek_router_route_v3_grouped_sigmoid(
+        &[-2.0, 0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -3.0],
+        Some(&[0.0, 0.0, 0.0, 4.0, 0.0, 0.0, -4.0, 0.0]),
+        2,
+        1,
+        2,
+        true,
+        2.5,
+    );
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_router_v4() -> DeepSeekPrimitiveMetrics {
+    let summary = deepseek_router_route_v4_sqrtsoftplus(
+        &[-2.0, 0.0, 1.0, 3.0],
+        Some(&[0.0, 3.0, 0.0, -3.0]),
+        2,
+        true,
+        1.5,
+    );
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_router_v4_hash() -> DeepSeekPrimitiveMetrics {
+    let hash_table = [
+        0u32, 1, 3, // token 0
+        2, 1, 3, // token 1
+        3, 0, 2, // token 2
+    ];
+    let summary =
+        deepseek_router_route_v4_hash(&[4.0, -1.0, 0.0, 2.0], &hash_table, 1, 3, true, 1.0);
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_quant_fp8() -> DeepSeekPrimitiveMetrics {
+    let weights = [
+        0x38, 0x40, 0x30, 0xb8, 0x70, 0x77, 0x78, 0x7e, 0x20, 0x28, 0x30, 0x38,
+    ];
+    let scales = [0x7f, 0x80, 0x7e, 0x81];
+    let summary = deepseek_fp8_e4m3fn_e8m0_dequant(&weights, &scales, 3, 4, 2, 2);
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_quant_mxfp4() -> DeepSeekPrimitiveMetrics {
+    let packed = [0x21, 0x76, 0xa9, 0xfe, 0x10, 0x54, 0x98, 0xdc];
+    let scales = [0x7f, 0x80, 0x7e, 0x81];
+    let summary = deepseek_mxfp4_e2m1_e8m0_dequant(&packed, &scales, 2, 4, 2);
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_mla_decode() -> DeepSeekPrimitiveMetrics {
+    let q_nope = [0.2, -0.3, 0.4, 0.1];
+    let q_pe = [0.15, -0.25];
+    let kv_c = [0.3, -0.1, 0.2, -0.4, 0.5, 0.1, 0.2, 0.4, -0.3];
+    let k_pe = [0.05, -0.2, 0.3];
+    let w_uk = [
+        0.3, -0.2, 0.1, 0.4, -0.5, 0.2, 0.6, -0.1, 0.7, 0.3, -0.2, 0.5,
+    ];
+    let w_uv = [
+        0.2, -0.4, 0.5, 0.1, -0.3, 0.6, 0.4, -0.2, 0.7, 0.2, -0.1, 0.3,
+    ];
+    let summary = deepseek_mla_decode(CudaDeepSeekMlaDecodeInput {
+        heads: 2,
+        tokens: 3,
+        kv_lora_rank: 3,
+        qk_nope_head_dim: 2,
+        qk_rope_head_dim: 1,
+        v_head_dim: 2,
+        softmax_scale: 0.7,
+        q_nope: &q_nope,
+        q_pe: &q_pe,
+        kv_c: &kv_c,
+        k_pe: &k_pe,
+        w_uk: &w_uk,
+        w_uv: &w_uv,
+    });
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_moe_forward() -> DeepSeekPrimitiveMetrics {
+    let input = [1.2, -0.7, 0.3];
+    let expert_ids = [1, 0];
+    let expert_weights = [0.75, 0.25];
+    let w_gate = [
+        1.0, -0.5, 0.25, -0.25, 0.75, 1.25, 0.5, 0.2, -0.1, -1.0, 0.4, 0.3,
+    ];
+    let w_up = [
+        -0.2, 0.4, 1.1, 0.8, -0.6, 0.2, 1.5, -0.3, 0.1, 0.7, 0.6, -0.4,
+    ];
+    let w_down = [
+        0.3, -0.2, 0.4, 0.1, -0.5, 0.2, -0.7, 0.6, -0.1, 0.25, 0.35, -0.45,
+    ];
+    let summary = deepseek_moe_forward(CudaDeepSeekMoeForwardInput {
+        hidden_size: 3,
+        intermediate_size: 2,
+        num_experts: 2,
+        top_k: 2,
+        clamp_swiglu: true,
+        swiglu_limit: 1.0,
+        input: &input,
+        expert_ids: &expert_ids,
+        expert_weights: &expert_weights,
+        w_gate: &w_gate,
+        w_up: &w_up,
+        w_down: &w_down,
+    });
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
 fn cuda_primitives_json(primitives: &[DeepSeekCudaPrimitiveReport<'_>]) -> String {
     let mut out = String::from("[");
     for (index, primitive) in primitives.iter().enumerate() {
@@ -573,6 +904,44 @@ fn cuda_primitives_json(primitives: &[DeepSeekCudaPrimitiveReport<'_>]) -> Strin
     }
     out.push(']');
     out
+}
+
+fn deepseek_cuda_primitive_bench_samples_json(
+    samples: &[DeepSeekCudaPrimitiveBenchSample],
+) -> String {
+    let mut out = String::from("[");
+    for (index, sample) in samples.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "{{\"name\":\"{}\",\"status\":\"{}\",\"requested_iterations\":{},\"executed_iterations\":{},\"total_wall_ns\":{},\"avg_wall_ns\":{},\"output_hash\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes_per_iter\":{},\"D2H_bytes_per_iter\":{},\"kernel_launches_per_iter\":{},\"sync_calls_per_iter\":{},\"hot_path_allocations_per_iter\":{},\"error\":{}}}",
+            json_escape(&sample.name),
+            sample.status,
+            sample.requested_iterations,
+            sample.executed_iterations,
+            sample.total_wall_ns,
+            sample.avg_wall_ns,
+            sample.output_hash,
+            sample.device_arena_bytes,
+            sample.pinned_host_bytes,
+            sample.h2d_bytes_per_iter,
+            sample.d2h_bytes_per_iter,
+            sample.kernel_launches_per_iter,
+            sample.sync_calls_per_iter,
+            sample.hot_path_allocations_per_iter,
+            json_opt_string(sample.error.as_deref()),
+        ));
+    }
+    out.push(']');
+    out
+}
+
+fn json_opt_string(value: Option<&str>) -> String {
+    value.map_or_else(
+        || "null".to_string(),
+        |value| format!("\"{}\"", json_escape(value)),
+    )
 }
 
 fn json_opt_architecture(value: Option<&str>) -> String {
@@ -598,4 +967,17 @@ fn vllm_reference_units(architecture: HfArchitectureKind) -> Vec<String> {
         ],
         _ => Vec::new(),
     }
+}
+
+fn deepseek_vllm_reference_units() -> Vec<String> {
+    let mut refs = vllm_reference_units(HfArchitectureKind::DeepSeekV3);
+    refs.extend(vllm_reference_units(HfArchitectureKind::DeepSeekV4));
+    refs.push("/root/vllm/vllm/models/deepseek_v4/nvidia/ops/o_proj.py".to_string());
+    refs.push("/root/vllm/vllm/models/deepseek_v4/nvidia/ops/prepare_megamoe.py".to_string());
+    refs.push(
+        "/root/vllm/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py".to_string(),
+    );
+    refs.sort();
+    refs.dedup();
+    refs
 }

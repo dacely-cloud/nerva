@@ -1,5 +1,7 @@
 use crate::model_io::deepseek::{
-    DeepSeekCudaPrimitiveReport, deepseek_cuda_readiness_report_json, run_deepseek_runtime_plan,
+    DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
+    deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
+    run_deepseek_runtime_plan,
 };
 
 #[test]
@@ -188,6 +190,64 @@ fn deepseek_cuda_readiness_without_config_reports_unknown_architecture() {
     assert!(json.contains("\"vllm_kv_cache_plan\":null"));
     assert!(json.contains("\"execution_unit_status\":[]"));
     assert!(json.contains("\"claim_allowed\":false"));
+}
+
+#[test]
+fn deepseek_cuda_primitive_bench_report_is_not_end_to_end_claim() {
+    let samples = [
+        DeepSeekCudaPrimitiveBenchSample {
+            name: "router_v3_grouped_sigmoid".to_string(),
+            status: "ok",
+            requested_iterations: 16,
+            executed_iterations: 16,
+            total_wall_ns: 1600,
+            avg_wall_ns: 100,
+            output_hash: 11,
+            device_arena_bytes: 128,
+            pinned_host_bytes: 96,
+            h2d_bytes_per_iter: 64,
+            d2h_bytes_per_iter: 32,
+            kernel_launches_per_iter: 1,
+            sync_calls_per_iter: 1,
+            hot_path_allocations_per_iter: 0,
+            error: None,
+        },
+        DeepSeekCudaPrimitiveBenchSample {
+            name: "routed_moe_forward".to_string(),
+            status: "unavailable",
+            requested_iterations: 16,
+            executed_iterations: 1,
+            total_wall_ns: 500,
+            avg_wall_ns: 500,
+            output_hash: 0,
+            device_arena_bytes: 0,
+            pinned_host_bytes: 0,
+            h2d_bytes_per_iter: 0,
+            d2h_bytes_per_iter: 0,
+            kernel_launches_per_iter: 0,
+            sync_calls_per_iter: 0,
+            hot_path_allocations_per_iter: 0,
+            error: Some("no CUDA device".to_string()),
+        },
+    ];
+
+    let json = deepseek_cuda_primitive_bench_report_json(16, &samples);
+
+    assert!(json.contains("\"schema\":\"nerva-deepseek-cuda-primitive-bench-v1\""));
+    assert!(json.contains("\"status\":\"unavailable\""));
+    assert!(json.contains("\"primitive_samples_total\":2"));
+    assert!(json.contains("\"primitive_samples_ok\":1"));
+    assert!(json.contains("\"primitive_samples_unavailable\":1"));
+    assert!(json.contains("\"runtime_parity_status\":\"primitive_microbench_only\""));
+    assert!(json.contains("\"performance_status\":\"not_vllm_end_to_end_comparable\""));
+    assert!(json.contains("\"claim_allowed\":false"));
+    assert!(json.contains("\"name\":\"router_v3_grouped_sigmoid\""));
+    assert!(json.contains("\"avg_wall_ns\":100"));
+    assert!(json.contains("\"kernel_launches_per_iter\":1"));
+    assert!(json.contains("\"hot_path_allocations_per_iter\":0"));
+    assert!(json.contains("/root/vllm/vllm/model_executor/models/deepseek_v2.py"));
+    assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/nvidia/model.py"));
+    assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/nvidia/ops/prepare_megamoe.py"));
 }
 
 fn deepseek_v4_config() -> &'static str {

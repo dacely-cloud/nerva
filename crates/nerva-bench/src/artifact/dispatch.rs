@@ -4,7 +4,10 @@ use crate::{
     cli::model::precision::precision_model_pair_json,
     model_io::{
         config::{run_layout_probe, run_manifest_probe, run_metadata_probe},
-        deepseek::{run_deepseek_cuda_readiness, run_deepseek_runtime_plan},
+        deepseek::{
+            run_deepseek_cuda_primitive_bench, run_deepseek_cuda_readiness,
+            run_deepseek_runtime_plan,
+        },
         resident::{
             run_hotset_probe, run_resident_shard_probe, run_resident_weight_probe,
             run_weight_execution_probe,
@@ -132,6 +135,10 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "manifest" => run_manifest_probe(args.first().cloned()),
         "deepseek-runtime-plan" => run_deepseek_runtime_plan(args.first().cloned()),
         "deepseek-cuda-readiness" => run_deepseek_cuda_readiness(args.first().cloned()),
+        "deepseek-cuda-primitive-bench" => {
+            let iterations = parse_optional_usize(args.first().cloned(), 16, "iterations")?;
+            run_deepseek_cuda_primitive_bench(iterations)
+        }
         "safetensors" => run_safetensors_probe(args.first().cloned(), args.get(1).cloned()),
         "safetensors-shards" => run_safetensors_shard_probe(
             args.first().cloned(),
