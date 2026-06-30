@@ -453,6 +453,7 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.attention_kind = layer.attention_kind;
   layout.deepseek_mode = layer.deepseek_mode;
   layout.deepseek_flags = layer.deepseek_flags;
+  layout.deepseek_hc_mult = layer.deepseek_hc_mult;
   layout.deepseek_q_lora_rank = layer.deepseek_q_lora_rank;
   layout.deepseek_kv_lora_rank = layer.deepseek_kv_lora_rank;
   layout.deepseek_o_lora_rank = layer.deepseek_o_lora_rank;

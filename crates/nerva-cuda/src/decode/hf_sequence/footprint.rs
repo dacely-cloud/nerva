@@ -3,7 +3,7 @@ use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 
 const U16_BYTES: u64 = 2;
 const F32_BYTES: u64 = 4;
-const LAYER_LAYOUT_BYTES: u64 = 368;
+const LAYER_LAYOUT_BYTES: u64 = 376;
 const TOKEN_SLOT_BYTES: u64 = 40;
 const DESCRIPTOR_STREAM_STAGING_BYTES: u64 = 64 * 1024 * 1024;
 const KV_CACHE_BLOCK_TOKENS: u64 = 16;
@@ -150,6 +150,14 @@ fn arena_elements(
     let mut elements = checked_mul(as_u64("vocab", request.vocab_size)?, hidden, "embeddings")?;
     elements = checked_add(elements, hidden, "input buffer")?;
     elements = checked_add(elements, hidden, "scratch buffer")?;
+    elements = checked_add(
+        elements,
+        crate::decode::hf_sequence::footprint_layers::deepseek_static_elements(
+            request.layers,
+            hidden,
+        )?,
+        "DeepSeek static weights",
+    )?;
     let declared_weight_plan = request
         .weight_plan
         .is_some_and(CudaHfDecodeSequenceWeightPlan::is_declared);
@@ -163,6 +171,7 @@ fn arena_elements(
                 kv_hidden,
                 head_dim,
                 intermediate,
+                as_u64("vocab", request.vocab_size)?,
                 declared_weight_plan,
             )?,
             "layer weights",

@@ -5,11 +5,11 @@ use nerva_core::types::error::{NervaError, Result};
 use nerva_cuda::decode::hf_chain::layer::{
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN,
     CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
-    CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
-    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW,
+    CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_DENSE,
+    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use nerva_cuda::decode::hf_sequence::weight_plan::{
     CudaHfDecodeSequenceWeightBlock, hash_weight_blocks,
@@ -170,10 +170,17 @@ fn deepseek_marker(
     if execution.uses_sliding_window_cache {
         flags |= CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW;
     }
+    if execution.uses_moe
+        && !execution.uses_hash_router
+        && metadata.topk_method.as_deref() == Some("noaux_tc")
+    {
+        flags |= CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS;
+    }
 
     Ok(CudaHfDeepSeekLayer {
         mode,
         flags,
+        hc_mult: metadata.hc_mult.unwrap_or(0),
         q_lora_rank: required_deepseek_usize(metadata.q_lora_rank, "q_lora_rank")?,
         kv_lora_rank: metadata.kv_lora_rank.unwrap_or(0),
         o_lora_rank: metadata.o_lora_rank.unwrap_or(0),
@@ -349,10 +356,11 @@ mod tests {
     use nerva_cuda::decode::hf_chain::layer::{
         CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN,
         CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER,
-        CUDA_HF_DEEPSEEK_FLAG_MOE, CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW,
-        CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
-        CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
-        CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
+        CUDA_HF_DEEPSEEK_FLAG_MOE, CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS,
+        CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
+        CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
+        CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+        CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
     };
     use nerva_model::hf::architecture::HfArchitectureKind;
     use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
@@ -532,6 +540,7 @@ mod tests {
         metadata.num_experts = Some(256);
         metadata.num_experts_per_tok = Some(8);
         metadata.norm_topk_prob = true;
+        metadata.topk_method = Some("noaux_tc".to_string());
         metadata.q_lora_rank = Some(1536);
         metadata.kv_lora_rank = Some(512);
         metadata.qk_nope_head_dim = Some(128);
@@ -552,7 +561,10 @@ mod tests {
         assert_eq!(first.qk_rope_head_dim, 64);
         assert_eq!(first.v_head_dim, 128);
         assert_eq!(first.compress_ratio, 1);
-        assert_eq!(layers[1].deepseek.unwrap().flags, CUDA_HF_DEEPSEEK_FLAG_MOE);
+        assert_eq!(
+            layers[1].deepseek.unwrap().flags,
+            CUDA_HF_DEEPSEEK_FLAG_MOE | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS
+        );
     }
 
     #[test]
@@ -581,7 +593,9 @@ mod tests {
         metadata.index_n_heads = Some(64);
         metadata.index_head_dim = Some(128);
         metadata.compress_ratios = vec![0, 1, 4, 128];
+        metadata.hc_mult = Some(4);
         metadata.num_hash_layers = Some(3);
+        metadata.topk_method = Some("noaux_tc".to_string());
         metadata.scoring_func = Some("sqrtsoftplus".to_string());
         metadata.expert_dtype = Some("fp4".to_string());
         metadata.torch_dtype = Some(DType::BF16);
@@ -622,8 +636,11 @@ mod tests {
         );
         assert_eq!(
             layers[3].deepseek.unwrap().flags,
-            CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR | CUDA_HF_DEEPSEEK_FLAG_MOE
+            CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR
+                | CUDA_HF_DEEPSEEK_FLAG_MOE
+                | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS
         );
+        assert_eq!(layers[3].deepseek.unwrap().hc_mult, 4);
         assert_eq!(layers[2].deepseek.unwrap().index_n_heads, 64);
         assert_eq!(layers[2].deepseek.unwrap().index_head_dim, 128);
     }

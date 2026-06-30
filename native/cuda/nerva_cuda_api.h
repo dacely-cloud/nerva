@@ -299,6 +299,7 @@ typedef struct NervaCudaHfDecodeChainLayer {
   uint32_t attention_kind;
   uint32_t deepseek_mode;
   uint32_t deepseek_flags;
+  uint32_t deepseek_hc_mult;
   uint32_t deepseek_q_lora_rank;
   uint32_t deepseek_kv_lora_rank;
   uint32_t deepseek_o_lora_rank;

@@ -19,6 +19,7 @@ pub const CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR: u32 = 1 << 1;
 pub const CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER: u32 = 1 << 2;
 pub const CUDA_HF_DEEPSEEK_FLAG_MOE: u32 = 1 << 3;
 pub const CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW: u32 = 1 << 4;
+pub const CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS: u32 = 1 << 5;
 
 #[derive(Clone, Debug)]
 pub struct CudaHfDecodeChainLayer<'a> {
@@ -60,6 +61,7 @@ pub struct CudaHfDecodeChainLayer<'a> {
 pub struct CudaHfDeepSeekLayer {
     pub mode: u32,
     pub flags: u32,
+    pub hc_mult: usize,
     pub q_lora_rank: usize,
     pub kv_lora_rank: usize,
     pub o_lora_rank: usize,
@@ -189,6 +191,7 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             attention_kind: self.attention_kind,
             deepseek_mode: self.deepseek.map_or(0, |layer| layer.mode),
             deepseek_flags: self.deepseek.map_or(0, |layer| layer.flags),
+            deepseek_hc_mult: self.deepseek.map_or(0, |layer| layer.hc_mult as u32),
             deepseek_q_lora_rank: self.deepseek.map_or(0, |layer| layer.q_lora_rank as u32),
             deepseek_kv_lora_rank: self.deepseek.map_or(0, |layer| layer.kv_lora_rank as u32),
             deepseek_o_lora_rank: self.deepseek.map_or(0, |layer| layer.o_lora_rank as u32),
@@ -254,6 +257,7 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             attention_kind: self.attention_kind,
             deepseek_mode: self.deepseek.map_or(0, |layer| layer.mode),
             deepseek_flags: self.deepseek.map_or(0, |layer| layer.flags),
+            deepseek_hc_mult: self.deepseek.map_or(0, |layer| layer.hc_mult as u32),
             deepseek_q_lora_rank: self.deepseek.map_or(0, |layer| layer.q_lora_rank as u32),
             deepseek_kv_lora_rank: self.deepseek.map_or(0, |layer| layer.kv_lora_rank as u32),
             deepseek_o_lora_rank: self.deepseek.map_or(0, |layer| layer.o_lora_rank as u32),
@@ -424,7 +428,10 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             CUDA_HF_DEEPSEEK_MODE_V4_SWA
                 | CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED
                 | CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER
-        ) && (layer.o_lora_rank == 0 || layer.o_groups == 0 || layer.qk_nope_head_dim == 0)
+        ) && (layer.hc_mult == 0
+            || layer.o_lora_rank == 0
+            || layer.o_groups == 0
+            || layer.qk_nope_head_dim == 0)
         {
             return Some(
                 "CUDA HF decode chain DeepSeek V4 MLA dimensions must be non-zero".to_string(),

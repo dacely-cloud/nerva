@@ -23,6 +23,7 @@ constexpr uint32_t kDeepSeekFlagCompressor = 1u << 1;
 constexpr uint32_t kDeepSeekFlagHashRouter = 1u << 2;
 constexpr uint32_t kDeepSeekFlagMoe = 1u << 3;
 constexpr uint32_t kDeepSeekFlagSlidingWindow = 1u << 4;
+constexpr uint32_t kDeepSeekFlagRouterBias = 1u << 5;
 constexpr uint32_t kSparseMoeExpertsMax = 256;
 constexpr uint32_t kSparseMoeTopKMax = 16;
 constexpr uint32_t kRequestId = 1;
@@ -118,6 +119,7 @@ struct SequenceLayerLayout {
   uint32_t attention_kind;
   uint32_t deepseek_mode;
   uint32_t deepseek_flags;
+  uint32_t deepseek_hc_mult;
   uint32_t deepseek_q_lora_rank;
   uint32_t deepseek_kv_lora_rank;
   uint32_t deepseek_o_lora_rank;

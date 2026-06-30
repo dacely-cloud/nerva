@@ -1,8 +1,9 @@
 use crate::decode::hf_chain::layer::{
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR,
     CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
-    CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
-    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer,
+    CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::request::{
@@ -99,6 +100,7 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
             | CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR
             | CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER
             | CUDA_HF_DEEPSEEK_FLAG_MOE,
+        hc_mult: 4,
         q_lora_rank: 1536,
         kv_lora_rank: 512,
         o_lora_rank: 1536,
@@ -151,6 +153,7 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     assert_eq!(ffi.attention_kind, CUDA_HF_ATTENTION_DEEPSEEK_MLA);
     assert_eq!(ffi.deepseek_mode, deepseek.mode);
     assert_eq!(ffi.deepseek_flags, deepseek.flags);
+    assert_eq!(ffi.deepseek_hc_mult, deepseek.hc_mult as u32);
     assert_eq!(ffi.deepseek_q_lora_rank, deepseek.q_lora_rank as u32);
     assert_eq!(ffi.deepseek_kv_lora_rank, deepseek.kv_lora_rank as u32);
     assert_eq!(ffi.deepseek_o_lora_rank, deepseek.o_lora_rank as u32);
@@ -349,7 +352,98 @@ fn declared_sparse_moe_descriptor_footprint_uses_router_and_experts() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 448);
-    assert_eq!(footprint.layout_bytes, 368);
+    assert_eq!(footprint.layout_bytes, 376);
+}
+
+#[test]
+fn declared_deepseek_v4_descriptor_footprint_counts_storage_widths_and_hc_blocks() {
+    let deepseek_layer = CudaHfDecodeChainLayer {
+        rms_attn_weight: &[],
+        rms_mlp_weight: &[],
+        w_q: &[],
+        w_q_gate: None,
+        w_k: &[],
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &[],
+        w_o: &[],
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &[],
+        w_up: &[],
+        w_down: &[],
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: None,
+        deepseek: Some(CudaHfDeepSeekLayer {
+            mode: CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+            flags: CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR
+                | CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER
+                | CUDA_HF_DEEPSEEK_FLAG_MOE
+                | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS,
+            hc_mult: 2,
+            q_lora_rank: 2,
+            kv_lora_rank: 1,
+            o_lora_rank: 2,
+            o_groups: 2,
+            qk_nope_head_dim: 1,
+            qk_rope_head_dim: 1,
+            v_head_dim: 2,
+            compress_ratio: 4,
+            index_n_heads: 1,
+            index_head_dim: 2,
+        }),
+        mlp_kind: CUDA_HF_MLP_SPARSE_MOE,
+        moe_intermediate: 4,
+        shared_expert_intermediate: 2,
+        num_experts: 2,
+        experts_per_token: 1,
+        norm_topk_prob: true,
+        attention_kind: CUDA_HF_ATTENTION_DEEPSEEK_MLA,
+    };
+    let layers = [deepseek_layer];
+    let request = CudaHfDecodeSequenceRequest {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        steps: 2,
+        seed_token: 0,
+        prompt_tokens: &[0],
+        eos_token: None,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: 1306,
+            gpu_resident_weight_bytes: 1306,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: 1,
+        }),
+        weight_blocks: &[],
+        sampler: CudaHfDecodeSamplerConfig::greedy(),
+    };
+
+    let footprint = estimate_sequence_footprint(&request).unwrap();
+
+    assert_eq!(footprint.resident_weight_bytes, 1306);
+    assert_eq!(footprint.layout_bytes, 376);
 }
 
 #[test]
@@ -423,7 +517,7 @@ fn query_gate_footprint_counts_optional_projection() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 504);
-    assert_eq!(footprint.layout_bytes, 368);
+    assert_eq!(footprint.layout_bytes, 376);
 }
 
 #[test]
@@ -512,10 +606,10 @@ fn linear_gdn_moe_footprint_counts_state_and_scratch() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 436);
-    assert_eq!(footprint.layout_bytes, 368);
+    assert_eq!(footprint.layout_bytes, 376);
     assert_eq!(footprint.scratch_bytes, 276);
     assert_eq!(footprint.resident_kv_bytes, 128);
-    assert_eq!(footprint.device_arena_bytes, 1424);
+    assert_eq!(footprint.device_arena_bytes, 1432);
 }
 
 fn assert_raw_descriptor_decode_matches_request(sampler: CudaHfDecodeSamplerConfig) {
