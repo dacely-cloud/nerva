@@ -153,7 +153,7 @@ pub fn deepseek_c4_indexer_topk_smoke() -> CudaDeepSeekC4IndexerTopkSummary {
         || !scores_close(&summary.topk_scores, &[1.5, 1.0, 2.0, 0.5])
         || summary.valid_tokens != 2
         || summary.selected_entries != 4
-        || summary.kernel_launches != 1
+        || summary.kernel_launches != 2
         || summary.sync_calls != 1
         || summary.hot_path_allocations != 0
     {

@@ -362,7 +362,7 @@ fn deepseek_c4_indexer_topk_smoke_is_repeatable_when_device_is_available() {
     assert_eq!(second.valid_tokens, 2);
     assert_eq!(second.selected_entries, 4);
     assert_eq!(second.output_hash, first.output_hash);
-    assert_eq!(second.kernel_launches, 1);
+    assert_eq!(second.kernel_launches, 2);
     assert_eq!(second.sync_calls, 1);
     assert_eq!(second.hot_path_allocations, 0);
 }

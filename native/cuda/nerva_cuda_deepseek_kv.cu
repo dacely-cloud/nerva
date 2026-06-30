@@ -257,22 +257,57 @@ __device__ __forceinline__ bool c4_indexer_score_is_better(float candidate,
          (candidate == current && slot >= 0 && slot < current_slot);
 }
 
-__global__ void c4_indexer_topk_kernel(int32_t *topk_indices,
-                                       float *topk_scores,
-                                       const float *query,
-                                       const float *key_cache,
-                                       const float *weights,
-                                       const int32_t *context_lens,
-                                       uint32_t num_tokens,
-                                       uint32_t num_heads,
-                                       uint32_t head_dim,
-                                       uint32_t max_compressed_tokens,
-                                       uint32_t topk_tokens) {
+__global__ void c4_indexer_score_kernel(float *logits,
+                                        const float *query,
+                                        const float *key_cache,
+                                        const float *weights,
+                                        const int32_t *context_lens,
+                                        uint32_t num_tokens,
+                                        uint32_t num_heads,
+                                        uint32_t head_dim,
+                                        uint32_t max_compressed_tokens) {
+  const uint32_t token_idx = blockIdx.x;
+  const uint32_t slot = blockIdx.y * blockDim.x + threadIdx.x;
+  if (token_idx >= num_tokens || slot >= max_compressed_tokens) {
+    return;
+  }
+
+  const uint64_t logits_idx =
+      static_cast<uint64_t>(token_idx) * max_compressed_tokens + slot;
+  const int32_t raw_context_len = context_lens[token_idx];
+  if (raw_context_len <= 0 ||
+      slot >= static_cast<uint32_t>(raw_context_len)) {
+    logits[logits_idx] = -INFINITY;
+    return;
+  }
+
+  float score = 0.0f;
+  for (uint32_t head = 0; head < num_heads; ++head) {
+    const float head_weight = weights[token_idx * num_heads + head];
+    float dot = 0.0f;
+    const uint64_t query_base =
+        (static_cast<uint64_t>(token_idx) * num_heads + head) * head_dim;
+    const uint64_t key_base = static_cast<uint64_t>(slot) * head_dim;
+    for (uint32_t dim = 0; dim < head_dim; ++dim) {
+      dot += query[query_base + dim] * key_cache[key_base + dim];
+    }
+    score += head_weight * dot;
+  }
+  logits[logits_idx] = score;
+}
+
+__global__ void c4_indexer_topk_from_scores_kernel(
+    int32_t *topk_indices,
+    float *topk_scores,
+    const float *logits,
+    const int32_t *context_lens,
+    uint32_t num_tokens,
+    uint32_t max_compressed_tokens,
+    uint32_t topk_tokens) {
   const uint32_t token_idx = blockIdx.x;
   if (token_idx >= num_tokens || threadIdx.x != 0) {
     return;
   }
-
   const uint64_t output_base =
       static_cast<uint64_t>(token_idx) * topk_tokens;
   for (uint32_t rank = 0; rank < topk_tokens; ++rank) {
@@ -290,19 +325,8 @@ __global__ void c4_indexer_topk_kernel(int32_t *topk_indices,
           : static_cast<uint32_t>(raw_context_len);
 
   for (uint32_t slot = 0; slot < context_len; ++slot) {
-    float score = 0.0f;
-    for (uint32_t head = 0; head < num_heads; ++head) {
-      const float head_weight = weights[token_idx * num_heads + head];
-      float dot = 0.0f;
-      const uint64_t query_base =
-          (static_cast<uint64_t>(token_idx) * num_heads + head) * head_dim;
-      const uint64_t key_base = static_cast<uint64_t>(slot) * head_dim;
-      for (uint32_t dim = 0; dim < head_dim; ++dim) {
-        dot += query[query_base + dim] * key_cache[key_base + dim];
-      }
-      score += head_weight * dot;
-    }
-
+    const float score =
+        logits[static_cast<uint64_t>(token_idx) * max_compressed_tokens + slot];
     const int32_t slot_i32 = static_cast<int32_t>(slot);
     for (uint32_t rank = 0; rank < topk_tokens; ++rank) {
       const uint64_t output_idx = output_base + rank;
@@ -1382,6 +1406,7 @@ extern "C" int nerva_cuda_deepseek_c4_indexer_topk(
   float *d_query = nullptr;
   float *d_key_cache = nullptr;
   float *d_weights = nullptr;
+  float *d_logits = nullptr;
   int32_t *d_context_lens = nullptr;
   int32_t *d_topk_indices = nullptr;
   float *d_topk_scores = nullptr;
@@ -1396,11 +1421,15 @@ extern "C" int nerva_cuda_deepseek_c4_indexer_topk(
       static_cast<uint64_t>(request->max_compressed_tokens) * request->head_dim;
   const uint64_t weight_values =
       static_cast<uint64_t>(request->num_tokens) * request->num_heads;
+  const uint64_t logits_values =
+      static_cast<uint64_t>(request->num_tokens) *
+      request->max_compressed_tokens;
   const uint64_t output_values =
       static_cast<uint64_t>(request->num_tokens) * request->topk_tokens;
   const uint64_t query_bytes = query_values * sizeof(float);
   const uint64_t key_bytes = key_values * sizeof(float);
   const uint64_t weight_bytes = weight_values * sizeof(float);
+  const uint64_t logits_bytes = logits_values * sizeof(float);
   const uint64_t context_bytes =
       static_cast<uint64_t>(request->num_tokens) * sizeof(int32_t);
   const uint64_t output_index_bytes = output_values * sizeof(int32_t);
@@ -1412,6 +1441,8 @@ extern "C" int nerva_cuda_deepseek_c4_indexer_topk(
   if (err != cudaSuccess) goto cleanup;
   err = cudaMalloc(reinterpret_cast<void **>(&d_weights), weight_bytes);
   if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_logits), logits_bytes);
+  if (err != cudaSuccess) goto cleanup;
   err = cudaMalloc(reinterpret_cast<void **>(&d_context_lens), context_bytes);
   if (err != cudaSuccess) goto cleanup;
   err = cudaMalloc(reinterpret_cast<void **>(&d_topk_indices),
@@ -1421,6 +1452,7 @@ extern "C" int nerva_cuda_deepseek_c4_indexer_topk(
                    output_score_bytes);
   if (err != cudaSuccess) goto cleanup;
   out->device_arena_bytes = query_bytes + key_bytes + weight_bytes +
+                            logits_bytes +
                             context_bytes + output_index_bytes +
                             output_score_bytes;
 
@@ -1458,9 +1490,13 @@ extern "C" int nerva_cuda_deepseek_c4_indexer_topk(
   out->h2d_bytes = query_bytes + key_bytes + weight_bytes + context_bytes;
 
   {
-    c4_indexer_topk_kernel<<<request->num_tokens, 1, 0, stream>>>(
-        d_topk_indices,
-        d_topk_scores,
+    constexpr uint32_t kScoreThreads = 128;
+    const dim3 score_grid(
+        request->num_tokens,
+        (request->max_compressed_tokens + kScoreThreads - 1u) /
+            kScoreThreads);
+    c4_indexer_score_kernel<<<score_grid, kScoreThreads, 0, stream>>>(
+        d_logits,
         d_query,
         d_key_cache,
         d_weights,
@@ -1468,6 +1504,16 @@ extern "C" int nerva_cuda_deepseek_c4_indexer_topk(
         request->num_tokens,
         request->num_heads,
         request->head_dim,
+        request->max_compressed_tokens);
+    out->kernel_launches += 1;
+    err = cudaGetLastError();
+    if (err != cudaSuccess) goto cleanup;
+    c4_indexer_topk_from_scores_kernel<<<request->num_tokens, 1, 0, stream>>>(
+        d_topk_indices,
+        d_topk_scores,
+        d_logits,
+        d_context_lens,
+        request->num_tokens,
         request->max_compressed_tokens,
         request->topk_tokens);
     out->kernel_launches += 1;
@@ -1520,6 +1566,7 @@ cleanup:
   if (d_topk_scores != nullptr) cudaFree(d_topk_scores);
   if (d_topk_indices != nullptr) cudaFree(d_topk_indices);
   if (d_context_lens != nullptr) cudaFree(d_context_lens);
+  if (d_logits != nullptr) cudaFree(d_logits);
   if (d_weights != nullptr) cudaFree(d_weights);
   if (d_key_cache != nullptr) cudaFree(d_key_cache);
   if (d_query != nullptr) cudaFree(d_query);
