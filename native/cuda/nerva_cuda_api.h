@@ -1485,6 +1485,78 @@ typedef struct NervaCudaDeepSeekQKvRmsNormResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekQKvRmsNormResult;
 
+typedef struct NervaCudaDeepSeekMhcPreRequest {
+  uint32_t tokens;
+  uint32_t hc_mult;
+  uint32_t hidden_size;
+  uint32_t sinkhorn_repeat;
+  float rms_eps;
+  float hc_pre_eps;
+  float hc_sinkhorn_eps;
+  float hc_post_mult_value;
+  const float *residual;
+  const float *fn_weights;
+  const float *hc_scale;
+  const float *hc_base;
+  float *post_mix;
+  float *comb_mix;
+  float *layer_input;
+} NervaCudaDeepSeekMhcPreRequest;
+
+typedef struct NervaCudaDeepSeekMhcPreResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t mhc_error;
+  uint32_t tokens;
+  uint32_t hc_mult;
+  uint32_t hidden_size;
+  uint32_t sinkhorn_repeat;
+  float rms_eps;
+  float hc_pre_eps;
+  float hc_sinkhorn_eps;
+  float hc_post_mult_value;
+  uint64_t post_mix_hash;
+  uint64_t comb_mix_hash;
+  uint64_t layer_input_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekMhcPreResult;
+
+typedef struct NervaCudaDeepSeekMhcPostRequest {
+  uint32_t tokens;
+  uint32_t hc_mult;
+  uint32_t hidden_size;
+  const float *x;
+  const float *residual;
+  const float *post_layer_mix;
+  const float *comb_res_mix;
+  float *output;
+} NervaCudaDeepSeekMhcPostRequest;
+
+typedef struct NervaCudaDeepSeekMhcPostResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t mhc_error;
+  uint32_t tokens;
+  uint32_t hc_mult;
+  uint32_t hidden_size;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekMhcPostResult;
+
 typedef struct NervaCudaDeepSeekMhcHeadRequest {
   uint32_t tokens;
   uint32_t hc_mult;
@@ -1927,6 +1999,12 @@ int nerva_cuda_deepseek_mla_decode(
 int nerva_cuda_deepseek_qkv_rmsnorm(
     const NervaCudaDeepSeekQKvRmsNormRequest *request,
     NervaCudaDeepSeekQKvRmsNormResult *out);
+int nerva_cuda_deepseek_mhc_pre(
+    const NervaCudaDeepSeekMhcPreRequest *request,
+    NervaCudaDeepSeekMhcPreResult *out);
+int nerva_cuda_deepseek_mhc_post(
+    const NervaCudaDeepSeekMhcPostRequest *request,
+    NervaCudaDeepSeekMhcPostResult *out);
 int nerva_cuda_deepseek_mhc_head(
     const NervaCudaDeepSeekMhcHeadRequest *request,
     NervaCudaDeepSeekMhcHeadResult *out);
