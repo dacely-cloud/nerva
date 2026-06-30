@@ -1,5 +1,6 @@
 #include "kernels.cuh"
 
+#include "../deepseek_quant.cuh"
 #include "device_ops.cuh"
 
 #include <stdint.h>
@@ -258,6 +259,157 @@ __global__ void hf_layer_attention_encode_kernel(
       s.attn[out] /= local_l;
     }
     projection_input[out] = f32_to_encoded(s.attn[out], dtype);
+  }
+}
+
+__device__ float deepseek_fp8_scaled_weight(const uint16_t *arena,
+                                            uint64_t weight_offset,
+                                            uint64_t scale_offset,
+                                            uint32_t rows, uint32_t cols,
+                                            uint32_t row, uint32_t col) {
+  const auto *weights = reinterpret_cast<const uint8_t *>(arena + weight_offset);
+  const auto *scales = reinterpret_cast<const float *>(arena + scale_offset);
+  const uint32_t scale_cols = (cols + 127u) / 128u;
+  const uint32_t scale_idx = (row / 128u) * scale_cols + (col / 128u);
+  return nerva::deepseek::f8_e4m3fn_bits_to_f32(
+             weights[static_cast<uint64_t>(row) * cols + col]) *
+         scales[scale_idx];
+}
+
+__device__ float deepseek_rope_value_serial(float left, float right,
+                                            uint32_t offset, uint32_t dim,
+                                            uint32_t position, float theta,
+                                            bool second) {
+  if (theta <= 0.0f || dim < 2) {
+    return second ? right : left;
+  }
+  const float exponent =
+      static_cast<float>(2u * offset) / static_cast<float>(dim);
+  const float angle = static_cast<float>(position) / powf(theta, exponent);
+  float sin_value = 0.0f;
+  float cos_value = 0.0f;
+  sincosf(angle, &sin_value, &cos_value);
+  return second ? right * cos_value + left * sin_value
+                : left * cos_value - right * sin_value;
+}
+
+__global__ void hf_deepseek_v3_mla_attention_encode_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t heads, uint32_t *step_cursor,
+    uint32_t max_steps, float rope_theta, const float *q,
+    const float *kv_a, float *latent_output,
+    const uint16_t *kv_latent_norm, uint16_t *kv_keys,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint16_t *projection_input) {
+  if (blockIdx.x != 0 || threadIdx.x != 0 ||
+      (step_cursor != nullptr && *step_cursor >= max_steps)) {
+    return;
+  }
+  const uint32_t position = step_cursor == nullptr ? 0 : *step_cursor;
+  const uint32_t q_lora_rank = layout.deepseek_q_lora_rank;
+  const uint32_t kv_lora_rank = layout.deepseek_kv_lora_rank;
+  const uint32_t qk_nope = layout.deepseek_qk_nope_head_dim;
+  const uint32_t qk_rope = layout.deepseek_qk_rope_head_dim;
+  const uint32_t v_head = layout.deepseek_v_head_dim;
+  const uint32_t qk_head_dim = qk_nope + qk_rope;
+  const uint32_t kv_cache_width = kv_lora_rank + qk_rope;
+  (void)q_lora_rank;
+  if (heads == 0 || kv_lora_rank == 0 || qk_nope == 0 || qk_rope == 0 ||
+      v_head == 0 || qk_head_dim == 0 ||
+      layout.w_v == kMissingOffset ||
+      layout.deepseek_kv_b_scale == kMissingOffset) {
+    return;
+  }
+
+  const uint64_t write_base =
+      kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
+                          position, kv_cache_width, 0);
+  for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+    kv_keys[write_base + latent] = kv_latent_norm[latent];
+  }
+  const uint32_t rope_half = qk_rope / 2u;
+  for (uint32_t dim = 0; dim < qk_rope; ++dim) {
+    float value = kv_a[kv_lora_rank + dim];
+    if (rope_half != 0) {
+      const uint32_t offset = dim % rope_half;
+      const uint32_t pair = dim < rope_half ? dim + rope_half : dim - rope_half;
+      value = deepseek_rope_value_serial(
+          kv_a[kv_lora_rank + offset], kv_a[kv_lora_rank + offset + rope_half],
+          offset, qk_rope, position, rope_theta, dim >= rope_half);
+      (void)pair;
+    }
+    kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
+  }
+
+  const float softmax_scale = rsqrtf(static_cast<float>(qk_head_dim));
+  const uint32_t kv_b_cols = kv_lora_rank;
+  const uint32_t kv_b_rows = heads * (qk_nope + v_head);
+  for (uint32_t head = 0; head < heads; ++head) {
+    for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+      latent_output[latent] = 0.0f;
+    }
+
+    float local_m = -INFINITY;
+    float local_l = 0.0f;
+    for (uint32_t token = 0; token <= position; ++token) {
+      const uint64_t token_base =
+          kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
+                              token, kv_cache_width, 0);
+      float score = 0.0f;
+      for (uint32_t nope = 0; nope < qk_nope; ++nope) {
+        const uint32_t row = head * (qk_nope + v_head) + nope;
+        const float q_value = q[head * qk_head_dim + nope];
+        for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+          score += q_value *
+                   deepseek_fp8_scaled_weight(arena, layout.w_v,
+                                              layout.deepseek_kv_b_scale,
+                                              kv_b_rows, kv_b_cols, row,
+                                              latent) *
+                   encoded_to_f32(kv_keys[token_base + latent], dtype);
+        }
+      }
+      const uint32_t q_pe_base = head * qk_head_dim + qk_nope;
+      for (uint32_t dim = 0; dim < qk_rope; ++dim) {
+        float q_pe = q[q_pe_base + dim];
+        if (rope_half != 0) {
+          const uint32_t offset = dim % rope_half;
+          q_pe = deepseek_rope_value_serial(
+              q[q_pe_base + offset], q[q_pe_base + offset + rope_half],
+              offset, qk_rope, position, rope_theta, dim >= rope_half);
+        }
+        score += q_pe *
+                 encoded_to_f32(kv_keys[token_base + kv_lora_rank + dim],
+                                dtype);
+      }
+      score *= softmax_scale;
+      const float next_m = fmaxf(local_m, score);
+      const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+      const float new_scale = expf(score - next_m);
+      for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+        latent_output[latent] =
+            latent_output[latent] * old_scale +
+            encoded_to_f32(kv_keys[token_base + latent], dtype) * new_scale;
+      }
+      local_l = local_l * old_scale + new_scale;
+      local_m = next_m;
+    }
+
+    if (local_l > 0.0f && isfinite(local_l)) {
+      for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+        latent_output[latent] /= local_l;
+      }
+    }
+    for (uint32_t value = 0; value < v_head; ++value) {
+      const uint32_t row = head * (qk_nope + v_head) + qk_nope + value;
+      float sum = 0.0f;
+      for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
+        sum += latent_output[latent] *
+               deepseek_fp8_scaled_weight(arena, layout.w_v,
+                                          layout.deepseek_kv_b_scale,
+                                          kv_b_rows, kv_b_cols, row, latent);
+      }
+      projection_input[head * v_head + value] = f32_to_encoded(sum, dtype);
+    }
   }
 }
 
