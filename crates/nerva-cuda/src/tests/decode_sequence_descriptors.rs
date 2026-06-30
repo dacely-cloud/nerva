@@ -538,6 +538,11 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
 
     assert_eq!(plan.attention_kind, CUDA_HF_ATTENTION_DEEPSEEK_MLA);
     assert_eq!(plan.deepseek_mode, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER);
+    assert_eq!(plan.deepseek_qk_head_dim, 2);
+    assert_eq!(plan.deepseek_q_rows, 4);
+    assert_eq!(plan.deepseek_kv_cache_width, 3);
+    assert_eq!(plan.deepseek_kv_b_rows, 4);
+    assert_eq!(plan.deepseek_value_rows, 2);
     assert_eq!(plan.rms_attn, 40);
     assert_eq!(plan.w_q, 48);
     assert_eq!(plan.deepseek_q_a_scale, 52);
@@ -590,6 +595,11 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
         plan.deepseek_mode,
         CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER
     );
+    assert_eq!(plan.deepseek_qk_head_dim, 0);
+    assert_eq!(plan.deepseek_q_rows, 0);
+    assert_eq!(plan.deepseek_kv_cache_width, 0);
+    assert_eq!(plan.deepseek_kv_b_rows, 0);
+    assert_eq!(plan.deepseek_value_rows, 0);
     assert_eq!(plan.rms_attn, 78);
     assert_eq!(plan.deepseek_attention_sink, 382);
     assert_eq!(plan.w_q, 386);

@@ -41,6 +41,47 @@ extern "C" void nerva_cuda_rt_candidate_selector_destroy(void *selector);
 
 namespace {
 #include "hf_decode_sequence/session_prelude.inc.cu"
+
+uint32_t checked_u32_product(uint32_t lhs, uint32_t rhs) {
+  if (lhs != 0 && rhs > UINT32_MAX / lhs) {
+    return 0;
+  }
+  return lhs * rhs;
+}
+
+void fill_deepseek_v3_mla_shape(
+    const NervaCudaHfDecodeChainLayer &source_layer,
+    NervaCudaHfDecodeSequenceLayoutPlanResult *out) {
+  if (out == nullptr ||
+      source_layer.attention_kind != kAttentionKindDeepSeekMla ||
+      (source_layer.deepseek_mode != kDeepSeekModeV3Mla &&
+       source_layer.deepseek_mode != kDeepSeekModeV32MlaIndexer)) {
+    return;
+  }
+  const uint32_t qk_head_dim =
+      source_layer.deepseek_qk_nope_head_dim +
+      source_layer.deepseek_qk_rope_head_dim;
+  if (qk_head_dim < source_layer.deepseek_qk_nope_head_dim) {
+    return;
+  }
+  const uint32_t kv_cache_width =
+      source_layer.deepseek_kv_lora_rank +
+      source_layer.deepseek_qk_rope_head_dim;
+  if (kv_cache_width < source_layer.deepseek_kv_lora_rank) {
+    return;
+  }
+  const uint32_t kv_b_head_rows =
+      source_layer.deepseek_qk_nope_head_dim + source_layer.deepseek_v_head_dim;
+  if (kv_b_head_rows < source_layer.deepseek_qk_nope_head_dim) {
+    return;
+  }
+  out->deepseek_qk_head_dim = qk_head_dim;
+  out->deepseek_q_rows = checked_u32_product(out->heads, qk_head_dim);
+  out->deepseek_kv_cache_width = kv_cache_width;
+  out->deepseek_kv_b_rows = checked_u32_product(out->heads, kv_b_head_rows);
+  out->deepseek_value_rows =
+      checked_u32_product(out->heads, source_layer.deepseek_v_head_dim);
+}
 }  // namespace
 
 #include "hf_decode_sequence/session_state.cuh"
@@ -105,6 +146,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_plan_layout(
   out->attention_kind = layout.attention_kind;
   out->deepseek_mode = layout.deepseek_mode;
   out->deepseek_flags = layout.deepseek_flags;
+  fill_deepseek_v3_mla_shape(request->layers[request->layer_index], out);
   out->resident_weight_bytes = elements * sizeof(uint16_t) -
                                hidden * 2u * sizeof(uint16_t);
   out->layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);
