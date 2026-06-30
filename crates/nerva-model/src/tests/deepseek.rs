@@ -4,6 +4,7 @@ use crate::hf::deepseek::{
     deepseek_mla_dimensions, plan_deepseek_vllm_kv_cache,
     plan_deepseek_vllm_kv_cache_with_block_size,
 };
+use crate::hf::deepseek_runtime::{DeepSeekAttentionExecutionKind, deepseek_layer_execution_plan};
 use crate::hf::metadata::HfMlpLayerKind;
 use crate::hf::parser::parse_hf_config_metadata;
 use crate::weights::layout::entry::WeightBlockRole;
@@ -192,6 +193,98 @@ fn deepseek_vllm_kv_plan_matches_v4_sparse_swa_and_indexer_contracts() {
         plan.to_json()
             .contains("/root/vllm/vllm/models/deepseek_v4/sparse_mla.py")
     );
+}
+
+#[test]
+fn deepseek_layer_execution_plan_matches_vllm_v3_v32_and_v4_modes() {
+    let v3 = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
+    let v3_plan = deepseek_layer_execution_plan(&v3).unwrap();
+    assert_eq!(v3_plan.cache_dtype_str, "bfloat16");
+    assert_eq!(v3_plan.default_block_size, 64);
+    assert_eq!(v3_plan.layers.len(), 6);
+    assert!(
+        v3_plan
+            .layers
+            .iter()
+            .all(|layer| layer.attention_kind == DeepSeekAttentionExecutionKind::V3Mla)
+    );
+    assert!(
+        v3_plan
+            .layers
+            .iter()
+            .all(|layer| layer.primary_kv_cache_group == "v3_main_mla")
+    );
+    assert!(!v3_plan.layers[0].uses_moe);
+    assert!(v3_plan.layers[3].uses_moe);
+
+    let v32 = parse_hf_config_metadata(deepseek_v32_config()).unwrap();
+    let v32_plan = deepseek_layer_execution_plan(&v32).unwrap();
+    assert_eq!(v32_plan.cache_dtype_str, "fp8_ds_mla");
+    assert_eq!(
+        v32_plan.layers[0].attention_kind.as_str(),
+        "deepseek_v3_2_mla_with_indexer"
+    );
+    assert_eq!(v32_plan.layers[0].primary_kv_cache_group, "v3_2_main_mla");
+    assert_eq!(
+        v32_plan.layers[0].indexer_kv_cache_group.as_deref(),
+        Some("v3_2_sparse_indexer")
+    );
+    assert!(
+        v32_plan
+            .layers
+            .iter()
+            .all(|layer| layer.uses_sparse_indexer)
+    );
+    assert!(
+        v32_plan
+            .layers
+            .iter()
+            .all(|layer| layer.uses_compressed_indexer_cache)
+    );
+
+    let v4 = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
+    let v4_plan = deepseek_layer_execution_plan(&v4).unwrap();
+    assert_eq!(v4_plan.cache_dtype_str, "fp8_ds_mla");
+    assert_eq!(v4_plan.default_block_size, 256);
+    assert_eq!(
+        v4_plan
+            .layers
+            .iter()
+            .map(|layer| layer.compress_ratio)
+            .collect::<Vec<_>>(),
+        vec![1, 1, 4, 128]
+    );
+    assert_eq!(
+        v4_plan
+            .layers
+            .iter()
+            .map(|layer| layer.attention_kind)
+            .collect::<Vec<_>>(),
+        vec![
+            DeepSeekAttentionExecutionKind::V4SlidingWindowMla,
+            DeepSeekAttentionExecutionKind::V4SlidingWindowMla,
+            DeepSeekAttentionExecutionKind::V4CompressedMlaWithSparseIndexer,
+            DeepSeekAttentionExecutionKind::V4CompressedMla,
+        ]
+    );
+    assert_eq!(v4_plan.layers[0].primary_kv_cache_group, "v4_swa");
+    assert!(v4_plan.layers[0].uses_sliding_window_cache);
+    assert_eq!(v4_plan.layers[2].primary_kv_cache_group, "v4_c4_mla");
+    assert_eq!(
+        v4_plan.layers[2].indexer_kv_cache_group.as_deref(),
+        Some("v4_c4_mla_indexer")
+    );
+    assert!(v4_plan.layers[2].uses_sparse_indexer);
+    assert!(v4_plan.layers[2].uses_compressor);
+    assert_eq!(v4_plan.layers[3].primary_kv_cache_group, "v4_c128_mla");
+    assert_eq!(
+        v4_plan.layers[3].indexer_kv_cache_group.as_deref(),
+        Some("v4_c128_mla_indexer")
+    );
+    assert!(!v4_plan.layers[3].uses_sparse_indexer);
+    assert!(v4_plan.layers[0].uses_hash_router);
+    assert!(v4_plan.layers[2].uses_hash_router);
+    assert!(!v4_plan.layers[3].uses_hash_router);
 }
 
 #[test]

@@ -1,4 +1,7 @@
+use nerva_core::types::error::{NervaError, Result};
+
 use crate::hf::architecture::HfArchitectureKind;
+use crate::hf::deepseek::plan_deepseek_vllm_kv_cache;
 use crate::hf::metadata::{HfMlpLayerKind, HfModelMetadata};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -18,6 +21,223 @@ pub struct DeepSeekLayerReport {
     pub v4_c128_layers: usize,
     pub v4_indexer_layers: usize,
     pub v4_hash_router_layers: usize,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DeepSeekAttentionExecutionKind {
+    V3Mla,
+    V32MlaWithIndexer,
+    V4SlidingWindowMla,
+    V4CompressedMla,
+    V4CompressedMlaWithSparseIndexer,
+}
+
+impl DeepSeekAttentionExecutionKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::V3Mla => "deepseek_v3_mla",
+            Self::V32MlaWithIndexer => "deepseek_v3_2_mla_with_indexer",
+            Self::V4SlidingWindowMla => "deepseek_v4_sliding_window_mla",
+            Self::V4CompressedMla => "deepseek_v4_compressed_mla",
+            Self::V4CompressedMlaWithSparseIndexer => {
+                "deepseek_v4_compressed_mla_with_sparse_indexer"
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeepSeekLayerExecution {
+    pub layer: usize,
+    pub attention_kind: DeepSeekAttentionExecutionKind,
+    pub compress_ratio: usize,
+    pub primary_kv_cache_group: String,
+    pub indexer_kv_cache_group: Option<String>,
+    pub uses_sliding_window_cache: bool,
+    pub uses_sparse_indexer: bool,
+    pub uses_compressed_indexer_cache: bool,
+    pub uses_compressor: bool,
+    pub uses_hash_router: bool,
+    pub uses_moe: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeepSeekLayerExecutionPlan {
+    pub architecture: HfArchitectureKind,
+    pub cache_dtype_str: String,
+    pub default_block_size: usize,
+    pub layers: Vec<DeepSeekLayerExecution>,
+}
+
+pub fn deepseek_layer_execution_plan(
+    metadata: &HfModelMetadata,
+) -> Result<DeepSeekLayerExecutionPlan> {
+    if !metadata.architecture.is_deepseek() {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "DeepSeek layer execution planning requires a DeepSeek architecture, got {}",
+                metadata.architecture.as_str()
+            ),
+        });
+    }
+
+    let cache_dtype = deepseek_runtime_cache_dtype(metadata.architecture);
+    let kv_plan = plan_deepseek_vllm_kv_cache(metadata, cache_dtype)?;
+    let layers = match metadata.architecture {
+        HfArchitectureKind::DeepSeekV3 => (0..metadata.num_hidden_layers)
+            .map(|layer| {
+                require_kv_group(&kv_plan, "v3_main_mla")?;
+                Ok(layer_execution(
+                    metadata,
+                    layer,
+                    DeepSeekAttentionExecutionKind::V3Mla,
+                    1,
+                    "v3_main_mla",
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        HfArchitectureKind::DeepSeekV32 => (0..metadata.num_hidden_layers)
+            .map(|layer| {
+                require_kv_group(&kv_plan, "v3_2_main_mla")?;
+                require_kv_group(&kv_plan, "v3_2_sparse_indexer")?;
+                Ok(layer_execution(
+                    metadata,
+                    layer,
+                    DeepSeekAttentionExecutionKind::V32MlaWithIndexer,
+                    1,
+                    "v3_2_main_mla",
+                    Some("v3_2_sparse_indexer"),
+                    false,
+                    true,
+                    true,
+                    false,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        HfArchitectureKind::DeepSeekV4 => (0..metadata.num_hidden_layers)
+            .map(|layer| {
+                let compress_ratio = metadata.compress_ratios.get(layer).copied().unwrap_or(0);
+                let compress_ratio = compress_ratio.max(1);
+                match compress_ratio {
+                    1 => {
+                        require_kv_group(&kv_plan, "v4_swa")?;
+                        Ok(layer_execution(
+                            metadata,
+                            layer,
+                            DeepSeekAttentionExecutionKind::V4SlidingWindowMla,
+                            compress_ratio,
+                            "v4_swa",
+                            None,
+                            true,
+                            false,
+                            false,
+                            false,
+                        ))
+                    }
+                    4 => {
+                        require_kv_group(&kv_plan, "v4_c4_mla")?;
+                        require_kv_group(&kv_plan, "v4_c4_mla_indexer")?;
+                        Ok(layer_execution(
+                            metadata,
+                            layer,
+                            DeepSeekAttentionExecutionKind::V4CompressedMlaWithSparseIndexer,
+                            compress_ratio,
+                            "v4_c4_mla",
+                            Some("v4_c4_mla_indexer"),
+                            false,
+                            true,
+                            true,
+                            true,
+                        ))
+                    }
+                    128 => {
+                        require_kv_group(&kv_plan, "v4_c128_mla")?;
+                        require_kv_group(&kv_plan, "v4_c128_mla_indexer")?;
+                        Ok(layer_execution(
+                            metadata,
+                            layer,
+                            DeepSeekAttentionExecutionKind::V4CompressedMla,
+                            compress_ratio,
+                            "v4_c128_mla",
+                            Some("v4_c128_mla_indexer"),
+                            false,
+                            false,
+                            true,
+                            true,
+                        ))
+                    }
+                    other => Err(NervaError::InvalidArgument {
+                        reason: format!(
+                            "DeepSeek V4 layer {layer} has unsupported compress_ratio {other}; expected 0/1, 4, or 128"
+                        ),
+                    }),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?,
+        _ => unreachable!("DeepSeek architecture checked above"),
+    };
+
+    Ok(DeepSeekLayerExecutionPlan {
+        architecture: metadata.architecture,
+        cache_dtype_str: cache_dtype.to_string(),
+        default_block_size: kv_plan.default_block_size,
+        layers,
+    })
+}
+
+fn layer_execution(
+    metadata: &HfModelMetadata,
+    layer: usize,
+    attention_kind: DeepSeekAttentionExecutionKind,
+    compress_ratio: usize,
+    primary_kv_cache_group: &str,
+    indexer_kv_cache_group: Option<&str>,
+    uses_sliding_window_cache: bool,
+    uses_sparse_indexer: bool,
+    uses_compressed_indexer_cache: bool,
+    uses_compressor: bool,
+) -> DeepSeekLayerExecution {
+    DeepSeekLayerExecution {
+        layer,
+        attention_kind,
+        compress_ratio,
+        primary_kv_cache_group: primary_kv_cache_group.to_string(),
+        indexer_kv_cache_group: indexer_kv_cache_group.map(str::to_string),
+        uses_sliding_window_cache,
+        uses_sparse_indexer,
+        uses_compressed_indexer_cache,
+        uses_compressor,
+        uses_hash_router: layer < metadata.num_hash_layers.unwrap_or(0),
+        uses_moe: metadata
+            .mlp_layer_types
+            .get(layer)
+            .is_some_and(|kind| *kind == HfMlpLayerKind::SparseMoe),
+    }
+}
+
+fn deepseek_runtime_cache_dtype(architecture: HfArchitectureKind) -> &'static str {
+    match architecture {
+        HfArchitectureKind::DeepSeekV3 => "bfloat16",
+        HfArchitectureKind::DeepSeekV32 | HfArchitectureKind::DeepSeekV4 => "fp8_ds_mla",
+        _ => "auto",
+    }
+}
+
+fn require_kv_group(plan: &crate::hf::deepseek::DeepSeekVllmKvCachePlan, name: &str) -> Result<()> {
+    if plan.groups.iter().any(|group| group.name == name) {
+        Ok(())
+    } else {
+        Err(NervaError::InvalidArgument {
+            reason: format!(
+                "DeepSeek layer execution plan requires KV cache group {name}, but vLLM KV cache planner did not produce it"
+            ),
+        })
+    }
 }
 
 pub fn deepseek_layer_report(metadata: &HfModelMetadata) -> DeepSeekLayerReport {
