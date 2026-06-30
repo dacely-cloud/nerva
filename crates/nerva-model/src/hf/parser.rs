@@ -118,6 +118,8 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         routed_scaling_factor: moe_config.routed_scaling_factor,
         q_lora_rank: deepseek_config.q_lora_rank,
         kv_lora_rank: deepseek_config.kv_lora_rank,
+        o_lora_rank: deepseek_config.o_lora_rank,
+        o_groups: deepseek_config.o_groups,
         qk_nope_head_dim: deepseek_config.qk_nope_head_dim,
         qk_rope_head_dim: deepseek_config.qk_rope_head_dim,
         v_head_dim: deepseek_config.v_head_dim,
@@ -129,6 +131,9 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         hc_sinkhorn_iters: deepseek_config.hc_sinkhorn_iters,
         hc_eps: deepseek_config.hc_eps,
         num_nextn_predict_layers: deepseek_config.num_nextn_predict_layers,
+        num_hash_layers: deepseek_config.num_hash_layers,
+        swiglu_limit: deepseek_config.swiglu_limit,
+        expert_dtype: deepseek_config.expert_dtype,
         torch_dtype,
     })
 }
@@ -153,6 +158,8 @@ struct ParsedMoeConfig {
 struct ParsedDeepSeekConfig {
     q_lora_rank: Option<usize>,
     kv_lora_rank: Option<usize>,
+    o_lora_rank: Option<usize>,
+    o_groups: Option<usize>,
     qk_nope_head_dim: Option<usize>,
     qk_rope_head_dim: Option<usize>,
     v_head_dim: Option<usize>,
@@ -164,6 +171,9 @@ struct ParsedDeepSeekConfig {
     hc_sinkhorn_iters: Option<usize>,
     hc_eps: Option<f32>,
     num_nextn_predict_layers: Option<usize>,
+    num_hash_layers: Option<usize>,
+    swiglu_limit: Option<f32>,
+    expert_dtype: Option<String>,
 }
 
 struct ParsedLinearAttentionConfig {
@@ -597,6 +607,8 @@ fn parse_deepseek_config(
     Ok(ParsedDeepSeekConfig {
         q_lora_rank,
         kv_lora_rank,
+        o_lora_rank: optional_model_usize(root_json, decoder_json, "o_lora_rank")?,
+        o_groups: optional_model_usize(root_json, decoder_json, "o_groups")?,
         qk_nope_head_dim,
         qk_rope_head_dim,
         v_head_dim,
@@ -613,6 +625,9 @@ fn parse_deepseek_config(
             decoder_json,
             "num_nextn_predict_layers",
         )?,
+        num_hash_layers: optional_model_usize(root_json, decoder_json, "num_hash_layers")?,
+        swiglu_limit: optional_model_f32(root_json, decoder_json, "swiglu_limit")?,
+        expert_dtype: optional_model_string(root_json, decoder_json, "expert_dtype")?,
     })
 }
 

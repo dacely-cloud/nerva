@@ -5,6 +5,7 @@ pub enum DType {
     U16,
     U32,
     I32,
+    I64,
     F16,
     BF16,
     F8E4M3,

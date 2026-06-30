@@ -6,6 +6,7 @@ pub(crate) fn dtype_size_bytes(dtype: DType) -> Result<usize> {
         DType::I8 | DType::F8E4M3 | DType::F8E8M0 => Ok(1),
         DType::F16 | DType::BF16 => Ok(2),
         DType::F32 => Ok(4),
+        DType::I64 => Ok(8),
         _ => Err(NervaError::InvalidArgument {
             reason: format!(
                 "dtype {} is not a supported exact weight dtype",
@@ -22,6 +23,7 @@ pub(crate) fn dtype_to_str(value: DType) -> &'static str {
         DType::U16 => "u16",
         DType::U32 => "u32",
         DType::I32 => "i32",
+        DType::I64 => "i64",
         DType::F16 => "float16",
         DType::BF16 => "bfloat16",
         DType::F8E4M3 => "float8_e4m3",

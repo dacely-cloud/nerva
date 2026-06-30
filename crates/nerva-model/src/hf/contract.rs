@@ -41,13 +41,8 @@ fn validate_supported_layout_architecture(metadata: &HfModelMetadata) -> Result<
         | HfArchitectureKind::Qwen35
         | HfArchitectureKind::Qwen35Moe
         | HfArchitectureKind::DeepSeekV3
-        | HfArchitectureKind::DeepSeekV32 => Ok(()),
-        HfArchitectureKind::DeepSeekV4 => Err(NervaError::InvalidArgument {
-            reason: format!(
-                "HF architecture {} is recognized, but the weight layout does not yet implement DeepSeek V4 compressed KV/indexer and pre-partitioned FP4/FP8 expert tensor mapping",
-                metadata.architecture.as_str()
-            ),
-        }),
+        | HfArchitectureKind::DeepSeekV32
+        | HfArchitectureKind::DeepSeekV4 => Ok(()),
         HfArchitectureKind::Gemma | HfArchitectureKind::Unknown => {
             Err(NervaError::InvalidArgument {
                 reason: format!(
@@ -211,7 +206,7 @@ fn validate_moe_metadata(metadata: &HfModelMetadata) -> Result<()> {
             reason: "HF MoE num_experts_per_tok cannot exceed num_experts".to_string(),
         });
     }
-    if num_experts > EXACT_RUNTIME_MOE_EXPERTS_MAX {
+    if !metadata.architecture.is_deepseek() && num_experts > EXACT_RUNTIME_MOE_EXPERTS_MAX {
         return Err(NervaError::InvalidArgument {
             reason: format!(
                 "HF MoE num_experts {num_experts} exceeds exact runtime limit {EXACT_RUNTIME_MOE_EXPERTS_MAX}"

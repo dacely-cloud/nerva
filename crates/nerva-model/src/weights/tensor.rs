@@ -178,6 +178,7 @@ fn dtype_json_label(dtype: DType) -> &'static str {
         DType::U16 => "u16",
         DType::U32 => "u32",
         DType::I32 => "i32",
+        DType::I64 => "i64",
         DType::F8E4M3 => "float8_e4m3",
         DType::F8E8M0 => "float8_e8m0",
     }

@@ -193,7 +193,20 @@ fn push_manifest_entries_for_block(
             | WeightBlockRole::ExpertGateScaleInv
             | WeightBlockRole::ExpertUpScaleInv
             | WeightBlockRole::ExpertDownScaleInv => {
-                return push_deepseek_v3_expert_entries(entries, architecture, block);
+                return push_deepseek_expert_entries(entries, architecture, block);
+            }
+            _ => {}
+        }
+    }
+    if uses_deepseek_v4_expert_tensors(architecture) {
+        match block.role {
+            WeightBlockRole::ExpertGateProjection
+            | WeightBlockRole::ExpertUpProjection
+            | WeightBlockRole::ExpertDownProjection
+            | WeightBlockRole::DeepSeekV4ExpertGateScale
+            | WeightBlockRole::DeepSeekV4ExpertUpScale
+            | WeightBlockRole::DeepSeekV4ExpertDownScale => {
+                return push_deepseek_expert_entries(entries, architecture, block);
             }
             _ => {}
         }
@@ -219,17 +232,21 @@ fn uses_deepseek_v3_expert_tensors(architecture: HfArchitectureKind) -> bool {
     )
 }
 
-fn push_deepseek_v3_expert_entries(
+fn uses_deepseek_v4_expert_tensors(architecture: HfArchitectureKind) -> bool {
+    architecture == HfArchitectureKind::DeepSeekV4
+}
+
+fn push_deepseek_expert_entries(
     entries: &mut Vec<HfTensorManifestEntry>,
     architecture: HfArchitectureKind,
     block: WeightBlockSpec,
 ) -> Result<()> {
     let experts = block.depth.ok_or_else(|| NervaError::InvalidArgument {
-        reason: "DeepSeek V3 expert block is missing depth".to_string(),
+        reason: "DeepSeek expert block is missing depth".to_string(),
     })?;
     for expert in 0..experts {
         let expert = u32::try_from(expert).map_err(|_| NervaError::InvalidArgument {
-            reason: "DeepSeek V3 expert index does not fit u32".to_string(),
+            reason: "DeepSeek expert index does not fit u32".to_string(),
         })?;
         let name = hf_expert_tensor_name(architecture, block.role, block.layer, expert)?;
         entries.push(HfTensorManifestEntry::from_parts(

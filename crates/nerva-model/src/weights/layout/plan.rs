@@ -57,6 +57,9 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
     ) {
         return plan_deepseek_v3_weight_layout(metadata);
     }
+    if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
+        return plan_deepseek_v4_weight_layout(metadata);
+    }
     metadata.block_shape().validate()?;
     validate_hf_metadata(
         metadata.hidden_size,
@@ -303,6 +306,195 @@ fn plan_deepseek_v3_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeight
     })
 }
 
+fn plan_deepseek_v4_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayoutPlan> {
+    let dtype = metadata
+        .torch_dtype
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "DeepSeek V4 weight layout requires torch_dtype".to_string(),
+        })?;
+    if dtype != DType::BF16 {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 checkpoints are expected to declare bfloat16 torch_dtype"
+                .to_string(),
+        });
+    }
+
+    let q_lora_rank = required_metadata_usize(metadata.q_lora_rank, "q_lora_rank")?;
+    let o_lora_rank = required_metadata_usize(metadata.o_lora_rank, "o_lora_rank")?;
+    let o_groups = required_metadata_usize(metadata.o_groups, "o_groups")?;
+    let qk_rope_head_dim = required_metadata_usize(metadata.qk_rope_head_dim, "qk_rope_head_dim")?;
+    let v_head_dim = required_metadata_usize(metadata.v_head_dim, "v_head_dim")?;
+    if qk_rope_head_dim >= metadata.head_dim {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 qk_rope_head_dim must be smaller than head_dim".to_string(),
+        });
+    }
+    if v_head_dim != metadata.head_dim {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 v_head_dim must match head_dim for current layout".to_string(),
+        });
+    }
+    if metadata.num_attention_heads % o_groups != 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V4 num_attention_heads must be divisible by o_groups".to_string(),
+        });
+    }
+    let q_rows = metadata
+        .num_attention_heads
+        .checked_mul(metadata.head_dim)
+        .ok_or_else(|| NervaError::AllocationFailed {
+            bytes: metadata.head_dim,
+            reason: "DeepSeek V4 q projection row count overflow".to_string(),
+        })?;
+    let wo_a_rows =
+        o_groups
+            .checked_mul(o_lora_rank)
+            .ok_or_else(|| NervaError::AllocationFailed {
+                bytes: o_lora_rank,
+                reason: "DeepSeek V4 wo_a row count overflow".to_string(),
+            })?;
+    let wo_a_cols = q_rows / o_groups;
+
+    let hc_mult = required_metadata_usize(metadata.hc_mult, "hc_mult")?;
+    let hc_dim =
+        metadata
+            .hidden_size
+            .checked_mul(hc_mult)
+            .ok_or_else(|| NervaError::AllocationFailed {
+                bytes: metadata.hidden_size,
+                reason: "DeepSeek V4 HC dimension overflow".to_string(),
+            })?;
+    let mix_hc = hc_mult
+        .checked_mul(
+            hc_mult
+                .checked_add(2)
+                .ok_or_else(|| NervaError::AllocationFailed {
+                    bytes: hc_mult,
+                    reason: "DeepSeek V4 HC mix factor overflow".to_string(),
+                })?,
+        )
+        .ok_or_else(|| NervaError::AllocationFailed {
+            bytes: hc_mult,
+            reason: "DeepSeek V4 HC mix dimension overflow".to_string(),
+        })?;
+
+    let num_experts = required_metadata_usize(metadata.num_experts, "num_experts")?;
+    let top_k = required_metadata_usize(metadata.num_experts_per_tok, "num_experts_per_tok")?;
+    let moe_intermediate =
+        required_metadata_usize(metadata.moe_intermediate_size, "moe_intermediate_size")?;
+    let shared_intermediate = metadata.shared_expert_intermediate_size.unwrap_or(0);
+    let index_n_heads = required_metadata_usize(metadata.index_n_heads, "index_n_heads")?;
+    let index_head_dim = required_metadata_usize(metadata.index_head_dim, "index_head_dim")?;
+    let hash_layers = metadata.num_hash_layers.unwrap_or(0);
+
+    let mut blocks = Vec::with_capacity(
+        metadata
+            .num_hidden_layers
+            .saturating_mul(1800)
+            .saturating_add(6),
+    );
+    push_static_block(
+        &mut blocks,
+        WeightBlockRole::TokenEmbedding,
+        metadata.vocab_size,
+        metadata.hidden_size,
+        DType::BF16,
+    )?;
+    push_static_block(
+        &mut blocks,
+        WeightBlockRole::DeepSeekV4HcHeadBase,
+        hc_mult,
+        1,
+        DType::F32,
+    )?;
+    push_static_block(
+        &mut blocks,
+        WeightBlockRole::DeepSeekV4HcHeadFn,
+        hc_mult,
+        hc_dim,
+        DType::F32,
+    )?;
+    push_static_block(
+        &mut blocks,
+        WeightBlockRole::DeepSeekV4HcHeadScale,
+        1,
+        1,
+        DType::F32,
+    )?;
+
+    for layer in 0..metadata.num_hidden_layers {
+        let layer_u32 = u32::try_from(layer).map_err(|_| NervaError::InvalidArgument {
+            reason: "layer index does not fit u32".to_string(),
+        })?;
+        let compress_ratio = metadata.compress_ratios.get(layer).copied().unwrap_or(0);
+        push_deepseek_v4_layer_blocks(
+            &mut blocks,
+            metadata,
+            layer_u32,
+            compress_ratio,
+            q_lora_rank,
+            q_rows,
+            wo_a_rows,
+            wo_a_cols,
+            mix_hc,
+            hc_dim,
+            num_experts,
+            top_k,
+            moe_intermediate,
+            shared_intermediate,
+            index_n_heads,
+            index_head_dim,
+            hash_layers,
+        )?;
+    }
+
+    push_static_block(
+        &mut blocks,
+        WeightBlockRole::FinalNorm,
+        metadata.hidden_size,
+        1,
+        DType::BF16,
+    )?;
+    if !metadata.tie_word_embeddings {
+        push_static_block(
+            &mut blocks,
+            WeightBlockRole::LmHead,
+            metadata.vocab_size,
+            metadata.hidden_size,
+            DType::BF16,
+        )?;
+    }
+
+    let total_weight_bytes = sum_weight_bytes(&blocks)?;
+    let static_weight_bytes = blocks
+        .iter()
+        .filter(|block| block.layer.is_none())
+        .map(|block| block.bytes)
+        .try_fold(0usize, |acc, bytes| {
+            acc.checked_add(bytes)
+                .ok_or_else(|| NervaError::AllocationFailed {
+                    bytes,
+                    reason: "DeepSeek V4 static weight byte count overflow".to_string(),
+                })
+        })?;
+    let per_layer_weight_bytes = total_weight_bytes
+        .checked_sub(static_weight_bytes)
+        .ok_or_else(|| NervaError::AllocationFailed {
+            bytes: total_weight_bytes,
+            reason: "DeepSeek V4 weight byte accounting underflow".to_string(),
+        })?
+        / metadata.num_hidden_layers;
+
+    Ok(HfWeightLayoutPlan {
+        metadata: metadata.clone(),
+        dtype,
+        blocks,
+        total_weight_bytes,
+        per_layer_weight_bytes,
+        static_weight_bytes,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_deepseek_v3_layer_blocks(
     blocks: &mut Vec<WeightBlockSpec>,
@@ -359,6 +551,369 @@ fn push_deepseek_v3_layer_blocks(
         ),
         _ => push_deepseek_v3_dense_mlp_blocks(blocks, metadata, layer),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_deepseek_v4_layer_blocks(
+    blocks: &mut Vec<WeightBlockSpec>,
+    metadata: &HfModelMetadata,
+    layer: u32,
+    compress_ratio: usize,
+    q_lora_rank: usize,
+    q_rows: usize,
+    wo_a_rows: usize,
+    wo_a_cols: usize,
+    mix_hc: usize,
+    hc_dim: usize,
+    num_experts: usize,
+    top_k: usize,
+    moe_intermediate: usize,
+    shared_intermediate: usize,
+    index_n_heads: usize,
+    index_head_dim: usize,
+    hash_layers: usize,
+) -> Result<()> {
+    for (role, rows, cols) in [
+        (WeightBlockRole::DeepSeekV4HcAttnBase, mix_hc, 1),
+        (WeightBlockRole::DeepSeekV4HcAttnFn, mix_hc, hc_dim),
+        (WeightBlockRole::DeepSeekV4HcAttnScale, 3, 1),
+        (WeightBlockRole::DeepSeekV4HcFfnBase, mix_hc, 1),
+        (WeightBlockRole::DeepSeekV4HcFfnFn, mix_hc, hc_dim),
+        (WeightBlockRole::DeepSeekV4HcFfnScale, 3, 1),
+    ] {
+        push_block(blocks, role, layer, rows, cols, DType::F32)?;
+    }
+    push_block(
+        blocks,
+        WeightBlockRole::AttentionNorm,
+        layer,
+        metadata.hidden_size,
+        1,
+        DType::BF16,
+    )?;
+    push_deepseek_v4_attention_blocks(
+        blocks,
+        metadata,
+        layer,
+        compress_ratio,
+        q_lora_rank,
+        q_rows,
+        wo_a_rows,
+        wo_a_cols,
+        index_n_heads,
+        index_head_dim,
+    )?;
+    push_block(
+        blocks,
+        WeightBlockRole::MlpNorm,
+        layer,
+        metadata.hidden_size,
+        1,
+        DType::BF16,
+    )?;
+    push_deepseek_v4_moe_blocks(
+        blocks,
+        metadata,
+        layer,
+        num_experts,
+        top_k,
+        moe_intermediate,
+        shared_intermediate,
+        hash_layers,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_deepseek_v4_attention_blocks(
+    blocks: &mut Vec<WeightBlockSpec>,
+    metadata: &HfModelMetadata,
+    layer: u32,
+    compress_ratio: usize,
+    q_lora_rank: usize,
+    q_rows: usize,
+    wo_a_rows: usize,
+    wo_a_cols: usize,
+    index_n_heads: usize,
+    index_head_dim: usize,
+) -> Result<()> {
+    for (role, rows, cols, dtype) in [
+        (
+            WeightBlockRole::DeepSeekV4AttentionSink,
+            metadata.num_attention_heads,
+            1,
+            DType::F32,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WqAProjection,
+            q_lora_rank,
+            metadata.hidden_size,
+            DType::F8E4M3,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WqAScale,
+            scale_dim(q_lora_rank),
+            scale_dim(metadata.hidden_size),
+            DType::F8E8M0,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WqBProjection,
+            q_rows,
+            q_lora_rank,
+            DType::F8E4M3,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WqBScale,
+            scale_dim(q_rows),
+            scale_dim(q_lora_rank),
+            DType::F8E8M0,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4QNorm,
+            q_lora_rank,
+            1,
+            DType::BF16,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WkvProjection,
+            metadata.head_dim,
+            metadata.hidden_size,
+            DType::F8E4M3,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WkvScale,
+            scale_dim(metadata.head_dim),
+            scale_dim(metadata.hidden_size),
+            DType::F8E8M0,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4KvNorm,
+            metadata.head_dim,
+            1,
+            DType::BF16,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WoAProjection,
+            wo_a_rows,
+            wo_a_cols,
+            DType::F8E4M3,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WoAScale,
+            scale_dim(wo_a_rows),
+            scale_dim(wo_a_cols),
+            DType::F8E8M0,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WoBProjection,
+            metadata.hidden_size,
+            wo_a_rows,
+            DType::F8E4M3,
+        ),
+        (
+            WeightBlockRole::DeepSeekV4WoBScale,
+            scale_dim(metadata.hidden_size),
+            scale_dim(wo_a_rows),
+            DType::F8E8M0,
+        ),
+    ] {
+        push_block(blocks, role, layer, rows, cols, dtype)?;
+    }
+
+    if compress_ratio > 1 {
+        push_deepseek_v4_compressor_blocks(
+            blocks,
+            layer,
+            compress_ratio,
+            metadata.hidden_size,
+            metadata.head_dim,
+            false,
+        )?;
+    }
+    if compress_ratio == 4 {
+        let index_rows = index_n_heads.checked_mul(index_head_dim).ok_or_else(|| {
+            NervaError::AllocationFailed {
+                bytes: index_head_dim,
+                reason: "DeepSeek V4 indexer query row count overflow".to_string(),
+            }
+        })?;
+        push_block(
+            blocks,
+            WeightBlockRole::DeepSeekV4IndexerWqBProjection,
+            layer,
+            index_rows,
+            q_lora_rank,
+            DType::F8E4M3,
+        )?;
+        push_block(
+            blocks,
+            WeightBlockRole::DeepSeekV4IndexerWqBScale,
+            layer,
+            scale_dim(index_rows),
+            scale_dim(q_lora_rank),
+            DType::F8E8M0,
+        )?;
+        push_deepseek_v4_compressor_blocks(
+            blocks,
+            layer,
+            compress_ratio,
+            metadata.hidden_size,
+            index_head_dim,
+            true,
+        )?;
+        push_block(
+            blocks,
+            WeightBlockRole::DeepSeekV4IndexerWeightsProjection,
+            layer,
+            index_n_heads,
+            metadata.hidden_size,
+            DType::BF16,
+        )?;
+    }
+    Ok(())
+}
+
+fn push_deepseek_v4_compressor_blocks(
+    blocks: &mut Vec<WeightBlockSpec>,
+    layer: u32,
+    compress_ratio: usize,
+    hidden_size: usize,
+    head_dim: usize,
+    indexer: bool,
+) -> Result<()> {
+    let coff = if compress_ratio == 4 { 2 } else { 1 };
+    let rows = head_dim
+        .checked_mul(coff)
+        .ok_or_else(|| NervaError::AllocationFailed {
+            bytes: head_dim,
+            reason: "DeepSeek V4 compressor row count overflow".to_string(),
+        })?;
+    let roles = if indexer {
+        (
+            WeightBlockRole::DeepSeekV4IndexerCompressorApe,
+            WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection,
+            WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection,
+            WeightBlockRole::DeepSeekV4IndexerCompressorNorm,
+        )
+    } else {
+        (
+            WeightBlockRole::DeepSeekV4CompressorApe,
+            WeightBlockRole::DeepSeekV4CompressorWkvProjection,
+            WeightBlockRole::DeepSeekV4CompressorWgateProjection,
+            WeightBlockRole::DeepSeekV4CompressorNorm,
+        )
+    };
+    push_block(blocks, roles.0, layer, compress_ratio, rows, DType::F32)?;
+    push_block(blocks, roles.1, layer, rows, hidden_size, DType::BF16)?;
+    push_block(blocks, roles.2, layer, rows, hidden_size, DType::BF16)?;
+    push_block(blocks, roles.3, layer, head_dim, 1, DType::BF16)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_deepseek_v4_moe_blocks(
+    blocks: &mut Vec<WeightBlockSpec>,
+    metadata: &HfModelMetadata,
+    layer: u32,
+    num_experts: usize,
+    top_k: usize,
+    moe_intermediate: usize,
+    shared_intermediate: usize,
+    hash_layers: usize,
+) -> Result<()> {
+    push_block(
+        blocks,
+        WeightBlockRole::RouterProjection,
+        layer,
+        num_experts,
+        metadata.hidden_size,
+        DType::BF16,
+    )?;
+    if (layer as usize) < hash_layers {
+        push_block(
+            blocks,
+            WeightBlockRole::DeepSeekV4HashRouteTable,
+            layer,
+            metadata.vocab_size,
+            top_k,
+            DType::I64,
+        )?;
+    } else {
+        push_block(
+            blocks,
+            WeightBlockRole::RouterCorrectionBias,
+            layer,
+            num_experts,
+            1,
+            DType::F32,
+        )?;
+    }
+    for (role, scale_role, rows, cols) in [
+        (
+            WeightBlockRole::SharedExpertGateProjection,
+            WeightBlockRole::DeepSeekV4SharedExpertGateScale,
+            shared_intermediate,
+            metadata.hidden_size,
+        ),
+        (
+            WeightBlockRole::SharedExpertUpProjection,
+            WeightBlockRole::DeepSeekV4SharedExpertUpScale,
+            shared_intermediate,
+            metadata.hidden_size,
+        ),
+        (
+            WeightBlockRole::SharedExpertDownProjection,
+            WeightBlockRole::DeepSeekV4SharedExpertDownScale,
+            metadata.hidden_size,
+            shared_intermediate,
+        ),
+    ] {
+        if rows > 0 {
+            push_block(blocks, role, layer, rows, cols, DType::F8E4M3)?;
+            push_block(
+                blocks,
+                scale_role,
+                layer,
+                scale_dim(rows),
+                scale_dim(cols),
+                DType::F8E8M0,
+            )?;
+        }
+    }
+
+    let half_hidden = checked_half(metadata.hidden_size, "DeepSeek V4 routed expert hidden")?;
+    let half_intermediate =
+        checked_half(moe_intermediate, "DeepSeek V4 routed expert intermediate")?;
+    for (role, scale_role, rows, cols) in [
+        (
+            WeightBlockRole::ExpertGateProjection,
+            WeightBlockRole::DeepSeekV4ExpertGateScale,
+            moe_intermediate,
+            half_hidden,
+        ),
+        (
+            WeightBlockRole::ExpertUpProjection,
+            WeightBlockRole::DeepSeekV4ExpertUpScale,
+            moe_intermediate,
+            half_hidden,
+        ),
+        (
+            WeightBlockRole::ExpertDownProjection,
+            WeightBlockRole::DeepSeekV4ExpertDownScale,
+            metadata.hidden_size,
+            half_intermediate,
+        ),
+    ] {
+        push_expert_block(blocks, role, layer, num_experts, rows, cols, DType::I8)?;
+        push_expert_block(
+            blocks,
+            scale_role,
+            layer,
+            num_experts,
+            rows,
+            cols.div_ceil(16),
+            DType::F8E8M0,
+        )?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -676,6 +1231,24 @@ fn push_block(
     Ok(())
 }
 
+fn push_static_block(
+    blocks: &mut Vec<WeightBlockSpec>,
+    role: WeightBlockRole,
+    rows: usize,
+    cols: usize,
+    dtype: DType,
+) -> Result<()> {
+    blocks.push(WeightBlockSpec::new(
+        role,
+        None,
+        rows,
+        cols,
+        dtype,
+        MemoryTier::Dram,
+    )?);
+    Ok(())
+}
+
 fn push_scale_block(
     blocks: &mut Vec<WeightBlockSpec>,
     role: WeightBlockRole,
@@ -716,6 +1289,15 @@ fn push_expert_block(
 
 fn scale_dim(value: usize) -> usize {
     value.div_ceil(128)
+}
+
+fn checked_half(value: usize, label: &'static str) -> Result<usize> {
+    if value % 2 != 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("{label} must be divisible by two"),
+        });
+    }
+    Ok(value / 2)
 }
 
 fn deepseek_v3_norm_dtype(architecture: HfArchitectureKind) -> DType {

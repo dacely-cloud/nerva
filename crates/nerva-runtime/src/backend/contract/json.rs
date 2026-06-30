@@ -12,6 +12,7 @@ pub(crate) fn dtype_to_str(dtype: DType) -> &'static str {
         DType::U16 => "u16",
         DType::U32 => "u32",
         DType::I32 => "i32",
+        DType::I64 => "i64",
         DType::F16 => "float16",
         DType::BF16 => "bfloat16",
         DType::F8E4M3 => "float8_e4m3",

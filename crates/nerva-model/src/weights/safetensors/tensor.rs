@@ -76,6 +76,7 @@ pub(crate) fn safetensors_file_data_start(header_json: &str) -> Result<usize> {
 pub(crate) fn safetensors_dtype(dtype: DType) -> Result<&'static str> {
     match dtype {
         DType::I8 => Ok("I8"),
+        DType::I64 => Ok("I64"),
         DType::F16 => Ok("F16"),
         DType::BF16 => Ok("BF16"),
         DType::F8E4M3 => Ok("F8_E4M3"),
@@ -153,6 +154,7 @@ mod tests {
     fn deepseek_storage_dtypes_map_to_safetensors_headers() {
         for (dtype, header_dtype) in [
             (DType::I8, "I8"),
+            (DType::I64, "I64"),
             (DType::F8E4M3, "F8_E4M3"),
             (DType::F8E8M0, "F8_E8M0"),
         ] {

@@ -38,6 +38,8 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         metadata.routed_scaling_factor.unwrap_or_default().to_bits() as u64,
         metadata.q_lora_rank.unwrap_or_default() as u64,
         metadata.kv_lora_rank.unwrap_or_default() as u64,
+        metadata.o_lora_rank.unwrap_or_default() as u64,
+        metadata.o_groups.unwrap_or_default() as u64,
         metadata.qk_nope_head_dim.unwrap_or_default() as u64,
         metadata.qk_rope_head_dim.unwrap_or_default() as u64,
         metadata.v_head_dim.unwrap_or_default() as u64,
@@ -48,6 +50,8 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         metadata.hc_sinkhorn_iters.unwrap_or_default() as u64,
         metadata.hc_eps.unwrap_or_default().to_bits() as u64,
         metadata.num_nextn_predict_layers.unwrap_or_default() as u64,
+        metadata.num_hash_layers.unwrap_or_default() as u64,
+        metadata.swiglu_limit.unwrap_or_default().to_bits() as u64,
     ] {
         for byte in value.to_le_bytes() {
             hash ^= u64::from(byte);
@@ -79,6 +83,7 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
     for value in [
         metadata.topk_method.as_deref(),
         metadata.scoring_func.as_deref(),
+        metadata.expert_dtype.as_deref(),
     ]
     .into_iter()
     .flatten()

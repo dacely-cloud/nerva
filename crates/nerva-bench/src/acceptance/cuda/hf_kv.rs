@@ -101,6 +101,10 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
         | WeightBlockRole::DeepSeekQALoraNorm
         | WeightBlockRole::DeepSeekKvANorm
         | WeightBlockRole::DeepSeekIndexerKeyNorm
+        | WeightBlockRole::DeepSeekV4QNorm
+        | WeightBlockRole::DeepSeekV4KvNorm
+        | WeightBlockRole::DeepSeekV4CompressorNorm
+        | WeightBlockRole::DeepSeekV4IndexerCompressorNorm
         | WeightBlockRole::MlpNorm
         | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
         WeightBlockRole::QueryProjection => encoded_identity(entry.rows, entry.cols, -1.0),
@@ -113,7 +117,18 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
         | WeightBlockRole::DeepSeekKvBProjection
         | WeightBlockRole::DeepSeekIndexerQueryProjection
         | WeightBlockRole::DeepSeekIndexerKeyProjection
-        | WeightBlockRole::DeepSeekIndexerWeightsProjection => {
+        | WeightBlockRole::DeepSeekIndexerWeightsProjection
+        | WeightBlockRole::DeepSeekV4WqAProjection
+        | WeightBlockRole::DeepSeekV4WqBProjection
+        | WeightBlockRole::DeepSeekV4WkvProjection
+        | WeightBlockRole::DeepSeekV4WoAProjection
+        | WeightBlockRole::DeepSeekV4WoBProjection
+        | WeightBlockRole::DeepSeekV4CompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4CompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4IndexerWqBProjection
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4IndexerWeightsProjection => {
             encoded_identity(entry.rows, entry.cols, 1.0)
         }
         WeightBlockRole::GateProjection
@@ -129,6 +144,25 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
         | WeightBlockRole::DeepSeekOutputScaleInv
         | WeightBlockRole::DeepSeekIndexerQueryScaleInv
         | WeightBlockRole::DeepSeekIndexerKeyScaleInv
+        | WeightBlockRole::DeepSeekV4HcHeadBase
+        | WeightBlockRole::DeepSeekV4HcHeadFn
+        | WeightBlockRole::DeepSeekV4HcHeadScale
+        | WeightBlockRole::DeepSeekV4HcAttnBase
+        | WeightBlockRole::DeepSeekV4HcAttnFn
+        | WeightBlockRole::DeepSeekV4HcAttnScale
+        | WeightBlockRole::DeepSeekV4HcFfnBase
+        | WeightBlockRole::DeepSeekV4HcFfnFn
+        | WeightBlockRole::DeepSeekV4HcFfnScale
+        | WeightBlockRole::DeepSeekV4AttentionSink
+        | WeightBlockRole::DeepSeekV4WqAScale
+        | WeightBlockRole::DeepSeekV4WqBScale
+        | WeightBlockRole::DeepSeekV4WkvScale
+        | WeightBlockRole::DeepSeekV4WoAScale
+        | WeightBlockRole::DeepSeekV4WoBScale
+        | WeightBlockRole::DeepSeekV4CompressorApe
+        | WeightBlockRole::DeepSeekV4IndexerWqBScale
+        | WeightBlockRole::DeepSeekV4IndexerCompressorApe
+        | WeightBlockRole::DeepSeekV4HashRouteTable
         | WeightBlockRole::LinearConvProjection
         | WeightBlockRole::LinearQkvProjection
         | WeightBlockRole::LinearZProjection
@@ -153,6 +187,12 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
         | WeightBlockRole::SharedExpertGateScaleInv
         | WeightBlockRole::SharedExpertUpScaleInv
         | WeightBlockRole::SharedExpertDownScaleInv
+        | WeightBlockRole::DeepSeekV4ExpertGateScale
+        | WeightBlockRole::DeepSeekV4ExpertUpScale
+        | WeightBlockRole::DeepSeekV4ExpertDownScale
+        | WeightBlockRole::DeepSeekV4SharedExpertGateScale
+        | WeightBlockRole::DeepSeekV4SharedExpertUpScale
+        | WeightBlockRole::DeepSeekV4SharedExpertDownScale
         | WeightBlockRole::SharedExpertRouterProjection => vec![0; elements],
         WeightBlockRole::QueryBias
         | WeightBlockRole::KeyBias

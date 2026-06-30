@@ -1,5 +1,6 @@
 mod acceptance;
 mod artifact;
+mod deepseek;
 mod experimental_rt;
 mod hf_cuda_decode;
 mod hf_cuda_generate;

@@ -323,6 +323,8 @@ mod tests {
             routed_scaling_factor: None,
             q_lora_rank: None,
             kv_lora_rank: None,
+            o_lora_rank: None,
+            o_groups: None,
             qk_nope_head_dim: None,
             qk_rope_head_dim: None,
             v_head_dim: None,
@@ -334,6 +336,9 @@ mod tests {
             hc_sinkhorn_iters: None,
             hc_eps: None,
             num_nextn_predict_layers: None,
+            num_hash_layers: None,
+            swiglu_limit: None,
+            expert_dtype: None,
             torch_dtype: Some(DType::F16),
         };
 
@@ -402,6 +407,8 @@ mod tests {
             routed_scaling_factor: None,
             q_lora_rank: None,
             kv_lora_rank: None,
+            o_lora_rank: None,
+            o_groups: None,
             qk_nope_head_dim: None,
             qk_rope_head_dim: None,
             v_head_dim: None,
@@ -413,6 +420,9 @@ mod tests {
             hc_sinkhorn_iters: None,
             hc_eps: None,
             num_nextn_predict_layers: None,
+            num_hash_layers: None,
+            swiglu_limit: None,
+            expert_dtype: None,
             torch_dtype: Some(DType::F16),
         };
 

@@ -75,6 +75,8 @@ fn parses_deepseek_v4_flash_metadata() {
     assert_eq!(metadata.num_key_value_heads, 1);
     assert_eq!(metadata.head_dim(), 512);
     assert_eq!(metadata.q_lora_rank, Some(1024));
+    assert_eq!(metadata.o_lora_rank, Some(1024));
+    assert_eq!(metadata.o_groups, Some(8));
     assert_eq!(metadata.qk_nope_head_dim, Some(448));
     assert_eq!(metadata.qk_rope_head_dim, Some(64));
     assert_eq!(metadata.v_head_dim, Some(512));
@@ -88,6 +90,9 @@ fn parses_deepseek_v4_flash_metadata() {
     assert_eq!(metadata.hc_mult, Some(4));
     assert_eq!(metadata.hc_sinkhorn_iters, Some(20));
     assert_eq!(metadata.hc_eps, Some(0.000001));
+    assert_eq!(metadata.num_hash_layers, Some(3));
+    assert_eq!(metadata.swiglu_limit, Some(10.0));
+    assert_eq!(metadata.expert_dtype.as_deref(), Some("fp4"));
     assert!(
         metadata
             .mlp_layer_types
@@ -122,7 +127,7 @@ fn recognized_deepseek_configs_fail_exact_runtime_contract_precisely() {
     );
     assert!(
         plan_hf_weight_layout(&parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap())
-            .is_err()
+            .is_ok()
     );
 }
 
@@ -219,6 +224,117 @@ fn deepseek_v32_manifest_adds_indexer_and_f32_norms() {
         64,
         7168,
         DType::BF16,
+    );
+}
+
+#[test]
+fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
+    let metadata = parse_hf_config_metadata(deepseek_v4_flash_config()).unwrap();
+    let manifest = build_hf_tensor_manifest(&plan_hf_weight_layout(&metadata).unwrap()).unwrap();
+
+    assert_entry(
+        &manifest,
+        "embed.weight",
+        WeightBlockRole::TokenEmbedding,
+        129280,
+        4096,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
+        "hc_head_fn",
+        WeightBlockRole::DeepSeekV4HcHeadFn,
+        4,
+        16384,
+        DType::F32,
+    );
+    assert_entry(
+        &manifest,
+        "layers.0.hc_attn_fn",
+        WeightBlockRole::DeepSeekV4HcAttnFn,
+        24,
+        16384,
+        DType::F32,
+    );
+    assert_entry(
+        &manifest,
+        "layers.0.attn.wq_a.scale",
+        WeightBlockRole::DeepSeekV4WqAScale,
+        8,
+        32,
+        DType::F8E8M0,
+    );
+    assert_entry(
+        &manifest,
+        "layers.2.attn.compressor.ape",
+        WeightBlockRole::DeepSeekV4CompressorApe,
+        4,
+        1024,
+        DType::F32,
+    );
+    assert_entry(
+        &manifest,
+        "layers.2.attn.indexer.compressor.wkv.weight",
+        WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection,
+        256,
+        4096,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
+        "layers.2.attn.indexer.weights_proj.weight",
+        WeightBlockRole::DeepSeekV4IndexerWeightsProjection,
+        64,
+        4096,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
+        "layers.3.attn.compressor.ape",
+        WeightBlockRole::DeepSeekV4CompressorApe,
+        128,
+        512,
+        DType::F32,
+    );
+    assert_entry(
+        &manifest,
+        "layers.0.ffn.gate.tid2eid",
+        WeightBlockRole::DeepSeekV4HashRouteTable,
+        129280,
+        6,
+        DType::I64,
+    );
+    assert_entry(
+        &manifest,
+        "layers.3.ffn.gate.bias",
+        WeightBlockRole::RouterCorrectionBias,
+        256,
+        1,
+        DType::F32,
+    );
+    assert_entry(
+        &manifest,
+        "layers.0.ffn.shared_experts.w1.scale",
+        WeightBlockRole::DeepSeekV4SharedExpertGateScale,
+        16,
+        32,
+        DType::F8E8M0,
+    );
+    assert_entry(
+        &manifest,
+        "layers.0.ffn.experts.0.w1.weight",
+        WeightBlockRole::ExpertGateProjection,
+        2048,
+        2048,
+        DType::I8,
+    );
+    assert_entry(
+        &manifest,
+        "layers.0.ffn.experts.0.w1.scale",
+        WeightBlockRole::DeepSeekV4ExpertGateScale,
+        2048,
+        128,
+        DType::F8E8M0,
     );
 }
 
@@ -319,11 +435,13 @@ fn deepseek_v4_flash_config() -> &'static str {
         "model_type": "deepseek_v4",
         "hidden_size": 4096,
         "moe_intermediate_size": 2048,
-        "num_hidden_layers": 3,
+        "num_hidden_layers": 4,
         "num_attention_heads": 64,
         "num_key_value_heads": 1,
         "head_dim": 512,
         "q_lora_rank": 1024,
+        "o_lora_rank": 1024,
+        "o_groups": 8,
         "kv_lora_rank": 512,
         "qk_rope_head_dim": 64,
         "n_routed_experts": 256,
@@ -340,6 +458,9 @@ fn deepseek_v4_flash_config() -> &'static str {
         "hc_mult": 4,
         "hc_sinkhorn_iters": 20,
         "hc_eps": 0.000001,
+        "num_hash_layers": 3,
+        "swiglu_limit": 10.0,
+        "expert_dtype": "fp4",
         "vocab_size": 129280,
         "max_position_embeddings": 1048576,
         "rope_parameters": {
