@@ -65,6 +65,20 @@ pub(crate) struct NervaCudaDeepSeekQuantFp8F32ScaleMatvecRequest {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaDeepSeekQuantFp8F32ScaleEncodedMatvecRequest {
+    pub(crate) rows: u32,
+    pub(crate) cols: u32,
+    pub(crate) block_rows: u32,
+    pub(crate) block_cols: u32,
+    pub(crate) input_dtype: u32,
+    pub(crate) weights: *const u8,
+    pub(crate) scales: *const f32,
+    pub(crate) input: *const u16,
+    pub(crate) output: *mut f32,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub(crate) struct NervaCudaDeepSeekQuantDequantResult {
     pub(crate) status: i32,
@@ -143,6 +157,10 @@ unsafe extern "C" {
         request: *const NervaCudaDeepSeekQuantFp8F32ScaleMatvecRequest,
         out: *mut NervaCudaDeepSeekQuantDequantResult,
     ) -> c_int;
+    fn nerva_cuda_deepseek_quant_fp8_f32_scale_encoded_matvec(
+        request: *const NervaCudaDeepSeekQuantFp8F32ScaleEncodedMatvecRequest,
+        out: *mut NervaCudaDeepSeekQuantDequantResult,
+    ) -> c_int;
     fn nerva_cuda_deepseek_fused_inv_rope_fp8_quant(
         request: *const NervaCudaDeepSeekFusedInvRopeFp8QuantRequest,
         out: *mut NervaCudaDeepSeekFusedInvRopeFp8QuantResult,
@@ -172,6 +190,13 @@ pub(crate) fn run_deepseek_quant_fp8_f32_scale_matvec(
     out: &mut NervaCudaDeepSeekQuantDequantResult,
 ) -> c_int {
     unsafe { nerva_cuda_deepseek_quant_fp8_f32_scale_matvec(request, out) }
+}
+
+pub(crate) fn run_deepseek_quant_fp8_f32_scale_encoded_matvec(
+    request: &NervaCudaDeepSeekQuantFp8F32ScaleEncodedMatvecRequest,
+    out: &mut NervaCudaDeepSeekQuantDequantResult,
+) -> c_int {
+    unsafe { nerva_cuda_deepseek_quant_fp8_f32_scale_encoded_matvec(request, out) }
 }
 
 pub(crate) fn run_deepseek_fused_inv_rope_fp8_quant(
