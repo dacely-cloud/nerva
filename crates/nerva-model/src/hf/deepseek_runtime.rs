@@ -1143,7 +1143,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
             &[
-                "replace scalar V4 MegaMoE fp8/fp4 expert kernel with DeepGEMM-equivalent batched expert kernels",
+                "replace reference V4 MegaMoE fp8/fp4 expert kernel with DeepGEMM-equivalent batched expert kernels",
                 "support expert-parallel physical/logical expert mapping",
                 "benchmark MegaMoE against vLLM deep_gemm_mega_moe/FusedMoE",
             ],

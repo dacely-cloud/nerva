@@ -18,6 +18,7 @@ constexpr uint32_t kMegaMoeBlockK = 128;
 constexpr uint32_t kMegaMoeGroupK = 32;
 constexpr uint32_t kMegaMoeGroupsPerBlock =
     kMegaMoeBlockK / kMegaMoeGroupK;
+constexpr uint32_t kMegaMoeExpertThreads = 128;
 
 constexpr float kInput[kHidden] = {1.2f, -0.7f, 0.3f};
 constexpr uint32_t kExpertIds[kTopK] = {1, 0};
@@ -272,13 +273,11 @@ __global__ void deepseek_megamoe_gate_up_kernel(
     float swiglu_limit,
     uint32_t hidden_blocks,
     int32_t *expert_error) {
-  if (threadIdx.x != 0) {
-    return;
-  }
   if (*expert_error != 0) {
     return;
   }
 
+  const uint32_t tid = threadIdx.x;
   const uint32_t route = blockIdx.x;
   const uint32_t intermediate = blockIdx.y;
   if (route >= num_tokens * top_k || intermediate >= intermediate_size) {
@@ -291,8 +290,10 @@ __global__ void deepseek_megamoe_gate_up_kernel(
 
   const int64_t expert_id_signed = topk_ids[route];
   if (expert_id_signed < 0) {
-    activation[static_cast<uint64_t>(route) * intermediate_size + intermediate] =
-        0.0f;
+    if (tid == 0) {
+      activation[static_cast<uint64_t>(route) * intermediate_size +
+                 intermediate] = 0.0f;
+    }
     return;
   }
   const uint32_t expert_id = static_cast<uint32_t>(expert_id_signed);
@@ -311,7 +312,7 @@ __global__ void deepseek_megamoe_gate_up_kernel(
   const uint64_t up_packed_base = up_row * w13_packed_cols;
   const uint64_t gate_scale_base = gate_row * w13_scale_cols;
   const uint64_t up_scale_base = up_row * w13_scale_cols;
-  for (uint32_t hidden = 0; hidden < hidden_size; ++hidden) {
+  for (uint32_t hidden = tid; hidden < hidden_size; hidden += blockDim.x) {
     const float x = decode_megamoe_x(
         x_fp8, x_scales, token, hidden, hidden_size, hidden_blocks);
     gate += x * decode_megamoe_fp4_weight(w13_packed,
@@ -325,8 +326,25 @@ __global__ void deepseek_megamoe_gate_up_kernel(
                                         up_scale_base,
                                         hidden);
   }
-  activation[static_cast<uint64_t>(route) * intermediate_size + intermediate] =
-      swiglu_dynamic(gate, up, 1u, swiglu_limit);
+  __shared__ float gate_partial[kMegaMoeExpertThreads];
+  __shared__ float up_partial[kMegaMoeExpertThreads];
+  gate_partial[tid] = gate;
+  up_partial[tid] = up;
+  __syncthreads();
+
+  for (uint32_t stride = blockDim.x / 2u; stride > 0; stride >>= 1u) {
+    if (tid < stride) {
+      gate_partial[tid] += gate_partial[tid + stride];
+      up_partial[tid] += up_partial[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  if (tid == 0) {
+    activation[static_cast<uint64_t>(route) * intermediate_size +
+               intermediate] =
+        swiglu_dynamic(gate_partial[0], up_partial[0], 1u, swiglu_limit);
+  }
 }
 
 __global__ void deepseek_megamoe_down_kernel(const int64_t *topk_ids,
@@ -341,13 +359,11 @@ __global__ void deepseek_megamoe_down_kernel(const int64_t *topk_ids,
                                              uint32_t num_experts,
                                              uint32_t top_k,
                                              int32_t *expert_error) {
-  if (threadIdx.x != 0) {
-    return;
-  }
   if (*expert_error != 0) {
     return;
   }
 
+  const uint32_t tid = threadIdx.x;
   const uint32_t output_index = blockIdx.x;
   if (output_index >= num_tokens * hidden_size) {
     return;
@@ -375,8 +391,8 @@ __global__ void deepseek_megamoe_down_kernel(const int64_t *topk_ids,
     const uint64_t w2_packed_base = w2_row * w2_packed_cols;
     const uint64_t w2_scale_base = w2_row * w2_scale_cols;
     float routed_sum = 0.0f;
-    for (uint32_t intermediate = 0; intermediate < intermediate_size;
-         ++intermediate) {
+    for (uint32_t intermediate = tid; intermediate < intermediate_size;
+         intermediate += blockDim.x) {
       routed_sum +=
           activation[route_offset * intermediate_size + intermediate] *
           decode_megamoe_fp4_weight(w2_packed,
@@ -387,7 +403,21 @@ __global__ void deepseek_megamoe_down_kernel(const int64_t *topk_ids,
     }
     token_sum += route_weight * routed_sum;
   }
-  output[output_index] = token_sum;
+
+  __shared__ float partial[kMegaMoeExpertThreads];
+  partial[tid] = token_sum;
+  __syncthreads();
+
+  for (uint32_t stride = blockDim.x / 2u; stride > 0; stride >>= 1u) {
+    if (tid < stride) {
+      partial[tid] += partial[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  if (tid == 0) {
+    output[output_index] = partial[0];
+  }
 }
 
 __global__ void deepseek_moe_forward_kernel(const float *input,
@@ -1287,7 +1317,7 @@ extern "C" int nerva_cuda_deepseek_megamoe_experts(
       dim3(static_cast<uint32_t>(tokens * top_k),
            static_cast<uint32_t>(intermediate),
            1),
-      1,
+      kMegaMoeExpertThreads,
       0,
       stream>>>(
       d_x_fp8,
@@ -1310,7 +1340,7 @@ extern "C" int nerva_cuda_deepseek_megamoe_experts(
 
   deepseek_megamoe_down_kernel<<<
       static_cast<uint32_t>(output_values),
-      1,
+      kMegaMoeExpertThreads,
       0,
       stream>>>(d_topk_ids,
                 d_topk_weights,

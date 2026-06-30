@@ -101,7 +101,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("\"unit\":\"deepseek_v4_megamoe_int8_fp4_experts\""));
     assert!(
         json.contains(
-            "replace scalar V4 MegaMoE fp8/fp4 expert kernel with DeepGEMM-equivalent batched expert kernels"
+            "replace reference V4 MegaMoE fp8/fp4 expert kernel with DeepGEMM-equivalent batched expert kernels"
         )
     );
     assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/attention.py"));
