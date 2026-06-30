@@ -1563,6 +1563,54 @@ typedef struct NervaCudaDeepSeekMhcPostResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekMhcPostResult;
 
+typedef struct NervaCudaDeepSeekMhcFusedPostPreRequest {
+  uint32_t tokens;
+  uint32_t hc_mult;
+  uint32_t hidden_size;
+  uint32_t sinkhorn_repeat;
+  float rms_eps;
+  float hc_pre_eps;
+  float hc_sinkhorn_eps;
+  float hc_post_mult_value;
+  const float *x;
+  const float *residual;
+  const float *post_layer_mix;
+  const float *comb_res_mix;
+  const float *fn_weights;
+  const float *hc_scale;
+  const float *hc_base;
+  float *new_residual;
+  float *new_post_mix;
+  float *new_comb_mix;
+  float *layer_input;
+} NervaCudaDeepSeekMhcFusedPostPreRequest;
+
+typedef struct NervaCudaDeepSeekMhcFusedPostPreResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  int32_t mhc_error;
+  uint32_t tokens;
+  uint32_t hc_mult;
+  uint32_t hidden_size;
+  uint32_t sinkhorn_repeat;
+  float rms_eps;
+  float hc_pre_eps;
+  float hc_sinkhorn_eps;
+  float hc_post_mult_value;
+  uint64_t new_residual_hash;
+  uint64_t new_post_mix_hash;
+  uint64_t new_comb_mix_hash;
+  uint64_t layer_input_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekMhcFusedPostPreResult;
+
 typedef struct NervaCudaDeepSeekMhcHeadRequest {
   uint32_t tokens;
   uint32_t hc_mult;
@@ -2011,6 +2059,9 @@ int nerva_cuda_deepseek_mhc_pre(
 int nerva_cuda_deepseek_mhc_post(
     const NervaCudaDeepSeekMhcPostRequest *request,
     NervaCudaDeepSeekMhcPostResult *out);
+int nerva_cuda_deepseek_mhc_fused_post_pre(
+    const NervaCudaDeepSeekMhcFusedPostPreRequest *request,
+    NervaCudaDeepSeekMhcFusedPostPreResult *out);
 int nerva_cuda_deepseek_mhc_head(
     const NervaCudaDeepSeekMhcHeadRequest *request,
     NervaCudaDeepSeekMhcHeadResult *out);

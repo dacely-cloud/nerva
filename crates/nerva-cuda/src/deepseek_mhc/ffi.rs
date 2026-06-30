@@ -82,6 +82,58 @@ pub(crate) struct NervaCudaDeepSeekMhcPostResult {
 
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub(crate) struct NervaCudaDeepSeekMhcFusedPostPreRequest {
+    pub(crate) tokens: u32,
+    pub(crate) hc_mult: u32,
+    pub(crate) hidden_size: u32,
+    pub(crate) sinkhorn_repeat: u32,
+    pub(crate) rms_eps: f32,
+    pub(crate) hc_pre_eps: f32,
+    pub(crate) hc_sinkhorn_eps: f32,
+    pub(crate) hc_post_mult_value: f32,
+    pub(crate) x: *const f32,
+    pub(crate) residual: *const f32,
+    pub(crate) post_layer_mix: *const f32,
+    pub(crate) comb_res_mix: *const f32,
+    pub(crate) fn_weights: *const f32,
+    pub(crate) hc_scale: *const f32,
+    pub(crate) hc_base: *const f32,
+    pub(crate) new_residual: *mut f32,
+    pub(crate) new_post_mix: *mut f32,
+    pub(crate) new_comb_mix: *mut f32,
+    pub(crate) layer_input: *mut f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NervaCudaDeepSeekMhcFusedPostPreResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) device_count: i32,
+    pub(crate) mhc_error: i32,
+    pub(crate) tokens: u32,
+    pub(crate) hc_mult: u32,
+    pub(crate) hidden_size: u32,
+    pub(crate) sinkhorn_repeat: u32,
+    pub(crate) rms_eps: f32,
+    pub(crate) hc_pre_eps: f32,
+    pub(crate) hc_sinkhorn_eps: f32,
+    pub(crate) hc_post_mult_value: f32,
+    pub(crate) new_residual_hash: u64,
+    pub(crate) new_post_mix_hash: u64,
+    pub(crate) new_comb_mix_hash: u64,
+    pub(crate) layer_input_hash: u64,
+    pub(crate) device_arena_bytes: u64,
+    pub(crate) pinned_host_bytes: u64,
+    pub(crate) h2d_bytes: u64,
+    pub(crate) d2h_bytes: u64,
+    pub(crate) kernel_launches: u64,
+    pub(crate) sync_calls: u64,
+    pub(crate) hot_path_allocations: u64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub(crate) struct NervaCudaDeepSeekMhcHeadRequest {
     pub(crate) tokens: u32,
     pub(crate) hc_mult: u32,
@@ -127,6 +179,10 @@ unsafe extern "C" {
         request: *const NervaCudaDeepSeekMhcPostRequest,
         out: *mut NervaCudaDeepSeekMhcPostResult,
     ) -> c_int;
+    fn nerva_cuda_deepseek_mhc_fused_post_pre(
+        request: *const NervaCudaDeepSeekMhcFusedPostPreRequest,
+        out: *mut NervaCudaDeepSeekMhcFusedPostPreResult,
+    ) -> c_int;
     fn nerva_cuda_deepseek_mhc_head(
         request: *const NervaCudaDeepSeekMhcHeadRequest,
         out: *mut NervaCudaDeepSeekMhcHeadResult,
@@ -145,6 +201,13 @@ pub(crate) fn run_deepseek_mhc_post(
     out: &mut NervaCudaDeepSeekMhcPostResult,
 ) -> c_int {
     unsafe { nerva_cuda_deepseek_mhc_post(request, out) }
+}
+
+pub(crate) fn run_deepseek_mhc_fused_post_pre(
+    request: &NervaCudaDeepSeekMhcFusedPostPreRequest,
+    out: &mut NervaCudaDeepSeekMhcFusedPostPreResult,
+) -> c_int {
+    unsafe { nerva_cuda_deepseek_mhc_fused_post_pre(request, out) }
 }
 
 pub(crate) fn run_deepseek_mhc_head(

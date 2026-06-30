@@ -222,6 +222,9 @@ add_library(nerva_cuda STATIC
     nerva_cuda_deepseek_quant.cu
     nerva_cuda_deepseek_router.cu
     nerva_cuda_deepseek_mla.cu
+    nerva_cuda_deepseek_mhc.cu
+    nerva_cuda_deepseek_mhc_fused.cu
+    nerva_cuda_deepseek_kv.cu
     nerva_cuda_deepseek_moe.cu
     nerva_cuda_experimental_rt.cu
     smoke_kernel.cu

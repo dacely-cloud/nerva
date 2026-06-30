@@ -1,3 +1,7 @@
+use crate::deepseek_mhc::fused_post_pre::{
+    CudaDeepSeekMhcFusedPostPreInput, CudaDeepSeekMhcFusedPostPreSummary,
+    deepseek_mhc_fused_post_pre,
+};
 use crate::deepseek_mhc::hc_head::{
     CudaDeepSeekMhcHeadInput, CudaDeepSeekMhcHeadSummary, deepseek_mhc_head,
 };
@@ -91,6 +95,60 @@ pub fn deepseek_mhc_post_smoke() -> CudaDeepSeekMhcPostSummary {
     failed
 }
 
+pub fn deepseek_mhc_fused_post_pre_smoke() -> CudaDeepSeekMhcFusedPostPreSummary {
+    let fixture = deepseek_mhc_pre_fixture();
+    let pre = reference_mhc_pre(fixture.input());
+    let input = CudaDeepSeekMhcFusedPostPreInput {
+        tokens: fixture.tokens,
+        hc_mult: fixture.hc_mult,
+        hidden_size: fixture.hidden_size,
+        sinkhorn_repeat: fixture.sinkhorn_repeat,
+        rms_eps: fixture.rms_eps,
+        hc_pre_eps: fixture.hc_pre_eps,
+        hc_sinkhorn_eps: fixture.hc_sinkhorn_eps,
+        hc_post_mult_value: fixture.hc_post_mult_value,
+        x: &pre.layer_input,
+        residual: &fixture.residual,
+        post_layer_mix: &pre.post_mix,
+        comb_res_mix: &pre.comb_mix,
+        fn_weights: &fixture.fn_weights,
+        hc_scale: &fixture.hc_scale,
+        hc_base: &fixture.hc_base,
+    };
+    let summary = deepseek_mhc_fused_post_pre(input.clone());
+    if summary.status != SmokeStatus::Ok {
+        return summary;
+    }
+
+    let expected = reference_mhc_fused_post_pre(input);
+    let matches_residual = close_vec(&summary.new_residual, &expected.new_residual, 1e-5);
+    let matches_post = close_vec(&summary.new_post_mix, &expected.pre.post_mix, 1e-5);
+    let matches_comb = close_vec(&summary.new_comb_mix, &expected.pre.comb_mix, 1e-5);
+    let matches_layer = close_vec(&summary.layer_input, &expected.pre.layer_input, 1e-5);
+    if matches_residual
+        && matches_post
+        && matches_comb
+        && matches_layer
+        && summary.new_residual_hash != 0
+        && summary.new_post_mix_hash != 0
+        && summary.new_comb_mix_hash != 0
+        && summary.layer_input_hash != 0
+        && summary.kernel_launches == 1
+        && summary.sync_calls == 1
+        && summary.hot_path_allocations == 0
+    {
+        return summary;
+    }
+
+    let mut failed = summary;
+    failed.status = SmokeStatus::Failed;
+    failed.error = Some(format!(
+        "CUDA DeepSeek mHC fused post-pre smoke mismatch: residual={} post={} comb={} layer={}",
+        matches_residual, matches_post, matches_comb, matches_layer
+    ));
+    failed
+}
+
 pub fn deepseek_mhc_head_smoke() -> CudaDeepSeekMhcHeadSummary {
     let fixture = deepseek_mhc_head_fixture();
     let summary = deepseek_mhc_head(fixture.input());
@@ -162,6 +220,12 @@ pub(crate) struct DeepSeekMhcPreReference {
     pub(crate) post_mix: Vec<f32>,
     pub(crate) comb_mix: Vec<f32>,
     pub(crate) layer_input: Vec<f32>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DeepSeekMhcFusedPostPreReference {
+    pub(crate) new_residual: Vec<f32>,
+    pub(crate) pre: DeepSeekMhcPreReference,
 }
 
 pub(crate) fn deepseek_mhc_pre_fixture() -> DeepSeekMhcPreFixture {
@@ -377,6 +441,35 @@ pub(crate) fn reference_mhc_post(input: CudaDeepSeekMhcPostInput<'_>) -> Vec<f32
         }
     }
     output
+}
+
+pub(crate) fn reference_mhc_fused_post_pre(
+    input: CudaDeepSeekMhcFusedPostPreInput<'_>,
+) -> DeepSeekMhcFusedPostPreReference {
+    let new_residual = reference_mhc_post(CudaDeepSeekMhcPostInput {
+        tokens: input.tokens,
+        hc_mult: input.hc_mult,
+        hidden_size: input.hidden_size,
+        x: input.x,
+        residual: input.residual,
+        post_layer_mix: input.post_layer_mix,
+        comb_res_mix: input.comb_res_mix,
+    });
+    let pre = reference_mhc_pre(CudaDeepSeekMhcPreInput {
+        tokens: input.tokens,
+        hc_mult: input.hc_mult,
+        hidden_size: input.hidden_size,
+        sinkhorn_repeat: input.sinkhorn_repeat,
+        rms_eps: input.rms_eps,
+        hc_pre_eps: input.hc_pre_eps,
+        hc_sinkhorn_eps: input.hc_sinkhorn_eps,
+        hc_post_mult_value: input.hc_post_mult_value,
+        residual: &new_residual,
+        fn_weights: input.fn_weights,
+        hc_scale: input.hc_scale,
+        hc_base: input.hc_base,
+    });
+    DeepSeekMhcFusedPostPreReference { new_residual, pre }
 }
 
 fn close_vec(actual: &[f32], expected: &[f32], tolerance: f32) -> bool {
