@@ -695,6 +695,25 @@ typedef struct NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotResult {
   uint64_t output_hash;
 } NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotResult;
 
+typedef struct NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest {
+  NervaCudaHfDecodeSequenceSession *session;
+  uint32_t layer_index;
+  uint8_t *output_bytes;
+  uint64_t output_byte_capacity;
+} NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest;
+
+typedef struct NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult {
+  int32_t status;
+  int32_t cuda_error;
+  uint32_t layer_index;
+  uint32_t block_count;
+  uint64_t layer_offset_bytes;
+  uint64_t layer_bytes;
+  uint64_t page_bytes;
+  uint64_t copied_bytes;
+  uint64_t output_hash;
+} NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult;
+
 typedef struct NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest {
   NervaCudaHfDecodeSequenceSession *session;
   uint32_t layer_index;
@@ -1789,6 +1808,9 @@ int nerva_cuda_hf_decode_sequence_session_advance(
 int nerva_cuda_hf_decode_sequence_deepseek_v4_swa_kv_snapshot(
     const NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotRequest *request,
     NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotResult *out);
+int nerva_cuda_hf_decode_sequence_deepseek_v3_mla_kv_snapshot(
+    const NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest *request,
+    NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult *out);
 int nerva_cuda_hf_decode_sequence_deepseek_v4_compressed_kv_snapshot(
     const NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest *request,
     NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult *out);

@@ -12,7 +12,8 @@ use crate::decode::hf_sequence::layout_plan::{
     CUDA_HF_SEQUENCE_MISSING_OFFSET, CudaHfDecodeSequenceLayoutPlanRequest,
 };
 use crate::decode::hf_sequence::request::{
-    CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::session::request::{
     CudaHfDecodeSequenceExperimentalRtConfig, CudaHfDecodeSequenceSessionConfig,
@@ -528,6 +529,142 @@ fn deepseek_v3_mla_shape_matches_vllm_contract() {
     assert_eq!(shape.kv_cache_width, 576);
     assert_eq!(shape.kv_b_rows, 32_768);
     assert_eq!(shape.value_rows, 16_384);
+}
+
+#[test]
+fn deepseek_v3_mla_snapshot_matches_vllm_latent_cache_row() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let hidden = 4usize;
+    let heads = 2usize;
+    let kv_heads = 1usize;
+    let head_dim = 2usize;
+    let intermediate = 4usize;
+    let vocab_size = 8usize;
+    let layer = tiny_deepseek_v3_descriptor_layer();
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: hidden as u32,
+        heads: heads as u32,
+        kv_heads: kv_heads as u32,
+        head_dim: head_dim as u32,
+        intermediate: intermediate as u32,
+        vocab_size: vocab_size as u32,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept tiny V3 MLA descriptor layer");
+    assert_eq!(plan.deepseek_kv_cache_width, 3);
+    assert_ne!(plan.w_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.deepseek_kv_a_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.k_norm, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+
+    let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    for dim in 0..hidden {
+        weight_storage[dim] = f32_to_bf16_bits(1.0);
+        weight_storage[plan.rms_attn as usize + dim] = f32_to_bf16_bits(1.0);
+    }
+    for dim in 0..2usize {
+        weight_storage[plan.k_norm as usize + dim] = f32_to_bf16_bits(1.0);
+    }
+    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    for row in 0..3usize {
+        let absolute = plan.w_k as usize * 2 + row * hidden;
+        let slot = absolute / 2;
+        if absolute % 2 == 0 {
+            weight_storage[slot] = (weight_storage[slot] & 0xff00) | one_fp8 as u16;
+        } else {
+            weight_storage[slot] = (weight_storage[slot] & 0x00ff) | ((one_fp8 as u16) << 8);
+        }
+    }
+    let scale_bits = 1.0f32.to_bits();
+    weight_storage[plan.deepseek_kv_a_scale as usize] = scale_bits as u16;
+    weight_storage[plan.deepseek_kv_a_scale as usize + 1] = (scale_bits >> 16) as u16;
+
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: plan.resident_weight_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+        hidden,
+        heads,
+        kv_heads,
+        head_dim,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 4,
+        rms_eps: 1.0e-5,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: CudaHfDecodeSequenceExperimentalRtConfig::default(),
+    };
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V3 MLA session should create before cache snapshot: {:?}",
+        created.summary.error
+    );
+    let mut session = created.session.expect("V3 MLA session handle should exist");
+    let summary = session.run(&[0], 1, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V3 MLA one-token run should populate the latent cache: {:?}",
+        summary.error
+    );
+
+    let snapshot = session.deepseek_v3_mla_kv_snapshot(0, 96);
+    assert_eq!(
+        snapshot.status,
+        SmokeStatus::Ok,
+        "V3 MLA KV snapshot should copy device cache: {:?}",
+        snapshot.error
+    );
+    assert_eq!(snapshot.block_count, 1);
+    assert_eq!(snapshot.layer_offset_bytes, 0);
+    assert_eq!(snapshot.layer_bytes, 96);
+    assert_eq!(snapshot.page_bytes, 96);
+    assert_eq!(snapshot.copied_bytes, 96);
+
+    let one = f32_to_bf16_bits(1.0).to_le_bytes();
+    let mut expected = vec![0u8; 96];
+    expected[0..2].copy_from_slice(&one);
+    expected[2..4].copy_from_slice(&one);
+    expected[4..6].copy_from_slice(&one);
+    assert_page_bytes_eq(
+        &snapshot.bytes,
+        &expected,
+        "V3 MLA latent cache row must match vLLM [kv_c, k_pe] ordering",
+    );
+    assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
 }
 
 #[test]
@@ -2876,6 +3013,61 @@ fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
     }
 }
 
+fn tiny_deepseek_v3_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
+    CudaHfDecodeChainLayer {
+        rms_attn_weight: &[],
+        rms_mlp_weight: &[],
+        w_q: &[],
+        w_q_gate: None,
+        w_k: &[],
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &[],
+        w_o: &[],
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &[],
+        w_up: &[],
+        w_down: &[],
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: None,
+        deepseek: Some(CudaHfDeepSeekLayer {
+            mode: CUDA_HF_DEEPSEEK_MODE_V3_MLA,
+            flags: 0,
+            hc_mult: 0,
+            q_lora_rank: 2,
+            kv_lora_rank: 2,
+            o_lora_rank: 0,
+            o_groups: 0,
+            qk_nope_head_dim: 1,
+            qk_rope_head_dim: 1,
+            v_head_dim: 1,
+            compress_ratio: 1,
+            index_topk: 0,
+            index_n_heads: 0,
+            index_head_dim: 0,
+            router_num_groups: 1,
+            router_topk_groups: 1,
+            routed_scaling_factor: 1.0,
+        }),
+        mlp_kind: CUDA_HF_MLP_DENSE,
+        moe_intermediate: 0,
+        shared_expert_intermediate: 0,
+        num_experts: 0,
+        experts_per_token: 0,
+        norm_topk_prob: true,
+        attention_kind: CUDA_HF_ATTENTION_DEEPSEEK_MLA,
+    }
+}
+
 fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
     CudaHfDecodeChainLayer {
         rms_attn_weight: &[],
@@ -3152,7 +3344,7 @@ fn linear_gdn_moe_footprint_counts_state_and_scratch() {
     assert_eq!(footprint.layout_bytes, 584);
     assert_eq!(footprint.scratch_bytes, 276);
     assert_eq!(footprint.resident_kv_bytes, 128);
-    assert_eq!(footprint.device_arena_bytes, 1624);
+    assert_eq!(footprint.device_arena_bytes, 1640);
 }
 
 fn assert_raw_descriptor_decode_matches_request(sampler: CudaHfDecodeSamplerConfig) {

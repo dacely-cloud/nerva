@@ -8,6 +8,8 @@ use crate::decode::hf_sequence::request::{
 use crate::decode::hf_sequence::session::failures::{failed_create_summary, failed_run_summary};
 use crate::decode::hf_sequence::session::ffi::{
     NervaCudaHfDecodeSequenceBatchAdvanceRequest, NervaCudaHfDecodeSequenceBatchAdvanceResult,
+    NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest,
+    NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult,
     NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest,
     NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult,
     NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotRequest,
@@ -31,7 +33,7 @@ use crate::decode::hf_sequence::session::ffi::{
     destroy_hf_decode_sequence_session, execute_hf_decode_sequence_layer_projection_batch,
     execute_hf_decode_sequence_projection_batch, fork_shared_weights_hf_decode_sequence_session,
     plan_hf_decode_sequence_projection_batch, run_hf_decode_sequence_session,
-    snapshot_deepseek_v4_compressed_kv, snapshot_deepseek_v4_swa_kv,
+    snapshot_deepseek_v3_mla_kv, snapshot_deepseek_v4_compressed_kv, snapshot_deepseek_v4_swa_kv,
 };
 use crate::decode::hf_sequence::session::helpers::{
     descriptor_ptr, planned_ptr, summary_from_run, validate_run,
@@ -254,6 +256,8 @@ pub struct CudaHfDecodeSequenceDeepSeekV4SwaKvSnapshot {
 
 pub type CudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshot =
     CudaHfDecodeSequenceDeepSeekV4SwaKvSnapshot;
+
+pub type CudaHfDecodeSequenceDeepSeekV3MlaKvSnapshot = CudaHfDecodeSequenceDeepSeekV4SwaKvSnapshot;
 
 impl<'a> CudaHfDecodeSequenceSessionConfig<'a> {
     pub fn create(&self) -> CudaHfDecodeSequenceSessionCreateOutput {
@@ -558,6 +562,63 @@ impl CudaHfDecodeSequenceSession {
         let mut out = NervaCudaHfDecodeSequenceBatchAdvanceResult::default();
         let return_code = batch_advance_one_hf_decode_sequence(&request, &mut out);
         batch_advance_summary(return_code, &out, tokens)
+    }
+
+    pub fn deepseek_v3_mla_kv_snapshot(
+        &mut self,
+        layer_index: u32,
+        byte_capacity: usize,
+    ) -> CudaHfDecodeSequenceDeepSeekV3MlaKvSnapshot {
+        if byte_capacity == 0 {
+            return CudaHfDecodeSequenceDeepSeekV3MlaKvSnapshot {
+                status: SmokeStatus::Failed,
+                cuda_error: 0,
+                layer_index,
+                block_count: 0,
+                layer_offset_bytes: 0,
+                layer_bytes: 0,
+                page_bytes: 0,
+                copied_bytes: 0,
+                output_hash: 0,
+                bytes: Vec::new(),
+                error: Some("DeepSeek V3 MLA KV snapshot requires a byte capacity".to_string()),
+            };
+        }
+        let mut bytes = vec![0u8; byte_capacity];
+        let request = NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest {
+            session: self.handle,
+            layer_index,
+            output_bytes: bytes.as_mut_ptr(),
+            output_byte_capacity: byte_capacity as u64,
+        };
+        let mut out = NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult::default();
+        let return_code = snapshot_deepseek_v3_mla_kv(&request, &mut out);
+        let copied = out.copied_bytes.min(byte_capacity as u64) as usize;
+        bytes.truncate(copied);
+        let status = if return_code == 0 && out.status == 0 {
+            SmokeStatus::Ok
+        } else {
+            SmokeStatus::Failed
+        };
+        let error = (status != SmokeStatus::Ok).then(|| {
+            format!(
+                "DeepSeek V3 MLA KV snapshot failed: return_code={return_code} status={} cuda_error={}",
+                out.status, out.cuda_error
+            )
+        });
+        CudaHfDecodeSequenceDeepSeekV3MlaKvSnapshot {
+            status,
+            cuda_error: out.cuda_error,
+            layer_index: out.layer_index,
+            block_count: out.block_count,
+            layer_offset_bytes: out.layer_offset_bytes,
+            layer_bytes: out.layer_bytes,
+            page_bytes: out.page_bytes,
+            copied_bytes: out.copied_bytes,
+            output_hash: out.output_hash,
+            bytes,
+            error,
+        }
     }
 
     pub fn deepseek_v4_swa_kv_snapshot(

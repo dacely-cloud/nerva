@@ -158,6 +158,29 @@ pub(crate) struct NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotResult {
 
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub(crate) struct NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest {
+    pub(crate) session: *mut NervaCudaHfDecodeSequenceSession,
+    pub(crate) layer_index: u32,
+    pub(crate) output_bytes: *mut u8,
+    pub(crate) output_byte_capacity: u64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) layer_index: u32,
+    pub(crate) block_count: u32,
+    pub(crate) layer_offset_bytes: u64,
+    pub(crate) layer_bytes: u64,
+    pub(crate) page_bytes: u64,
+    pub(crate) copied_bytes: u64,
+    pub(crate) output_hash: u64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub(crate) struct NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest {
     pub(crate) session: *mut NervaCudaHfDecodeSequenceSession,
     pub(crate) layer_index: u32,
@@ -397,6 +420,10 @@ unsafe extern "C" {
         request: *const NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotRequest,
         out: *mut NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotResult,
     ) -> c_int;
+    fn nerva_cuda_hf_decode_sequence_deepseek_v3_mla_kv_snapshot(
+        request: *const NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest,
+        out: *mut NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult,
+    ) -> c_int;
     fn nerva_cuda_hf_decode_sequence_deepseek_v4_compressed_kv_snapshot(
         request: *const NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest,
         out: *mut NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult,
@@ -462,6 +489,13 @@ pub(crate) fn snapshot_deepseek_v4_swa_kv(
     out: &mut NervaCudaHfDecodeSequenceDeepSeekV4SwaKvSnapshotResult,
 ) -> c_int {
     unsafe { nerva_cuda_hf_decode_sequence_deepseek_v4_swa_kv_snapshot(request, out) }
+}
+
+pub(crate) fn snapshot_deepseek_v3_mla_kv(
+    request: &NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest,
+    out: &mut NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult,
+) -> c_int {
+    unsafe { nerva_cuda_hf_decode_sequence_deepseek_v3_mla_kv_snapshot(request, out) }
 }
 
 pub(crate) fn snapshot_deepseek_v4_compressed_kv(

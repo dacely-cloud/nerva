@@ -322,8 +322,9 @@ cudaError_t launch_cublas_layer_session_step(
     hf_decode_prepare_first_attn_norm_encode_kernel<<<
         1, kDecodeNormThreads, 0, session->stream>>>(
         session->device_arena, session->arena_layout, first_layout,
-        session->dtype, layer_norm_weight_dtype(first_layout, session->dtype),
-        session->hidden, first_attention_hidden, first_kv_hidden,
+        session->dtype, session->hidden,
+        layer_norm_weight_dtype(first_layout, session->dtype),
+        first_attention_hidden, first_kv_hidden,
         session->intermediate, session->device_step, max_steps,
         session->device_prompt_tokens, prompt_token_count, session->device_slots,
         session->rms_eps, session->device_scratch,
@@ -598,8 +599,9 @@ cudaError_t profile_cublas_layer_session_step(
     hf_decode_prepare_first_attn_norm_encode_kernel<<<
         1, kDecodeNormThreads, 0, session->stream>>>(
         session->device_arena, session->arena_layout, first_layout,
-        session->dtype, layer_norm_weight_dtype(first_layout, session->dtype),
-        session->hidden, attention_hidden, kv_hidden, session->intermediate,
+        session->dtype, session->hidden,
+        layer_norm_weight_dtype(first_layout, session->dtype), attention_hidden,
+        kv_hidden, session->intermediate,
         session->device_step, max_steps, session->device_prompt_tokens,
         prompt_token_count, session->device_slots, session->rms_eps,
         session->device_scratch,

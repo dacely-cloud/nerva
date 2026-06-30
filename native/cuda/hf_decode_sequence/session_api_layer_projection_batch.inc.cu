@@ -294,11 +294,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_layer_projection_batch_execute(
       hf_decode_prepare_first_attn_norm_encode_kernel<<<
           1, kDecodeNormThreads, 0, best->stream>>>(
           session->device_arena, session->arena_layout, first_layout,
-          session->dtype, session->dtype, session->hidden, attention_hidden,
-          kv_hidden, session->intermediate, session->device_step,
-          session->max_context_tokens, session->device_prompt_tokens,
-          session->active_prompt_token_count, session->device_slots,
-          session->rms_eps, session->device_scratch,
+          session->dtype, session->hidden,
+          layer_norm_weight_dtype(first_layout, session->dtype),
+          attention_hidden, kv_hidden, session->intermediate,
+          session->device_step, session->max_context_tokens,
+          session->device_prompt_tokens, session->active_prompt_token_count,
+          session->device_slots, session->rms_eps, session->device_scratch,
           session->device_projection_input);
       out->dependency_kernel_launches += 1;
       err = cudaGetLastError();

@@ -582,6 +582,12 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         "cuda_hf_sequence_deepseek_execution_guard".to_string(),
     ];
 
+    if matches!(
+        metadata.architecture,
+        HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32
+    ) {
+        primitives.push("cuda_hf_sequence_deepseek_v3_mla_kv_page_contents".to_string());
+    }
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
         primitives.push("deepseek_v4_mhc_compressor_indexer_manifest".to_string());
         primitives.push("deepseek_v4_hash_router_manifest".to_string());
@@ -703,11 +709,12 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_footprint_accounting",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_execution_guard",
+                "cuda_hf_sequence_deepseek_v3_mla_kv_page_contents",
             ],
             &[
                 "integrate MLA prefill/decode into exact runtime",
                 "consume DeepSeek native sequence layout offsets in MLA kernels",
-                "commit vLLM-compatible MLA KV cache pages during decode",
+                "run full-size V3 MLA KV page differential against vLLM",
                 "match vLLM DeepseekV2MLAAttention output numerics",
             ],
         ),
