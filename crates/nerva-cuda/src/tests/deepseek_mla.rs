@@ -1,5 +1,6 @@
 use crate::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
-use crate::deepseek_mla::probe::deepseek_mla_smoke;
+use crate::deepseek_mla::probe::{deepseek_mla_smoke, deepseek_qkv_rmsnorm_smoke};
+use crate::deepseek_mla::qkv_norm::{CudaDeepSeekQKvRmsNormSummary, deepseek_qkv_rmsnorm};
 use crate::deepseek_mla::summary::CudaDeepSeekMlaSummary;
 use crate::smoke::status::SmokeStatus;
 
@@ -38,6 +39,98 @@ fn deepseek_mla_summary_serializes_shape_and_output() {
     assert!(json.contains("\"output\":[0.1,-0.2,0.3,-0.4]"));
     assert!(json.contains("\"mismatches\":0"));
     assert!(json.contains("\"hot_path_allocations\":0"));
+}
+
+#[test]
+fn deepseek_qkv_rmsnorm_summary_serializes_outputs() {
+    let summary = CudaDeepSeekQKvRmsNormSummary {
+        status: SmokeStatus::Ok,
+        return_code: 0,
+        cuda_error: 0,
+        num_tokens: 2,
+        q_size: 4,
+        kv_size: 3,
+        eps: 1e-5,
+        q_out: vec![0.1, -0.2],
+        kv_out: vec![0.3, -0.4],
+        output_hash: 17,
+        device_arena_bytes: 64,
+        pinned_host_bytes: 32,
+        h2d_bytes: 48,
+        d2h_bytes: 32,
+        kernel_launches: 1,
+        sync_calls: 1,
+        hot_path_allocations: 0,
+        error: None,
+    };
+
+    let json = summary.to_json();
+    assert!(json.contains("\"status\":\"ok\""));
+    assert!(json.contains("\"num_tokens\":2"));
+    assert!(json.contains("\"q_size\":4"));
+    assert!(json.contains("\"kv_size\":3"));
+    assert!(json.contains("\"q_out\":[0.1,-0.2]"));
+    assert!(json.contains("\"kv_out\":[0.3,-0.4]"));
+    assert!(json.contains("\"kernel_launches\":1"));
+    assert!(json.contains("\"hot_path_allocations\":0"));
+}
+
+#[test]
+fn deepseek_qkv_rmsnorm_smoke_is_repeatable_when_device_is_available() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let first = deepseek_qkv_rmsnorm_smoke();
+    if first.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let second = deepseek_qkv_rmsnorm_smoke();
+    assert_eq!(second.status, SmokeStatus::Ok, "second smoke: {second:?}");
+    assert_eq!(second.num_tokens, 2);
+    assert_eq!(second.q_size, 4);
+    assert_eq!(second.kv_size, 3);
+    assert_eq!(second.kernel_launches, 1);
+    assert_eq!(second.sync_calls, 1);
+    assert_eq!(second.hot_path_allocations, 0);
+    assert_eq!(second.output_hash, first.output_hash);
+    assert_eq!(second.q_out, first.q_out);
+    assert_eq!(second.kv_out, first.kv_out);
+}
+
+#[test]
+fn deepseek_qkv_rmsnorm_api_matches_vllm_fused_q_kv_rmsnorm_math() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let q = [
+        1.0, -2.0, 3.0, -4.0, // token 0
+        -0.5, 1.5, -2.5, 3.5, // token 1
+    ];
+    let kv = [
+        0.25, -0.75, 1.25, // token 0
+        -1.5, 2.0, -2.5, // token 1
+    ];
+    let q_weight = [0.5, 1.0, -1.5, 2.0];
+    let kv_weight = [1.25, -0.5, 0.75];
+    let summary = deepseek_qkv_rmsnorm(&q, &kv, &q_weight, &kv_weight, 2, 4, 3, 1e-5);
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let expected_q = reference_rmsnorm_rows(&q, &q_weight, 2, 4, 1e-5);
+    let expected_kv = reference_rmsnorm_rows(&kv, &kv_weight, 2, 3, 1e-5);
+    assert_eq!(summary.num_tokens, 2);
+    assert_eq!(summary.q_size, 4);
+    assert_eq!(summary.kv_size, 3);
+    for (actual, expected) in summary.q_out.iter().zip(expected_q.iter()) {
+        assert_close(*actual, *expected, 1e-5);
+    }
+    for (actual, expected) in summary.kv_out.iter().zip(expected_kv.iter()) {
+        assert_close(*actual, *expected, 1e-5);
+    }
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert!(summary.output_hash != 0);
 }
 
 #[test]
@@ -177,4 +270,30 @@ fn reference_mla_decode(
         }
     }
     output
+}
+
+fn reference_rmsnorm_rows(
+    values: &[f32],
+    weight: &[f32],
+    rows: usize,
+    cols: usize,
+    eps: f32,
+) -> Vec<f32> {
+    let mut out = vec![0.0f32; rows * cols];
+    for row in 0..rows {
+        let row_values = &values[row * cols..(row + 1) * cols];
+        let variance = row_values.iter().map(|value| value * value).sum::<f32>() / cols as f32;
+        let rrms = 1.0 / (variance + eps).sqrt();
+        for col in 0..cols {
+            out[row * cols + col] = row_values[col] * rrms * weight[col];
+        }
+    }
+    out
+}
+
+fn assert_close(actual: f32, expected: f32, tolerance: f32) {
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "actual={actual} expected={expected} tolerance={tolerance}"
+    );
 }

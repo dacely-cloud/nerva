@@ -59,6 +59,9 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
         "cuda-deepseek-router" => {
             Ok(nerva_cuda::deepseek_router::probe::deepseek_router_smoke().to_json())
         }
+        "cuda-deepseek-qkv-rmsnorm" => {
+            Ok(nerva_cuda::deepseek_mla::probe::deepseek_qkv_rmsnorm_smoke().to_json())
+        }
         "cuda-deepseek-kv" => Ok(nerva_cuda::deepseek_kv::probe::deepseek_kv_smoke().to_json()),
         "cuda-deepseek-compressed-slots" => {
             Ok(nerva_cuda::deepseek_kv::probe::deepseek_compressed_slot_mapping_smoke().to_json())

@@ -8,6 +8,7 @@ use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use nerva_cuda::deepseek_kv::partial_states::deepseek_save_partial_states;
 use nerva_cuda::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
+use nerva_cuda::deepseek_mla::qkv_norm::deepseek_qkv_rmsnorm;
 use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
 use nerva_cuda::deepseek_quant::dequant::{
     deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_mxfp4_e2m1_e8m0_dequant,
@@ -327,6 +328,7 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
         bench_primitive("quant_fp8_e4m3fn_e8m0", iterations, bench_quant_fp8),
         bench_primitive("quant_mxfp4_e2m1_e8m0", iterations, bench_quant_mxfp4),
         bench_primitive("mla_decode_mqa", iterations, bench_mla_decode),
+        bench_primitive("qkv_rmsnorm", iterations, bench_qkv_rmsnorm),
         bench_primitive("kv_fp8_ds_mla_pack", iterations, bench_kv_fp8_ds_mla_pack),
         bench_primitive(
             "compressed_slot_mapping",
@@ -387,6 +389,7 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let moe = nerva_cuda::deepseek_moe::probe::deepseek_moe_smoke();
     let quant = nerva_cuda::deepseek_quant::probe::deepseek_quant_smoke();
     let router = nerva_cuda::deepseek_router::probe::deepseek_router_smoke();
+    let qkv_norm = nerva_cuda::deepseek_mla::probe::deepseek_qkv_rmsnorm_smoke();
     let kv = nerva_cuda::deepseek_kv::probe::deepseek_kv_smoke();
     let compressed_slots = nerva_cuda::deepseek_kv::probe::deepseek_compressed_slot_mapping_smoke();
     let c128_topk = nerva_cuda::deepseek_kv::probe::deepseek_c128_topk_metadata_smoke();
@@ -395,6 +398,7 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let moe_json = moe.to_json();
     let quant_json = quant.to_json();
     let router_json = router.to_json();
+    let qkv_norm_json = qkv_norm.to_json();
     let kv_json = kv.to_json();
     let compressed_slots_json = compressed_slots.to_json();
     let c128_topk_json = c128_topk.to_json();
@@ -419,6 +423,11 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
             name: "cuda_deepseek_router_smoke",
             status: smoke_status_label(&router.status),
             summary_json: &router_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_qkv_rmsnorm_smoke",
+            status: smoke_status_label(&qkv_norm.status),
+            summary_json: &qkv_norm_json,
         },
         DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_fp8_ds_mla_kv_pack_smoke",
@@ -694,6 +703,8 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         primitives.push("deepseek_v4_hash_route_table_i64_loader".to_string());
         primitives.push("precision_moe_deepseek_v4_hash_route_table".to_string());
         primitives.push("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke".to_string());
+        primitives.push("cuda_deepseek_qkv_rmsnorm_api".to_string());
+        primitives.push("cuda_deepseek_qkv_rmsnorm_smoke".to_string());
         primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_api".to_string());
         primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_smoke".to_string());
     }
@@ -826,9 +837,14 @@ fn coverage_for_unit(
             ),
             (HfArchitectureKind::DeepSeekV4, "deepseek_v4_mhc_pre_post_head") => (
                 "partial",
-                &["deepseek_v4_mhc_compressor_indexer_manifest"],
                 &[
-                    "implement MHC pre/post-head transforms",
+                    "deepseek_v4_mhc_compressor_indexer_manifest",
+                    "cuda_deepseek_qkv_rmsnorm_api",
+                    "cuda_deepseek_qkv_rmsnorm_smoke",
+                ],
+                &[
+                    "integrate fused Q/KV RMSNorm into MHC pre-head runtime",
+                    "implement remaining MHC pre/post-head transforms",
                     "verify MHC head/attention/FFN scale handling against vLLM",
                 ],
             ),
@@ -865,6 +881,8 @@ fn coverage_for_unit(
                 "partial",
                 &[
                     "deepseek_v4_mhc_compressor_indexer_manifest",
+                    "cuda_deepseek_qkv_rmsnorm_api",
+                    "cuda_deepseek_qkv_rmsnorm_smoke",
                     "cuda_deepseek_save_partial_states_api",
                     "cuda_deepseek_save_partial_states_smoke",
                     "cuda_deepseek_compressed_slot_mapping_api",
@@ -1052,6 +1070,18 @@ fn deepseek_vllm_reference_specs() -> Vec<DeepSeekVllmReferenceSpec> {
                 "_save_partial_states_kernel",
                 "slot_id < 0",
                 "score + ape",
+            ],
+        },
+        DeepSeekVllmReferenceSpec {
+            architecture: "deepseek_v4",
+            execution_unit: "v4_fused_qkv_rmsnorm",
+            relative_path: "vllm/models/deepseek_v4/common/ops/fused_qk_rmsnorm.py",
+            required_symbols: &[
+                "def fused_q_kv_rmsnorm",
+                "_fused_q_kv_rmsnorm_kernel",
+                "num_tokens",
+                "pid_task",
+                "RMSNorm in fp32",
             ],
         },
         DeepSeekVllmReferenceSpec {
@@ -1373,6 +1403,32 @@ fn bench_mla_decode() -> DeepSeekPrimitiveMetrics {
     }
 }
 
+fn bench_qkv_rmsnorm() -> DeepSeekPrimitiveMetrics {
+    let q = [
+        1.0, -2.0, 3.0, -4.0, // token 0
+        -0.5, 1.5, -2.5, 3.5, // token 1
+    ];
+    let kv = [
+        0.25, -0.75, 1.25, // token 0
+        -1.5, 2.0, -2.5, // token 1
+    ];
+    let q_weight = [0.5, 1.0, -1.5, 2.0];
+    let kv_weight = [1.25, -0.5, 0.75];
+    let summary = deepseek_qkv_rmsnorm(&q, &kv, &q_weight, &kv_weight, 2, 4, 3, 1e-5);
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
 fn bench_kv_fp8_ds_mla_pack() -> DeepSeekPrimitiveMetrics {
     let nope = (0..448)
         .map(|idx| (idx as u8).wrapping_mul(5).wrapping_add(3))
@@ -1631,6 +1687,7 @@ fn vllm_reference_units(architecture: HfArchitectureKind) -> Vec<String> {
             "/root/vllm/vllm/models/deepseek_v4/compressor.py".to_string(),
             "/root/vllm/vllm/models/deepseek_v4/sparse_mla.py".to_string(),
             "/root/vllm/vllm/models/deepseek_v4/common/ops/save_partial_states.py".to_string(),
+            "/root/vllm/vllm/models/deepseek_v4/common/ops/fused_qk_rmsnorm.py".to_string(),
             "/root/vllm/vllm/v1/kv_cache_interface.py".to_string(),
         ],
         _ => Vec::new(),

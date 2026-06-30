@@ -1,4 +1,5 @@
 use crate::deepseek_mla::ffi::{NervaCudaDeepSeekMlaSmokeResult, run_deepseek_mla_smoke};
+use crate::deepseek_mla::qkv_norm::{CudaDeepSeekQKvRmsNormSummary, deepseek_qkv_rmsnorm};
 use crate::deepseek_mla::summary::CudaDeepSeekMlaSummary;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;
 use crate::smoke::status::SmokeStatus;
@@ -66,4 +67,70 @@ pub fn deepseek_mla_smoke() -> CudaDeepSeekMlaSummary {
     } else {
         CudaDeepSeekMlaSummary::failed(reason)
     }
+}
+
+pub fn deepseek_qkv_rmsnorm_smoke() -> CudaDeepSeekQKvRmsNormSummary {
+    let q = [
+        1.0, -2.0, 3.0, -4.0, // token 0
+        -0.5, 1.5, -2.5, 3.5, // token 1
+    ];
+    let kv = [
+        0.25, -0.75, 1.25, // token 0
+        -1.5, 2.0, -2.5, // token 1
+    ];
+    let q_weight = [0.5, 1.0, -1.5, 2.0];
+    let kv_weight = [1.25, -0.5, 0.75];
+    let summary = deepseek_qkv_rmsnorm(&q, &kv, &q_weight, &kv_weight, 2, 4, 3, 1e-5);
+    if summary.status != SmokeStatus::Ok {
+        return summary;
+    }
+
+    let expected_q = reference_rmsnorm_rows(&q, &q_weight, 2, 4, 1e-5);
+    let expected_kv = reference_rmsnorm_rows(&kv, &kv_weight, 2, 3, 1e-5);
+    let matches_q = summary
+        .q_out
+        .iter()
+        .zip(expected_q.iter())
+        .all(|(actual, expected)| (actual - expected).abs() <= 1e-5);
+    let matches_kv = summary
+        .kv_out
+        .iter()
+        .zip(expected_kv.iter())
+        .all(|(actual, expected)| (actual - expected).abs() <= 1e-5);
+    if matches_q
+        && matches_kv
+        && summary.output_hash != 0
+        && summary.kernel_launches == 1
+        && summary.sync_calls == 1
+        && summary.hot_path_allocations == 0
+    {
+        return summary;
+    }
+
+    let mut failed = summary;
+    failed.status = SmokeStatus::Failed;
+    failed.error = Some(format!(
+        "CUDA DeepSeek Q/KV RMSNorm smoke mismatch: matches_q={} matches_kv={} output_hash={} kernel_launches={}",
+        matches_q, matches_kv, failed.output_hash, failed.kernel_launches
+    ));
+    failed
+}
+
+fn reference_rmsnorm_rows(
+    values: &[f32],
+    weight: &[f32],
+    rows: usize,
+    cols: usize,
+    eps: f32,
+) -> Vec<f32> {
+    let mut out = vec![0.0f32; rows * cols];
+    for row in 0..rows {
+        let row_values = &values[row * cols..(row + 1) * cols];
+        let variance = row_values.iter().map(|value| value * value).sum::<f32>() / cols as f32;
+        let rrms = 1.0 / (variance + eps).sqrt();
+        for col in 0..cols {
+            out[row * cols + col] = row_values[col] * rrms * weight[col];
+        }
+    }
+    out
 }
