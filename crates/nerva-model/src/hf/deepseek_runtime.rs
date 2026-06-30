@@ -620,6 +620,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_index_topk_descriptor".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut".to_string());
     }
 
     primitives
@@ -861,11 +862,12 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v4_index_topk_descriptor",
                 "cuda_hf_sequence_deepseek_v4_compressed_scan_metrics",
                 "cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime",
+                "cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
             &[
                 "verify C4 sparse top-k numerics against vLLM end-to-end",
-                "replace serial sparse scorer with vLLM-style paged logits and radix top-k kernels",
+                "integrate split paged-logits/top-k sparse scorer into full decode runtime for partial-cover cases",
             ],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_parallel_attention_gemm_streams") => (
