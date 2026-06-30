@@ -239,7 +239,14 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       &session->deepseek_compressed_kv_bytes,
       &session->deepseek_indexer_state_bytes,
       &session->deepseek_indexer_kv_bytes);
-  if (session->deepseek_compressor_state_bytes != 0 ||
+  bool has_deepseek_layout = false;
+  for (const SequenceLayerLayout &layout : layouts) {
+    if (layout.deepseek_mode != 0) {
+      has_deepseek_layout = true;
+      break;
+    }
+  }
+  if (has_deepseek_layout || session->deepseek_compressor_state_bytes != 0 ||
       session->deepseek_compressed_kv_bytes != 0 ||
       session->deepseek_indexer_state_bytes != 0 ||
       session->deepseek_indexer_kv_bytes != 0) {

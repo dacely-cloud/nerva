@@ -724,6 +724,9 @@ fn deepseek_v32_dense_session_runs_through_sampling() {
     assert_eq!(summary.tokens.len(), 2);
     assert_eq!(summary.kv_tokens, 2);
     assert_eq!(summary.graph_replays, 2);
+    assert_eq!(summary.deepseek_v3_grouped_router_selections, 0);
+    assert_eq!(summary.deepseek_v4_bias_router_selections, 0);
+    assert_eq!(summary.deepseek_v4_hash_router_selections, 0);
     assert!(summary.graph_nodes > 0);
 }
 
@@ -830,6 +833,12 @@ fn deepseek_v32_sparse_moe_session_runs_through_sampling() {
     assert_eq!(summary.tokens.len(), 2);
     assert_eq!(summary.kv_tokens, 2);
     assert_eq!(summary.graph_replays, 2);
+    assert_eq!(
+        summary.deepseek_v3_grouped_router_selections,
+        summary.graph_replays
+    );
+    assert_eq!(summary.deepseek_v4_bias_router_selections, 0);
+    assert_eq!(summary.deepseek_v4_hash_router_selections, 0);
     assert!(summary.graph_nodes > 0);
 }
 
@@ -925,6 +934,9 @@ fn deepseek_v4_swa_dense_session_runs_through_sampling() {
     assert_eq!(summary.tokens.len(), 2);
     assert_eq!(summary.kv_tokens, 2);
     assert_eq!(summary.graph_replays, 2);
+    assert_eq!(summary.deepseek_v3_grouped_router_selections, 0);
+    assert_eq!(summary.deepseek_v4_bias_router_selections, 0);
+    assert_eq!(summary.deepseek_v4_hash_router_selections, 0);
     assert!(summary.graph_nodes > 0);
 }
 
@@ -1029,6 +1041,12 @@ fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
     assert_eq!(summary.tokens.len(), 2);
     assert_eq!(summary.kv_tokens, 2);
     assert_eq!(summary.graph_replays, 2);
+    assert_eq!(summary.deepseek_v3_grouped_router_selections, 0);
+    assert_eq!(
+        summary.deepseek_v4_bias_router_selections,
+        summary.graph_replays
+    );
+    assert_eq!(summary.deepseek_v4_hash_router_selections, 0);
     assert!(summary.graph_nodes > 0);
 }
 
@@ -1135,6 +1153,12 @@ fn deepseek_v4_swa_hash_moe_session_runs_through_sampling() {
     assert_eq!(summary.tokens.len(), 2);
     assert_eq!(summary.kv_tokens, 2);
     assert_eq!(summary.graph_replays, 2);
+    assert_eq!(summary.deepseek_v3_grouped_router_selections, 0);
+    assert_eq!(summary.deepseek_v4_bias_router_selections, 0);
+    assert_eq!(
+        summary.deepseek_v4_hash_router_selections,
+        summary.graph_replays
+    );
     assert!(summary.graph_nodes > 0);
 }
 

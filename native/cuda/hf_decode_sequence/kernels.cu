@@ -1472,7 +1472,8 @@ __global__ void hf_deepseek_v3_sparse_moe_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
-    float *scratch, uint16_t *projection_input) {
+    float *scratch, uint16_t *projection_input,
+    uint64_t *deepseek_runtime_counters) {
   if (step_cursor != nullptr && *step_cursor >= max_steps) {
     return;
   }
@@ -1547,6 +1548,14 @@ __global__ void hf_deepseek_v3_sparse_moe_encode_kernel(
   if (route_status != 0) {
     return;
   }
+  if (threadIdx.x == 0 && deepseek_runtime_counters != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterV3GroupedRouterSelections),
+        1ull);
+  }
+  __syncthreads();
 
   const uint64_t expert_gate = layout.w_expert_gate_up;
   const uint64_t expert_gate_scale =
@@ -2199,12 +2208,26 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
       for (uint32_t rank = 0; rank < top_k; ++rank) {
         selected_weights[rank] *= scale;
       }
+      if (deepseek_runtime_counters != nullptr) {
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterV4HashRouterSelections),
+            1ull);
+      }
     } else {
       if (nerva::deepseek::router::route_v4_sqrtsoftplus(
               router_logits, correction_bias, num_experts, top_k,
               layout.norm_topk_prob, routed_scale, selected_experts,
               selected_weights) != 0) {
         return;
+      }
+      if (deepseek_runtime_counters != nullptr) {
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterV4BiasRouterSelections),
+            1ull);
       }
     }
     for (uint32_t row = 0; row < hidden; ++row) {

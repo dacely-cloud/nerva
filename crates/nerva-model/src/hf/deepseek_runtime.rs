@@ -575,6 +575,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         "precision_moe_deepseek_router_correction_bias_load".to_string(),
         "cuda_deepseek_router_route_api".to_string(),
         "cuda_deepseek_v3_grouped_sigmoid_router_smoke".to_string(),
+        "cuda_hf_sequence_deepseek_v3_grouped_router_runtime".to_string(),
         "cuda_hf_sequence_deepseek_descriptor_abi".to_string(),
         "cuda_hf_sequence_deepseek_footprint_accounting".to_string(),
         "cuda_hf_sequence_deepseek_native_layout_pack".to_string(),
@@ -592,6 +593,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("deepseek_v4_hash_route_table_i64_loader".to_string());
         primitives.push("precision_moe_deepseek_v4_hash_route_table".to_string());
         primitives.push("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_bias_router_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_hash_router_runtime".to_string());
         primitives.push("cuda_deepseek_qkv_rmsnorm_api".to_string());
         primitives.push("cuda_deepseek_qkv_rmsnorm_smoke".to_string());
         primitives.push("cuda_deepseek_fused_inv_rope_fp8_quant_api".to_string());
@@ -744,12 +747,10 @@ fn coverage_for_unit(
                 "precision_moe_deepseek_router_correction_bias_load",
                 "cuda_deepseek_router_route_api",
                 "cuda_deepseek_v3_grouped_sigmoid_router_smoke",
+                "cuda_hf_sequence_deepseek_v3_grouped_router_runtime",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
-            &[
-                "integrate grouped sigmoid router into CUDA exact runtime decode layers",
-                "verify full-layer routed outputs against vLLM",
-            ],
+            &["verify full-layer routed outputs against vLLM"],
         ),
         (
             HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32,
@@ -888,12 +889,11 @@ fn coverage_for_unit(
                 "precision_moe_deepseek_v4_hash_route_table",
                 "cuda_deepseek_router_route_api",
                 "cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke",
+                "cuda_hf_sequence_deepseek_v4_bias_router_runtime",
+                "cuda_hf_sequence_deepseek_v4_hash_router_runtime",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
-            &[
-                "integrate hash and bias routing into CUDA exact runtime decode layers",
-                "verify full-layer routed outputs against vLLM",
-            ],
+            &["verify full-layer routed outputs against vLLM"],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_megamoe_int8_fp4_experts") => (
             "partial",

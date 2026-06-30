@@ -50,6 +50,12 @@ void fill_deepseek_runtime_counter_result(
       counters[kDeepSeekRuntimeCounterSparseTopkSlotsSelected];
   out->deepseek_sparse_topk_candidates_scored =
       counters[kDeepSeekRuntimeCounterSparseTopkCandidatesScored];
+  out->deepseek_v3_grouped_router_selections =
+      counters[kDeepSeekRuntimeCounterV3GroupedRouterSelections];
+  out->deepseek_v4_bias_router_selections =
+      counters[kDeepSeekRuntimeCounterV4BiasRouterSelections];
+  out->deepseek_v4_hash_router_selections =
+      counters[kDeepSeekRuntimeCounterV4HashRouterSelections];
 }
 
 uint32_t observed_from_slot_range(uint32_t steps, uint32_t has_eos_token,

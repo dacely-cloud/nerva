@@ -214,7 +214,8 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
         session->device_arena, layout, session->dtype, session->hidden,
         attention_rows, kv_cache_width, session->intermediate,
         session->device_step, max_steps, session->device_scratch,
-        session->device_projection_input);
+        session->device_projection_input,
+        session->device_deepseek_runtime_counters);
     return cudaGetLastError();
   }
   if (layout.w_gate == kMissingOffset || layout.w_up == kMissingOffset ||

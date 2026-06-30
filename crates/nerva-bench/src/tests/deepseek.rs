@@ -40,6 +40,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("precision_moe_deepseek_router_correction_bias_load"));
     assert!(json.contains("cuda_deepseek_router_route_api"));
     assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v3_grouped_router_runtime"));
     assert!(json.contains("deepseek_v4_mhc_compressor_indexer_manifest"));
     assert!(json.contains("mxfp4_e2m1_e8m0_block_dequant_reference"));
     assert!(json.contains("cuda_mxfp4_e2m1_e8m0_dequant_api"));
@@ -51,6 +52,8 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("deepseek_v4_hash_route_table_i64_loader"));
     assert!(json.contains("precision_moe_deepseek_v4_hash_route_table"));
     assert!(json.contains("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_bias_router_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_hash_router_runtime"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_api"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_smoke"));
     assert!(json.contains("cuda_deepseek_fp8_ds_mla_kv_pack_api"));
@@ -111,6 +114,7 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("precision_moe_deepseek_v3_grouped_router"));
     assert!(json.contains("cuda_deepseek_router_route_api"));
     assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v3_grouped_router_runtime"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
     assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
     assert!(json.contains("\"unit\":\"deepseek_v32_sparse_attention_indexer\""));
@@ -233,7 +237,8 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("precision_moe_deepseek_v4_hash_route_table"));
     assert!(json.contains("deepseek_v4_hash_route_table_i64_loader"));
     assert!(json.contains("cuda_deepseek_router_route_api"));
-    assert!(json.contains("integrate hash and bias routing into CUDA exact runtime decode layers"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_bias_router_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_hash_router_runtime"));
     assert!(json.contains("\"unit\":\"deepseek_v4_parallel_attention_gemm_streams\""));
     assert!(json.contains("\"status\":\"missing\""));
     assert!(json.contains("\"default_block_size\":256"));
@@ -420,7 +425,7 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"performance_status\":\"blocked_until_runtime_units_complete\""));
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("\"performance_comparison_allowed\":false"));
-    assert!(json.contains("integrate hash and bias routing into CUDA exact runtime decode layers"));
+    assert!(json.contains("verify full-layer routed outputs against vLLM"));
 
     let _ = std::fs::remove_dir_all(dir);
 }

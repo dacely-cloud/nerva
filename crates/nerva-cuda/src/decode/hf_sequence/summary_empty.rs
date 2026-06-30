@@ -79,6 +79,9 @@ pub(crate) fn empty_summary(
         deepseek_sparse_topk_selections: 0,
         deepseek_sparse_topk_slots_selected: 0,
         deepseek_sparse_topk_candidates_scored: 0,
+        deepseek_v3_grouped_router_selections: 0,
+        deepseek_v4_bias_router_selections: 0,
+        deepseek_v4_hash_router_selections: 0,
         error: Some(error),
     }
 }

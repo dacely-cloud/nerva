@@ -218,6 +218,9 @@ impl<'a> CudaHfDecodeSequenceRequest<'a> {
             deepseek_sparse_topk_selections: out.deepseek_sparse_topk_selections,
             deepseek_sparse_topk_slots_selected: out.deepseek_sparse_topk_slots_selected,
             deepseek_sparse_topk_candidates_scored: out.deepseek_sparse_topk_candidates_scored,
+            deepseek_v3_grouped_router_selections: out.deepseek_v3_grouped_router_selections,
+            deepseek_v4_bias_router_selections: out.deepseek_v4_bias_router_selections,
+            deepseek_v4_hash_router_selections: out.deepseek_v4_hash_router_selections,
             error,
         }
     }
