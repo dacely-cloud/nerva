@@ -648,6 +648,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
   if (context_steps > session->max_context_tokens) {
     return -1;
   }
+  if (validate_deepseek_v4_compressed_context(session, context_steps) !=
+      cudaSuccess) {
+    out->device_count = 1;
+    out->cuda_error = static_cast<int32_t>(cudaErrorNotSupported);
+    return -1;
+  }
   for (uint32_t index = 0; index < request->prompt_token_count; ++index) {
     if (request->prompt_tokens[index] >= session->vocab_size) {
       return -1;
@@ -856,6 +862,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
   if (request->prompt_token_count > session->max_context_tokens) {
     return -1;
   }
+  if (validate_deepseek_v4_compressed_context(
+          session, request->prompt_token_count) != cudaSuccess) {
+    out->device_count = 1;
+    out->cuda_error = static_cast<int32_t>(cudaErrorNotSupported);
+    return -1;
+  }
   for (uint32_t index = 0; index < request->prompt_token_count; ++index) {
     if (request->prompt_tokens[index] >= session->vocab_size) {
       return -1;
@@ -946,6 +958,12 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
       prompt_count + session->active_observed_tokens + request->steps - 1u;
   if (target_cursor > session->max_context_tokens ||
       target_cursor < session->active_cursor) {
+    return -1;
+  }
+  if (validate_deepseek_v4_compressed_context(session, target_cursor) !=
+      cudaSuccess) {
+    out->device_count = 1;
+    out->cuda_error = static_cast<int32_t>(cudaErrorNotSupported);
     return -1;
   }
   const uint32_t run_count = target_cursor - session->active_cursor;

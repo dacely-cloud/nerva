@@ -104,7 +104,13 @@ bool has_unsupported_deepseek_layers(const NervaCudaHfDecodeChainLayer *layers,
           layer.deepseek_mode == kDeepSeekModeV4Swa &&
           (layer.mlp_kind == kMlpKindDense ||
            layer.mlp_kind == kMlpKindSparseMoe);
-      if (!supported_v3 && !supported_v4_swa) {
+      const bool supported_v4_compressed =
+          (layer.deepseek_mode == kDeepSeekModeV4Compressed ||
+           layer.deepseek_mode == kDeepSeekModeV4CompressedIndexer) &&
+          layer.deepseek_compress_ratio > 1 &&
+          (layer.mlp_kind == kMlpKindDense ||
+           layer.mlp_kind == kMlpKindSparseMoe);
+      if (!supported_v3 && !supported_v4_swa && !supported_v4_compressed) {
         return true;
       }
     }

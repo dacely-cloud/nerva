@@ -194,20 +194,62 @@ bool layout_is_deepseek_v3_mla(const SequenceLayerLayout &layout) {
           layout.deepseek_mode == kDeepSeekModeV32MlaIndexer);
 }
 
+bool layout_deepseek_v4_mlp_supported(const SequenceLayerLayout &layout) {
+  return layout.mlp_kind == kMlpKindDense ||
+         layout.mlp_kind == kMlpKindSparseMoe;
+}
+
 bool layout_is_deepseek_v4_swa_native(const SequenceLayerLayout &layout) {
   if (layout.attention_kind != kAttentionKindDeepSeekMla ||
       layout.deepseek_mode != kDeepSeekModeV4Swa) {
     return false;
   }
-  if (layout.mlp_kind == kMlpKindDense) {
-    return true;
+  return layout_deepseek_v4_mlp_supported(layout);
+}
+
+bool layout_is_deepseek_v4_compressed_native(const SequenceLayerLayout &layout) {
+  if (layout.attention_kind != kAttentionKindDeepSeekMla ||
+      (layout.deepseek_mode != kDeepSeekModeV4Compressed &&
+       layout.deepseek_mode != kDeepSeekModeV4CompressedIndexer)) {
+    return false;
   }
-  return layout.mlp_kind == kMlpKindSparseMoe;
+  return layout.deepseek_compress_ratio > 1 &&
+         layout_deepseek_v4_mlp_supported(layout);
+}
+
+bool layout_is_deepseek_v4_native(const SequenceLayerLayout &layout) {
+  return layout_is_deepseek_v4_swa_native(layout) ||
+         layout_is_deepseek_v4_compressed_native(layout);
 }
 
 bool layout_is_native_deepseek_session(const SequenceLayerLayout &layout) {
   return layout_is_deepseek_v3_mla(layout) ||
-         layout_is_deepseek_v4_swa_native(layout);
+         layout_is_deepseek_v4_native(layout);
+}
+
+uint32_t session_deepseek_v4_compressed_context_limit(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr ||
+      session->host_layouts.size() != session->layer_count) {
+    return 0;
+  }
+  uint32_t limit = UINT32_MAX;
+  for (const SequenceLayerLayout &layout : session->host_layouts) {
+    if (!layout_is_deepseek_v4_compressed_native(layout)) {
+      continue;
+    }
+    limit = std::min(limit, layout.deepseek_compress_ratio);
+  }
+  return limit == UINT32_MAX ? 0 : limit;
+}
+
+cudaError_t validate_deepseek_v4_compressed_context(
+    const NervaCudaHfDecodeSequenceSession *session, uint32_t context_steps) {
+  const uint32_t limit = session_deepseek_v4_compressed_context_limit(session);
+  if (limit == 0 || context_steps < limit) {
+    return cudaSuccess;
+  }
+  return cudaErrorNotSupported;
 }
 
 uint64_t layout_deepseek_v3_qk_head_dim(const SequenceLayerLayout &layout) {
@@ -235,7 +277,7 @@ uint64_t layout_deepseek_v3_kv_cache_width(const SequenceLayerLayout &layout,
 
 uint64_t layout_deepseek_kv_cache_width(const SequenceLayerLayout &layout,
                                         uint64_t fallback_kv_hidden) {
-  if (layout_is_deepseek_v4_swa_native(layout)) {
+  if (layout_is_deepseek_v4_native(layout)) {
     return layout.deepseek_qk_nope_head_dim + layout.deepseek_qk_rope_head_dim;
   }
   return layout_deepseek_v3_kv_cache_width(layout, fallback_kv_hidden);
@@ -265,7 +307,7 @@ uint64_t layout_deepseek_v3_value_rows(const SequenceLayerLayout &layout,
 
 uint64_t layer_attention_workspace_rows(const SequenceLayerLayout &layout,
                                         uint64_t attention_hidden) {
-  if (layout_is_deepseek_v4_swa_native(layout)) {
+  if (layout_is_deepseek_v4_native(layout)) {
     return std::max<uint64_t>(attention_hidden, layout.deepseek_q_lora_rank);
   }
   if (!layout_is_deepseek_v3_mla(layout)) return attention_hidden;
