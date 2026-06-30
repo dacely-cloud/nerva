@@ -63,6 +63,7 @@ const COMMANDS: &[&str] = &[
     "deepseek-vllm-reference-audit [vllm_root]",
     "deepseek-vllm-parity-gate config.json [vllm_root]",
     "deepseek-vllm-benchmark-plan checkpoint_dir prompt_text|@prompt.txt [context_tokens] [output_tokens] [vllm_root]",
+    "deepseek-vllm-benchmark-run checkpoint_dir prompt_text|@prompt.txt [context_tokens] [output_tokens] [vllm_root] [artifact_dir]",
     "deepseek-vllm-compare vllm.json nerva.json",
     "safetensors [config.json model.safetensors]",
     "safetensors-shards config.json model.safetensors.index.json checkpoint_dir",

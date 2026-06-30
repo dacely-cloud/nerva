@@ -6,8 +6,8 @@ use crate::model_io::config::{
 };
 use crate::model_io::deepseek::{
     run_deepseek_cuda_primitive_bench, run_deepseek_cuda_readiness, run_deepseek_runtime_plan,
-    run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_compare, run_deepseek_vllm_parity_gate,
-    run_deepseek_vllm_reference_audit,
+    run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_benchmark_run, run_deepseek_vllm_compare,
+    run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
 };
 use crate::model_io::resident::{
     run_hotset_probe, run_resident_shard_probe, run_resident_weight_probe,
@@ -42,6 +42,7 @@ pub(crate) fn dispatch(
             run_deepseek_vllm_parity_gate(args.next(), args.next()),
         )),
         Some("deepseek-vllm-benchmark-plan") => Some(run_deepseek_vllm_benchmark_plan_cli(args)),
+        Some("deepseek-vllm-benchmark-run") => Some(run_deepseek_vllm_benchmark_run_cli(args)),
         Some("deepseek-vllm-compare") => Some(exit::print_json_result(run_deepseek_vllm_compare(
             args.next(),
             args.next(),
@@ -89,6 +90,27 @@ fn run_deepseek_vllm_benchmark_plan_cli(args: &mut impl Iterator<Item = String>)
         prompt_spec,
         max_context_tokens,
         max_new_tokens,
+        args.next(),
+    ))
+}
+
+fn run_deepseek_vllm_benchmark_run_cli(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let checkpoint_dir = args.next();
+    let prompt_spec = args.next();
+    let max_context_tokens = match parse_optional_usize(args.next(), 16_000, "context_tokens") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    let max_new_tokens = match parse_optional_usize(args.next(), 2048, "output_tokens") {
+        Ok(value) => value,
+        Err(reason) => return exit::parse_error(reason),
+    };
+    exit::print_json_result(run_deepseek_vllm_benchmark_run(
+        checkpoint_dir,
+        prompt_spec,
+        max_context_tokens,
+        max_new_tokens,
+        args.next(),
         args.next(),
     ))
 }

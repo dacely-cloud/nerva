@@ -6,7 +6,8 @@ use crate::{
         config::{run_layout_probe, run_manifest_probe, run_metadata_probe},
         deepseek::{
             run_deepseek_cuda_primitive_bench, run_deepseek_cuda_readiness,
-            run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_compare,
+            run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan,
+            run_deepseek_vllm_benchmark_run, run_deepseek_vllm_compare,
             run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
         },
         resident::{
@@ -180,6 +181,19 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
                 max_context_tokens,
                 max_new_tokens,
                 args.get(4).cloned(),
+            )
+        }
+        "deepseek-vllm-benchmark-run" => {
+            let max_context_tokens =
+                parse_optional_usize(args.get(2).cloned(), 16_000, "context_tokens")?;
+            let max_new_tokens = parse_optional_usize(args.get(3).cloned(), 2048, "output_tokens")?;
+            run_deepseek_vllm_benchmark_run(
+                args.first().cloned(),
+                args.get(1).cloned(),
+                max_context_tokens,
+                max_new_tokens,
+                args.get(4).cloned(),
+                args.get(5).cloned(),
             )
         }
         "deepseek-vllm-compare" => {

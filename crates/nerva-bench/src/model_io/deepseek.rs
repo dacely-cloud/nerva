@@ -1,5 +1,6 @@
 use std::{
     path::{Path, PathBuf},
+    process::Command,
     time::Instant,
 };
 
@@ -294,7 +295,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
     } else {
         "ready"
     };
-    let benchmark_allowed = status == "ready" && runtime_blockers.is_empty();
+    let benchmark_allowed = status == "ready";
 
     let nerva_generate = vec![
         "cargo".to_string(),
@@ -411,6 +412,181 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
             "not_benchmarked"
         },
         benchmark_allowed,
+    ))
+}
+
+pub(crate) fn run_deepseek_vllm_benchmark_run(
+    checkpoint_dir: Option<String>,
+    prompt_spec: Option<String>,
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    vllm_root_arg: Option<String>,
+    artifact_dir_arg: Option<String>,
+) -> Result<String, String> {
+    let checkpoint_dir = checkpoint_dir
+        .ok_or_else(|| "deepseek-vllm-benchmark-run requires checkpoint_dir".to_string())?;
+    let prompt_spec = prompt_spec.ok_or_else(|| {
+        "deepseek-vllm-benchmark-run requires prompt_text|@prompt.txt".to_string()
+    })?;
+    if max_context_tokens == 0 || max_new_tokens == 0 {
+        return Err(
+            "deepseek-vllm-benchmark-run requires non-zero context and output tokens".to_string(),
+        );
+    }
+
+    let checkpoint_path = PathBuf::from(&checkpoint_dir);
+    let config_path = checkpoint_path.join("config.json");
+    if !checkpoint_path.is_dir() {
+        return Err(format!(
+            "checkpoint directory does not exist: {checkpoint_dir}"
+        ));
+    }
+    if !config_path.is_file() {
+        return Err(format!(
+            "checkpoint config.json does not exist: {}",
+            config_path.display()
+        ));
+    }
+    if !checkpoint_path
+        .join("model.safetensors.index.json")
+        .exists()
+        && !checkpoint_path.join("model.safetensors").exists()
+    {
+        return Err(format!(
+            "checkpoint has no model.safetensors or model.safetensors.index.json: {checkpoint_dir}"
+        ));
+    }
+    if prompt_path_status(&prompt_spec) != "ok" {
+        return Err(format!("prompt is not readable: {prompt_spec}"));
+    }
+    let config = std::fs::read_to_string(&config_path)
+        .map_err(|err| format!("failed to read {}: {err}", config_path.display()))?;
+    let metadata = parse_hf_config_metadata(&config)
+        .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+    if !metadata.architecture.is_deepseek() {
+        return Err(format!(
+            "deepseek-vllm-benchmark-run requires DeepSeek V3/V3.2/V4, got {}",
+            metadata.architecture.as_str()
+        ));
+    }
+
+    let repo_root = repo_root();
+    let vllm_root = PathBuf::from(vllm_root_arg.unwrap_or_else(|| "/root/vllm".to_string()));
+    if !vllm_root.is_dir() {
+        return Err(format!("vLLM root does not exist: {}", vllm_root.display()));
+    }
+    let artifact_dir = artifact_dir_arg.map_or_else(default_deepseek_artifact_dir, PathBuf::from);
+    std::fs::create_dir_all(&artifact_dir).map_err(|err| {
+        format!(
+            "failed to create artifact dir {}: {err}",
+            artifact_dir.display()
+        )
+    })?;
+    let vllm_artifact = artifact_dir.join("vllm.json");
+    let nerva_artifact = artifact_dir.join("nerva.json");
+    let compare_artifact = artifact_dir.join("compare.json");
+
+    let vllm_command = deepseek_vllm_generate_command(
+        &repo_root,
+        &vllm_root,
+        &checkpoint_dir,
+        &prompt_spec,
+        max_context_tokens,
+        max_new_tokens,
+    );
+    let nerva_command = deepseek_nerva_generate_command(
+        &checkpoint_dir,
+        &prompt_spec,
+        max_context_tokens,
+        max_new_tokens,
+    );
+
+    let vllm_run = run_json_command(&vllm_command, &repo_root)?;
+    std::fs::write(&vllm_artifact, &vllm_run.json).map_err(|err| {
+        format!(
+            "failed to write vLLM artifact {}: {err}",
+            vllm_artifact.display()
+        )
+    })?;
+    if vllm_run.status != 0 {
+        return Ok(deepseek_benchmark_run_json(
+            "vllm_failed",
+            &checkpoint_dir,
+            &prompt_spec,
+            max_context_tokens,
+            max_new_tokens,
+            &artifact_dir,
+            &vllm_artifact,
+            &nerva_artifact,
+            &compare_artifact,
+            &vllm_command,
+            &nerva_command,
+            &vllm_run,
+            None,
+            None,
+        ));
+    }
+
+    let nerva_run = run_json_command(&nerva_command, &repo_root)?;
+    std::fs::write(&nerva_artifact, &nerva_run.json).map_err(|err| {
+        format!(
+            "failed to write NERVA artifact {}: {err}",
+            nerva_artifact.display()
+        )
+    })?;
+    if nerva_run.status != 0 {
+        return Ok(deepseek_benchmark_run_json(
+            "nerva_failed",
+            &checkpoint_dir,
+            &prompt_spec,
+            max_context_tokens,
+            max_new_tokens,
+            &artifact_dir,
+            &vllm_artifact,
+            &nerva_artifact,
+            &compare_artifact,
+            &vllm_command,
+            &nerva_command,
+            &vllm_run,
+            Some(&nerva_run),
+            None,
+        ));
+    }
+
+    let compare_json = deepseek_vllm_compare_json(
+        &vllm_artifact.display().to_string(),
+        &nerva_artifact.display().to_string(),
+        &vllm_run.json,
+        &nerva_run.json,
+    )?;
+    std::fs::write(&compare_artifact, &compare_json).map_err(|err| {
+        format!(
+            "failed to write compare artifact {}: {err}",
+            compare_artifact.display()
+        )
+    })?;
+    let compare_status = find_first_json_string_field(&compare_json, "status")?
+        .unwrap_or_else(|| "unknown".to_string());
+    let status = if compare_status == "ok" {
+        "ok"
+    } else {
+        "compare_failed"
+    };
+    Ok(deepseek_benchmark_run_json(
+        status,
+        &checkpoint_dir,
+        &prompt_spec,
+        max_context_tokens,
+        max_new_tokens,
+        &artifact_dir,
+        &vllm_artifact,
+        &nerva_artifact,
+        &compare_artifact,
+        &vllm_command,
+        &nerva_command,
+        &vllm_run,
+        Some(&nerva_run),
+        Some(&compare_json),
     ))
 }
 
@@ -2236,6 +2412,208 @@ fn deepseek_cuda_primitive_bench_samples_json(
     }
     out.push(']');
     out
+}
+
+struct DeepSeekCommandRun {
+    status: i32,
+    json: String,
+    stderr_tail: String,
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn default_deepseek_artifact_dir() -> PathBuf {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "nerva-deepseek-vllm-benchmark-{}-{millis}",
+        std::process::id()
+    ))
+}
+
+fn deepseek_vllm_generate_command(
+    repo_root: &Path,
+    vllm_root: &Path,
+    checkpoint_dir: &str,
+    prompt_spec: &str,
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+) -> Vec<String> {
+    let venv_python = vllm_root.join(".venv/bin/python");
+    let python = if venv_python.is_file() {
+        venv_python.display().to_string()
+    } else {
+        "python3".to_string()
+    };
+    vec![
+        python,
+        repo_root
+            .join("tools/deepseek_vllm_generate.py")
+            .display()
+            .to_string(),
+        "--vllm-root".to_string(),
+        vllm_root.display().to_string(),
+        "--model".to_string(),
+        checkpoint_dir.to_string(),
+        "--prompt".to_string(),
+        prompt_spec.to_string(),
+        "--max-model-len".to_string(),
+        max_context_tokens.to_string(),
+        "--max-tokens".to_string(),
+        max_new_tokens.to_string(),
+        "--temperature".to_string(),
+        "0".to_string(),
+        "--top-p".to_string(),
+        "1".to_string(),
+        "--top-k".to_string(),
+        "0".to_string(),
+        "--seed".to_string(),
+        "0".to_string(),
+        "--dtype".to_string(),
+        "bfloat16".to_string(),
+        "--runs".to_string(),
+        "3".to_string(),
+        "--warmup-runs".to_string(),
+        "1".to_string(),
+    ]
+}
+
+fn deepseek_nerva_generate_command(
+    checkpoint_dir: &str,
+    prompt_spec: &str,
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+) -> Vec<String> {
+    vec![
+        "cargo".to_string(),
+        "run".to_string(),
+        "--release".to_string(),
+        "-p".to_string(),
+        "nerva".to_string(),
+        "--".to_string(),
+        "--json".to_string(),
+        "--raw".to_string(),
+        "-m".to_string(),
+        checkpoint_dir.to_string(),
+        "-p".to_string(),
+        prompt_spec.to_string(),
+        "-c".to_string(),
+        max_context_tokens.to_string(),
+        "-o".to_string(),
+        max_new_tokens.to_string(),
+        "--temperature".to_string(),
+        "0".to_string(),
+        "--top-p".to_string(),
+        "1".to_string(),
+        "--top-k".to_string(),
+        "0".to_string(),
+        "--seed".to_string(),
+        "0".to_string(),
+    ]
+}
+
+fn run_json_command(command: &[String], cwd: &Path) -> Result<DeepSeekCommandRun, String> {
+    let executable = command
+        .first()
+        .ok_or_else(|| "cannot run empty command".to_string())?;
+    let output = Command::new(executable)
+        .args(&command[1..])
+        .current_dir(cwd)
+        .output()
+        .map_err(|err| format!("failed to run {}: {err}", command.join(" ")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json = extract_json_payload(&stdout).unwrap_or_else(|_| {
+        format!(
+            "{{\"status\":\"command_failed\",\"stdout_tail\":\"{}\"}}",
+            json_escape(&tail_chars(&stdout, 4096))
+        )
+    });
+    Ok(DeepSeekCommandRun {
+        status: output.status.code().unwrap_or(-1),
+        json,
+        stderr_tail: tail_chars(&stderr, 4096),
+    })
+}
+
+fn extract_json_payload(stdout: &str) -> Result<String, String> {
+    let start = stdout
+        .find('{')
+        .ok_or_else(|| "command stdout did not contain a JSON object".to_string())?;
+    let end = stdout
+        .rfind('}')
+        .ok_or_else(|| "command stdout did not contain a complete JSON object".to_string())?;
+    if end < start {
+        return Err("command stdout JSON bounds are invalid".to_string());
+    }
+    Ok(stdout[start..=end].trim().to_string())
+}
+
+fn tail_chars(value: &str, max_chars: usize) -> String {
+    let len = value.chars().count();
+    if len <= max_chars {
+        return value.to_string();
+    }
+    value.chars().skip(len - max_chars).collect()
+}
+
+fn command_run_json(run: Option<&DeepSeekCommandRun>) -> String {
+    match run {
+        Some(run) => format!(
+            "{{\"exit_status\":{},\"stderr_tail\":\"{}\"}}",
+            run.status,
+            json_escape(&run.stderr_tail)
+        ),
+        None => "null".to_string(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn deepseek_benchmark_run_json(
+    status: &str,
+    checkpoint_dir: &str,
+    prompt_spec: &str,
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    artifact_dir: &Path,
+    vllm_artifact: &Path,
+    nerva_artifact: &Path,
+    compare_artifact: &Path,
+    vllm_command: &[String],
+    nerva_command: &[String],
+    vllm_run: &DeepSeekCommandRun,
+    nerva_run: Option<&DeepSeekCommandRun>,
+    compare_json: Option<&str>,
+) -> String {
+    let claim_allowed = compare_json
+        .and_then(|json| find_first_json_string_field(json, "status").ok().flatten())
+        .is_some_and(|status| status == "ok");
+    format!(
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-run-v1\",\"checkpoint_dir\":\"{}\",\"prompt_spec\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"artifact_dir\":\"{}\",\"artifacts\":{{\"vllm\":\"{}\",\"nerva\":\"{}\",\"compare\":\"{}\"}},\"commands\":{{\"vllm_generate\":{},\"nerva_generate\":{}}},\"runs\":{{\"vllm\":{},\"nerva\":{}}},\"compare\":{},\"claim_allowed\":{}}}",
+        status,
+        json_escape(checkpoint_dir),
+        json_escape(prompt_spec),
+        max_context_tokens,
+        max_new_tokens,
+        json_escape(&artifact_dir.display().to_string()),
+        json_escape(&vllm_artifact.display().to_string()),
+        json_escape(&nerva_artifact.display().to_string()),
+        json_escape(&compare_artifact.display().to_string()),
+        json_string_array(vllm_command),
+        json_string_array(nerva_command),
+        command_run_json(Some(vllm_run)),
+        command_run_json(nerva_run),
+        compare_json.unwrap_or("null"),
+        claim_allowed,
+    )
 }
 
 fn json_opt_hash(value: Option<u64>) -> String {

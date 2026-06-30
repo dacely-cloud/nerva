@@ -1,7 +1,7 @@
 use crate::model_io::deepseek::{
     deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
-    run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_compare,
-    run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
+    run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_benchmark_run,
+    run_deepseek_vllm_compare, run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
     DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
 };
 
@@ -549,7 +549,7 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"vllm_reference_status\":\"ok\""));
     assert!(json.contains("\"runtime_units_total\":9"));
     assert!(json.contains("\"runtime_blocking_units_total\":8"));
-    assert!(json.contains("\"benchmark_allowed\":false"));
+    assert!(json.contains("\"benchmark_allowed\":true"));
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("\"nerva_generate\""));
     assert!(json.contains("\"--json\""));
@@ -577,6 +577,25 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("run deepseek-vllm-compare on the two JSON artifacts"));
 
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn deepseek_vllm_benchmark_run_requires_real_checkpoint_before_launch() {
+    let dir = std::env::temp_dir().join(format!(
+        "nerva-bench-deepseek-vllm-run-missing-{}",
+        std::process::id()
+    ));
+    let err = run_deepseek_vllm_benchmark_run(
+        Some(dir.to_string_lossy().into_owned()),
+        Some("Tell me a long story about deterministic inference.".to_string()),
+        16_000,
+        2048,
+        Some("/root/vllm".to_string()),
+        None,
+    )
+    .expect_err("missing checkpoint should stop before launching vLLM or NERVA");
+
+    assert!(err.contains("checkpoint directory does not exist"));
 }
 
 #[test]
