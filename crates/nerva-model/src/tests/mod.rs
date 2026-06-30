@@ -1,6 +1,7 @@
 mod attention;
 mod causal_lm;
 mod causal_lm_bias;
+mod deepseek;
 mod hf;
 mod hf_contract;
 mod hf_head_dim;

@@ -98,15 +98,37 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
         WeightBlockRole::AttentionNorm
         | WeightBlockRole::QueryNorm
         | WeightBlockRole::KeyNorm
+        | WeightBlockRole::DeepSeekQALoraNorm
+        | WeightBlockRole::DeepSeekKvANorm
+        | WeightBlockRole::DeepSeekIndexerKeyNorm
         | WeightBlockRole::MlpNorm
         | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
         WeightBlockRole::QueryProjection => encoded_identity(entry.rows, entry.cols, -1.0),
         WeightBlockRole::KeyProjection
         | WeightBlockRole::ValueProjection
-        | WeightBlockRole::OutputProjection => encoded_identity(entry.rows, entry.cols, 1.0),
+        | WeightBlockRole::OutputProjection
+        | WeightBlockRole::DeepSeekQALoraProjection
+        | WeightBlockRole::DeepSeekQBProjection
+        | WeightBlockRole::DeepSeekKvAProjection
+        | WeightBlockRole::DeepSeekKvBProjection
+        | WeightBlockRole::DeepSeekIndexerQueryProjection
+        | WeightBlockRole::DeepSeekIndexerKeyProjection
+        | WeightBlockRole::DeepSeekIndexerWeightsProjection => {
+            encoded_identity(entry.rows, entry.cols, 1.0)
+        }
         WeightBlockRole::GateProjection
         | WeightBlockRole::UpProjection
         | WeightBlockRole::DownProjection
+        | WeightBlockRole::GateScaleInv
+        | WeightBlockRole::UpScaleInv
+        | WeightBlockRole::DownScaleInv
+        | WeightBlockRole::DeepSeekQALoraScaleInv
+        | WeightBlockRole::DeepSeekQBScaleInv
+        | WeightBlockRole::DeepSeekKvAScaleInv
+        | WeightBlockRole::DeepSeekKvBScaleInv
+        | WeightBlockRole::DeepSeekOutputScaleInv
+        | WeightBlockRole::DeepSeekIndexerQueryScaleInv
+        | WeightBlockRole::DeepSeekIndexerKeyScaleInv
         | WeightBlockRole::LinearConvProjection
         | WeightBlockRole::LinearQkvProjection
         | WeightBlockRole::LinearZProjection
@@ -117,18 +139,26 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
         | WeightBlockRole::LinearNorm
         | WeightBlockRole::LinearOutputProjection
         | WeightBlockRole::RouterProjection
+        | WeightBlockRole::RouterCorrectionBias
         | WeightBlockRole::ExpertGateProjection
         | WeightBlockRole::ExpertUpProjection
         | WeightBlockRole::ExpertGateUpProjection
         | WeightBlockRole::ExpertDownProjection
+        | WeightBlockRole::ExpertGateScaleInv
+        | WeightBlockRole::ExpertUpScaleInv
+        | WeightBlockRole::ExpertDownScaleInv
         | WeightBlockRole::SharedExpertGateProjection
         | WeightBlockRole::SharedExpertUpProjection
         | WeightBlockRole::SharedExpertDownProjection
+        | WeightBlockRole::SharedExpertGateScaleInv
+        | WeightBlockRole::SharedExpertUpScaleInv
+        | WeightBlockRole::SharedExpertDownScaleInv
         | WeightBlockRole::SharedExpertRouterProjection => vec![0; elements],
         WeightBlockRole::QueryBias
         | WeightBlockRole::KeyBias
         | WeightBlockRole::ValueBias
-        | WeightBlockRole::OutputBias => vec![0; elements],
+        | WeightBlockRole::OutputBias
+        | WeightBlockRole::DeepSeekIndexerKeyNormBias => vec![0; elements],
     }
 }
 

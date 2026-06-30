@@ -21,7 +21,7 @@ pub(crate) fn resolve_model_path(model: &str) -> Result<PathBuf, String> {
         return resolve_hf_snapshot(repo);
     }
     Err(format!(
-        "unknown model '{model}'. Use a checkpoint path, Hugging Face repo id, or a known alias like qwen3-8b, qwen3-moe, or qwen-coder"
+        "unknown model '{model}'. Use a checkpoint path, Hugging Face repo id, or a known alias like qwen3-8b, qwen3-moe, qwen-coder, deepseek-v3, or deepseek-v4-flash"
     ))
 }
 
@@ -69,6 +69,16 @@ pub(crate) fn model_alias(model: &str) -> Option<&'static str> {
         | "qwen3-coder-480b-a35b"
         | "qwen3-coder-480b-a35b-instruct"
         | "qwen/qwen3-coder-480b-a35b-instruct" => Some("Qwen/Qwen3-Coder-480B-A35B-Instruct"),
+        "deepseek" | "deepseek-v3" | "deepseek-v3-base" | "deepseek-ai/deepseek-v3" => {
+            Some("deepseek-ai/DeepSeek-V3")
+        }
+        "deepseek-v3.2" | "deepseek-v32" | "deepseek-ai/deepseek-v3.2" => {
+            Some("deepseek-ai/DeepSeek-V3.2")
+        }
+        "deepseek-v4" | "deepseek-v4-flash" | "deepseek-ai/deepseek-v4-flash" => {
+            Some("deepseek-ai/DeepSeek-V4-Flash")
+        }
+        "deepseek-v4-pro" | "deepseek-ai/deepseek-v4-pro" => Some("deepseek-ai/DeepSeek-V4-Pro"),
         "mixtral"
         | "mixtral-8x7b"
         | "mixtral-8x7b-instruct"
@@ -148,6 +158,19 @@ mod tests {
         assert_eq!(model_alias("qwen3-moe"), Some("Qwen/Qwen3-30B-A3B"));
         assert_eq!(model_alias("qwen3-235b-a22b"), Some("Qwen/Qwen3-235B-A22B"));
         assert_eq!(model_alias("qwen3.5-moe"), Some("Qwen/Qwen3.5-35B-A3B"));
+        assert_eq!(model_alias("deepseek-v3"), Some("deepseek-ai/DeepSeek-V3"));
+        assert_eq!(
+            model_alias("deepseek-v3.2"),
+            Some("deepseek-ai/DeepSeek-V3.2")
+        );
+        assert_eq!(
+            model_alias("deepseek-v4-flash"),
+            Some("deepseek-ai/DeepSeek-V4-Flash")
+        );
+        assert_eq!(
+            model_alias("deepseek-v4-pro"),
+            Some("deepseek-ai/DeepSeek-V4-Pro")
+        );
     }
 
     #[test]

@@ -8,6 +8,14 @@ const EXACT_RUNTIME_MOE_EXPERTS_MAX: usize = 256;
 const EXACT_RUNTIME_MOE_TOP_K_MAX: usize = 16;
 
 pub fn validate_exact_runtime_contract(metadata: &HfModelMetadata) -> Result<()> {
+    if metadata.architecture.is_deepseek() {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "HF architecture {} is recognized, but the exact runtime does not yet implement DeepSeek MLA attention, block-quantized FP8/FP4 weights, compressed KV/indexer state, and DeepSeek grouped MoE routing",
+                metadata.architecture.as_str()
+            ),
+        });
+    }
     validate_weight_layout_contract(metadata)?;
     validate_exact_runtime_attention(metadata)
 }
@@ -31,7 +39,15 @@ fn validate_supported_layout_architecture(metadata: &HfModelMetadata) -> Result<
         | HfArchitectureKind::Qwen3
         | HfArchitectureKind::Qwen3Moe
         | HfArchitectureKind::Qwen35
-        | HfArchitectureKind::Qwen35Moe => Ok(()),
+        | HfArchitectureKind::Qwen35Moe
+        | HfArchitectureKind::DeepSeekV3
+        | HfArchitectureKind::DeepSeekV32 => Ok(()),
+        HfArchitectureKind::DeepSeekV4 => Err(NervaError::InvalidArgument {
+            reason: format!(
+                "HF architecture {} is recognized, but the weight layout does not yet implement DeepSeek V4 compressed KV/indexer and pre-partitioned FP4/FP8 expert tensor mapping",
+                metadata.architecture.as_str()
+            ),
+        }),
         HfArchitectureKind::Gemma | HfArchitectureKind::Unknown => {
             Err(NervaError::InvalidArgument {
                 reason: format!(

@@ -11,7 +11,7 @@ use crate::hf::validate::validate_hf_metadata;
 
 pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
     let architecture = architecture_from_config(config_json)?;
-    validate_supported_rope_config(config_json)?;
+    validate_supported_rope_config(config_json, architecture)?;
     let decoder_config_json = decoder_config_json(config_json, architecture)?;
     let hidden_size = required_model_usize(config_json, decoder_config_json, "hidden_size")?;
     let num_hidden_layers =
@@ -21,7 +21,12 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
     let num_key_value_heads =
         optional_model_usize(config_json, decoder_config_json, "num_key_value_heads")?
             .unwrap_or(num_attention_heads);
-    let head_dim = parse_head_dim(decoder_config_json, hidden_size, num_attention_heads)?;
+    let head_dim = parse_head_dim(
+        decoder_config_json,
+        architecture,
+        hidden_size,
+        num_attention_heads,
+    )?;
     let explicit_intermediate_size =
         optional_model_usize(config_json, decoder_config_json, "intermediate_size")?;
     let vocab_size = required_model_usize(config_json, decoder_config_json, "vocab_size")?;
@@ -49,6 +54,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         architecture,
         num_hidden_layers,
     )?;
+    let deepseek_config = parse_deepseek_config(config_json, decoder_config_json, architecture)?;
     let moe_config = parse_moe_config(
         config_json,
         decoder_config_json,
@@ -103,6 +109,26 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         num_experts_per_tok: moe_config.num_experts_per_tok,
         decoder_sparse_step: moe_config.decoder_sparse_step,
         norm_topk_prob: moe_config.norm_topk_prob,
+        moe_first_k_dense_replace: moe_config.first_k_dense_replace,
+        moe_layer_freq: moe_config.moe_layer_freq,
+        num_expert_groups: moe_config.num_expert_groups,
+        topk_group: moe_config.topk_group,
+        topk_method: moe_config.topk_method,
+        scoring_func: moe_config.scoring_func,
+        routed_scaling_factor: moe_config.routed_scaling_factor,
+        q_lora_rank: deepseek_config.q_lora_rank,
+        kv_lora_rank: deepseek_config.kv_lora_rank,
+        qk_nope_head_dim: deepseek_config.qk_nope_head_dim,
+        qk_rope_head_dim: deepseek_config.qk_rope_head_dim,
+        v_head_dim: deepseek_config.v_head_dim,
+        index_topk: deepseek_config.index_topk,
+        index_n_heads: deepseek_config.index_n_heads,
+        index_head_dim: deepseek_config.index_head_dim,
+        compress_ratios: deepseek_config.compress_ratios,
+        hc_mult: deepseek_config.hc_mult,
+        hc_sinkhorn_iters: deepseek_config.hc_sinkhorn_iters,
+        hc_eps: deepseek_config.hc_eps,
+        num_nextn_predict_layers: deepseek_config.num_nextn_predict_layers,
         torch_dtype,
     })
 }
@@ -115,6 +141,29 @@ struct ParsedMoeConfig {
     num_experts_per_tok: Option<usize>,
     decoder_sparse_step: Option<usize>,
     norm_topk_prob: bool,
+    first_k_dense_replace: Option<usize>,
+    moe_layer_freq: Option<usize>,
+    num_expert_groups: Option<usize>,
+    topk_group: Option<usize>,
+    topk_method: Option<String>,
+    scoring_func: Option<String>,
+    routed_scaling_factor: Option<f32>,
+}
+
+struct ParsedDeepSeekConfig {
+    q_lora_rank: Option<usize>,
+    kv_lora_rank: Option<usize>,
+    qk_nope_head_dim: Option<usize>,
+    qk_rope_head_dim: Option<usize>,
+    v_head_dim: Option<usize>,
+    index_topk: Option<usize>,
+    index_n_heads: Option<usize>,
+    index_head_dim: Option<usize>,
+    compress_ratios: Vec<usize>,
+    hc_mult: Option<usize>,
+    hc_sinkhorn_iters: Option<usize>,
+    hc_eps: Option<f32>,
+    num_nextn_predict_layers: Option<usize>,
 }
 
 struct ParsedLinearAttentionConfig {
@@ -190,6 +239,18 @@ fn optional_model_bool(
     }
 }
 
+fn optional_model_f32(
+    root_json: &str,
+    decoder_json: &str,
+    key: &'static str,
+) -> Result<Option<f32>> {
+    match optional_f32(decoder_json, key)? {
+        Some(value) => Ok(Some(value)),
+        None if !std::ptr::eq(root_json, decoder_json) => optional_f32(root_json, key),
+        None => Ok(None),
+    }
+}
+
 fn optional_model_string(
     root_json: &str,
     decoder_json: &str,
@@ -220,11 +281,24 @@ fn parse_rms_norm_eps(root_json: &str, decoder_json: &str) -> Result<Option<f32>
 
 fn parse_head_dim(
     config_json: &str,
+    architecture: HfArchitectureKind,
     hidden_size: usize,
     num_attention_heads: usize,
 ) -> Result<usize> {
     if let Some(head_dim) = optional_usize(config_json, "head_dim")? {
         return Ok(head_dim);
+    }
+    if architecture.is_deepseek() {
+        let qk_nope_head_dim = optional_usize(config_json, "qk_nope_head_dim")?;
+        let qk_rope_head_dim = optional_usize(config_json, "qk_rope_head_dim")?;
+        if let (Some(nope), Some(rope)) = (qk_nope_head_dim, qk_rope_head_dim) {
+            return nope
+                .checked_add(rope)
+                .ok_or_else(|| NervaError::AllocationFailed {
+                    bytes: nope,
+                    reason: "DeepSeek qk head dimension overflow".to_string(),
+                });
+        }
     }
     if num_attention_heads == 0 || !hidden_size.is_multiple_of(num_attention_heads) {
         return Err(NervaError::InvalidArgument {
@@ -256,7 +330,13 @@ fn parse_rope_theta(root_json: &str, decoder_json: &str) -> Result<Option<f32>> 
     Ok(None)
 }
 
-fn validate_supported_rope_config(config_json: &str) -> Result<()> {
+fn validate_supported_rope_config(
+    config_json: &str,
+    architecture: HfArchitectureKind,
+) -> Result<()> {
+    if architecture.is_deepseek() {
+        return Ok(());
+    }
     validate_default_rope_object(config_json, "rope_parameters")?;
     validate_default_rope_object(config_json, "rope_scaling")
 }
@@ -328,7 +408,10 @@ fn parse_moe_config(
 ) -> Result<ParsedMoeConfig> {
     let num_experts = match optional_model_usize(root_json, decoder_json, "num_experts")? {
         Some(value) => Some(value),
-        None => optional_model_usize(root_json, decoder_json, "num_local_experts")?,
+        None => match optional_model_usize(root_json, decoder_json, "num_local_experts")? {
+            Some(value) => Some(value),
+            None => optional_model_usize(root_json, decoder_json, "n_routed_experts")?,
+        },
     };
     let num_experts_per_tok = optional_model_usize(root_json, decoder_json, "num_experts_per_tok")?;
     let moe_intermediate_size =
@@ -337,10 +420,34 @@ fn parse_moe_config(
             None if architecture == HfArchitectureKind::MixtralMoe => intermediate_size,
             None => None,
         };
+    let n_shared_experts = optional_model_usize(root_json, decoder_json, "n_shared_experts")?;
     let shared_expert_intermediate_size =
-        optional_model_usize(root_json, decoder_json, "shared_expert_intermediate_size")?
-            .unwrap_or(0);
+        match optional_model_usize(root_json, decoder_json, "shared_expert_intermediate_size")? {
+            Some(value) => value,
+            None => match (n_shared_experts, moe_intermediate_size) {
+                (Some(experts), Some(intermediate)) => experts
+                    .checked_mul(intermediate)
+                    .ok_or_else(|| NervaError::AllocationFailed {
+                        bytes: intermediate,
+                        reason: "HF MoE shared expert intermediate overflow".to_string(),
+                    })?,
+                _ => 0,
+            },
+        };
     let decoder_sparse_step = optional_model_usize(root_json, decoder_json, "decoder_sparse_step")?;
+    let first_k_dense_replace =
+        optional_model_usize(root_json, decoder_json, "first_k_dense_replace")?;
+    let moe_layer_freq = optional_model_usize(root_json, decoder_json, "moe_layer_freq")?;
+    let num_expert_groups =
+        match optional_model_usize(root_json, decoder_json, "num_expert_groups")? {
+            Some(value) => Some(value),
+            None => optional_model_usize(root_json, decoder_json, "n_group")?,
+        };
+    let topk_group = optional_model_usize(root_json, decoder_json, "topk_group")?;
+    let topk_method = optional_model_string(root_json, decoder_json, "topk_method")?;
+    let scoring_func = optional_model_string(root_json, decoder_json, "scoring_func")?;
+    let routed_scaling_factor =
+        optional_model_f32(root_json, decoder_json, "routed_scaling_factor")?;
     let norm_topk_prob =
         optional_model_bool(root_json, decoder_json, "norm_topk_prob")?.unwrap_or(false);
     let mlp_only_layers =
@@ -353,6 +460,7 @@ fn parse_moe_config(
             | HfArchitectureKind::Qwen3Moe
             | HfArchitectureKind::Qwen35Moe
     );
+    let is_moe_architecture = is_moe_architecture || architecture.is_deepseek();
     let has_moe_fields = num_experts.unwrap_or(0) > 0
         || num_experts_per_tok.is_some()
         || moe_intermediate_size.is_some();
@@ -365,6 +473,13 @@ fn parse_moe_config(
             num_experts_per_tok: None,
             decoder_sparse_step: None,
             norm_topk_prob,
+            first_k_dense_replace: None,
+            moe_layer_freq: None,
+            num_expert_groups,
+            topk_group,
+            topk_method,
+            scoring_func,
+            routed_scaling_factor,
         });
     }
 
@@ -375,6 +490,12 @@ fn parse_moe_config(
     if decoder_sparse_step == 0 {
         return Err(NervaError::InvalidArgument {
             reason: "HF MoE decoder_sparse_step must be non-zero".to_string(),
+        });
+    }
+    let resolved_moe_layer_freq = moe_layer_freq.unwrap_or(1);
+    if resolved_moe_layer_freq == 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: "HF MoE moe_layer_freq must be non-zero".to_string(),
         });
     }
     if num_experts_per_tok > num_experts {
@@ -392,15 +513,28 @@ fn parse_moe_config(
         }
     }
 
-    let mlp_layer_types = (0..num_hidden_layers)
-        .map(|layer| {
-            if mlp_only_layers.contains(&layer) || (layer + 1) % decoder_sparse_step != 0 {
-                HfMlpLayerKind::Dense
-            } else {
-                HfMlpLayerKind::SparseMoe
-            }
-        })
-        .collect();
+    let mlp_layer_types = if architecture.is_deepseek() {
+        let first_dense = first_k_dense_replace.unwrap_or(0);
+        (0..num_hidden_layers)
+            .map(|layer| {
+                if layer >= first_dense && layer % resolved_moe_layer_freq == 0 {
+                    HfMlpLayerKind::SparseMoe
+                } else {
+                    HfMlpLayerKind::Dense
+                }
+            })
+            .collect()
+    } else {
+        (0..num_hidden_layers)
+            .map(|layer| {
+                if mlp_only_layers.contains(&layer) || (layer + 1) % decoder_sparse_step != 0 {
+                    HfMlpLayerKind::Dense
+                } else {
+                    HfMlpLayerKind::SparseMoe
+                }
+            })
+            .collect()
+    };
     Ok(ParsedMoeConfig {
         mlp_layer_types,
         moe_intermediate_size: Some(moe_intermediate_size),
@@ -410,6 +544,75 @@ fn parse_moe_config(
         num_experts_per_tok: Some(num_experts_per_tok),
         decoder_sparse_step: Some(decoder_sparse_step),
         norm_topk_prob,
+        first_k_dense_replace,
+        moe_layer_freq: architecture
+            .is_deepseek()
+            .then_some(resolved_moe_layer_freq)
+            .or(moe_layer_freq),
+        num_expert_groups,
+        topk_group,
+        topk_method,
+        scoring_func,
+        routed_scaling_factor,
+    })
+}
+
+fn parse_deepseek_config(
+    root_json: &str,
+    decoder_json: &str,
+    architecture: HfArchitectureKind,
+) -> Result<ParsedDeepSeekConfig> {
+    let q_lora_rank = optional_model_usize(root_json, decoder_json, "q_lora_rank")?;
+    let kv_lora_rank = optional_model_usize(root_json, decoder_json, "kv_lora_rank")?;
+    let qk_rope_head_dim = optional_model_usize(root_json, decoder_json, "qk_rope_head_dim")?;
+    let explicit_qk_nope_head_dim =
+        optional_model_usize(root_json, decoder_json, "qk_nope_head_dim")?;
+    let explicit_v_head_dim = optional_model_usize(root_json, decoder_json, "v_head_dim")?;
+    let explicit_head_dim = optional_model_usize(root_json, decoder_json, "head_dim")?;
+    let qk_nope_head_dim = match (
+        explicit_qk_nope_head_dim,
+        explicit_head_dim,
+        qk_rope_head_dim,
+    ) {
+        (Some(value), _, _) => Some(value),
+        (None, Some(head_dim), Some(rope)) if architecture == HfArchitectureKind::DeepSeekV4 => {
+            Some(
+                head_dim
+                    .checked_sub(rope)
+                    .ok_or_else(|| NervaError::InvalidArgument {
+                        reason: "DeepSeek V4 head_dim must be at least qk_rope_head_dim"
+                            .to_string(),
+                    })?,
+            )
+        }
+        _ => None,
+    };
+    let v_head_dim = explicit_v_head_dim.or_else(|| {
+        architecture
+            .is_deepseek()
+            .then_some(explicit_head_dim)
+            .flatten()
+    });
+
+    Ok(ParsedDeepSeekConfig {
+        q_lora_rank,
+        kv_lora_rank,
+        qk_nope_head_dim,
+        qk_rope_head_dim,
+        v_head_dim,
+        index_topk: optional_model_usize(root_json, decoder_json, "index_topk")?,
+        index_n_heads: optional_model_usize(root_json, decoder_json, "index_n_heads")?,
+        index_head_dim: optional_model_usize(root_json, decoder_json, "index_head_dim")?,
+        compress_ratios: optional_model_usize_array(root_json, decoder_json, "compress_ratios")?
+            .unwrap_or_default(),
+        hc_mult: optional_model_usize(root_json, decoder_json, "hc_mult")?,
+        hc_sinkhorn_iters: optional_model_usize(root_json, decoder_json, "hc_sinkhorn_iters")?,
+        hc_eps: optional_model_f32(root_json, decoder_json, "hc_eps")?,
+        num_nextn_predict_layers: optional_model_usize(
+            root_json,
+            decoder_json,
+            "num_nextn_predict_layers",
+        )?,
     })
 }
 

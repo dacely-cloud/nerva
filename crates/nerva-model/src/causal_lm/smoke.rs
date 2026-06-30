@@ -164,17 +164,35 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Result<Vec<u16>> {
         WeightBlockRole::AttentionNorm
         | WeightBlockRole::QueryNorm
         | WeightBlockRole::KeyNorm
+        | WeightBlockRole::DeepSeekQALoraNorm
+        | WeightBlockRole::DeepSeekKvANorm
+        | WeightBlockRole::DeepSeekIndexerKeyNorm
         | WeightBlockRole::LinearNorm
         | WeightBlockRole::MlpNorm
         | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
         WeightBlockRole::QueryBias
         | WeightBlockRole::KeyBias
         | WeightBlockRole::ValueBias
-        | WeightBlockRole::OutputBias => vec![0; elements],
+        | WeightBlockRole::OutputBias
+        | WeightBlockRole::DeepSeekIndexerKeyNormBias => vec![0; elements],
         WeightBlockRole::QueryProjection
         | WeightBlockRole::KeyProjection
         | WeightBlockRole::ValueProjection
         | WeightBlockRole::OutputProjection
+        | WeightBlockRole::DeepSeekQALoraProjection
+        | WeightBlockRole::DeepSeekQALoraScaleInv
+        | WeightBlockRole::DeepSeekQBProjection
+        | WeightBlockRole::DeepSeekQBScaleInv
+        | WeightBlockRole::DeepSeekKvAProjection
+        | WeightBlockRole::DeepSeekKvAScaleInv
+        | WeightBlockRole::DeepSeekKvBProjection
+        | WeightBlockRole::DeepSeekKvBScaleInv
+        | WeightBlockRole::DeepSeekOutputScaleInv
+        | WeightBlockRole::DeepSeekIndexerQueryProjection
+        | WeightBlockRole::DeepSeekIndexerQueryScaleInv
+        | WeightBlockRole::DeepSeekIndexerKeyProjection
+        | WeightBlockRole::DeepSeekIndexerKeyScaleInv
+        | WeightBlockRole::DeepSeekIndexerWeightsProjection
         | WeightBlockRole::LinearConvProjection
         | WeightBlockRole::LinearQkvProjection
         | WeightBlockRole::LinearZProjection
@@ -186,14 +204,24 @@ fn values_for_entry(entry: &HfTensorManifestEntry) -> Result<Vec<u16>> {
         | WeightBlockRole::GateProjection
         | WeightBlockRole::UpProjection
         | WeightBlockRole::DownProjection
+        | WeightBlockRole::GateScaleInv
+        | WeightBlockRole::UpScaleInv
+        | WeightBlockRole::DownScaleInv
         | WeightBlockRole::RouterProjection
+        | WeightBlockRole::RouterCorrectionBias
         | WeightBlockRole::ExpertGateProjection
         | WeightBlockRole::ExpertUpProjection
         | WeightBlockRole::ExpertGateUpProjection
         | WeightBlockRole::ExpertDownProjection
+        | WeightBlockRole::ExpertGateScaleInv
+        | WeightBlockRole::ExpertUpScaleInv
+        | WeightBlockRole::ExpertDownScaleInv
         | WeightBlockRole::SharedExpertGateProjection
         | WeightBlockRole::SharedExpertUpProjection
         | WeightBlockRole::SharedExpertDownProjection
+        | WeightBlockRole::SharedExpertGateScaleInv
+        | WeightBlockRole::SharedExpertUpScaleInv
+        | WeightBlockRole::SharedExpertDownScaleInv
         | WeightBlockRole::SharedExpertRouterProjection => vec![0; elements],
     };
     if values.len() == elements {

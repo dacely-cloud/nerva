@@ -10,6 +10,9 @@ pub enum HfArchitectureKind {
     Qwen3Moe,
     Qwen35,
     Qwen35Moe,
+    DeepSeekV3,
+    DeepSeekV32,
+    DeepSeekV4,
     Unknown,
 }
 
@@ -26,14 +29,42 @@ impl HfArchitectureKind {
             Self::Qwen3Moe => "qwen3_moe",
             Self::Qwen35 => "qwen3.5",
             Self::Qwen35Moe => "qwen3.5_moe",
+            Self::DeepSeekV3 => "deepseek_v3",
+            Self::DeepSeekV32 => "deepseek_v3.2",
+            Self::DeepSeekV4 => "deepseek_v4",
             Self::Unknown => "unknown",
         }
+    }
+
+    pub const fn is_deepseek(self) -> bool {
+        matches!(
+            self,
+            Self::DeepSeekV3 | Self::DeepSeekV32 | Self::DeepSeekV4
+        )
     }
 }
 
 pub(crate) fn architecture_kind_from_str(value: &str) -> HfArchitectureKind {
     let lower = value.to_ascii_lowercase();
-    if lower.contains("llama") {
+    if lower.contains("deepseekv32")
+        || lower.contains("deepseek_v32")
+        || lower.contains("deepseek-v32")
+        || lower.contains("deepseekv3.2")
+        || lower.contains("deepseek_v3.2")
+        || lower.contains("deepseek-v3.2")
+    {
+        HfArchitectureKind::DeepSeekV32
+    } else if lower.contains("deepseekv4")
+        || lower.contains("deepseek_v4")
+        || lower.contains("deepseek-v4")
+    {
+        HfArchitectureKind::DeepSeekV4
+    } else if lower.contains("deepseekv3")
+        || lower.contains("deepseek_v3")
+        || lower.contains("deepseek-v3")
+    {
+        HfArchitectureKind::DeepSeekV3
+    } else if lower.contains("llama") {
         HfArchitectureKind::Llama
     } else if lower.contains("mixtral") {
         HfArchitectureKind::MixtralMoe

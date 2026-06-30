@@ -1,7 +1,9 @@
 use std::process::ExitCode;
 
 use crate::cli::exit;
-use crate::model_io::config::{run_layout_probe, run_manifest_probe, run_metadata_probe};
+use crate::model_io::config::{
+    run_layout_probe, run_manifest_coverage_probe, run_manifest_probe, run_metadata_probe,
+};
 use crate::model_io::resident::{
     run_hotset_probe, run_resident_shard_probe, run_resident_weight_probe,
     run_weight_execution_probe,
@@ -17,6 +19,10 @@ pub(crate) fn dispatch(
         Some("metadata") => Some(exit::print_json_result(run_metadata_probe(args.next()))),
         Some("layout") => Some(exit::print_json_result(run_layout_probe(args.next()))),
         Some("manifest") => Some(exit::print_json_result(run_manifest_probe(args.next()))),
+        Some("manifest-coverage") => Some(exit::print_json_result(run_manifest_coverage_probe(
+            args.next(),
+            args.next(),
+        ))),
         Some("safetensors") => Some(exit::print_json_result(run_safetensors_probe(
             args.next(),
             args.next(),

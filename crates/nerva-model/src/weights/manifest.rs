@@ -185,6 +185,19 @@ fn push_manifest_entries_for_block(
             _ => {}
         }
     }
+    if uses_deepseek_v3_expert_tensors(architecture) {
+        match block.role {
+            WeightBlockRole::ExpertGateProjection
+            | WeightBlockRole::ExpertUpProjection
+            | WeightBlockRole::ExpertDownProjection
+            | WeightBlockRole::ExpertGateScaleInv
+            | WeightBlockRole::ExpertUpScaleInv
+            | WeightBlockRole::ExpertDownScaleInv => {
+                return push_deepseek_v3_expert_entries(entries, architecture, block);
+            }
+            _ => {}
+        }
+    }
     let name = hf_tensor_name(architecture, block.role, block.layer)?;
     entries.push(HfTensorManifestEntry::from_block(block, name));
     Ok(())
@@ -197,6 +210,41 @@ fn uses_split_expert_tensors(architecture: HfArchitectureKind) -> bool {
             | HfArchitectureKind::Qwen2Moe
             | HfArchitectureKind::Qwen3Moe
     )
+}
+
+fn uses_deepseek_v3_expert_tensors(architecture: HfArchitectureKind) -> bool {
+    matches!(
+        architecture,
+        HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32
+    )
+}
+
+fn push_deepseek_v3_expert_entries(
+    entries: &mut Vec<HfTensorManifestEntry>,
+    architecture: HfArchitectureKind,
+    block: WeightBlockSpec,
+) -> Result<()> {
+    let experts = block.depth.ok_or_else(|| NervaError::InvalidArgument {
+        reason: "DeepSeek V3 expert block is missing depth".to_string(),
+    })?;
+    for expert in 0..experts {
+        let expert = u32::try_from(expert).map_err(|_| NervaError::InvalidArgument {
+            reason: "DeepSeek V3 expert index does not fit u32".to_string(),
+        })?;
+        let name = hf_expert_tensor_name(architecture, block.role, block.layer, expert)?;
+        entries.push(HfTensorManifestEntry::from_parts(
+            name,
+            block.role,
+            block.layer,
+            Some(expert),
+            block.rows,
+            block.cols,
+            2,
+            block.dtype,
+            block.tier,
+        )?);
+    }
+    Ok(())
 }
 
 fn push_qwen_moe_expert_gate_up_entries(

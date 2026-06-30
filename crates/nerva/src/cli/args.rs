@@ -315,17 +315,10 @@ mod tests {
 
     #[test]
     fn rt_far_pages_enable_rt() {
-        let args = [
-            "-m",
-            "qwen3-8b",
-            "-p",
-            "hello",
-            "--rt-far-pages",
-            "14",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+        let args = ["-m", "qwen3-8b", "-p", "hello", "--rt-far-pages", "14"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
         let parsed = parse_args(&args).unwrap();
         assert!(parsed.rt);
         assert_eq!(parsed.rt_far_pages, Some(14));

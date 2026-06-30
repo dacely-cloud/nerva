@@ -31,6 +31,23 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         metadata.num_experts_per_tok.unwrap_or_default() as u64,
         metadata.decoder_sparse_step.unwrap_or_default() as u64,
         u64::from(metadata.norm_topk_prob),
+        metadata.moe_first_k_dense_replace.unwrap_or_default() as u64,
+        metadata.moe_layer_freq.unwrap_or_default() as u64,
+        metadata.num_expert_groups.unwrap_or_default() as u64,
+        metadata.topk_group.unwrap_or_default() as u64,
+        metadata.routed_scaling_factor.unwrap_or_default().to_bits() as u64,
+        metadata.q_lora_rank.unwrap_or_default() as u64,
+        metadata.kv_lora_rank.unwrap_or_default() as u64,
+        metadata.qk_nope_head_dim.unwrap_or_default() as u64,
+        metadata.qk_rope_head_dim.unwrap_or_default() as u64,
+        metadata.v_head_dim.unwrap_or_default() as u64,
+        metadata.index_topk.unwrap_or_default() as u64,
+        metadata.index_n_heads.unwrap_or_default() as u64,
+        metadata.index_head_dim.unwrap_or_default() as u64,
+        metadata.hc_mult.unwrap_or_default() as u64,
+        metadata.hc_sinkhorn_iters.unwrap_or_default() as u64,
+        metadata.hc_eps.unwrap_or_default().to_bits() as u64,
+        metadata.num_nextn_predict_layers.unwrap_or_default() as u64,
     ] {
         for byte in value.to_le_bytes() {
             hash ^= u64::from(byte);
@@ -49,6 +66,24 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
     }
     if let Some(dtype) = metadata.torch_dtype {
         for byte in dtype_to_str(dtype).as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    for value in &metadata.compress_ratios {
+        for byte in (*value as u64).to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    for value in [
+        metadata.topk_method.as_deref(),
+        metadata.scoring_func.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for byte in value.as_bytes() {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }

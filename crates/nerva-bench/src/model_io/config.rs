@@ -44,6 +44,36 @@ pub(crate) fn run_manifest_probe(config_path: Option<String>) -> Result<String, 
     }
 }
 
+pub(crate) fn run_manifest_coverage_probe(
+    config_path: Option<String>,
+    index_path: Option<String>,
+) -> Result<String, String> {
+    let config_path = config_path.ok_or_else(|| {
+        "manifest-coverage requires config.json and model.safetensors.index.json".to_string()
+    })?;
+    let index_path = index_path.ok_or_else(|| {
+        "manifest-coverage requires config.json and model.safetensors.index.json".to_string()
+    })?;
+    let config = std::fs::read_to_string(&config_path)
+        .map_err(|err| format!("failed to read {config_path}: {err}"))?;
+    let index = std::fs::read_to_string(&index_path)
+        .map_err(|err| format!("failed to read {index_path}: {err}"))?;
+    let manifest = load_manifest_from_config(&config)?;
+    let shards =
+        nerva_model::weights::safetensors::planner::required_safetensors_shards_for_manifest(
+            &index, &manifest,
+        )
+        .map_err(|err| format!("HF safetensors index coverage failed: {err:?}"))?;
+    Ok(format!(
+        "{{\"status\":\"ok\",\"architecture\":\"{}\",\"manifest_entries\":{},\"required_shards\":{},\"total_weight_bytes\":{},\"manifest_hash\":{}}}",
+        manifest.architecture.as_str(),
+        manifest.entries.len(),
+        shards.len(),
+        manifest.total_weight_bytes,
+        manifest.manifest_hash,
+    ))
+}
+
 pub(crate) fn load_manifest_from_optional_config(
     config_path: Option<String>,
 ) -> Result<nerva_model::weights::manifest::HfTensorManifest, String> {

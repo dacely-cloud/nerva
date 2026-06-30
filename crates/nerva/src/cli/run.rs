@@ -259,10 +259,7 @@ fn generate_json_output(
     let rt_page_tokens = output.stream.create.experimental_rt_page_tokens;
     let rt_total_pages = output.stream.create.experimental_rt_pages;
     let rt_local_pages = ceil_div_u32(
-        output
-            .stream
-            .create
-            .experimental_rt_local_window_tokens,
+        output.stream.create.experimental_rt_local_window_tokens,
         rt_page_tokens,
     );
     let rt_sink_pages = ceil_div_u32(

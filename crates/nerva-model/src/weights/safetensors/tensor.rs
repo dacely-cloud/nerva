@@ -75,8 +75,11 @@ pub(crate) fn safetensors_file_data_start(header_json: &str) -> Result<usize> {
 
 pub(crate) fn safetensors_dtype(dtype: DType) -> Result<&'static str> {
     match dtype {
+        DType::I8 => Ok("I8"),
         DType::F16 => Ok("F16"),
         DType::BF16 => Ok("BF16"),
+        DType::F8E4M3 => Ok("F8_E4M3"),
+        DType::F8E8M0 => Ok("F8_E8M0"),
         DType::F32 => Ok("F32"),
         _ => Err(NervaError::InvalidArgument {
             reason: format!(
@@ -134,5 +137,44 @@ pub(crate) fn push_safetensors_shape_json(entry: &HfTensorManifestEntry, out: &m
             out.push(']');
         }
         _ => out.push_str("[]"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nerva_core::types::dtype::DType;
+    use nerva_core::types::memory::tier::MemoryTier;
+
+    use super::{safetensors_dtype, validate_safetensors_tensor_header};
+    use crate::weights::layout::entry::WeightBlockRole;
+    use crate::weights::manifest::HfTensorManifestEntry;
+
+    #[test]
+    fn deepseek_storage_dtypes_map_to_safetensors_headers() {
+        for (dtype, header_dtype) in [
+            (DType::I8, "I8"),
+            (DType::F8E4M3, "F8_E4M3"),
+            (DType::F8E8M0, "F8_E8M0"),
+        ] {
+            assert_eq!(safetensors_dtype(dtype).unwrap(), header_dtype);
+            let entry = HfTensorManifestEntry {
+                name: "layers.0.ffn.experts.0.w1.weight".to_string(),
+                role: WeightBlockRole::ExpertGateProjection,
+                layer: Some(0),
+                expert: Some(0),
+                rows: 2,
+                cols: 3,
+                depth: None,
+                rank: 2,
+                elements: 6,
+                bytes: 6,
+                dtype,
+                tier: MemoryTier::Dram,
+            };
+            let header =
+                format!(r#"{{"dtype":"{header_dtype}","shape":[2,3],"data_offsets":[0,6]}}"#);
+
+            validate_safetensors_tensor_header(&header, &entry).unwrap();
+        }
     }
 }
