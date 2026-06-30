@@ -475,6 +475,70 @@ typedef struct NervaCudaHfDecodeSequenceResult {
   uint64_t hot_path_allocations;
 } NervaCudaHfDecodeSequenceResult;
 
+typedef struct NervaCudaHfDecodeSequenceLayoutPlanRequest {
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint32_t vocab_size;
+  uint32_t layer_count;
+  uint32_t layer_index;
+  const NervaCudaHfDecodeChainLayer *layers;
+} NervaCudaHfDecodeSequenceLayoutPlanRequest;
+
+typedef struct NervaCudaHfDecodeSequenceLayoutPlanResult {
+  int32_t status;
+  uint32_t hidden;
+  uint32_t heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t intermediate;
+  uint32_t vocab_size;
+  uint32_t layer_count;
+  uint32_t layer_index;
+  uint32_t attention_kind;
+  uint32_t deepseek_mode;
+  uint32_t deepseek_flags;
+  uint64_t resident_weight_bytes;
+  uint64_t layout_bytes;
+  uint64_t rms_attn;
+  uint64_t rms_mlp;
+  uint64_t w_q;
+  uint64_t q_norm;
+  uint64_t w_k;
+  uint64_t k_norm;
+  uint64_t w_v;
+  uint64_t w_o;
+  uint64_t w_router;
+  uint64_t w_expert_gate_up;
+  uint64_t w_expert_down;
+  uint64_t deepseek_q_a_scale;
+  uint64_t deepseek_q_b;
+  uint64_t deepseek_q_b_scale;
+  uint64_t deepseek_kv_a_scale;
+  uint64_t deepseek_kv_b_scale;
+  uint64_t deepseek_o_a_scale;
+  uint64_t deepseek_o_b;
+  uint64_t deepseek_o_b_scale;
+  uint64_t deepseek_attention_sink;
+  uint64_t deepseek_indexer_q;
+  uint64_t deepseek_indexer_q_scale;
+  uint64_t deepseek_indexer_k;
+  uint64_t deepseek_indexer_k_scale;
+  uint64_t deepseek_indexer_k_norm;
+  uint64_t deepseek_indexer_k_norm_bias;
+  uint64_t deepseek_indexer_weights;
+  uint64_t deepseek_compressor_ape;
+  uint64_t deepseek_compressor_wkv;
+  uint64_t deepseek_compressor_wgate;
+  uint64_t deepseek_compressor_norm;
+  uint64_t deepseek_indexer_compressor_ape;
+  uint64_t deepseek_indexer_compressor_wkv;
+  uint64_t deepseek_indexer_compressor_wgate;
+  uint64_t deepseek_indexer_compressor_norm;
+} NervaCudaHfDecodeSequenceLayoutPlanResult;
+
 typedef struct NervaCudaHfDecodeSequenceSession NervaCudaHfDecodeSequenceSession;
 
 typedef struct NervaCudaHfDecodeSequenceSessionCreateRequest {
@@ -1585,6 +1649,9 @@ int nerva_cuda_hf_decode_chain_u16(const NervaCudaHfDecodeChainRequest *request,
 int nerva_cuda_hf_decode_sequence_u16(
     const NervaCudaHfDecodeSequenceRequest *request,
     NervaCudaHfDecodeSequenceResult *out);
+int nerva_cuda_hf_decode_sequence_plan_layout(
+    const NervaCudaHfDecodeSequenceLayoutPlanRequest *request,
+    NervaCudaHfDecodeSequenceLayoutPlanResult *out);
 int nerva_cuda_hf_decode_sequence_session_create(
     const NervaCudaHfDecodeSequenceSessionCreateRequest *request,
     NervaCudaHfDecodeSequenceSessionCreateResult *out,

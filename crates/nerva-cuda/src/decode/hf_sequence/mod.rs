@@ -1,6 +1,7 @@
 pub(crate) mod ffi;
 pub mod footprint;
 mod footprint_layers;
+pub mod layout_plan;
 pub mod request;
 pub mod session;
 mod status;

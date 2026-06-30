@@ -3,7 +3,7 @@ use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
 
 const U16_BYTES: u64 = 2;
 const F32_BYTES: u64 = 4;
-const LAYER_LAYOUT_BYTES: u64 = 376;
+const LAYER_LAYOUT_BYTES: u64 = 568;
 const TOKEN_SLOT_BYTES: u64 = 40;
 const DESCRIPTOR_STREAM_STAGING_BYTES: u64 = 64 * 1024 * 1024;
 const KV_CACHE_BLOCK_TOKENS: u64 = 16;

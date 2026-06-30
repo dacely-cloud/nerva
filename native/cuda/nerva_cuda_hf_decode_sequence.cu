@@ -45,6 +45,111 @@ namespace {
 
 #include "hf_decode_sequence/session_state.cuh"
 
+extern "C" int nerva_cuda_hf_decode_sequence_plan_layout(
+    const NervaCudaHfDecodeSequenceLayoutPlanRequest *request,
+    NervaCudaHfDecodeSequenceLayoutPlanResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  if (request == nullptr || request->layers == nullptr ||
+      request->layer_count == 0 || request->layer_index >= request->layer_count ||
+      request->hidden == 0 || request->heads == 0 || request->kv_heads == 0 ||
+      request->head_dim == 0 || request->intermediate == 0 ||
+      request->vocab_size == 0 || request->kv_heads > request->heads ||
+      request->heads % request->kv_heads != 0) {
+    return -1;
+  }
+  for (uint32_t index = 0; index < request->layer_count; ++index) {
+    if (!valid_layer(request->layers[index], false)) {
+      return -1;
+    }
+  }
+
+  const uint64_t hidden = request->hidden;
+  const uint64_t attention_hidden =
+      static_cast<uint64_t>(request->heads) * request->head_dim;
+  const uint64_t kv_hidden =
+      static_cast<uint64_t>(request->kv_heads) * request->head_dim;
+  const uint64_t intermediate = request->intermediate;
+  const uint64_t vocab_size = request->vocab_size;
+  std::vector<SequenceLayerLayout> layouts(request->layer_count);
+  uint64_t elements = 0;
+  push(elements, vocab_size * hidden);
+  push(elements, hidden);
+  push(elements, hidden);
+  pack_deepseek_static(elements, request->layers, request->layer_count, hidden);
+  for (uint32_t index = 0; index < request->layer_count; ++index) {
+    pack_layer(layouts[index], elements, request->layers[index], hidden,
+               attention_hidden, kv_hidden, request->head_dim, intermediate,
+               vocab_size);
+  }
+  uint64_t linear_gdn_conv_state_elements = 0;
+  uint64_t linear_gdn_recurrent_state_elements = 0;
+  assign_linear_gdn_state_offsets(layouts, &linear_gdn_conv_state_elements,
+                                  &linear_gdn_recurrent_state_elements);
+  push(elements, hidden);
+  push(elements, vocab_size * hidden);
+
+  const SequenceLayerLayout &layout = layouts[request->layer_index];
+  out->status = 0;
+  out->hidden = request->hidden;
+  out->heads = request->heads;
+  out->kv_heads = request->kv_heads;
+  out->head_dim = request->head_dim;
+  out->intermediate = request->intermediate;
+  out->vocab_size = request->vocab_size;
+  out->layer_count = request->layer_count;
+  out->layer_index = request->layer_index;
+  out->attention_kind = layout.attention_kind;
+  out->deepseek_mode = layout.deepseek_mode;
+  out->deepseek_flags = layout.deepseek_flags;
+  out->resident_weight_bytes = elements * sizeof(uint16_t) -
+                               hidden * 2u * sizeof(uint16_t);
+  out->layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);
+  out->rms_attn = layout.rms_attn;
+  out->rms_mlp = layout.rms_mlp;
+  out->w_q = layout.w_q;
+  out->q_norm = layout.q_norm;
+  out->w_k = layout.w_k;
+  out->k_norm = layout.k_norm;
+  out->w_v = layout.w_v;
+  out->w_o = layout.w_o;
+  out->w_router = layout.w_router;
+  out->w_expert_gate_up = layout.w_expert_gate_up;
+  out->w_expert_down = layout.w_expert_down;
+  out->deepseek_q_a_scale = layout.deepseek_q_a_scale;
+  out->deepseek_q_b = layout.deepseek_q_b;
+  out->deepseek_q_b_scale = layout.deepseek_q_b_scale;
+  out->deepseek_kv_a_scale = layout.deepseek_kv_a_scale;
+  out->deepseek_kv_b_scale = layout.deepseek_kv_b_scale;
+  out->deepseek_o_a_scale = layout.deepseek_o_a_scale;
+  out->deepseek_o_b = layout.deepseek_o_b;
+  out->deepseek_o_b_scale = layout.deepseek_o_b_scale;
+  out->deepseek_attention_sink = layout.deepseek_attention_sink;
+  out->deepseek_indexer_q = layout.deepseek_indexer_q;
+  out->deepseek_indexer_q_scale = layout.deepseek_indexer_q_scale;
+  out->deepseek_indexer_k = layout.deepseek_indexer_k;
+  out->deepseek_indexer_k_scale = layout.deepseek_indexer_k_scale;
+  out->deepseek_indexer_k_norm = layout.deepseek_indexer_k_norm;
+  out->deepseek_indexer_k_norm_bias = layout.deepseek_indexer_k_norm_bias;
+  out->deepseek_indexer_weights = layout.deepseek_indexer_weights;
+  out->deepseek_compressor_ape = layout.deepseek_compressor_ape;
+  out->deepseek_compressor_wkv = layout.deepseek_compressor_wkv;
+  out->deepseek_compressor_wgate = layout.deepseek_compressor_wgate;
+  out->deepseek_compressor_norm = layout.deepseek_compressor_norm;
+  out->deepseek_indexer_compressor_ape =
+      layout.deepseek_indexer_compressor_ape;
+  out->deepseek_indexer_compressor_wkv =
+      layout.deepseek_indexer_compressor_wkv;
+  out->deepseek_indexer_compressor_wgate =
+      layout.deepseek_indexer_compressor_wgate;
+  out->deepseek_indexer_compressor_norm =
+      layout.deepseek_indexer_compressor_norm;
+  return 0;
+}
+
 namespace {
 #include "hf_decode_sequence/session_common.inc.cu"
 #include "hf_decode_sequence/session_cudnn.inc.cu"

@@ -125,10 +125,82 @@ pub(crate) struct NervaCudaHfDecodeSequenceResult {
     pub(crate) hot_path_allocations: u64,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaHfDecodeSequenceLayoutPlanRequest {
+    pub(crate) hidden: u32,
+    pub(crate) heads: u32,
+    pub(crate) kv_heads: u32,
+    pub(crate) head_dim: u32,
+    pub(crate) intermediate: u32,
+    pub(crate) vocab_size: u32,
+    pub(crate) layer_count: u32,
+    pub(crate) layer_index: u32,
+    pub(crate) layers: *const NervaCudaHfDecodeChainLayer,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default, Debug)]
+pub(crate) struct NervaCudaHfDecodeSequenceLayoutPlanResult {
+    pub(crate) status: i32,
+    pub(crate) hidden: u32,
+    pub(crate) heads: u32,
+    pub(crate) kv_heads: u32,
+    pub(crate) head_dim: u32,
+    pub(crate) intermediate: u32,
+    pub(crate) vocab_size: u32,
+    pub(crate) layer_count: u32,
+    pub(crate) layer_index: u32,
+    pub(crate) attention_kind: u32,
+    pub(crate) deepseek_mode: u32,
+    pub(crate) deepseek_flags: u32,
+    pub(crate) resident_weight_bytes: u64,
+    pub(crate) layout_bytes: u64,
+    pub(crate) rms_attn: u64,
+    pub(crate) rms_mlp: u64,
+    pub(crate) w_q: u64,
+    pub(crate) q_norm: u64,
+    pub(crate) w_k: u64,
+    pub(crate) k_norm: u64,
+    pub(crate) w_v: u64,
+    pub(crate) w_o: u64,
+    pub(crate) w_router: u64,
+    pub(crate) w_expert_gate_up: u64,
+    pub(crate) w_expert_down: u64,
+    pub(crate) deepseek_q_a_scale: u64,
+    pub(crate) deepseek_q_b: u64,
+    pub(crate) deepseek_q_b_scale: u64,
+    pub(crate) deepseek_kv_a_scale: u64,
+    pub(crate) deepseek_kv_b_scale: u64,
+    pub(crate) deepseek_o_a_scale: u64,
+    pub(crate) deepseek_o_b: u64,
+    pub(crate) deepseek_o_b_scale: u64,
+    pub(crate) deepseek_attention_sink: u64,
+    pub(crate) deepseek_indexer_q: u64,
+    pub(crate) deepseek_indexer_q_scale: u64,
+    pub(crate) deepseek_indexer_k: u64,
+    pub(crate) deepseek_indexer_k_scale: u64,
+    pub(crate) deepseek_indexer_k_norm: u64,
+    pub(crate) deepseek_indexer_k_norm_bias: u64,
+    pub(crate) deepseek_indexer_weights: u64,
+    pub(crate) deepseek_compressor_ape: u64,
+    pub(crate) deepseek_compressor_wkv: u64,
+    pub(crate) deepseek_compressor_wgate: u64,
+    pub(crate) deepseek_compressor_norm: u64,
+    pub(crate) deepseek_indexer_compressor_ape: u64,
+    pub(crate) deepseek_indexer_compressor_wkv: u64,
+    pub(crate) deepseek_indexer_compressor_wgate: u64,
+    pub(crate) deepseek_indexer_compressor_norm: u64,
+}
+
 unsafe extern "C" {
     fn nerva_cuda_hf_decode_sequence_u16(
         request: *const NervaCudaHfDecodeSequenceRequest,
         out: *mut NervaCudaHfDecodeSequenceResult,
+    ) -> c_int;
+    fn nerva_cuda_hf_decode_sequence_plan_layout(
+        request: *const NervaCudaHfDecodeSequenceLayoutPlanRequest,
+        out: *mut NervaCudaHfDecodeSequenceLayoutPlanResult,
     ) -> c_int;
 }
 
@@ -137,4 +209,11 @@ pub(crate) fn run_hf_decode_sequence_u16(
     out: &mut NervaCudaHfDecodeSequenceResult,
 ) -> c_int {
     unsafe { nerva_cuda_hf_decode_sequence_u16(request, out) }
+}
+
+pub(crate) fn plan_hf_decode_sequence_layout(
+    request: &NervaCudaHfDecodeSequenceLayoutPlanRequest,
+    out: &mut NervaCudaHfDecodeSequenceLayoutPlanResult,
+) -> c_int {
+    unsafe { nerva_cuda_hf_decode_sequence_plan_layout(request, out) }
 }

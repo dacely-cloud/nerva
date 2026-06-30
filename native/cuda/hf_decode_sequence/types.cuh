@@ -130,6 +130,30 @@ struct SequenceLayerLayout {
   uint32_t deepseek_compress_ratio;
   uint32_t deepseek_index_n_heads;
   uint32_t deepseek_index_head_dim;
+  uint64_t deepseek_q_a_scale;
+  uint64_t deepseek_q_b;
+  uint64_t deepseek_q_b_scale;
+  uint64_t deepseek_kv_a_scale;
+  uint64_t deepseek_kv_b_scale;
+  uint64_t deepseek_o_a_scale;
+  uint64_t deepseek_o_b;
+  uint64_t deepseek_o_b_scale;
+  uint64_t deepseek_attention_sink;
+  uint64_t deepseek_indexer_q;
+  uint64_t deepseek_indexer_q_scale;
+  uint64_t deepseek_indexer_k;
+  uint64_t deepseek_indexer_k_scale;
+  uint64_t deepseek_indexer_k_norm;
+  uint64_t deepseek_indexer_k_norm_bias;
+  uint64_t deepseek_indexer_weights;
+  uint64_t deepseek_compressor_ape;
+  uint64_t deepseek_compressor_wkv;
+  uint64_t deepseek_compressor_wgate;
+  uint64_t deepseek_compressor_norm;
+  uint64_t deepseek_indexer_compressor_ape;
+  uint64_t deepseek_indexer_compressor_wkv;
+  uint64_t deepseek_indexer_compressor_wgate;
+  uint64_t deepseek_indexer_compressor_norm;
 };
 
 struct PackedProjectionShape {

@@ -128,14 +128,24 @@ uint64_t deepseek_norm_slots(const NervaCudaHfDecodeChainLayer &layer,
              : bf16_slots(rows, 1);
 }
 
-void push_deepseek_v4_compressor(uint64_t &cursor, uint64_t compress_ratio,
-                                 uint64_t hidden, uint64_t head_dim) {
+struct DeepSeekV4CompressorOffsets {
+  uint64_t ape;
+  uint64_t wkv;
+  uint64_t wgate;
+  uint64_t norm;
+};
+
+DeepSeekV4CompressorOffsets push_deepseek_v4_compressor(
+    uint64_t &cursor, uint64_t compress_ratio, uint64_t hidden,
+    uint64_t head_dim) {
   const uint64_t coff = compress_ratio == 4 ? 2u : 1u;
   const uint64_t rows = head_dim * coff;
-  push(cursor, f32_slots(compress_ratio, rows));
-  push(cursor, bf16_slots(rows, hidden));
-  push(cursor, bf16_slots(rows, hidden));
-  push(cursor, bf16_slots(head_dim, 1));
+  DeepSeekV4CompressorOffsets offsets{};
+  offsets.ape = push(cursor, f32_slots(compress_ratio, rows));
+  offsets.wkv = push(cursor, bf16_slots(rows, hidden));
+  offsets.wgate = push(cursor, bf16_slots(rows, hidden));
+  offsets.norm = push(cursor, bf16_slots(head_dim, 1));
+  return offsets;
 }
 
 uint64_t hash_tokens(const uint32_t *tokens, uint32_t count) {
@@ -579,28 +589,39 @@ void pack_deepseek_v3_attention(SequenceLayerLayout &layout, uint64_t &cursor,
   const uint64_t value_hidden = heads * v_head;
 
   layout.w_q = push(cursor, fp8_slots(q_lora_rank, hidden));
-  push(cursor, scale_f32_slots(q_lora_rank, hidden));
+  layout.deepseek_q_a_scale = push(cursor, scale_f32_slots(q_lora_rank, hidden));
   layout.q_norm = push(cursor, deepseek_norm_slots(layer, q_lora_rank));
-  push(cursor, fp8_slots(q_rows, q_lora_rank));
-  push(cursor, scale_f32_slots(q_rows, q_lora_rank));
+  layout.deepseek_q_b = push(cursor, fp8_slots(q_rows, q_lora_rank));
+  layout.deepseek_q_b_scale =
+      push(cursor, scale_f32_slots(q_rows, q_lora_rank));
   layout.w_k = push(cursor, fp8_slots(kv_a_rows, hidden));
-  push(cursor, scale_f32_slots(kv_a_rows, hidden));
+  layout.deepseek_kv_a_scale =
+      push(cursor, scale_f32_slots(kv_a_rows, hidden));
   layout.k_norm = push(cursor, deepseek_norm_slots(layer, kv_lora_rank));
   layout.w_v = push(cursor, fp8_slots(kv_b_rows, kv_lora_rank));
-  push(cursor, scale_f32_slots(kv_b_rows, kv_lora_rank));
+  layout.deepseek_kv_b_scale =
+      push(cursor, scale_f32_slots(kv_b_rows, kv_lora_rank));
   layout.w_o = push(cursor, fp8_slots(hidden, value_hidden));
-  push(cursor, scale_f32_slots(hidden, value_hidden));
+  layout.deepseek_o_a_scale =
+      push(cursor, scale_f32_slots(hidden, value_hidden));
 
   if ((layer.deepseek_flags & kDeepSeekFlagSparseIndexer) != 0) {
     const uint64_t index_rows = static_cast<uint64_t>(layer.deepseek_index_n_heads) *
                                 layer.deepseek_index_head_dim;
-    push(cursor, fp8_slots(index_rows, q_lora_rank));
-    push(cursor, scale_f32_slots(index_rows, q_lora_rank));
-    push(cursor, fp8_slots(layer.deepseek_index_head_dim, hidden));
-    push(cursor, scale_f32_slots(layer.deepseek_index_head_dim, hidden));
-    push(cursor, f32_slots(layer.deepseek_index_head_dim, 1));
-    push(cursor, f32_slots(layer.deepseek_index_head_dim, 1));
-    push(cursor, bf16_slots(layer.deepseek_index_n_heads, hidden));
+    layout.deepseek_indexer_q =
+        push(cursor, fp8_slots(index_rows, q_lora_rank));
+    layout.deepseek_indexer_q_scale =
+        push(cursor, scale_f32_slots(index_rows, q_lora_rank));
+    layout.deepseek_indexer_k =
+        push(cursor, fp8_slots(layer.deepseek_index_head_dim, hidden));
+    layout.deepseek_indexer_k_scale =
+        push(cursor, scale_f32_slots(layer.deepseek_index_head_dim, hidden));
+    layout.deepseek_indexer_k_norm =
+        push(cursor, f32_slots(layer.deepseek_index_head_dim, 1));
+    layout.deepseek_indexer_k_norm_bias =
+        push(cursor, f32_slots(layer.deepseek_index_head_dim, 1));
+    layout.deepseek_indexer_weights =
+        push(cursor, bf16_slots(layer.deepseek_index_n_heads, hidden));
   }
 }
 
@@ -624,33 +645,51 @@ void pack_deepseek_v4_attention(SequenceLayerLayout &layout, uint64_t &cursor,
   push(cursor, f32_slots(mix_hc, 1));
   push(cursor, f32_slots(mix_hc, hc_dim));
   push(cursor, f32_slots(3, 1));
-  push(cursor, f32_slots(heads, 1));
+  layout.deepseek_attention_sink = push(cursor, f32_slots(heads, 1));
   layout.w_q = push(cursor, fp8_slots(q_lora_rank, hidden));
-  push(cursor, scale_e8m0_slots(q_lora_rank, hidden));
-  push(cursor, fp8_slots(q_rows, q_lora_rank));
-  push(cursor, scale_e8m0_slots(q_rows, q_lora_rank));
+  layout.deepseek_q_a_scale =
+      push(cursor, scale_e8m0_slots(q_lora_rank, hidden));
+  layout.deepseek_q_b = push(cursor, fp8_slots(q_rows, q_lora_rank));
+  layout.deepseek_q_b_scale =
+      push(cursor, scale_e8m0_slots(q_rows, q_lora_rank));
   layout.q_norm = push(cursor, bf16_slots(q_lora_rank, 1));
   layout.w_k = push(cursor, fp8_slots(head_dim, hidden));
-  push(cursor, scale_e8m0_slots(head_dim, hidden));
+  layout.deepseek_kv_a_scale =
+      push(cursor, scale_e8m0_slots(head_dim, hidden));
   layout.k_norm = push(cursor, bf16_slots(head_dim, 1));
   layout.w_o = push(cursor, fp8_slots(wo_a_rows, wo_a_cols));
-  push(cursor, scale_e8m0_slots(wo_a_rows, wo_a_cols));
-  push(cursor, fp8_slots(hidden, wo_a_rows));
-  push(cursor, scale_e8m0_slots(hidden, wo_a_rows));
+  layout.deepseek_o_a_scale =
+      push(cursor, scale_e8m0_slots(wo_a_rows, wo_a_cols));
+  layout.deepseek_o_b = push(cursor, fp8_slots(hidden, wo_a_rows));
+  layout.deepseek_o_b_scale =
+      push(cursor, scale_e8m0_slots(hidden, wo_a_rows));
 
   if ((layer.deepseek_flags & kDeepSeekFlagCompressor) != 0 &&
       layer.deepseek_compress_ratio > 1) {
-    push_deepseek_v4_compressor(cursor, layer.deepseek_compress_ratio, hidden,
-                                head_dim);
+    const DeepSeekV4CompressorOffsets offsets =
+        push_deepseek_v4_compressor(cursor, layer.deepseek_compress_ratio,
+                                    hidden, head_dim);
+    layout.deepseek_compressor_ape = offsets.ape;
+    layout.deepseek_compressor_wkv = offsets.wkv;
+    layout.deepseek_compressor_wgate = offsets.wgate;
+    layout.deepseek_compressor_norm = offsets.norm;
   }
   if (layer.deepseek_compress_ratio == 4) {
     const uint64_t index_rows = static_cast<uint64_t>(layer.deepseek_index_n_heads) *
                                 layer.deepseek_index_head_dim;
-    push(cursor, fp8_slots(index_rows, q_lora_rank));
-    push(cursor, scale_e8m0_slots(index_rows, q_lora_rank));
-    push_deepseek_v4_compressor(cursor, 4, hidden,
-                                layer.deepseek_index_head_dim);
-    push(cursor, bf16_slots(layer.deepseek_index_n_heads, hidden));
+    layout.deepseek_indexer_q =
+        push(cursor, fp8_slots(index_rows, q_lora_rank));
+    layout.deepseek_indexer_q_scale =
+        push(cursor, scale_e8m0_slots(index_rows, q_lora_rank));
+    const DeepSeekV4CompressorOffsets offsets =
+        push_deepseek_v4_compressor(cursor, 4, hidden,
+                                    layer.deepseek_index_head_dim);
+    layout.deepseek_indexer_compressor_ape = offsets.ape;
+    layout.deepseek_indexer_compressor_wkv = offsets.wkv;
+    layout.deepseek_indexer_compressor_wgate = offsets.wgate;
+    layout.deepseek_indexer_compressor_norm = offsets.norm;
+    layout.deepseek_indexer_weights =
+        push(cursor, bf16_slots(layer.deepseek_index_n_heads, hidden));
   }
 }
 
@@ -814,6 +853,30 @@ void pack_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.w_linear_out = kMissingOffset;
   layout.linear_conv_state = kMissingOffset;
   layout.linear_recurrent_state = kMissingOffset;
+  layout.deepseek_q_a_scale = kMissingOffset;
+  layout.deepseek_q_b = kMissingOffset;
+  layout.deepseek_q_b_scale = kMissingOffset;
+  layout.deepseek_kv_a_scale = kMissingOffset;
+  layout.deepseek_kv_b_scale = kMissingOffset;
+  layout.deepseek_o_a_scale = kMissingOffset;
+  layout.deepseek_o_b = kMissingOffset;
+  layout.deepseek_o_b_scale = kMissingOffset;
+  layout.deepseek_attention_sink = kMissingOffset;
+  layout.deepseek_indexer_q = kMissingOffset;
+  layout.deepseek_indexer_q_scale = kMissingOffset;
+  layout.deepseek_indexer_k = kMissingOffset;
+  layout.deepseek_indexer_k_scale = kMissingOffset;
+  layout.deepseek_indexer_k_norm = kMissingOffset;
+  layout.deepseek_indexer_k_norm_bias = kMissingOffset;
+  layout.deepseek_indexer_weights = kMissingOffset;
+  layout.deepseek_compressor_ape = kMissingOffset;
+  layout.deepseek_compressor_wkv = kMissingOffset;
+  layout.deepseek_compressor_wgate = kMissingOffset;
+  layout.deepseek_compressor_norm = kMissingOffset;
+  layout.deepseek_indexer_compressor_ape = kMissingOffset;
+  layout.deepseek_indexer_compressor_wkv = kMissingOffset;
+  layout.deepseek_indexer_compressor_wgate = kMissingOffset;
+  layout.deepseek_indexer_compressor_norm = kMissingOffset;
   layout.linear_key_heads = layer.linear_key_heads;
   layout.linear_value_heads = layer.linear_value_heads;
   layout.linear_key_head_dim = layer.linear_key_head_dim;

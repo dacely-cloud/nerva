@@ -2,10 +2,13 @@ use crate::decode::hf_chain::layer::{
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR,
     CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer,
-    CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
+    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
+use crate::decode::hf_sequence::layout_plan::{
+    CUDA_HF_SEQUENCE_MISSING_OFFSET, CudaHfDecodeSequenceLayoutPlanRequest,
+};
 use crate::decode::hf_sequence::request::{
     CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
@@ -355,7 +358,7 @@ fn declared_sparse_moe_descriptor_footprint_uses_router_and_experts() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 448);
-    assert_eq!(footprint.layout_bytes, 376);
+    assert_eq!(footprint.layout_bytes, 568);
 }
 
 #[test]
@@ -396,7 +399,7 @@ fn declared_deepseek_v4_descriptor_footprint_counts_storage_widths_and_hc_blocks
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 1306);
-    assert_eq!(footprint.layout_bytes, 376);
+    assert_eq!(footprint.layout_bytes, 568);
 }
 
 #[test]
@@ -469,6 +472,159 @@ fn declared_deepseek_v4_descriptor_run_reaches_native_execution_guard() {
         "expected cudaErrorNotSupported guard, got {:?}",
         summary.error
     );
+}
+
+#[test]
+fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
+    let layer = tiny_deepseek_v32_descriptor_layer();
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept tiny V3.2 descriptor layer");
+
+    assert_eq!(plan.attention_kind, CUDA_HF_ATTENTION_DEEPSEEK_MLA);
+    assert_eq!(plan.deepseek_mode, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER);
+    assert_eq!(plan.rms_attn, 40);
+    assert_eq!(plan.w_q, 48);
+    assert_eq!(plan.deepseek_q_a_scale, 52);
+    assert_eq!(plan.q_norm, 54);
+    assert_eq!(plan.deepseek_q_b, 58);
+    assert_eq!(plan.deepseek_q_b_scale, 62);
+    assert_eq!(plan.w_k, 64);
+    assert_eq!(plan.deepseek_kv_a_scale, 70);
+    assert_eq!(plan.k_norm, 72);
+    assert_eq!(plan.w_v, 76);
+    assert_eq!(plan.deepseek_kv_b_scale, 80);
+    assert_eq!(plan.w_o, 82);
+    assert_eq!(plan.deepseek_o_a_scale, 86);
+    assert_eq!(plan.deepseek_indexer_q, 88);
+    assert_eq!(plan.deepseek_indexer_q_scale, 92);
+    assert_eq!(plan.deepseek_indexer_k, 94);
+    assert_eq!(plan.deepseek_indexer_k_scale, 98);
+    assert_eq!(plan.deepseek_indexer_k_norm, 100);
+    assert_eq!(plan.deepseek_indexer_k_norm_bias, 104);
+    assert_eq!(plan.deepseek_indexer_weights, 108);
+    assert_eq!(plan.rms_mlp, 116);
+    assert_eq!(plan.deepseek_o_b, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_eq!(
+        plan.deepseek_compressor_ape,
+        CUDA_HF_SEQUENCE_MISSING_OFFSET
+    );
+    assert_eq!(plan.layout_bytes, 568);
+    assert!(plan.resident_weight_bytes > 0);
+}
+
+#[test]
+fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
+    let layer = tiny_deepseek_v4_descriptor_layer();
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept tiny V4 descriptor layer");
+
+    assert_eq!(plan.attention_kind, CUDA_HF_ATTENTION_DEEPSEEK_MLA);
+    assert_eq!(
+        plan.deepseek_mode,
+        CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER
+    );
+    assert_eq!(plan.rms_attn, 78);
+    assert_eq!(plan.deepseek_attention_sink, 382);
+    assert_eq!(plan.w_q, 386);
+    assert_eq!(plan.deepseek_q_a_scale, 390);
+    assert_eq!(plan.deepseek_q_b, 391);
+    assert_eq!(plan.deepseek_q_b_scale, 395);
+    assert_eq!(plan.q_norm, 396);
+    assert_eq!(plan.w_k, 398);
+    assert_eq!(plan.deepseek_kv_a_scale, 402);
+    assert_eq!(plan.k_norm, 403);
+    assert_eq!(plan.w_o, 405);
+    assert_eq!(plan.deepseek_o_a_scale, 409);
+    assert_eq!(plan.deepseek_o_b, 410);
+    assert_eq!(plan.deepseek_o_b_scale, 418);
+    assert_eq!(plan.deepseek_compressor_ape, 419);
+    assert_eq!(plan.deepseek_compressor_wkv, 451);
+    assert_eq!(plan.deepseek_compressor_wgate, 467);
+    assert_eq!(plan.deepseek_compressor_norm, 483);
+    assert_eq!(plan.deepseek_indexer_q, 485);
+    assert_eq!(plan.deepseek_indexer_q_scale, 487);
+    assert_eq!(plan.deepseek_indexer_compressor_ape, 488);
+    assert_eq!(plan.deepseek_indexer_compressor_wkv, 520);
+    assert_eq!(plan.deepseek_indexer_compressor_wgate, 536);
+    assert_eq!(plan.deepseek_indexer_compressor_norm, 552);
+    assert_eq!(plan.deepseek_indexer_weights, 554);
+    assert_eq!(plan.rms_mlp, 558);
+    assert_eq!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_eq!(plan.deepseek_kv_b_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_eq!(plan.layout_bytes, 568);
+}
+
+fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
+    CudaHfDecodeChainLayer {
+        rms_attn_weight: &[],
+        rms_mlp_weight: &[],
+        w_q: &[],
+        w_q_gate: None,
+        w_k: &[],
+        q_norm_weight: None,
+        k_norm_weight: None,
+        w_v: &[],
+        w_o: &[],
+        q_bias: None,
+        k_bias: None,
+        v_bias: None,
+        o_bias: None,
+        w_gate: &[],
+        w_up: &[],
+        w_down: &[],
+        w_router: None,
+        w_expert_gate_up: None,
+        w_expert_down: None,
+        w_shared_expert_gate: None,
+        w_shared_expert_up: None,
+        w_shared_expert_down: None,
+        w_shared_expert_router: None,
+        linear_gdn: None,
+        deepseek: Some(CudaHfDeepSeekLayer {
+            mode: CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
+            flags: CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
+            hc_mult: 0,
+            q_lora_rank: 2,
+            kv_lora_rank: 2,
+            o_lora_rank: 0,
+            o_groups: 0,
+            qk_nope_head_dim: 1,
+            qk_rope_head_dim: 1,
+            v_head_dim: 1,
+            compress_ratio: 1,
+            index_n_heads: 2,
+            index_head_dim: 2,
+        }),
+        mlp_kind: 0,
+        moe_intermediate: 0,
+        shared_expert_intermediate: 0,
+        num_experts: 0,
+        experts_per_token: 0,
+        norm_topk_prob: true,
+        attention_kind: CUDA_HF_ATTENTION_DEEPSEEK_MLA,
+    }
 }
 
 fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
@@ -596,7 +752,7 @@ fn query_gate_footprint_counts_optional_projection() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 504);
-    assert_eq!(footprint.layout_bytes, 376);
+    assert_eq!(footprint.layout_bytes, 568);
 }
 
 #[test]
@@ -685,10 +841,10 @@ fn linear_gdn_moe_footprint_counts_state_and_scratch() {
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
     assert_eq!(footprint.resident_weight_bytes, 436);
-    assert_eq!(footprint.layout_bytes, 376);
+    assert_eq!(footprint.layout_bytes, 568);
     assert_eq!(footprint.scratch_bytes, 276);
     assert_eq!(footprint.resident_kv_bytes, 128);
-    assert_eq!(footprint.device_arena_bytes, 1432);
+    assert_eq!(footprint.device_arena_bytes, 1624);
 }
 
 fn assert_raw_descriptor_decode_matches_request(sampler: CudaHfDecodeSamplerConfig) {
