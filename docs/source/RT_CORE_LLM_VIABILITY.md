@@ -54,6 +54,24 @@ microseconds while the selected-page attention stage can run against roughly
 4-7% of dense KV bytes. It is still synthetic descriptor work, so it proves the
 shape of the systems opportunity, not real Qwen semantic quality.
 
+A fixed 1024-candidate scale check was also run at 1M, 2M, 4M, and 8M synthetic
+tokens. The summarized artifact is
+`docs/source/perf/rt_context_scale_c1024_summary.json`.
+
+| Context tokens | Pages | Selector + rerank | Estimated KV fraction | RT attention stage | Dense full attention | Stage speedup | Qwen3-8B dense KV | Qwen3-8B hot KV |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1,048,576 | 16,384 | 19.150 us | 7.0312% | 2.310 ms | 12.227 ms | 5.29x | 144 GiB | 10.125 GiB |
+| 2,097,152 | 32,768 | 17.032 us | 3.5156% | 2.313 ms | 27.182 ms | 11.75x | 288 GiB | 10.125 GiB |
+| 4,194,304 | 65,536 | 16.548 us | 1.7578% | 2.310 ms | 54.368 ms | 23.54x | 576 GiB | 10.125 GiB |
+| 8,388,608 | 131,072 | 16.840 us | 0.8789% | 2.313 ms | 109.019 ms | 47.14x | 1152 GiB | 10.125 GiB |
+
+This is the best current evidence that RT-style candidate selection can support
+a fixed-size hot KV working set while total context grows. The Qwen3-8B byte
+columns are estimates using 36 layers, 8 KV heads, 128 head dim, BF16 K/V, and
+64-token pages. They are not a claim that Qwen3-8B can exact-attend to 8M
+positions; they show the memory geometry a hot/cold sparse-memory system would
+need if a semantic selector could pick useful far pages.
+
 The real Qwen selected-page attention integration is wired into the existing
 decode pipeline. It does not replace decode, attention projection, MLP, sampling,
 or KV layout with a separate implementation.

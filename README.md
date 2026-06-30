@@ -527,6 +527,8 @@ The same run reports synthetic full dense attention at 5.238 ms/layer and the RT
 
 The 1,048,576-token synthetic sweep now has a summarized artifact at `docs/source/perf/rt_1m_synthetic_sweep_summary.json`. The high-signal points are 512 candidate pages/query at 3.9062% estimated KV bytes with 95.4528% attention-mass recall, and 1024 candidate pages/query at 7.0312% estimated KV bytes with 99.9937% attention-mass recall. This supports RT candidate selection as a viable hot/cold KV search primitive, but it is still synthetic and not semantic Qwen retrieval.
 
+The fixed-1024-candidate synthetic scale artifact at `docs/source/perf/rt_context_scale_c1024_summary.json` extends that check to 8,388,608 tokens. RT selected attention stayed near 2.31 ms while dense synthetic attention grew to 109.02 ms; the estimated Qwen3-8B hot KV set stays about 10.125 GiB while dense BF16 KV would be about 1,152 GiB. This supports the hot/cold memory direction, not exact over-context Qwen inference.
+
 On the 30,571-token Qwen3-8B prompt with 2,048 generated tokens, 80 selected pages, 4,096 local tokens, 128 sink tokens, and `NERVA_EXPERIMENTAL_PREFILL_LOCAL_WINDOW_TOKENS=4096`, the current decode comparison is:
 
 | Selector policy | Decode throughput | Decode wall | Attention per 256-token chunk | Notes |
