@@ -624,6 +624,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_window_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut".to_string());
@@ -810,8 +811,12 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_v4_swa_window_runtime",
                 "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime",
+                "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_contents",
             ],
-            &["verify V4 SWA fp8_ds_mla page contents against vLLM FlashMLA"],
+            &[
+                "verify non-zero full-size V4 SWA fp8_ds_mla pages against vLLM FlashMLA",
+                "replace serial SWA page reader with the vLLM FlashMLA/FlashInfer kernel path",
+            ],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_fp8_ds_mla_cache") => (
             "partial",

@@ -28,6 +28,36 @@ use super::decode_sequence_descriptor_blocks::{
     run_null_legacy_descriptor_decode, tiny_descriptor_weights,
 };
 
+fn fnv_hash_bytes(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x00000100000001b3);
+    }
+    hash
+}
+
+fn encode_e8m0_scale(scale: f32) -> u8 {
+    (scale.log2().ceil() as i32 + 127).clamp(0, 255) as u8
+}
+
+fn expected_zero_deepseek_v4_swa_fp8_ds_mla_page(
+    written_tokens: usize,
+    qk_nope: usize,
+    qk_rope: usize,
+    page_bytes: usize,
+) -> Vec<u8> {
+    let token_stride = qk_nope + qk_rope * 2;
+    let scale_dim = qk_nope / 64 + 1;
+    let scale_base = 64 * token_stride;
+    let zero_scale = encode_e8m0_scale(1.0e-4 / 448.0);
+    let mut expected = vec![0u8; page_bytes];
+    for token in 0..written_tokens {
+        expected[scale_base + token * scale_dim] = zero_scale;
+    }
+    expected
+}
+
 #[test]
 fn linear_gdn_layer_validation_preserves_layout_metadata() {
     let hidden = 4;
@@ -921,6 +951,7 @@ fn deepseek_v4_swa_dense_session_runs_through_sampling() {
         "V4 SWA dense DeepSeek should pass session creation: {:?}",
         created.summary.error
     );
+    let swa_kv_bytes = created.summary.deepseek_v4_swa_kv_bytes as usize;
     let mut session = created
         .session
         .expect("V4 SWA dense session handle should exist");
@@ -940,6 +971,25 @@ fn deepseek_v4_swa_dense_session_runs_through_sampling() {
     assert_eq!(summary.deepseek_v4_bias_router_selections, 0);
     assert_eq!(summary.deepseek_v4_hash_router_selections, 0);
     assert!(summary.graph_nodes > 0);
+
+    let snapshot = session.deepseek_v4_swa_kv_snapshot(0, swa_kv_bytes);
+    assert_eq!(
+        snapshot.status,
+        SmokeStatus::Ok,
+        "V4 SWA packed KV snapshot should copy device cache: {:?}",
+        snapshot.error
+    );
+    assert_eq!(snapshot.block_count, 1);
+    assert_eq!(snapshot.layer_offset_bytes, 0);
+    assert_eq!(snapshot.layer_bytes, 576);
+    assert_eq!(snapshot.page_bytes, 576);
+    assert_eq!(snapshot.copied_bytes, 576);
+    let expected = expected_zero_deepseek_v4_swa_fp8_ds_mla_page(2, 1, 1, 576);
+    assert_eq!(
+        snapshot.bytes, expected,
+        "V4 SWA packed fp8_ds_mla page bytes must match vLLM offsets"
+    );
+    assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
 }
 
 #[test]
