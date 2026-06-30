@@ -77,6 +77,8 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_deepseek_compress_norm_rope_fp8_cache_smoke"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_mxfp4_cache_api"));
     assert!(json.contains("cuda_deepseek_compress_norm_rope_mxfp4_cache_smoke"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_nonzero_page_contents"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_fullsize_page_contents"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_index_topk_descriptor"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime"));
@@ -518,6 +520,7 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"hf-cuda-generate\""));
     assert!(json.contains("\"vllm_generate\""));
     assert!(json.contains("\"tools/deepseek_vllm_generate.py\""));
+    assert!(json.contains("\"--vllm-root\""));
     assert!(json.contains("\"--max-model-len\""));
     assert!(json.contains("\"--max-tokens\""));
     assert!(json.contains("same greedy sampler temperature=0 top_p=1 top_k=0 seed=0"));

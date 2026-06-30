@@ -777,6 +777,10 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_window_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_contents".to_string());
+        primitives
+            .push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_nonzero_page_contents".to_string());
+        primitives
+            .push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_fullsize_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_contents".to_string());
         primitives

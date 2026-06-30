@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--vllm-root", default="/root/vllm")
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--trust-remote-code", action="store_true", default=True)
@@ -51,6 +53,11 @@ def token_ids_from_output(output: Any) -> list[int]:
 def main() -> None:
     args = parse_args()
     prompt, prompt_mode = resolve_prompt(args.prompt)
+
+    vllm_root = Path(args.vllm_root).resolve()
+    if not vllm_root.is_dir():
+        raise SystemExit(f"vLLM root does not exist: {vllm_root}")
+    sys.path.insert(0, str(vllm_root))
 
     from vllm import LLM, SamplingParams
 
@@ -92,6 +99,7 @@ def main() -> None:
                 "status": "ok",
                 "schema": "nerva-vllm-generate-v1",
                 "engine": "vllm",
+                "vllm_root": str(vllm_root),
                 "model": args.model,
                 "prompt_mode": prompt_mode,
                 "prompt": prompt,

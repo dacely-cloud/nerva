@@ -202,6 +202,27 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
     );
     assert!(mhc.remaining_gaps.is_empty());
 
+    let swa = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v4_mla_swa_cache")
+        .expect("DeepSeek V4 should report SWA cache coverage");
+    assert_eq!(swa.status, "partial");
+    for primitive in [
+        "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_nonzero_page_contents",
+        "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_fullsize_page_contents",
+    ] {
+        assert!(
+            primitives.iter().any(|item| item == primitive),
+            "missing DeepSeek V4 SWA primitive coverage entry: {primitive}"
+        );
+        assert!(
+            swa.validated_primitives
+                .iter()
+                .any(|item| item == primitive),
+            "missing DeepSeek V4 SWA validated primitive: {primitive}"
+        );
+    }
+
     let parity = coverage
         .iter()
         .find(|unit| unit.unit == "deepseek_v4_vllm_e2e_parity")

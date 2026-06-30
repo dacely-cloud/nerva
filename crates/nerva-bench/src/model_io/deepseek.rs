@@ -285,6 +285,8 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
     let vllm_generate = vec![
         "python3".to_string(),
         "tools/deepseek_vllm_generate.py".to_string(),
+        "--vllm-root".to_string(),
+        vllm_root.display().to_string(),
         "--model".to_string(),
         checkpoint_dir.clone(),
         "--prompt".to_string(),
