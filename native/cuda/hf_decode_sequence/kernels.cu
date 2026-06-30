@@ -381,6 +381,323 @@ __device__ float deepseek_rope_value_serial(float left, float right,
                 : left * cos_value - right * sin_value;
 }
 
+__device__ __forceinline__ uint16_t deepseek_session_f32_to_bf16_bits(
+    float value) {
+  const uint32_t bits = __float_as_uint(value);
+  const uint32_t lsb = (bits >> 16u) & 1u;
+  const uint32_t rounded = bits + 0x7fffu + lsb;
+  return static_cast<uint16_t>(rounded >> 16u);
+}
+
+__device__ __forceinline__ float deepseek_session_bf16_bits_to_f32(
+    uint16_t bits) {
+  return __uint_as_float(static_cast<uint32_t>(bits) << 16u);
+}
+
+__device__ uint8_t deepseek_session_f32_to_f8_e4m3fn_bits_nearest(
+    float value) {
+  if (isnan(value)) {
+    return 0x7fu;
+  }
+  uint8_t best_bits = 0;
+  float best_error = INFINITY;
+  for (uint32_t bits = 0; bits <= 254u; ++bits) {
+    const float candidate =
+        nerva::deepseek::f8_e4m3fn_bits_to_f32(static_cast<uint8_t>(bits));
+    if (isnan(candidate)) {
+      continue;
+    }
+    const float error = fabsf(candidate - value);
+    if (error < best_error ||
+        (error == best_error && bits < static_cast<uint32_t>(best_bits))) {
+      best_error = error;
+      best_bits = static_cast<uint8_t>(bits);
+    }
+  }
+  return best_bits;
+}
+
+__device__ __forceinline__ uint8_t deepseek_session_encode_e8m0_scale(
+    float scale) {
+  int exponent = static_cast<int>(ceilf(log2f(scale)));
+  exponent += 127;
+  if (exponent < 0) {
+    exponent = 0;
+  }
+  if (exponent > 255) {
+    exponent = 255;
+  }
+  return static_cast<uint8_t>(exponent);
+}
+
+__device__ float deepseek_session_compressed_state_value(
+    const float *state_cache, uint64_t state_offset_bytes,
+    uint32_t state_width, uint32_t head_dim, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint32_t position, uint32_t dim,
+    uint32_t compress_ratio, uint32_t window_index, bool score_half) {
+  const uint32_t logical_block = position / kKvCacheBlockTokens;
+  if (logical_block >= kv_block_count || dim >= head_dim) {
+    return 0.0f;
+  }
+  const uint32_t physical_block =
+      kv_block_table == nullptr ? logical_block : kv_block_table[logical_block];
+  const uint32_t pos_in_block = position % kKvCacheBlockTokens;
+  const uint32_t head_offset =
+      window_index >= compress_ratio ? head_dim : 0u;
+  if (head_offset + dim >= state_width) {
+    return 0.0f;
+  }
+  const uint64_t row_stride = static_cast<uint64_t>(state_width) * 2u;
+  const uint64_t token_index =
+      static_cast<uint64_t>(physical_block) * kKvCacheBlockTokens +
+      pos_in_block;
+  const uint64_t base =
+      state_offset_bytes / sizeof(float) + token_index * row_stride +
+      head_offset + dim;
+  return score_half ? state_cache[base + state_width] : state_cache[base];
+}
+
+__device__ void deepseek_session_compress_state_to_scratch(
+    const float *state_cache, uint64_t state_offset_bytes,
+    uint32_t state_width, uint32_t head_dim, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint32_t position,
+    uint32_t compress_ratio, float *compressed) {
+  const uint32_t overlap = compress_ratio == 4 ? 1u : 0u;
+  const uint32_t window_tokens = (1u + overlap) * compress_ratio;
+  const int64_t start = static_cast<int64_t>(position) -
+                        static_cast<int64_t>(window_tokens) + 1ll;
+  for (uint32_t dim = 0; dim < head_dim; ++dim) {
+    float max_score = -INFINITY;
+    for (uint32_t window = 0; window < window_tokens; ++window) {
+      const int64_t pos = start + static_cast<int64_t>(window);
+      if (pos < 0) {
+        continue;
+      }
+      const float score = deepseek_session_compressed_state_value(
+          state_cache, state_offset_bytes, state_width, head_dim,
+          kv_block_count, kv_block_table, static_cast<uint32_t>(pos), dim,
+          compress_ratio, window, true);
+      max_score = fmaxf(max_score, score);
+    }
+    float weighted = 0.0f;
+    float denom = 0.0f;
+    for (uint32_t window = 0; window < window_tokens; ++window) {
+      const int64_t pos = start + static_cast<int64_t>(window);
+      if (pos < 0) {
+        continue;
+      }
+      const uint32_t pos_u32 = static_cast<uint32_t>(pos);
+      const float score = deepseek_session_compressed_state_value(
+          state_cache, state_offset_bytes, state_width, head_dim,
+          kv_block_count, kv_block_table, pos_u32, dim, compress_ratio,
+          window, true);
+      const float weight = expf(score - max_score);
+      weighted += deepseek_session_compressed_state_value(
+                      state_cache, state_offset_bytes, state_width, head_dim,
+                      kv_block_count, kv_block_table, pos_u32, dim,
+                      compress_ratio, window, false) *
+                  weight;
+      denom += weight;
+    }
+    compressed[dim] = denom > 0.0f ? weighted / denom : 0.0f;
+  }
+}
+
+__device__ float deepseek_session_normed_compressed_value(
+    const float *compressed, const uint16_t *norm_weight, uint32_t head_dim,
+    uint32_t dim, float rms_eps) {
+  float variance = 0.0f;
+  for (uint32_t index = 0; index < head_dim; ++index) {
+    variance += compressed[index] * compressed[index];
+  }
+  const float rrms =
+      rsqrtf(variance / static_cast<float>(head_dim) + rms_eps);
+  return compressed[dim] * rrms *
+         encoded_to_f32(norm_weight[dim], kDTypeBF16);
+}
+
+__device__ float deepseek_session_rotated_compressed_value(
+    const float *compressed, const uint16_t *norm_weight, uint32_t head_dim,
+    uint32_t rope_head_dim, uint32_t dim, uint32_t position, float rms_eps,
+    float rope_theta) {
+  const uint32_t nope_head_dim = head_dim - rope_head_dim;
+  const float value = deepseek_session_normed_compressed_value(
+      compressed, norm_weight, head_dim, dim, rms_eps);
+  if (rope_theta <= 0.0f || rope_head_dim < 2 || dim < nope_head_dim) {
+    return value;
+  }
+  const uint32_t rope_local = dim - nope_head_dim;
+  const uint32_t pair = rope_local / 2u;
+  const uint32_t even_dim = nope_head_dim + pair * 2u;
+  const uint32_t odd_dim = even_dim + 1u;
+  if (odd_dim >= head_dim) {
+    return value;
+  }
+  const float even = deepseek_session_normed_compressed_value(
+      compressed, norm_weight, head_dim, even_dim, rms_eps);
+  const float odd = deepseek_session_normed_compressed_value(
+      compressed, norm_weight, head_dim, odd_dim, rms_eps);
+  const float exponent =
+      static_cast<float>(2u * pair) / static_cast<float>(rope_head_dim);
+  const float angle =
+      static_cast<float>(position) / powf(rope_theta, exponent);
+  float sin_value = 0.0f;
+  float cos_value = 0.0f;
+  sincosf(angle, &sin_value, &cos_value);
+  return (rope_local & 1u) == 0u ? even * cos_value - odd * sin_value
+                                 : odd * cos_value + even * sin_value;
+}
+
+__device__ bool deepseek_session_write_fp8_ds_mla_compressed_kv(
+    uint16_t *arena, const float *state_cache, uint64_t state_offset_bytes,
+    uint8_t *kv_cache, uint64_t kv_offset_bytes,
+    uint32_t compressed_block_count, const SequenceLayerLayout &layout,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint32_t position, float rms_eps, float rope_theta, float *compressed) {
+  const uint32_t compress_ratio = layout.deepseek_compress_ratio;
+  if (state_cache == nullptr || kv_cache == nullptr || compress_ratio <= 1 ||
+      (position + 1u) % compress_ratio != 0 ||
+      layout.deepseek_compressor_norm == kMissingOffset) {
+    return false;
+  }
+  const uint32_t head_dim =
+      layout.deepseek_qk_nope_head_dim + layout.deepseek_qk_rope_head_dim;
+  const uint32_t coff = compress_ratio == 4 ? 2u : 1u;
+  const uint32_t state_width = coff * head_dim;
+  const uint32_t compressed_slot = position / compress_ratio;
+  const uint32_t compressed_block = compressed_slot / kKvCacheBlockTokens;
+  if (head_dim == 0 || compressed_block >= compressed_block_count) {
+    return false;
+  }
+  deepseek_session_compress_state_to_scratch(
+      state_cache, state_offset_bytes, state_width, head_dim, kv_block_count,
+      kv_block_table, position, compress_ratio, compressed);
+
+  const uint32_t nope = layout.deepseek_qk_nope_head_dim;
+  const uint32_t rope = layout.deepseek_qk_rope_head_dim;
+  const uint32_t token_stride = nope + rope * 2u;
+  const uint32_t scale_dim = nope / 64u + 1u;
+  const uint32_t kv_pos = compressed_slot % kKvCacheBlockTokens;
+  const uint64_t block_stride =
+      static_cast<uint64_t>(kKvCacheBlockTokens) *
+      static_cast<uint64_t>(token_stride + scale_dim);
+  uint8_t *block_ptr = kv_cache + kv_offset_bytes +
+                       static_cast<uint64_t>(compressed_block) * block_stride;
+  uint8_t *data_ptr = block_ptr + static_cast<uint64_t>(kv_pos) * token_stride;
+  uint8_t *scale_ptr =
+      block_ptr + static_cast<uint64_t>(kKvCacheBlockTokens) * token_stride +
+      static_cast<uint64_t>(kv_pos) * scale_dim;
+  const uint32_t quant_block = 64u;
+  const uint32_t blocks = scale_dim;
+  for (uint32_t block = 0; block < blocks; ++block) {
+    const uint32_t start = block * quant_block;
+    const uint32_t end =
+        start + quant_block < nope ? start + quant_block : nope;
+    float absmax = 0.0f;
+    for (uint32_t dim = start; dim < end; ++dim) {
+      const float normed = deepseek_session_normed_compressed_value(
+          compressed, arena + layout.deepseek_compressor_norm, head_dim, dim,
+          rms_eps);
+      const float quant_input = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(normed));
+      absmax = fmaxf(absmax, fabsf(quant_input));
+    }
+    const float raw = fmaxf(absmax, 1.0e-4f) / 448.0f;
+    const float scale = exp2f(ceilf(log2f(raw)));
+    scale_ptr[block] = block * quant_block < nope
+                           ? deepseek_session_encode_e8m0_scale(scale)
+                           : 0u;
+    for (uint32_t dim = start; dim < end; ++dim) {
+      const float normed = deepseek_session_normed_compressed_value(
+          compressed, arena + layout.deepseek_compressor_norm, head_dim, dim,
+          rms_eps);
+      const float quant_input = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(normed));
+      const float scaled = fminf(fmaxf(quant_input / scale, -448.0f), 448.0f);
+      data_ptr[dim] =
+          deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
+    }
+  }
+  const uint32_t compressed_pos = compressed_slot * compress_ratio;
+  for (uint32_t dim = nope; dim < head_dim; ++dim) {
+    const float rotated = deepseek_session_rotated_compressed_value(
+        compressed, arena + layout.deepseek_compressor_norm, head_dim, rope,
+        dim, compressed_pos, rms_eps, rope_theta);
+    const uint16_t bits = deepseek_session_f32_to_bf16_bits(rotated);
+    const uint32_t rope_local = dim - nope;
+    data_ptr[nope + rope_local * 2u] = static_cast<uint8_t>(bits & 0xffu);
+    data_ptr[nope + rope_local * 2u + 1u] =
+        static_cast<uint8_t>(bits >> 8u);
+  }
+  return true;
+}
+
+__device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
+    uint16_t *arena, const float *state_cache, uint64_t state_offset_bytes,
+    uint8_t *kv_cache, uint64_t kv_offset_bytes,
+    uint32_t compressed_block_count, const SequenceLayerLayout &layout,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint32_t position, float rms_eps, float rope_theta, float *compressed) {
+  const uint32_t compress_ratio = layout.deepseek_compress_ratio;
+  const uint32_t head_dim = layout.deepseek_index_head_dim;
+  const uint32_t scale_dim = (head_dim / 128u) * sizeof(float);
+  if (state_cache == nullptr || kv_cache == nullptr || compress_ratio <= 1 ||
+      (position + 1u) % compress_ratio != 0 || head_dim == 0 ||
+      scale_dim < sizeof(float) ||
+      layout.deepseek_indexer_compressor_norm == kMissingOffset) {
+    return false;
+  }
+  const uint32_t coff = compress_ratio == 4 ? 2u : 1u;
+  const uint32_t state_width = coff * head_dim;
+  const uint32_t compressed_slot = position / compress_ratio;
+  const uint32_t compressed_block = compressed_slot / kKvCacheBlockTokens;
+  if (compressed_block >= compressed_block_count) {
+    return false;
+  }
+  deepseek_session_compress_state_to_scratch(
+      state_cache, state_offset_bytes, state_width, head_dim, kv_block_count,
+      kv_block_table, position, compress_ratio, compressed);
+
+  const uint32_t token_stride = head_dim;
+  const uint32_t kv_pos = compressed_slot % kKvCacheBlockTokens;
+  const uint64_t block_stride =
+      static_cast<uint64_t>(kKvCacheBlockTokens) *
+      static_cast<uint64_t>(token_stride + scale_dim);
+  uint8_t *block_ptr = kv_cache + kv_offset_bytes +
+                       static_cast<uint64_t>(compressed_block) * block_stride;
+  uint8_t *data_ptr = block_ptr + static_cast<uint64_t>(kv_pos) * token_stride;
+  uint8_t *scale_ptr =
+      block_ptr + static_cast<uint64_t>(kKvCacheBlockTokens) * token_stride +
+      static_cast<uint64_t>(kv_pos) * scale_dim;
+
+  const uint32_t rope = layout.deepseek_qk_rope_head_dim <= head_dim
+                            ? layout.deepseek_qk_rope_head_dim
+                            : 0u;
+  const uint32_t compressed_pos = compressed_slot * compress_ratio;
+  float absmax = 0.0f;
+  for (uint32_t dim = 0; dim < head_dim; ++dim) {
+    const float rotated = deepseek_session_rotated_compressed_value(
+        compressed, arena + layout.deepseek_indexer_compressor_norm, head_dim,
+        rope, dim, compressed_pos, rms_eps, rope_theta);
+    const float quant_input = deepseek_session_bf16_bits_to_f32(
+        deepseek_session_f32_to_bf16_bits(rotated));
+    absmax = fmaxf(absmax, fabsf(quant_input));
+  }
+  const float raw = fmaxf(absmax, 1.0e-4f) / 448.0f;
+  const float scale = exp2f(ceilf(log2f(raw)));
+  *reinterpret_cast<float *>(scale_ptr) = scale;
+  for (uint32_t dim = 0; dim < head_dim; ++dim) {
+    const float rotated = deepseek_session_rotated_compressed_value(
+        compressed, arena + layout.deepseek_indexer_compressor_norm, head_dim,
+        rope, dim, compressed_pos, rms_eps, rope_theta);
+    const float quant_input = deepseek_session_bf16_bits_to_f32(
+        deepseek_session_f32_to_bf16_bits(rotated));
+    const float scaled = fminf(fmaxf(quant_input / scale, -448.0f), 448.0f);
+    data_ptr[dim] = deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
+  }
+  return true;
+}
+
 __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t heads, uint32_t *step_cursor,
@@ -1056,8 +1373,14 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     const NervaCudaSyntheticTokenSlot *slots, uint16_t *projection_input,
     float *deepseek_compressor_state,
     uint64_t deepseek_compressor_state_offset_bytes,
+    uint8_t *deepseek_compressed_kv,
+    uint64_t deepseek_compressed_kv_offset_bytes,
+    uint32_t deepseek_compressed_kv_block_count,
     float *deepseek_indexer_state,
     uint64_t deepseek_indexer_state_offset_bytes,
+    uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
     uint64_t *deepseek_runtime_counters) {
   if (threadIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
@@ -1216,6 +1539,34 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
                 kDeepSeekRuntimeCounterIndexerStateWrites),
             1ull);
       }
+    }
+  }
+
+  if (deepseek_session_write_fp8_ds_mla_compressed_kv(
+          arena, deepseek_compressor_state,
+          deepseek_compressor_state_offset_bytes, deepseek_compressed_kv,
+          deepseek_compressed_kv_offset_bytes,
+          deepseek_compressed_kv_block_count, layout, kv_block_count,
+          kv_block_table, position, rms_eps, rope_theta, s.attn)) {
+    if (deepseek_runtime_counters != nullptr) {
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterCompressedKvWrites),
+          1ull);
+    }
+  }
+  if (deepseek_session_write_indexer_fp8_compressed_kv(
+          arena, deepseek_indexer_state, deepseek_indexer_state_offset_bytes,
+          deepseek_indexer_kv, deepseek_indexer_kv_offset_bytes,
+          deepseek_indexer_kv_block_count, layout, kv_block_count,
+          kv_block_table, position, rms_eps, rope_theta, s.attn)) {
+    if (deepseek_runtime_counters != nullptr) {
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterIndexerKvWrites),
+          1ull);
     }
   }
 

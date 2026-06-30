@@ -1224,7 +1224,7 @@ fn deepseek_v4_compressed_indexer_short_session_runs_through_sampling() {
 }
 
 #[test]
-fn deepseek_v4_compressed_indexer_rejects_compressed_context_until_cache_path() {
+fn deepseek_v4_compressed_indexer_writes_first_boundary_cache() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
     let layer = tiny_deepseek_v4_descriptor_layer();
@@ -1245,8 +1245,48 @@ fn deepseek_v4_compressed_indexer_rejects_compressed_context_until_cache_path() 
         let summary = session.run(&[0], 4, None);
         assert_eq!(
             summary.status,
+            SmokeStatus::Ok,
+            "context length at compress_ratio should write first compressed cache boundary: {:?}",
+            summary.error
+        );
+        assert_eq!(summary.steps, 4);
+        assert_eq!(summary.tokens.len(), 4);
+        assert_eq!(summary.kv_tokens, 4);
+        assert_eq!(summary.graph_replays, 4);
+        assert_eq!(
+            summary.deepseek_compressor_state_writes,
+            summary.graph_replays
+        );
+        assert_eq!(summary.deepseek_compressed_kv_writes, 1);
+        assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
+        assert_eq!(summary.deepseek_indexer_kv_writes, 0);
+    });
+}
+
+#[test]
+fn deepseek_v4_compressed_indexer_rejects_after_first_boundary_until_attention_reads_cache() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let layer = tiny_deepseek_v4_descriptor_layer();
+    with_tiny_deepseek_v4_descriptor_session(layer, 8, |created| {
+        if created.summary.status == SmokeStatus::Unavailable {
+            return;
+        }
+        assert_eq!(
+            created.summary.status,
+            SmokeStatus::Ok,
+            "V4 compressed-indexer DeepSeek should create before runtime boundary checks: {:?}",
+            created.summary.error
+        );
+        let mut session = created
+            .session
+            .expect("V4 compressed-indexer session handle should exist");
+
+        let summary = session.run(&[0], 5, None);
+        assert_eq!(
+            summary.status,
             SmokeStatus::Failed,
-            "context length at compress_ratio must fail until native compressed cache is implemented"
+            "context past compress_ratio must fail until attention reads native compressed cache"
         );
         assert!(
             summary

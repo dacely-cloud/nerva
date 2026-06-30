@@ -149,8 +149,14 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     const NervaCudaSyntheticTokenSlot *slots, uint16_t *projection_input,
     float *deepseek_compressor_state,
     uint64_t deepseek_compressor_state_offset_bytes,
+    uint8_t *deepseek_compressed_kv,
+    uint64_t deepseek_compressed_kv_offset_bytes,
+    uint32_t deepseek_compressed_kv_block_count,
     float *deepseek_indexer_state,
     uint64_t deepseek_indexer_state_offset_bytes,
+    uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
     uint64_t *deepseek_runtime_counters);
 __global__ void hf_layer_finish_kernel(
     uint16_t *arena, uint64_t output_offset, uint32_t dtype, uint32_t hidden,
