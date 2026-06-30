@@ -69,6 +69,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_bias_router_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_hash_router_runtime"));
+    assert!(json.contains("deepseek_qkv_rmsnorm_reference"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_api"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_smoke"));
     assert!(json.contains("deepseek_v4_mhc_warmup_plan_matches_vllm"));
@@ -307,6 +308,7 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("\"cache_dtype_str\":\"fp8_ds_mla\""));
     assert!(json.contains("\"page_size_bytes\":1728"));
     assert!(json.contains("cuda_deepseek_fp8_ds_mla_kv_pack_api"));
+    assert!(json.contains("deepseek_qkv_rmsnorm_reference"));
     assert!(json.contains("cuda_deepseek_qkv_rmsnorm_api"));
     assert!(json.contains("deepseek_v4_mhc_warmup_plan_matches_vllm"));
     assert!(json.contains("deepseek_v4_mhc_pre_post_head_reference_matches_vllm_torch"));

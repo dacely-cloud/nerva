@@ -1,5 +1,5 @@
 use crate::deepseek_mla::ffi::{
-    NervaCudaDeepSeekQKvRmsNormRequest, NervaCudaDeepSeekQKvRmsNormResult, run_deepseek_qkv_rmsnorm,
+    run_deepseek_qkv_rmsnorm, NervaCudaDeepSeekQKvRmsNormRequest, NervaCudaDeepSeekQKvRmsNormResult,
 };
 use crate::json::json_opt_str;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;
@@ -25,6 +25,30 @@ pub struct CudaDeepSeekQKvRmsNormSummary {
     pub sync_calls: u64,
     pub hot_path_allocations: u64,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeepSeekQKvRmsNormReference {
+    pub q_out: Vec<f32>,
+    pub kv_out: Vec<f32>,
+}
+
+pub fn deepseek_qkv_rmsnorm_reference(
+    q: &[f32],
+    kv: &[f32],
+    q_weight: &[f32],
+    kv_weight: &[f32],
+    num_tokens: u32,
+    q_size: u32,
+    kv_size: u32,
+    eps: f32,
+) -> Result<DeepSeekQKvRmsNormReference, String> {
+    let shape =
+        validate_qkv_rmsnorm_shape(q, kv, q_weight, kv_weight, num_tokens, q_size, kv_size, eps)?;
+    Ok(DeepSeekQKvRmsNormReference {
+        q_out: reference_rmsnorm_rows(q, q_weight, shape.num_tokens, shape.q_size, eps),
+        kv_out: reference_rmsnorm_rows(kv, kv_weight, shape.num_tokens, shape.kv_size, eps),
+    })
 }
 
 impl CudaDeepSeekQKvRmsNormSummary {
@@ -68,26 +92,9 @@ pub fn deepseek_qkv_rmsnorm(
     kv_size: u32,
     eps: f32,
 ) -> CudaDeepSeekQKvRmsNormSummary {
-    let q_values = (num_tokens as usize)
-        .checked_mul(q_size as usize)
-        .unwrap_or(usize::MAX);
-    let kv_values = (num_tokens as usize)
-        .checked_mul(kv_size as usize)
-        .unwrap_or(usize::MAX);
-    if num_tokens == 0
-        || q_size == 0
-        || kv_size == 0
-        || !eps.is_finite()
-        || eps < 0.0
-        || q_values == usize::MAX
-        || kv_values == usize::MAX
-        || q.len() != q_values
-        || kv.len() != kv_values
-        || q_weight.len() != q_size as usize
-        || kv_weight.len() != kv_size as usize
-        || q_values > u32::MAX as usize
-        || kv_values > u32::MAX as usize
-    {
+    let Ok(shape) =
+        validate_qkv_rmsnorm_shape(q, kv, q_weight, kv_weight, num_tokens, q_size, kv_size, eps)
+    else {
         return failed_summary(
             num_tokens,
             q_size,
@@ -97,10 +104,10 @@ pub fn deepseek_qkv_rmsnorm(
             Vec::new(),
             "invalid DeepSeek Q/KV RMSNorm shape",
         );
-    }
+    };
 
-    let mut q_out = vec![0.0f32; q_values];
-    let mut kv_out = vec![0.0f32; kv_values];
+    let mut q_out = vec![0.0f32; shape.q_values];
+    let mut kv_out = vec![0.0f32; shape.kv_values];
     let request = NervaCudaDeepSeekQKvRmsNormRequest {
         num_tokens,
         q_size,
@@ -116,6 +123,74 @@ pub fn deepseek_qkv_rmsnorm(
     let mut out = NervaCudaDeepSeekQKvRmsNormResult::default();
     let return_code = run_deepseek_qkv_rmsnorm(&request, &mut out);
     summarize(return_code, out, q_out, kv_out)
+}
+
+#[derive(Clone, Copy)]
+struct QKvRmsNormShape {
+    num_tokens: usize,
+    q_size: usize,
+    kv_size: usize,
+    q_values: usize,
+    kv_values: usize,
+}
+
+fn validate_qkv_rmsnorm_shape(
+    q: &[f32],
+    kv: &[f32],
+    q_weight: &[f32],
+    kv_weight: &[f32],
+    num_tokens: u32,
+    q_size: u32,
+    kv_size: u32,
+    eps: f32,
+) -> Result<QKvRmsNormShape, String> {
+    let q_values = (num_tokens as usize)
+        .checked_mul(q_size as usize)
+        .ok_or_else(|| "DeepSeek Q/KV RMSNorm Q shape overflow".to_string())?;
+    let kv_values = (num_tokens as usize)
+        .checked_mul(kv_size as usize)
+        .ok_or_else(|| "DeepSeek Q/KV RMSNorm KV shape overflow".to_string())?;
+    if num_tokens == 0
+        || q_size == 0
+        || kv_size == 0
+        || !eps.is_finite()
+        || eps < 0.0
+        || q.len() != q_values
+        || kv.len() != kv_values
+        || q_weight.len() != q_size as usize
+        || kv_weight.len() != kv_size as usize
+        || q_values > u32::MAX as usize
+        || kv_values > u32::MAX as usize
+    {
+        return Err("invalid DeepSeek Q/KV RMSNorm shape".to_string());
+    }
+
+    Ok(QKvRmsNormShape {
+        num_tokens: num_tokens as usize,
+        q_size: q_size as usize,
+        kv_size: kv_size as usize,
+        q_values,
+        kv_values,
+    })
+}
+
+fn reference_rmsnorm_rows(
+    values: &[f32],
+    weight: &[f32],
+    rows: usize,
+    cols: usize,
+    eps: f32,
+) -> Vec<f32> {
+    let mut out = vec![0.0f32; rows * cols];
+    for row in 0..rows {
+        let row_values = &values[row * cols..(row + 1) * cols];
+        let variance = row_values.iter().map(|value| value * value).sum::<f32>() / cols as f32;
+        let rrms = 1.0 / (variance + eps).sqrt();
+        for col in 0..cols {
+            out[row * cols + col] = row_values[col] * rrms * weight[col];
+        }
+    }
+    out
 }
 
 fn summarize(

@@ -1,6 +1,8 @@
-use crate::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
+use crate::deepseek_mla::decode::{deepseek_mla_decode, CudaDeepSeekMlaDecodeInput};
 use crate::deepseek_mla::probe::{deepseek_mla_smoke, deepseek_qkv_rmsnorm_smoke};
-use crate::deepseek_mla::qkv_norm::{CudaDeepSeekQKvRmsNormSummary, deepseek_qkv_rmsnorm};
+use crate::deepseek_mla::qkv_norm::{
+    deepseek_qkv_rmsnorm, deepseek_qkv_rmsnorm_reference, CudaDeepSeekQKvRmsNormSummary,
+};
 use crate::deepseek_mla::summary::CudaDeepSeekMlaSummary;
 use crate::smoke::status::SmokeStatus;
 
@@ -76,6 +78,36 @@ fn deepseek_qkv_rmsnorm_summary_serializes_outputs() {
 }
 
 #[test]
+fn deepseek_qkv_rmsnorm_reference_matches_vllm_fused_q_kv_rmsnorm_math() {
+    let q = [
+        1.0, -2.0, 3.0, -4.0, // token 0
+        -0.5, 1.5, -2.5, 3.5, // token 1
+    ];
+    let kv = [
+        0.25, -0.75, 1.25, // token 0
+        -1.5, 2.0, -2.5, // token 1
+    ];
+    let q_weight = [0.5, 1.0, -1.5, 2.0];
+    let kv_weight = [1.25, -0.5, 0.75];
+    let reference =
+        deepseek_qkv_rmsnorm_reference(&q, &kv, &q_weight, &kv_weight, 2, 4, 3, 1e-5).unwrap();
+
+    assert_eq!(reference.q_out.len(), 8);
+    assert_eq!(reference.kv_out.len(), 6);
+    let q_row0_variance = (1.0f32 + 4.0 + 9.0 + 16.0) / 4.0;
+    let q_row0_rrms = 1.0 / (q_row0_variance + 1e-5).sqrt();
+    assert_close(reference.q_out[0], 1.0 * q_row0_rrms * 0.5, 1e-6);
+    assert_close(reference.q_out[3], -4.0 * q_row0_rrms * 2.0, 1e-6);
+    let kv_row1_variance = (2.25f32 + 4.0 + 6.25) / 3.0;
+    let kv_row1_rrms = 1.0 / (kv_row1_variance + 1e-5).sqrt();
+    assert_close(reference.kv_out[3], -1.5 * kv_row1_rrms * 1.25, 1e-6);
+    assert_close(reference.kv_out[5], -2.5 * kv_row1_rrms * 0.75, 1e-6);
+    assert!(
+        deepseek_qkv_rmsnorm_reference(&q, &kv, &q_weight[..3], &kv_weight, 2, 4, 3, 1e-5).is_err()
+    );
+}
+
+#[test]
 fn deepseek_qkv_rmsnorm_smoke_is_repeatable_when_device_is_available() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
@@ -116,15 +148,15 @@ fn deepseek_qkv_rmsnorm_api_matches_vllm_fused_q_kv_rmsnorm_math() {
         return;
     }
 
-    let expected_q = reference_rmsnorm_rows(&q, &q_weight, 2, 4, 1e-5);
-    let expected_kv = reference_rmsnorm_rows(&kv, &kv_weight, 2, 3, 1e-5);
+    let expected =
+        deepseek_qkv_rmsnorm_reference(&q, &kv, &q_weight, &kv_weight, 2, 4, 3, 1e-5).unwrap();
     assert_eq!(summary.num_tokens, 2);
     assert_eq!(summary.q_size, 4);
     assert_eq!(summary.kv_size, 3);
-    for (actual, expected) in summary.q_out.iter().zip(expected_q.iter()) {
+    for (actual, expected) in summary.q_out.iter().zip(expected.q_out.iter()) {
         assert_close(*actual, *expected, 1e-5);
     }
-    for (actual, expected) in summary.kv_out.iter().zip(expected_kv.iter()) {
+    for (actual, expected) in summary.kv_out.iter().zip(expected.kv_out.iter()) {
         assert_close(*actual, *expected, 1e-5);
     }
     assert_eq!(summary.kernel_launches, 1);
@@ -270,25 +302,6 @@ fn reference_mla_decode(
         }
     }
     output
-}
-
-fn reference_rmsnorm_rows(
-    values: &[f32],
-    weight: &[f32],
-    rows: usize,
-    cols: usize,
-    eps: f32,
-) -> Vec<f32> {
-    let mut out = vec![0.0f32; rows * cols];
-    for row in 0..rows {
-        let row_values = &values[row * cols..(row + 1) * cols];
-        let variance = row_values.iter().map(|value| value * value).sum::<f32>() / cols as f32;
-        let rrms = 1.0 / (variance + eps).sqrt();
-        for col in 0..cols {
-            out[row * cols + col] = row_values[col] * rrms * weight[col];
-        }
-    }
-    out
 }
 
 fn assert_close(actual: f32, expected: f32, tolerance: f32) {

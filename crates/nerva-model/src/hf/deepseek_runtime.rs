@@ -741,6 +741,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_bias_router_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_hash_router_runtime".to_string());
+        primitives.push("deepseek_qkv_rmsnorm_reference".to_string());
         primitives.push("cuda_deepseek_qkv_rmsnorm_api".to_string());
         primitives.push("cuda_deepseek_qkv_rmsnorm_smoke".to_string());
         primitives.push("cuda_deepseek_fused_inv_rope_fp8_quant_api".to_string());
@@ -1020,6 +1021,7 @@ fn coverage_for_unit(
                 "cuda_deepseek_mhc_fused_post_pre_smoke",
                 "cuda_deepseek_mhc_head_api",
                 "cuda_deepseek_mhc_head_smoke",
+                "deepseek_qkv_rmsnorm_reference",
                 "cuda_deepseek_qkv_rmsnorm_api",
                 "cuda_deepseek_qkv_rmsnorm_smoke",
                 "cuda_deepseek_fused_inv_rope_fp8_quant_api",
@@ -1077,6 +1079,7 @@ fn coverage_for_unit(
             "partial",
             &[
                 "deepseek_v4_mhc_compressor_indexer_manifest",
+                "deepseek_qkv_rmsnorm_reference",
                 "cuda_deepseek_qkv_rmsnorm_api",
                 "cuda_deepseek_qkv_rmsnorm_smoke",
                 "deepseek_save_partial_states_reference",
