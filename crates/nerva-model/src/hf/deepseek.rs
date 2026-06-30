@@ -9,6 +9,8 @@ use crate::hf::metadata::HfModelMetadata;
 const VLLM_DEEPSEEK_V3_BLOCK_SIZE: usize = 64;
 const VLLM_DEEPSEEK_V4_BLOCK_SIZE: usize = 256;
 const VLLM_DEEPSEEK_V4_SWA_BLOCK_SIZE: usize = 64;
+const VLLM_DEEPSEEK_V4_C4_COMPRESSOR_BLOCK_SIZE: usize = 4;
+const VLLM_DEEPSEEK_V4_C128_COMPRESSOR_BLOCK_SIZE: usize = 8;
 const VLLM_DEEPSEEK_V4_FP8_DS_MLA_BYTES_PER_TOKEN: usize = 584;
 const VLLM_DEEPSEEK_V32_FP8_DS_MLA_BYTES_PER_TOKEN: usize = 656;
 const VLLM_DEEPSEEK_INDEXER_QUANT_BLOCK: usize = 128;
@@ -213,12 +215,11 @@ pub fn plan_deepseek_vllm_kv_cache_with_block_size(
             });
         }
         HfArchitectureKind::DeepSeekV4 => {
-            let mut swa_layers = 0usize;
             let mut c4_layers = 0usize;
             let mut c128_layers = 0usize;
             for ratio in v4_layer_compress_ratios(metadata)? {
                 match ratio {
-                    0 | 1 => swa_layers += 1,
+                    0 | 1 => {}
                     4 => c4_layers += 1,
                     128 => c128_layers += 1,
                     other => {
@@ -230,10 +231,10 @@ pub fn plan_deepseek_vllm_kv_cache_with_block_size(
                     }
                 }
             }
-            if swa_layers > 0 {
+            if metadata.num_hidden_layers > 0 {
                 groups.push(DeepSeekVllmKvCacheGroup {
                     name: "v4_swa".to_string(),
-                    layers: swa_layers,
+                    layers: metadata.num_hidden_layers,
                     spec: mla_spec(
                         "sliding_window_mla",
                         VLLM_DEEPSEEK_V4_SWA_BLOCK_SIZE,
@@ -247,22 +248,16 @@ pub fn plan_deepseek_vllm_kv_cache_with_block_size(
                     )?,
                 });
             }
-            for (name, ratio, layers) in [
-                ("v4_c4_mla", 4usize, c4_layers),
-                ("v4_c128_mla", 128, c128_layers),
-            ] {
-                if layers == 0 {
-                    continue;
-                }
+            if c4_layers > 0 {
                 groups.push(DeepSeekVllmKvCacheGroup {
-                    name: name.to_string(),
-                    layers,
+                    name: "v4_c4_mla".to_string(),
+                    layers: c4_layers,
                     spec: mla_spec(
                         "mla_attention",
                         block_size,
                         mla_dimensions.semantic_head_size,
                         normalized_cache_dtype,
-                        ratio,
+                        4,
                         None,
                         v4_alignment(normalized_cache_dtype),
                         Some("deepseek_v4"),
@@ -270,17 +265,64 @@ pub fn plan_deepseek_vllm_kv_cache_with_block_size(
                     )?,
                 });
                 groups.push(DeepSeekVllmKvCacheGroup {
-                    name: format!("{name}_indexer"),
-                    layers,
+                    name: "v4_c4_mla_indexer".to_string(),
+                    layers: c4_layers,
                     spec: indexer_spec(
                         "mla_indexer",
                         block_size,
                         required(metadata.index_head_dim, "index_head_dim")?,
                         normalized_cache_dtype,
-                        ratio,
+                        4,
                         Some(VLLM_DEEPSEEK_V4_ALIGNMENT),
                         Some("deepseek_v4"),
                         metadata.architecture,
+                    )?,
+                });
+                groups.push(DeepSeekVllmKvCacheGroup {
+                    name: "v4_c4_compressor_state".to_string(),
+                    layers: c4_layers,
+                    spec: v4_compressor_state_spec(
+                        VLLM_DEEPSEEK_V4_C4_COMPRESSOR_BLOCK_SIZE,
+                        v4_compressor_state_dim(mla_dimensions.semantic_head_size, 4)?,
+                        8,
+                    )?,
+                });
+                groups.push(DeepSeekVllmKvCacheGroup {
+                    name: "v4_c4_indexer_compressor_state".to_string(),
+                    layers: c4_layers,
+                    spec: v4_compressor_state_spec(
+                        VLLM_DEEPSEEK_V4_C4_COMPRESSOR_BLOCK_SIZE,
+                        v4_compressor_state_dim(
+                            required(metadata.index_head_dim, "index_head_dim")?,
+                            4,
+                        )?,
+                        8,
+                    )?,
+                });
+            }
+            if c128_layers > 0 {
+                groups.push(DeepSeekVllmKvCacheGroup {
+                    name: "v4_c128_mla".to_string(),
+                    layers: c128_layers,
+                    spec: mla_spec(
+                        "mla_attention",
+                        block_size,
+                        mla_dimensions.semantic_head_size,
+                        normalized_cache_dtype,
+                        128,
+                        None,
+                        v4_alignment(normalized_cache_dtype),
+                        Some("deepseek_v4"),
+                        metadata.architecture,
+                    )?,
+                });
+                groups.push(DeepSeekVllmKvCacheGroup {
+                    name: "v4_c128_compressor_state".to_string(),
+                    layers: c128_layers,
+                    spec: v4_compressor_state_spec(
+                        VLLM_DEEPSEEK_V4_C128_COMPRESSOR_BLOCK_SIZE,
+                        v4_compressor_state_dim(mla_dimensions.semantic_head_size, 128)?,
+                        128,
                     )?,
                 });
             }
@@ -447,6 +489,44 @@ fn indexer_spec(
         model_version,
         real_page_size_bytes,
     )?)
+}
+
+fn v4_compressor_state_spec(
+    block_size: usize,
+    state_dim: usize,
+    sliding_window: usize,
+) -> Result<DeepSeekVllmKvCacheSpec> {
+    let real_page_size_bytes = checked_mul3(
+        block_size,
+        1,
+        state_dim,
+        dtype_size_bytes(DType::F32),
+        "DeepSeek V4 compressor state page bytes",
+    )?;
+    spec_from_parts(
+        "sliding_window_mla",
+        block_size,
+        block_size,
+        state_dim,
+        DType::F32,
+        "float32_state",
+        1,
+        Some(sliding_window),
+        Some(VLLM_DEEPSEEK_V4_ALIGNMENT),
+        None,
+        real_page_size_bytes,
+    )
+}
+
+fn v4_compressor_state_dim(head_dim: usize, compress_ratio: usize) -> Result<usize> {
+    let coff = 1 + usize::from(compress_ratio == 4);
+    checked_mul3(
+        2,
+        coff,
+        head_dim,
+        1,
+        "DeepSeek V4 compressor state dimension",
+    )
 }
 
 fn spec_from_parts(

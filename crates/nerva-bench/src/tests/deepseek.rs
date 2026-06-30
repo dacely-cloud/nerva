@@ -1,8 +1,8 @@
 use crate::model_io::deepseek::{
-    DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
     deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
     run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_compare,
     run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
+    DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
 };
 
 #[test]
@@ -504,11 +504,8 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(
         json.contains("benchmark V4 mHC, sparse MLA, and MegaMoE throughput against /root/vllm")
     );
-    assert!(
-        json.contains(
-            "run same-checkpoint full-layer routed output differential against /root/vllm"
-        )
-    );
+    assert!(json
+        .contains("run same-checkpoint full-layer routed output differential against /root/vllm"));
 
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -746,12 +743,16 @@ ev.wait
         root,
         "vllm/models/deepseek_v4/compressor.py",
         r#"
+class CompressorStateCache: pass
 class DeepseekCompressor: pass
 save_partial_states
 compress_norm_rope_store_triton
 compress_ratio
 SlidingWindowMLASpec
 alignment=576
+self.block_size = 4
+self.block_size = 8
+state_dim=2 * self.coff * self.head_dim
 CompressorMetadataBuilder
 "#,
     );

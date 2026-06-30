@@ -312,11 +312,11 @@ fn deepseek_vllm_kv_plan_matches_v4_sparse_swa_and_indexer_contracts() {
 
     let plan = plan_deepseek_vllm_kv_cache(&metadata, "fp8_ds_mla").unwrap();
     assert_eq!(plan.default_block_size, 256);
-    assert_eq!(plan.groups.len(), 5);
+    assert_eq!(plan.groups.len(), 7);
 
     let swa = &plan.groups[0];
     assert_eq!(swa.name, "v4_swa");
-    assert_eq!(swa.layers, 2);
+    assert_eq!(swa.layers, 4);
     assert_eq!(swa.spec.kind, "sliding_window_mla");
     assert_eq!(swa.spec.block_size, 64);
     assert_eq!(swa.spec.sliding_window, Some(4096));
@@ -342,7 +342,28 @@ fn deepseek_vllm_kv_plan_matches_v4_sparse_swa_and_indexer_contracts() {
     assert_eq!(c4_indexer.spec.page_size_padded, Some(8640));
     assert_eq!(c4_indexer.spec.page_size_bytes, 8640);
 
-    let c128 = &plan.groups[3];
+    let c4_compressor = &plan.groups[3];
+    assert_eq!(c4_compressor.name, "v4_c4_compressor_state");
+    assert_eq!(c4_compressor.layers, 1);
+    assert_eq!(c4_compressor.spec.kind, "sliding_window_mla");
+    assert_eq!(c4_compressor.spec.block_size, 4);
+    assert_eq!(c4_compressor.spec.head_size, 2048);
+    assert_eq!(c4_compressor.spec.sliding_window, Some(8));
+    assert_eq!(c4_compressor.spec.real_page_size_bytes, 4 * 2048 * 4);
+    assert_eq!(c4_compressor.spec.page_size_padded, Some(32832));
+    assert_eq!(c4_compressor.spec.page_size_bytes, 32832);
+
+    let c4_indexer_compressor = &plan.groups[4];
+    assert_eq!(c4_indexer_compressor.name, "v4_c4_indexer_compressor_state");
+    assert_eq!(c4_indexer_compressor.layers, 1);
+    assert_eq!(c4_indexer_compressor.spec.block_size, 4);
+    assert_eq!(c4_indexer_compressor.spec.head_size, 512);
+    assert_eq!(c4_indexer_compressor.spec.sliding_window, Some(8));
+    assert_eq!(c4_indexer_compressor.spec.real_page_size_bytes, 4 * 512 * 4);
+    assert_eq!(c4_indexer_compressor.spec.page_size_padded, Some(8640));
+    assert_eq!(c4_indexer_compressor.spec.page_size_bytes, 8640);
+
+    let c128 = &plan.groups[5];
     assert_eq!(c128.name, "v4_c128_mla");
     assert_eq!(c128.layers, 1);
     assert_eq!(c128.spec.storage_block_size, 2);
@@ -350,12 +371,15 @@ fn deepseek_vllm_kv_plan_matches_v4_sparse_swa_and_indexer_contracts() {
     assert_eq!(c128.spec.page_size_padded, Some(1728));
     assert_eq!(c128.spec.page_size_bytes, 1728);
 
-    let c128_indexer = &plan.groups[4];
-    assert_eq!(c128_indexer.name, "v4_c128_mla_indexer");
-    assert_eq!(c128_indexer.spec.storage_block_size, 2);
-    assert_eq!(c128_indexer.spec.real_page_size_bytes, 2 * 132);
-    assert_eq!(c128_indexer.spec.page_size_padded, Some(576));
-    assert_eq!(c128_indexer.spec.page_size_bytes, 576);
+    let c128_compressor = &plan.groups[6];
+    assert_eq!(c128_compressor.name, "v4_c128_compressor_state");
+    assert_eq!(c128_compressor.layers, 1);
+    assert_eq!(c128_compressor.spec.block_size, 8);
+    assert_eq!(c128_compressor.spec.head_size, 1024);
+    assert_eq!(c128_compressor.spec.sliding_window, Some(128));
+    assert_eq!(c128_compressor.spec.real_page_size_bytes, 8 * 1024 * 4);
+    assert_eq!(c128_compressor.spec.page_size_padded, Some(32832));
+    assert_eq!(c128_compressor.spec.page_size_bytes, 32832);
     assert!(plan
         .to_json()
         .contains("/root/vllm/vllm/models/deepseek_v4/sparse_mla.py"));
@@ -443,14 +467,27 @@ fn deepseek_layer_execution_plan_matches_vllm_v3_v32_and_v4_modes() {
         v4_plan.layers[2].indexer_kv_cache_group.as_deref(),
         Some("v4_c4_mla_indexer")
     );
+    assert_eq!(
+        v4_plan.layers[2].compressor_state_kv_cache_group.as_deref(),
+        Some("v4_c4_compressor_state")
+    );
+    assert_eq!(
+        v4_plan.layers[2]
+            .indexer_compressor_state_kv_cache_group
+            .as_deref(),
+        Some("v4_c4_indexer_compressor_state")
+    );
     assert!(v4_plan.layers[2].uses_sparse_indexer);
     assert!(v4_plan.layers[2].uses_compressor);
     assert_eq!(v4_plan.layers[3].primary_kv_cache_group, "v4_c128_mla");
+    assert_eq!(v4_plan.layers[3].indexer_kv_cache_group.as_deref(), None);
     assert_eq!(
-        v4_plan.layers[3].indexer_kv_cache_group.as_deref(),
-        Some("v4_c128_mla_indexer")
+        v4_plan.layers[3].compressor_state_kv_cache_group.as_deref(),
+        Some("v4_c128_compressor_state")
     );
     assert!(!v4_plan.layers[3].uses_sparse_indexer);
+    assert!(!v4_plan.layers[3].uses_compressed_indexer_cache);
+    assert!(v4_plan.layers[3].uses_compressor);
     assert!(v4_plan.layers[0].uses_hash_router);
     assert!(v4_plan.layers[2].uses_hash_router);
     assert!(!v4_plan.layers[3].uses_hash_router);

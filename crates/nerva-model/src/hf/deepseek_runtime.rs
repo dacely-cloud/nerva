@@ -56,6 +56,8 @@ pub struct DeepSeekLayerExecution {
     pub index_topk: usize,
     pub primary_kv_cache_group: String,
     pub indexer_kv_cache_group: Option<String>,
+    pub compressor_state_kv_cache_group: Option<String>,
+    pub indexer_compressor_state_kv_cache_group: Option<String>,
     pub uses_sliding_window_cache: bool,
     pub uses_sparse_indexer: bool,
     pub uses_compressed_indexer_cache: bool,
@@ -129,6 +131,8 @@ pub fn deepseek_layer_execution_plan(
                     1,
                     "v3_main_mla",
                     None,
+                    None,
+                    None,
                     false,
                     false,
                     false,
@@ -147,6 +151,8 @@ pub fn deepseek_layer_execution_plan(
                     1,
                     "v3_2_main_mla",
                     Some("v3_2_sparse_indexer"),
+                    None,
+                    None,
                     false,
                     true,
                     true,
@@ -168,6 +174,8 @@ pub fn deepseek_layer_execution_plan(
                             compress_ratio,
                             "v4_swa",
                             None,
+                            None,
+                            None,
                             true,
                             false,
                             false,
@@ -177,6 +185,8 @@ pub fn deepseek_layer_execution_plan(
                     4 => {
                         require_kv_group(&kv_plan, "v4_c4_mla")?;
                         require_kv_group(&kv_plan, "v4_c4_mla_indexer")?;
+                        require_kv_group(&kv_plan, "v4_c4_compressor_state")?;
+                        require_kv_group(&kv_plan, "v4_c4_indexer_compressor_state")?;
                         Ok(layer_execution(
                             metadata,
                             layer,
@@ -184,6 +194,8 @@ pub fn deepseek_layer_execution_plan(
                             compress_ratio,
                             "v4_c4_mla",
                             Some("v4_c4_mla_indexer"),
+                            Some("v4_c4_compressor_state"),
+                            Some("v4_c4_indexer_compressor_state"),
                             false,
                             true,
                             true,
@@ -192,17 +204,19 @@ pub fn deepseek_layer_execution_plan(
                     }
                     128 => {
                         require_kv_group(&kv_plan, "v4_c128_mla")?;
-                        require_kv_group(&kv_plan, "v4_c128_mla_indexer")?;
+                        require_kv_group(&kv_plan, "v4_c128_compressor_state")?;
                         Ok(layer_execution(
                             metadata,
                             layer,
                             DeepSeekAttentionExecutionKind::V4CompressedMla,
                             compress_ratio,
                             "v4_c128_mla",
-                            Some("v4_c128_mla_indexer"),
+                            None,
+                            Some("v4_c128_compressor_state"),
+                            None,
                             false,
                             false,
-                            true,
+                            false,
                             true,
                         ))
                     }
@@ -358,6 +372,8 @@ fn layer_execution(
     compress_ratio: usize,
     primary_kv_cache_group: &str,
     indexer_kv_cache_group: Option<&str>,
+    compressor_state_kv_cache_group: Option<&str>,
+    indexer_compressor_state_kv_cache_group: Option<&str>,
     uses_sliding_window_cache: bool,
     uses_sparse_indexer: bool,
     uses_compressed_indexer_cache: bool,
@@ -370,6 +386,9 @@ fn layer_execution(
         index_topk: metadata.index_topk.unwrap_or(0),
         primary_kv_cache_group: primary_kv_cache_group.to_string(),
         indexer_kv_cache_group: indexer_kv_cache_group.map(str::to_string),
+        compressor_state_kv_cache_group: compressor_state_kv_cache_group.map(str::to_string),
+        indexer_compressor_state_kv_cache_group: indexer_compressor_state_kv_cache_group
+            .map(str::to_string),
         uses_sliding_window_cache,
         uses_sparse_indexer,
         uses_compressed_indexer_cache,
