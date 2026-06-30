@@ -2840,19 +2840,11 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
   }
 
   const float attn_scale = rsqrtf(static_cast<float>(head_dim));
-  const uint32_t compressed_raw_start =
-      compressed_attention_tokens == 0
-          ? 0u
-          : compressed_attention_tokens * layout.deepseek_compress_ratio;
   const uint32_t window_raw_start =
       local_window_tokens == 0 || position + 1u <= local_window_tokens
           ? 0u
           : position + 1u - local_window_tokens;
-  const uint32_t raw_attention_start =
-      layout.deepseek_compress_ratio <= 1
-          ? window_raw_start
-          : (compressed_raw_start > window_raw_start ? compressed_raw_start
-                                                     : window_raw_start);
+  const uint32_t raw_attention_start = window_raw_start;
   const uint32_t raw_attention_tokens =
       position + 1u > raw_attention_start ? position + 1u - raw_attention_start
                                           : 0u;

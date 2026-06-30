@@ -3245,6 +3245,10 @@ fn deepseek_v4_compressed_indexer_short_session_runs_through_sampling() {
         assert_eq!(summary.deepseek_indexer_kv_writes, 0);
         assert_eq!(summary.deepseek_compressed_kv_attention_reads, 0);
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 0);
+        assert_eq!(
+            summary.deepseek_raw_attention_tokens_scanned, 3,
+            "V4 compressed-indexer must keep the raw SWA path active before the first compressed block"
+        );
         assert_eq!(summary.deepseek_sparse_topk_selections, 0);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 0);
         assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
@@ -3290,6 +3294,16 @@ fn deepseek_v4_compressed_indexer_writes_first_boundary_cache() {
         assert_eq!(summary.deepseek_indexer_kv_writes, 1);
         assert_eq!(summary.deepseek_compressed_kv_attention_reads, 1);
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 1);
+        assert_eq!(
+            summary.deepseek_raw_attention_tokens_scanned, 10,
+            "V4 C4 attention should scan the full SWA window in addition to compressed top-k"
+        );
+        assert_eq!(
+            summary.deepseek_raw_attention_tokens_scanned
+                + summary.deepseek_compressed_kv_attention_slots_scanned,
+            11,
+            "V4 C4 mixed sparse length should match vLLM's SWA + extra compressed top-k contract"
+        );
         assert_eq!(summary.deepseek_sparse_topk_selections, 1);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 1);
         assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
@@ -3782,6 +3796,16 @@ fn deepseek_v4_compressed_indexer_runs_past_first_boundary_with_compressed_atten
         assert_eq!(summary.deepseek_indexer_kv_writes, 1);
         assert_eq!(summary.deepseek_compressed_kv_attention_reads, 2);
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 2);
+        assert_eq!(
+            summary.deepseek_raw_attention_tokens_scanned, 15,
+            "V4 C4 attention should keep scanning SWA tokens after compressed cache appears"
+        );
+        assert_eq!(
+            summary.deepseek_raw_attention_tokens_scanned
+                + summary.deepseek_compressed_kv_attention_slots_scanned,
+            17,
+            "V4 C4 mixed sparse length should be raw SWA plus compressed top-k slots"
+        );
         assert_eq!(summary.deepseek_sparse_topk_selections, 2);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 2);
         assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
@@ -3832,6 +3856,16 @@ fn deepseek_v4_compressed_indexer_tracks_compressed_attention_scan_growth() {
         assert_eq!(summary.deepseek_indexer_kv_writes, 2);
         assert_eq!(summary.deepseek_compressed_kv_attention_reads, 5);
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 6);
+        assert_eq!(
+            summary.deepseek_raw_attention_tokens_scanned, 36,
+            "V4 C4 attention should preserve the full SWA window while compressed scans grow"
+        );
+        assert_eq!(
+            summary.deepseek_raw_attention_tokens_scanned
+                + summary.deepseek_compressed_kv_attention_slots_scanned,
+            42,
+            "V4 C4 cover-all sparse length should combine SWA tokens and compressed slots"
+        );
         assert_eq!(summary.deepseek_sparse_topk_selections, 5);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 6);
         assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 0);
@@ -3891,6 +3925,16 @@ fn deepseek_v4_compressed_indexer_limits_attention_to_sparse_topk() {
         assert_eq!(summary.deepseek_indexer_kv_writes, 2);
         assert_eq!(summary.deepseek_compressed_kv_attention_reads, 5);
         assert_eq!(summary.deepseek_compressed_kv_attention_slots_scanned, 5);
+        assert_eq!(
+            summary.deepseek_raw_attention_tokens_scanned, 36,
+            "V4 C4 top-k limiting should not truncate the local SWA window"
+        );
+        assert_eq!(
+            summary.deepseek_raw_attention_tokens_scanned
+                + summary.deepseek_compressed_kv_attention_slots_scanned,
+            41,
+            "V4 C4 top-k limiting should only cap compressed sparse slots"
+        );
         assert_eq!(summary.deepseek_sparse_topk_selections, 5);
         assert_eq!(summary.deepseek_sparse_topk_slots_selected, 5);
         assert_eq!(summary.deepseek_sparse_topk_candidates_scored, 2);
