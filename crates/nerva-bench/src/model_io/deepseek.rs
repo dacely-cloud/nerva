@@ -15,7 +15,7 @@ use nerva_cuda::deepseek_moe::experts::{
 };
 use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
 use nerva_cuda::deepseek_moe::prepare::{
-    CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare,
+    CudaDeepSeekMegaMoeEplbMapping, CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare,
 };
 use nerva_cuda::deepseek_quant::dequant::{
     deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_mxfp4_e2m1_e8m0_dequant,
@@ -548,6 +548,11 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
         ),
         bench_primitive("routed_moe_forward", iterations, bench_moe_forward),
         bench_primitive("megamoe_prepare", iterations, bench_megamoe_prepare),
+        bench_primitive(
+            "megamoe_prepare_eplb",
+            iterations,
+            bench_megamoe_prepare_eplb,
+        ),
         bench_primitive("megamoe_experts", iterations, bench_megamoe_experts),
     ];
     Ok(deepseek_cuda_primitive_bench_report_json(
@@ -1720,10 +1725,64 @@ fn bench_megamoe_prepare() -> DeepSeekPrimitiveMetrics {
         topk_ids: &topk_ids,
         topk_weights: &topk_weights,
         is_padding: Some(&is_padding),
+        eplb_mapping: None,
     });
     DeepSeekPrimitiveMetrics {
         status: summary.status,
         output_hash: summary.x_fp8_hash ^ summary.x_scales_hash ^ summary.topk_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_megamoe_prepare_eplb() -> DeepSeekPrimitiveMetrics {
+    let num_tokens = 2usize;
+    let hidden_size = 128usize;
+    let top_k = 3usize;
+    let mut hidden_states = vec![0.0f32; num_tokens * hidden_size];
+    for token in 0..num_tokens {
+        for hidden in 0..hidden_size {
+            hidden_states[token * hidden_size + hidden] =
+                (token as f32 + 1.0) * ((hidden % 13) as f32 - 6.0) * 0.0625;
+        }
+    }
+    let topk_ids = [0i64, 1, 2, 0, 2, 9];
+    let topk_weights = [0.5f32, 0.25, 0.125, 0.75, 0.125, 0.0625];
+    let logical_to_physical_map = [
+        10i64, 11, -1, //
+        12, -1, -1, //
+        13, 14, 15,
+    ];
+    let logical_replica_count = [2u32, 1, 3];
+    let summary = deepseek_megamoe_prepare(CudaDeepSeekMegaMoePrepareInput {
+        num_tokens: num_tokens as u32,
+        hidden_size: hidden_size as u32,
+        top_k: top_k as u32,
+        hidden_states: &hidden_states,
+        topk_ids: &topk_ids,
+        topk_weights: &topk_weights,
+        is_padding: None,
+        eplb_mapping: Some(CudaDeepSeekMegaMoeEplbMapping {
+            num_logical_experts: 3,
+            map_slots: 3,
+            expert_load_size: 16,
+            record_expert_load: true,
+            logical_to_physical_map: &logical_to_physical_map,
+            logical_replica_count: &logical_replica_count,
+        }),
+    });
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.x_fp8_hash
+            ^ summary.x_scales_hash
+            ^ summary.topk_hash
+            ^ summary.expert_load_hash,
         device_arena_bytes: summary.device_arena_bytes,
         pinned_host_bytes: summary.pinned_host_bytes,
         h2d_bytes: summary.h2d_bytes,

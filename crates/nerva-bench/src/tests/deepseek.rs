@@ -52,6 +52,8 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke"));
     assert!(json.contains("cuda_deepseek_megamoe_prepare_api"));
     assert!(json.contains("cuda_deepseek_megamoe_prepare_smoke"));
+    assert!(json.contains("cuda_deepseek_megamoe_eplb_mapping_api"));
+    assert!(json.contains("cuda_deepseek_megamoe_eplb_mapping_smoke"));
     assert!(json.contains("cuda_deepseek_megamoe_fp8_fp4_expert_api"));
     assert!(json.contains("cuda_deepseek_megamoe_fp8_fp4_expert_smoke"));
     assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_api"));
@@ -104,6 +106,9 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
             "replace reference V4 MegaMoE fp8/fp4 expert kernel with DeepGEMM-equivalent batched expert kernels"
         )
     );
+    assert!(json.contains(
+        "integrate dynamic EPLB rebalance and physical expert weight exchange into full runtime"
+    ));
     assert!(json.contains("/root/vllm/vllm/models/deepseek_v4/attention.py"));
 
     let _ = std::fs::remove_file(config_path);

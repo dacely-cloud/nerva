@@ -162,13 +162,20 @@ __global__ void deepseek_megamoe_prepare_kernel(
     const int64_t *topk_ids,
     const float *topk_weights,
     const uint8_t *is_padding,
+    const int64_t *logical_to_physical_map,
+    const uint32_t *logical_replica_count,
     uint8_t *x_fp8,
     uint32_t *x_scales,
     int64_t *topk_ids_out,
     float *topk_weights_out,
+    uint32_t *expert_load_out,
     uint32_t num_tokens,
     uint32_t hidden_size,
     uint32_t top_k,
+    uint32_t num_logical_experts,
+    uint32_t map_slots,
+    uint32_t expert_load_size,
+    uint32_t record_expert_load,
     uint32_t hidden_blocks,
     int32_t *prepare_error) {
   const uint32_t token = blockIdx.x;
@@ -218,9 +225,32 @@ __global__ void deepseek_megamoe_prepare_kernel(
   if (hidden_block == 0 && lane < top_k) {
     const bool padding = is_padding != nullptr && is_padding[token] != 0u;
     const uint64_t route_offset = static_cast<uint64_t>(token) * top_k + lane;
-    topk_ids_out[route_offset] = padding ? -1 : topk_ids[route_offset];
-    topk_weights_out[route_offset] =
-        padding ? 0.0f : topk_weights[route_offset];
+    int64_t staged_id = padding ? -1 : topk_ids[route_offset];
+    if (!padding && logical_to_physical_map != nullptr &&
+        logical_replica_count != nullptr) {
+      const bool valid_logical =
+          staged_id >= 0 &&
+          static_cast<uint64_t>(staged_id) < num_logical_experts;
+      if (valid_logical) {
+        const uint32_t logical_id = static_cast<uint32_t>(staged_id);
+        uint32_t replica_count = logical_replica_count[logical_id];
+        replica_count = replica_count > map_slots ? map_slots : replica_count;
+        replica_count = replica_count == 0u ? 1u : replica_count;
+        const uint32_t hashed = static_cast<uint32_t>(
+            (static_cast<uint64_t>(token) * 2654435769ull) & 0xffffffffull);
+        const uint32_t replica_idx = hashed % replica_count;
+        const uint32_t map_index = logical_id * map_slots + replica_idx;
+        staged_id = logical_to_physical_map[map_index];
+      } else {
+        staged_id = -1;
+      }
+    }
+    topk_ids_out[route_offset] = staged_id;
+    topk_weights_out[route_offset] = padding ? 0.0f : topk_weights[route_offset];
+    if (record_expert_load != 0u && expert_load_out != nullptr &&
+        staged_id >= 0 && static_cast<uint64_t>(staged_id) < expert_load_size) {
+      atomicAdd(&expert_load_out[static_cast<uint32_t>(staged_id)], 1u);
+    }
   }
 
   if (lane == 0 && hidden_block == 0) {
@@ -622,13 +652,33 @@ bool validate_forward_request(const NervaCudaDeepSeekMoeForwardRequest *request)
 
 bool validate_megamoe_prepare_request(
     const NervaCudaDeepSeekMegaMoePrepareRequest *request) {
-  return request != nullptr && request->hidden_states != nullptr &&
-         request->topk_ids != nullptr && request->topk_weights != nullptr &&
-         request->x_fp8 != nullptr && request->x_scales != nullptr &&
-         request->topk_ids_out != nullptr &&
-         request->topk_weights_out != nullptr && request->num_tokens > 0 &&
-         request->hidden_size > 0 && request->top_k > 0 &&
-         request->hidden_size % kMegaMoeBlockK == 0;
+  if (request == nullptr || request->hidden_states == nullptr ||
+      request->topk_ids == nullptr || request->topk_weights == nullptr ||
+      request->x_fp8 == nullptr || request->x_scales == nullptr ||
+      request->topk_ids_out == nullptr ||
+      request->topk_weights_out == nullptr || request->num_tokens == 0 ||
+      request->hidden_size == 0 || request->top_k == 0 ||
+      request->hidden_size % kMegaMoeBlockK != 0) {
+    return false;
+  }
+  const bool has_mapping =
+      request->logical_to_physical_map != nullptr ||
+      request->logical_replica_count != nullptr ||
+      request->num_logical_experts != 0 || request->map_slots != 0 ||
+      request->record_expert_load != 0 || request->expert_load_size != 0;
+  if (!has_mapping) {
+    return true;
+  }
+  if (request->logical_to_physical_map == nullptr ||
+      request->logical_replica_count == nullptr ||
+      request->num_logical_experts == 0 || request->map_slots == 0) {
+    return false;
+  }
+  if (request->record_expert_load != 0 &&
+      (request->expert_load_size == 0 || request->expert_load_out == nullptr)) {
+    return false;
+  }
+  return true;
 }
 
 bool validate_megamoe_experts_request(
@@ -942,6 +992,9 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
   int64_t *d_topk_ids = nullptr;
   float *d_topk_weights = nullptr;
   uint8_t *d_is_padding = nullptr;
+  int64_t *d_logical_to_physical_map = nullptr;
+  uint32_t *d_logical_replica_count = nullptr;
+  uint32_t *d_expert_load_out = nullptr;
   uint8_t *d_x_fp8 = nullptr;
   uint32_t *d_x_scales = nullptr;
   int64_t *d_topk_ids_out = nullptr;
@@ -951,6 +1004,7 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
   uint32_t *h_x_scales = nullptr;
   int64_t *h_topk_ids_out = nullptr;
   float *h_topk_weights_out = nullptr;
+  uint32_t *h_expert_load_out = nullptr;
   int32_t h_prepare_error = -1;
   cudaStream_t stream = nullptr;
   dim3 grid(1, 1, 1);
@@ -959,11 +1013,23 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
   const uint64_t hidden = request->hidden_size;
   const uint64_t top_k = request->top_k;
   const uint64_t hidden_blocks = hidden / kMegaMoeBlockK;
+  const bool mapping_enabled =
+      request->logical_to_physical_map != nullptr &&
+      request->logical_replica_count != nullptr;
+  const bool record_expert_load = request->record_expert_load != 0u;
   const uint64_t hidden_bytes = sizeof(float) * tokens * hidden;
   const uint64_t topk_ids_bytes = sizeof(int64_t) * tokens * top_k;
   const uint64_t topk_weights_bytes = sizeof(float) * tokens * top_k;
   const uint64_t padding_bytes =
       request->is_padding == nullptr ? 0 : sizeof(uint8_t) * tokens;
+  const uint64_t map_bytes =
+      mapping_enabled
+          ? sizeof(int64_t) * request->num_logical_experts * request->map_slots
+          : 0;
+  const uint64_t replica_count_bytes =
+      mapping_enabled ? sizeof(uint32_t) * request->num_logical_experts : 0;
+  const uint64_t expert_load_bytes =
+      record_expert_load ? sizeof(uint32_t) * request->expert_load_size : 0;
   const uint64_t x_fp8_bytes = sizeof(uint8_t) * tokens * hidden;
   const uint64_t x_scales_bytes = sizeof(uint32_t) * tokens * hidden_blocks;
   const uint64_t prepare_error_bytes = sizeof(int32_t);
@@ -977,6 +1043,19 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
   if (err != cudaSuccess) goto cleanup;
   if (padding_bytes > 0) {
     err = cudaMalloc(reinterpret_cast<void **>(&d_is_padding), padding_bytes);
+    if (err != cudaSuccess) goto cleanup;
+  }
+  if (map_bytes > 0) {
+    err = cudaMalloc(reinterpret_cast<void **>(&d_logical_to_physical_map),
+                     map_bytes);
+    if (err != cudaSuccess) goto cleanup;
+    err = cudaMalloc(reinterpret_cast<void **>(&d_logical_replica_count),
+                     replica_count_bytes);
+    if (err != cudaSuccess) goto cleanup;
+  }
+  if (expert_load_bytes > 0) {
+    err = cudaMalloc(reinterpret_cast<void **>(&d_expert_load_out),
+                     expert_load_bytes);
     if (err != cudaSuccess) goto cleanup;
   }
   err = cudaMalloc(reinterpret_cast<void **>(&d_x_fp8), x_fp8_bytes);
@@ -993,6 +1072,7 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
   if (err != cudaSuccess) goto cleanup;
   out->device_arena_bytes =
       hidden_bytes + topk_ids_bytes + topk_weights_bytes + padding_bytes +
+      map_bytes + replica_count_bytes + expert_load_bytes +
       x_fp8_bytes + x_scales_bytes + topk_ids_bytes + topk_weights_bytes +
       prepare_error_bytes;
 
@@ -1012,8 +1092,15 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
                       topk_weights_bytes,
                       cudaHostAllocDefault);
   if (err != cudaSuccess) goto cleanup;
+  if (expert_load_bytes > 0) {
+    err = cudaHostAlloc(reinterpret_cast<void **>(&h_expert_load_out),
+                        expert_load_bytes,
+                        cudaHostAllocDefault);
+    if (err != cudaSuccess) goto cleanup;
+  }
   out->pinned_host_bytes =
-      x_fp8_bytes + x_scales_bytes + topk_ids_bytes + topk_weights_bytes;
+      x_fp8_bytes + x_scales_bytes + topk_ids_bytes + topk_weights_bytes +
+      expert_load_bytes;
 
   err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   if (err != cudaSuccess) goto cleanup;
@@ -1043,6 +1130,24 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
                           stream);
     if (err != cudaSuccess) goto cleanup;
   }
+  if (map_bytes > 0) {
+    err = cudaMemcpyAsync(d_logical_to_physical_map,
+                          request->logical_to_physical_map,
+                          map_bytes,
+                          cudaMemcpyHostToDevice,
+                          stream);
+    if (err != cudaSuccess) goto cleanup;
+    err = cudaMemcpyAsync(d_logical_replica_count,
+                          request->logical_replica_count,
+                          replica_count_bytes,
+                          cudaMemcpyHostToDevice,
+                          stream);
+    if (err != cudaSuccess) goto cleanup;
+  }
+  if (expert_load_bytes > 0) {
+    err = cudaMemsetAsync(d_expert_load_out, 0, expert_load_bytes, stream);
+    if (err != cudaSuccess) goto cleanup;
+  }
   err = cudaMemcpyAsync(d_prepare_error,
                         &h_prepare_error,
                         prepare_error_bytes,
@@ -1051,7 +1156,7 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
   if (err != cudaSuccess) goto cleanup;
   out->h2d_bytes =
       hidden_bytes + topk_ids_bytes + topk_weights_bytes + padding_bytes +
-      prepare_error_bytes;
+      map_bytes + replica_count_bytes + prepare_error_bytes;
 
   grid = dim3(request->num_tokens, static_cast<uint32_t>(hidden_blocks), 1);
   deepseek_megamoe_prepare_kernel<<<grid, kMegaMoeBlockK, 0, stream>>>(
@@ -1059,13 +1164,20 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
       d_topk_ids,
       d_topk_weights,
       d_is_padding,
+      d_logical_to_physical_map,
+      d_logical_replica_count,
       d_x_fp8,
       d_x_scales,
       d_topk_ids_out,
       d_topk_weights_out,
+      d_expert_load_out,
       request->num_tokens,
       request->hidden_size,
       request->top_k,
+      request->num_logical_experts,
+      request->map_slots,
+      request->expert_load_size,
+      request->record_expert_load,
       static_cast<uint32_t>(hidden_blocks),
       d_prepare_error);
   out->kernel_launches += 1;
@@ -1102,9 +1214,17 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
                         cudaMemcpyDeviceToHost,
                         stream);
   if (err != cudaSuccess) goto cleanup;
+  if (expert_load_bytes > 0) {
+    err = cudaMemcpyAsync(h_expert_load_out,
+                          d_expert_load_out,
+                          expert_load_bytes,
+                          cudaMemcpyDeviceToHost,
+                          stream);
+    if (err != cudaSuccess) goto cleanup;
+  }
   out->d2h_bytes =
       x_fp8_bytes + x_scales_bytes + topk_ids_bytes + topk_weights_bytes +
-      prepare_error_bytes;
+      expert_load_bytes + prepare_error_bytes;
 
   err = cudaStreamSynchronize(stream);
   out->sync_calls += 1;
@@ -1116,6 +1236,11 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
     memcpy(request->x_scales, h_x_scales, x_scales_bytes);
     memcpy(request->topk_ids_out, h_topk_ids_out, topk_ids_bytes);
     memcpy(request->topk_weights_out, h_topk_weights_out, topk_weights_bytes);
+    if (expert_load_bytes > 0) {
+      memcpy(request->expert_load_out, h_expert_load_out, expert_load_bytes);
+      out->expert_load_hash =
+          hash_bytes(request->expert_load_out, expert_load_bytes);
+    }
     out->x_fp8_hash = hash_bytes(request->x_fp8, x_fp8_bytes);
     out->x_scales_hash = hash_bytes(request->x_scales, x_scales_bytes);
     out->topk_hash = hash_bytes(request->topk_ids_out, topk_ids_bytes);
@@ -1126,6 +1251,7 @@ extern "C" int nerva_cuda_deepseek_megamoe_prepare(
 
 cleanup:
   if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_expert_load_out != nullptr) cudaFreeHost(h_expert_load_out);
   if (h_topk_weights_out != nullptr) cudaFreeHost(h_topk_weights_out);
   if (h_topk_ids_out != nullptr) cudaFreeHost(h_topk_ids_out);
   if (h_x_scales != nullptr) cudaFreeHost(h_x_scales);
@@ -1135,6 +1261,9 @@ cleanup:
   if (d_topk_ids_out != nullptr) cudaFree(d_topk_ids_out);
   if (d_x_scales != nullptr) cudaFree(d_x_scales);
   if (d_x_fp8 != nullptr) cudaFree(d_x_fp8);
+  if (d_expert_load_out != nullptr) cudaFree(d_expert_load_out);
+  if (d_logical_replica_count != nullptr) cudaFree(d_logical_replica_count);
+  if (d_logical_to_physical_map != nullptr) cudaFree(d_logical_to_physical_map);
   if (d_is_padding != nullptr) cudaFree(d_is_padding);
   if (d_topk_weights != nullptr) cudaFree(d_topk_weights);
   if (d_topk_ids != nullptr) cudaFree(d_topk_ids);

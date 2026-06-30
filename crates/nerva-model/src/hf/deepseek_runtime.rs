@@ -726,6 +726,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_mxfp4_e2m1_e8m0_block_dequant_smoke".to_string());
         primitives.push("cuda_deepseek_megamoe_prepare_api".to_string());
         primitives.push("cuda_deepseek_megamoe_prepare_smoke".to_string());
+        primitives.push("cuda_deepseek_megamoe_eplb_mapping_api".to_string());
+        primitives.push("cuda_deepseek_megamoe_eplb_mapping_smoke".to_string());
         primitives.push("cuda_deepseek_megamoe_fp8_fp4_expert_api".to_string());
         primitives.push("cuda_deepseek_megamoe_fp8_fp4_expert_smoke".to_string());
         primitives.push("deepseek_v4_sqrtsoftplus_hash_router_reference".to_string());
@@ -1135,6 +1137,8 @@ fn coverage_for_unit(
                 "cuda_mxfp4_e2m1_e8m0_block_dequant_smoke",
                 "cuda_deepseek_megamoe_prepare_api",
                 "cuda_deepseek_megamoe_prepare_smoke",
+                "cuda_deepseek_megamoe_eplb_mapping_api",
+                "cuda_deepseek_megamoe_eplb_mapping_smoke",
                 "cuda_deepseek_megamoe_fp8_fp4_expert_api",
                 "cuda_deepseek_megamoe_fp8_fp4_expert_smoke",
                 "deepseek_routed_moe_reference",
@@ -1144,7 +1148,7 @@ fn coverage_for_unit(
             ],
             &[
                 "replace reference V4 MegaMoE fp8/fp4 expert kernel with DeepGEMM-equivalent batched expert kernels",
-                "support expert-parallel physical/logical expert mapping",
+                "integrate dynamic EPLB rebalance and physical expert weight exchange into full runtime",
                 "benchmark MegaMoE against vLLM deep_gemm_mega_moe/FusedMoE",
             ],
         ),

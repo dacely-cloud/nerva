@@ -231,6 +231,8 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
     for primitive in [
         "cuda_deepseek_megamoe_prepare_api",
         "cuda_deepseek_megamoe_prepare_smoke",
+        "cuda_deepseek_megamoe_eplb_mapping_api",
+        "cuda_deepseek_megamoe_eplb_mapping_smoke",
         "cuda_deepseek_megamoe_fp8_fp4_expert_api",
         "cuda_deepseek_megamoe_fp8_fp4_expert_smoke",
     ] {

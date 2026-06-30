@@ -21,9 +21,11 @@ pub struct CudaDeepSeekMegaMoePrepareSummary {
     pub x_scales: Vec<u32>,
     pub topk_ids: Vec<i64>,
     pub topk_weights: Vec<f32>,
+    pub expert_load: Vec<u32>,
     pub x_fp8_hash: u64,
     pub x_scales_hash: u64,
     pub topk_hash: u64,
+    pub expert_load_hash: u64,
     pub device_arena_bytes: u64,
     pub pinned_host_bytes: u64,
     pub h2d_bytes: u64,
@@ -43,6 +45,17 @@ pub struct CudaDeepSeekMegaMoePrepareInput<'a> {
     pub topk_ids: &'a [i64],
     pub topk_weights: &'a [f32],
     pub is_padding: Option<&'a [u8]>,
+    pub eplb_mapping: Option<CudaDeepSeekMegaMoeEplbMapping<'a>>,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct CudaDeepSeekMegaMoeEplbMapping<'a> {
+    pub num_logical_experts: u32,
+    pub map_slots: u32,
+    pub expert_load_size: u32,
+    pub record_expert_load: bool,
+    pub logical_to_physical_map: &'a [i64],
+    pub logical_replica_count: &'a [u32],
 }
 
 pub fn deepseek_megamoe_prepare(
@@ -58,25 +71,49 @@ pub fn deepseek_megamoe_prepare(
     }
 
     let (x_fp8_len, x_scales_len, topk_len) = output_shape;
+    let expert_load_len = input.eplb_mapping.map_or(0usize, |mapping| {
+        if mapping.record_expert_load {
+            mapping.expert_load_size as usize
+        } else {
+            0
+        }
+    });
     let mut x_fp8 = vec![0u8; x_fp8_len];
     let mut x_scales = vec![0u32; x_scales_len];
     let mut topk_ids_out = vec![0i64; topk_len];
     let mut topk_weights_out = vec![0.0f32; topk_len];
+    let mut expert_load = vec![0u32; expert_load_len];
     let mut out = NervaCudaDeepSeekMegaMoePrepareResult::default();
+    let eplb = input.eplb_mapping;
     let request = NervaCudaDeepSeekMegaMoePrepareRequest {
         num_tokens: input.num_tokens,
         hidden_size: input.hidden_size,
         top_k: input.top_k,
+        num_logical_experts: eplb.map_or(0, |mapping| mapping.num_logical_experts),
+        map_slots: eplb.map_or(0, |mapping| mapping.map_slots),
+        expert_load_size: eplb.map_or(0, |mapping| mapping.expert_load_size),
+        record_expert_load: eplb.is_some_and(|mapping| mapping.record_expert_load) as u32,
         hidden_states: input.hidden_states.as_ptr(),
         topk_ids: input.topk_ids.as_ptr(),
         topk_weights: input.topk_weights.as_ptr(),
         is_padding: input
             .is_padding
             .map_or(ptr::null(), |values| values.as_ptr()),
+        logical_to_physical_map: eplb.map_or(ptr::null(), |mapping| {
+            mapping.logical_to_physical_map.as_ptr()
+        }),
+        logical_replica_count: eplb.map_or(ptr::null(), |mapping| {
+            mapping.logical_replica_count.as_ptr()
+        }),
         x_fp8: x_fp8.as_mut_ptr(),
         x_scales: x_scales.as_mut_ptr(),
         topk_ids_out: topk_ids_out.as_mut_ptr(),
         topk_weights_out: topk_weights_out.as_mut_ptr(),
+        expert_load_out: if expert_load.is_empty() {
+            ptr::null_mut()
+        } else {
+            expert_load.as_mut_ptr()
+        },
     };
     let return_code = run_deepseek_megamoe_prepare(&request, &mut out);
     summarize(
@@ -86,6 +123,7 @@ pub fn deepseek_megamoe_prepare(
         x_scales,
         topk_ids_out,
         topk_weights_out,
+        expert_load,
     )
 }
 
@@ -104,6 +142,21 @@ fn valid_shape(input: &CudaDeepSeekMegaMoePrepareInput<'_>) -> bool {
             Some(padding) => padding.len() == tokens,
             None => true,
         }
+        && match input.eplb_mapping {
+            Some(mapping) => valid_eplb_shape(mapping),
+            None => true,
+        }
+}
+
+fn valid_eplb_shape(mapping: CudaDeepSeekMegaMoeEplbMapping<'_>) -> bool {
+    let logical = mapping.num_logical_experts as usize;
+    let slots = mapping.map_slots as usize;
+    let load = mapping.expert_load_size as usize;
+    mapping.num_logical_experts > 0
+        && mapping.map_slots > 0
+        && mapping.logical_to_physical_map.len() == logical * slots
+        && mapping.logical_replica_count.len() == logical
+        && (!mapping.record_expert_load || load > 0)
 }
 
 fn output_shape(input: &CudaDeepSeekMegaMoePrepareInput<'_>) -> (usize, usize, usize) {
@@ -121,6 +174,7 @@ fn summarize(
     x_scales: Vec<u32>,
     topk_ids: Vec<i64>,
     topk_weights: Vec<f32>,
+    expert_load: Vec<u32>,
 ) -> CudaDeepSeekMegaMoePrepareSummary {
     let status = if return_code == 0 && out.status == 0 && out.prepare_error == 0 {
         SmokeStatus::Ok
@@ -150,9 +204,11 @@ fn summarize(
         x_scales,
         topk_ids,
         topk_weights,
+        expert_load,
         x_fp8_hash: out.x_fp8_hash,
         x_scales_hash: out.x_scales_hash,
         topk_hash: out.topk_hash,
+        expert_load_hash: out.expert_load_hash,
         device_arena_bytes: out.device_arena_bytes,
         pinned_host_bytes: out.pinned_host_bytes,
         h2d_bytes: out.h2d_bytes,
@@ -182,9 +238,17 @@ fn failed_summary(
         x_scales: vec![0u32; output_shape.1],
         topk_ids: vec![0i64; output_shape.2],
         topk_weights: vec![0.0f32; output_shape.2],
+        expert_load: input.eplb_mapping.map_or_else(Vec::new, |mapping| {
+            if mapping.record_expert_load {
+                vec![0u32; mapping.expert_load_size as usize]
+            } else {
+                Vec::new()
+            }
+        }),
         x_fp8_hash: 0,
         x_scales_hash: 0,
         topk_hash: 0,
+        expert_load_hash: 0,
         device_arena_bytes: 0,
         pinned_host_bytes: 0,
         h2d_bytes: 0,

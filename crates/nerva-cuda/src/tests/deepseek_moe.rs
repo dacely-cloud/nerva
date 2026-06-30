@@ -1,6 +1,8 @@
 use crate::deepseek_moe::experts::{CudaDeepSeekMegaMoeExpertsInput, deepseek_megamoe_experts};
 use crate::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
-use crate::deepseek_moe::prepare::{CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare};
+use crate::deepseek_moe::prepare::{
+    CudaDeepSeekMegaMoeEplbMapping, CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare,
+};
 use crate::deepseek_moe::probe::deepseek_moe_smoke;
 use crate::deepseek_moe::summary::CudaDeepSeekMoeSummary;
 use crate::smoke::status::SmokeStatus;
@@ -151,6 +153,7 @@ fn deepseek_megamoe_prepare_matches_vllm_input_staging_contract() {
         topk_ids: &topk_ids,
         topk_weights: &topk_weights,
         is_padding: Some(&is_padding),
+        eplb_mapping: None,
     });
     if summary.status != SmokeStatus::Ok {
         return;
@@ -188,6 +191,67 @@ fn deepseek_megamoe_prepare_matches_vllm_input_staging_contract() {
     assert!(summary.x_fp8_hash != 0);
     assert!(summary.x_scales_hash != 0);
     assert!(summary.topk_hash != 0);
+    assert!(summary.expert_load.is_empty());
+    assert_eq!(summary.expert_load_hash, 0);
+}
+
+#[test]
+fn deepseek_megamoe_prepare_maps_eplb_logical_to_physical_ids() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let num_tokens = 2usize;
+    let hidden_size = 128usize;
+    let top_k = 3usize;
+    let mut hidden_states = vec![0.0f32; num_tokens * hidden_size];
+    for token in 0..num_tokens {
+        for hidden in 0..hidden_size {
+            hidden_states[token * hidden_size + hidden] =
+                (token as f32 + 1.0) * ((hidden % 13) as f32 - 6.0) * 0.0625;
+        }
+    }
+    let topk_ids = [0i64, 1, 2, 0, 2, 9];
+    let topk_weights = [0.5f32, 0.25, 0.125, 0.75, 0.125, 0.0625];
+    let logical_to_physical_map = [
+        10i64, 11, -1, //
+        12, -1, -1, //
+        13, 14, 15,
+    ];
+    let logical_replica_count = [2u32, 1, 3];
+
+    let summary = deepseek_megamoe_prepare(CudaDeepSeekMegaMoePrepareInput {
+        num_tokens: num_tokens as u32,
+        hidden_size: hidden_size as u32,
+        top_k: top_k as u32,
+        hidden_states: &hidden_states,
+        topk_ids: &topk_ids,
+        topk_weights: &topk_weights,
+        is_padding: None,
+        eplb_mapping: Some(CudaDeepSeekMegaMoeEplbMapping {
+            num_logical_experts: 3,
+            map_slots: 3,
+            expert_load_size: 16,
+            record_expert_load: true,
+            logical_to_physical_map: &logical_to_physical_map,
+            logical_replica_count: &logical_replica_count,
+        }),
+    });
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    assert_eq!(summary.topk_ids, vec![10, 12, 13, 11, 13, -1]);
+    assert_eq!(summary.topk_weights, topk_weights.to_vec());
+    assert_eq!(summary.expert_load.len(), 16);
+    let mut expected_load = vec![0u32; 16];
+    expected_load[10] = 1;
+    expected_load[11] = 1;
+    expected_load[12] = 1;
+    expected_load[13] = 2;
+    assert_eq!(summary.expert_load, expected_load);
+    assert!(summary.expert_load_hash != 0);
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
 }
 
 #[test]

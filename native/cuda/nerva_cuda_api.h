@@ -1977,14 +1977,21 @@ typedef struct NervaCudaDeepSeekMegaMoePrepareRequest {
   uint32_t num_tokens;
   uint32_t hidden_size;
   uint32_t top_k;
+  uint32_t num_logical_experts;
+  uint32_t map_slots;
+  uint32_t expert_load_size;
+  uint32_t record_expert_load;
   const float *hidden_states;
   const int64_t *topk_ids;
   const float *topk_weights;
   const uint8_t *is_padding;
+  const int64_t *logical_to_physical_map;
+  const uint32_t *logical_replica_count;
   uint8_t *x_fp8;
   uint32_t *x_scales;
   int64_t *topk_ids_out;
   float *topk_weights_out;
+  uint32_t *expert_load_out;
 } NervaCudaDeepSeekMegaMoePrepareRequest;
 
 typedef struct NervaCudaDeepSeekMegaMoePrepareResult {
@@ -1999,6 +2006,7 @@ typedef struct NervaCudaDeepSeekMegaMoePrepareResult {
   uint64_t x_fp8_hash;
   uint64_t x_scales_hash;
   uint64_t topk_hash;
+  uint64_t expert_load_hash;
   uint64_t device_arena_bytes;
   uint64_t pinned_host_bytes;
   uint64_t h2d_bytes;
