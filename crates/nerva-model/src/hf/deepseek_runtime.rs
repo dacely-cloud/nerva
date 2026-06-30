@@ -626,6 +626,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources".to_string());
@@ -833,8 +834,11 @@ fn coverage_for_unit(
                 "cuda_deepseek_fp8_ds_mla_kv_pack_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_runtime",
+                "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_contents",
             ],
-            &["verify full 584-byte/token packed cache contents against vLLM FlashMLA"],
+            &[
+                "verify non-zero full-size 584-byte/token packed cache contents against vLLM FlashMLA",
+            ],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_c4_c128_compressor") => (
             "partial",

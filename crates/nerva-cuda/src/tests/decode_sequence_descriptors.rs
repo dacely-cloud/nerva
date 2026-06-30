@@ -1978,6 +1978,57 @@ fn deepseek_v4_compressed_indexer_writes_first_boundary_cache() {
 }
 
 #[test]
+fn deepseek_v4_compressed_snapshot_matches_fp8_ds_mla_page() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let layer = tiny_deepseek_v4_descriptor_layer();
+    with_tiny_deepseek_v4_descriptor_session(layer, 8, |created| {
+        if created.summary.status == SmokeStatus::Unavailable {
+            return;
+        }
+        assert_eq!(
+            created.summary.status,
+            SmokeStatus::Ok,
+            "V4 compressed-indexer DeepSeek should create before compressed KV snapshot: {:?}",
+            created.summary.error
+        );
+        let mut session = created
+            .session
+            .expect("V4 compressed-indexer session handle should exist");
+
+        let summary = session.run(&[0], 4, None);
+        assert_eq!(
+            summary.status,
+            SmokeStatus::Ok,
+            "compress_ratio boundary should write a compressed KV page: {:?}",
+            summary.error
+        );
+        assert_eq!(summary.deepseek_compressed_kv_writes, 1);
+
+        let snapshot = session.deepseek_v4_compressed_kv_snapshot(0, 576);
+        assert_eq!(
+            snapshot.status,
+            SmokeStatus::Ok,
+            "V4 compressed packed KV snapshot should copy device cache: {:?}",
+            snapshot.error
+        );
+        assert_eq!(snapshot.block_count, 1);
+        assert_eq!(snapshot.layer_offset_bytes, 0);
+        assert_eq!(snapshot.layer_bytes, 576);
+        assert_eq!(snapshot.page_bytes, 576);
+        assert_eq!(snapshot.copied_bytes, 576);
+
+        let expected = expected_zero_deepseek_v4_swa_fp8_ds_mla_page(1, 1, 1, 576);
+        assert_page_bytes_eq(
+            &snapshot.bytes,
+            &expected,
+            "V4 compressed packed fp8_ds_mla page bytes must match vLLM offsets",
+        );
+        assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
+    });
+}
+
+#[test]
 fn deepseek_v4_compressed_indexer_writes_realistic_indexer_cache_width() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
