@@ -57,7 +57,7 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_only(
         .iter()
         .map(|token| token.0)
         .collect::<Vec<_>>();
-    let layers = descriptor_marker_layers(&weights.metadata);
+    let layers = descriptor_marker_layers(&weights.metadata)?;
     let sequence = CudaHfDecodeSequenceRequest {
         dtype: cuda_dtype(weights.dtype)?,
         hidden: weights.metadata.hidden_size,

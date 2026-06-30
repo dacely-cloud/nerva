@@ -106,7 +106,7 @@ pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling_
     let weights = load_shard_backed_weights(dir.as_ref())?;
     let resident_weights = shard_backed_resident_weights(runtime, &weights, compute_capability)?;
     let weight_plan = cuda_weight_plan(&resident_weights.summary, &resident_weights.descriptors)?;
-    let layers = descriptor_marker_layers(&weights.metadata);
+    let layers = descriptor_marker_layers(&weights.metadata)?;
     let created = CudaHfDecodeSequenceSessionConfig {
         dtype: cuda_dtype(weights.dtype)?,
         hidden: weights.metadata.hidden_size,

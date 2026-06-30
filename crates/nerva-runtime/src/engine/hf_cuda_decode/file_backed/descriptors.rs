@@ -3,13 +3,21 @@ use std::os::unix::ffi::OsStrExt;
 
 use nerva_core::types::error::{NervaError, Result};
 use nerva_cuda::decode::hf_chain::layer::{
-    CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_MLP_DENSE,
-    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN,
+    CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
+    CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
+    CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
+    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use nerva_cuda::decode::hf_sequence::weight_plan::{
     CudaHfDecodeSequenceWeightBlock, hash_weight_blocks,
 };
 use nerva_model::hf::architecture::HfArchitectureKind;
+use nerva_model::hf::deepseek_runtime::{
+    DeepSeekAttentionExecutionKind, DeepSeekLayerExecution, deepseek_layer_execution_plan,
+};
 use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 
 use crate::engine::hf_cuda_decode::descriptors::cuda_weight_strategy;
@@ -33,12 +41,23 @@ pub(super) struct ShardBackedResidentWeights {
 
 pub(super) fn descriptor_marker_layers(
     metadata: &HfModelMetadata,
-) -> Vec<CudaHfDecodeChainLayer<'static>> {
+) -> Result<Vec<CudaHfDecodeChainLayer<'static>>> {
     let qk_norm = metadata.qk_norm.then_some(&MARKER[..]);
     let qkv_bias = metadata.attention_qkv_bias.then_some(&MARKER[..]);
     let output_bias = metadata.attention_output_bias.then_some(&MARKER[..]);
+    let deepseek_plan = if metadata.architecture.is_deepseek() {
+        Some(deepseek_layer_execution_plan(metadata)?)
+    } else {
+        None
+    };
     (0..metadata.num_hidden_layers)
         .map(|layer| {
+            let deepseek_execution = deepseek_plan
+                .as_ref()
+                .and_then(|plan| plan.layers.get(layer));
+            let deepseek = deepseek_execution
+                .map(|execution| deepseek_marker(metadata, execution))
+                .transpose()?;
             let sparse_moe = metadata
                 .mlp_layer_types
                 .get(layer)
@@ -50,7 +69,9 @@ pub(super) fn descriptor_marker_layers(
                 .attention_layer_types
                 .get(layer)
                 .is_some_and(|kind| *kind == HfAttentionLayerKind::Full);
-            let attention_kind = if metadata
+            let attention_kind = if deepseek.is_some() {
+                CUDA_HF_ATTENTION_DEEPSEEK_MLA
+            } else if metadata
                 .attention_layer_types
                 .get(layer)
                 .is_some_and(|kind| *kind == HfAttentionLayerKind::Linear)
@@ -59,7 +80,7 @@ pub(super) fn descriptor_marker_layers(
             } else {
                 CUDA_HF_ATTENTION_FULL
             };
-            CudaHfDecodeChainLayer {
+            Ok(CudaHfDecodeChainLayer {
                 rms_attn_weight: &EMPTY,
                 rms_mlp_weight: &EMPTY,
                 w_q: &EMPTY,
@@ -83,8 +104,11 @@ pub(super) fn descriptor_marker_layers(
                 w_shared_expert_up: None,
                 w_shared_expert_down: None,
                 w_shared_expert_router: None,
-                linear_gdn: linear_gdn_marker(metadata, layer),
-                deepseek: None,
+                linear_gdn: deepseek
+                    .is_none()
+                    .then(|| linear_gdn_marker(metadata, layer))
+                    .flatten(),
+                deepseek,
                 mlp_kind: if sparse_moe {
                     CUDA_HF_MLP_SPARSE_MOE
                 } else {
@@ -112,9 +136,61 @@ pub(super) fn descriptor_marker_layers(
                 },
                 norm_topk_prob: sparse_moe && metadata.norm_topk_prob,
                 attention_kind,
-            }
+            })
         })
         .collect()
+}
+
+fn deepseek_marker(
+    metadata: &HfModelMetadata,
+    execution: &DeepSeekLayerExecution,
+) -> Result<CudaHfDeepSeekLayer> {
+    let mode = match execution.attention_kind {
+        DeepSeekAttentionExecutionKind::V3Mla => CUDA_HF_DEEPSEEK_MODE_V3_MLA,
+        DeepSeekAttentionExecutionKind::V32MlaWithIndexer => CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
+        DeepSeekAttentionExecutionKind::V4SlidingWindowMla => CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+        DeepSeekAttentionExecutionKind::V4CompressedMla => CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
+        DeepSeekAttentionExecutionKind::V4CompressedMlaWithSparseIndexer => {
+            CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER
+        }
+    };
+    let mut flags = 0u32;
+    if execution.uses_sparse_indexer {
+        flags |= CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER;
+    }
+    if execution.uses_compressor {
+        flags |= CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR;
+    }
+    if execution.uses_hash_router {
+        flags |= CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER;
+    }
+    if execution.uses_moe {
+        flags |= CUDA_HF_DEEPSEEK_FLAG_MOE;
+    }
+    if execution.uses_sliding_window_cache {
+        flags |= CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW;
+    }
+
+    Ok(CudaHfDeepSeekLayer {
+        mode,
+        flags,
+        q_lora_rank: required_deepseek_usize(metadata.q_lora_rank, "q_lora_rank")?,
+        kv_lora_rank: metadata.kv_lora_rank.unwrap_or(0),
+        o_lora_rank: metadata.o_lora_rank.unwrap_or(0),
+        o_groups: metadata.o_groups.unwrap_or(0),
+        qk_nope_head_dim: required_deepseek_usize(metadata.qk_nope_head_dim, "qk_nope_head_dim")?,
+        qk_rope_head_dim: required_deepseek_usize(metadata.qk_rope_head_dim, "qk_rope_head_dim")?,
+        v_head_dim: required_deepseek_usize(metadata.v_head_dim, "v_head_dim")?,
+        compress_ratio: execution.compress_ratio,
+        index_n_heads: metadata.index_n_heads.unwrap_or(0),
+        index_head_dim: metadata.index_head_dim.unwrap_or(0),
+    })
+}
+
+fn required_deepseek_usize(value: Option<usize>, name: &'static str) -> Result<usize> {
+    value.ok_or_else(|| NervaError::InvalidArgument {
+        reason: format!("DeepSeek CUDA descriptor metadata is missing {name}"),
+    })
 }
 
 fn linear_gdn_marker(
@@ -271,8 +347,12 @@ fn cuda_weight_descriptors(
 mod tests {
     use nerva_core::types::dtype::DType;
     use nerva_cuda::decode::hf_chain::layer::{
-        CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_MLP_DENSE,
-        CUDA_HF_MLP_SPARSE_MOE,
+        CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN,
+        CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER,
+        CUDA_HF_DEEPSEEK_FLAG_MOE, CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW,
+        CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
+        CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+        CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
     };
     use nerva_model::hf::architecture::HfArchitectureKind;
     use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
@@ -291,6 +371,7 @@ mod tests {
             intermediate_size: 8,
             vocab_size: 16,
             max_position_embeddings: None,
+            sliding_window: None,
             rope_theta: None,
             rms_norm_eps: Some(1e-5),
             bos_token_id: None,
@@ -343,7 +424,7 @@ mod tests {
             torch_dtype: Some(DType::F16),
         };
 
-        let layers = descriptor_marker_layers(&metadata);
+        let layers = descriptor_marker_layers(&metadata).unwrap();
 
         assert_eq!(layers[0].mlp_kind, CUDA_HF_MLP_SPARSE_MOE);
         assert_eq!(layers[0].moe_intermediate, 3);
@@ -371,6 +452,7 @@ mod tests {
             intermediate_size: 8,
             vocab_size: 16,
             max_position_embeddings: None,
+            sliding_window: None,
             rope_theta: None,
             rms_norm_eps: Some(1e-5),
             bos_token_id: None,
@@ -427,7 +509,7 @@ mod tests {
             torch_dtype: Some(DType::F16),
         };
 
-        let layers = descriptor_marker_layers(&metadata);
+        let layers = descriptor_marker_layers(&metadata).unwrap();
 
         assert!(layers[0].w_q_gate.is_none());
         assert!(layers[1].w_q_gate.is_some());
@@ -435,5 +517,179 @@ mod tests {
         assert_eq!(layers[0].attention_kind, CUDA_HF_ATTENTION_LINEAR_GDN);
         assert_eq!(layers[1].attention_kind, CUDA_HF_ATTENTION_FULL);
         assert_eq!(layers[2].attention_kind, CUDA_HF_ATTENTION_FULL);
+    }
+
+    #[test]
+    fn descriptor_marker_layers_preserve_deepseek_v3_mla_metadata() {
+        let mut metadata = base_metadata(HfArchitectureKind::DeepSeekV3, 2);
+        metadata.num_attention_heads = 128;
+        metadata.num_key_value_heads = 128;
+        metadata.head_dim = 192;
+        metadata.intermediate_size = 4096;
+        metadata.mlp_layer_types = vec![HfMlpLayerKind::Dense, HfMlpLayerKind::SparseMoe];
+        metadata.moe_intermediate_size = Some(2048);
+        metadata.shared_expert_intermediate_size = Some(2048);
+        metadata.num_experts = Some(256);
+        metadata.num_experts_per_tok = Some(8);
+        metadata.norm_topk_prob = true;
+        metadata.q_lora_rank = Some(1536);
+        metadata.kv_lora_rank = Some(512);
+        metadata.qk_nope_head_dim = Some(128);
+        metadata.qk_rope_head_dim = Some(64);
+        metadata.v_head_dim = Some(128);
+        metadata.torch_dtype = Some(DType::BF16);
+
+        let layers = descriptor_marker_layers(&metadata).unwrap();
+
+        assert_eq!(layers[0].attention_kind, CUDA_HF_ATTENTION_DEEPSEEK_MLA);
+        assert_eq!(layers[1].attention_kind, CUDA_HF_ATTENTION_DEEPSEEK_MLA);
+        let first = layers[0].deepseek.unwrap();
+        assert_eq!(first.mode, CUDA_HF_DEEPSEEK_MODE_V3_MLA);
+        assert_eq!(first.flags, 0);
+        assert_eq!(first.q_lora_rank, 1536);
+        assert_eq!(first.kv_lora_rank, 512);
+        assert_eq!(first.qk_nope_head_dim, 128);
+        assert_eq!(first.qk_rope_head_dim, 64);
+        assert_eq!(first.v_head_dim, 128);
+        assert_eq!(first.compress_ratio, 1);
+        assert_eq!(layers[1].deepseek.unwrap().flags, CUDA_HF_DEEPSEEK_FLAG_MOE);
+    }
+
+    #[test]
+    fn descriptor_marker_layers_preserve_deepseek_v4_mla_modes() {
+        let mut metadata = base_metadata(HfArchitectureKind::DeepSeekV4, 4);
+        metadata.hidden_size = 4096;
+        metadata.num_attention_heads = 64;
+        metadata.num_key_value_heads = 1;
+        metadata.head_dim = 512;
+        metadata.intermediate_size = 4096;
+        metadata.sliding_window = Some(4096);
+        metadata.mlp_layer_types = vec![HfMlpLayerKind::SparseMoe; 4];
+        metadata.moe_intermediate_size = Some(2048);
+        metadata.shared_expert_intermediate_size = Some(2048);
+        metadata.num_experts = Some(256);
+        metadata.num_experts_per_tok = Some(6);
+        metadata.norm_topk_prob = true;
+        metadata.q_lora_rank = Some(1024);
+        metadata.kv_lora_rank = Some(512);
+        metadata.o_lora_rank = Some(1024);
+        metadata.o_groups = Some(8);
+        metadata.qk_nope_head_dim = Some(448);
+        metadata.qk_rope_head_dim = Some(64);
+        metadata.v_head_dim = Some(512);
+        metadata.index_topk = Some(512);
+        metadata.index_n_heads = Some(64);
+        metadata.index_head_dim = Some(128);
+        metadata.compress_ratios = vec![0, 1, 4, 128];
+        metadata.num_hash_layers = Some(3);
+        metadata.scoring_func = Some("sqrtsoftplus".to_string());
+        metadata.expert_dtype = Some("fp4".to_string());
+        metadata.torch_dtype = Some(DType::BF16);
+
+        let layers = descriptor_marker_layers(&metadata).unwrap();
+
+        assert_eq!(
+            layers
+                .iter()
+                .map(|layer| layer.deepseek.unwrap().mode)
+                .collect::<Vec<_>>(),
+            vec![
+                CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+                CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+                CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+                CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
+            ]
+        );
+        assert_eq!(
+            layers
+                .iter()
+                .map(|layer| layer.deepseek.unwrap().compress_ratio)
+                .collect::<Vec<_>>(),
+            vec![1, 1, 4, 128]
+        );
+        assert_eq!(
+            layers[0].deepseek.unwrap().flags,
+            CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW
+                | CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER
+                | CUDA_HF_DEEPSEEK_FLAG_MOE
+        );
+        assert_eq!(
+            layers[2].deepseek.unwrap().flags,
+            CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR
+                | CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER
+                | CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER
+                | CUDA_HF_DEEPSEEK_FLAG_MOE
+        );
+        assert_eq!(
+            layers[3].deepseek.unwrap().flags,
+            CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR | CUDA_HF_DEEPSEEK_FLAG_MOE
+        );
+        assert_eq!(layers[2].deepseek.unwrap().index_n_heads, 64);
+        assert_eq!(layers[2].deepseek.unwrap().index_head_dim, 128);
+    }
+
+    fn base_metadata(architecture: HfArchitectureKind, layers: usize) -> HfModelMetadata {
+        HfModelMetadata {
+            architecture,
+            hidden_size: 4,
+            num_hidden_layers: layers,
+            num_attention_heads: 1,
+            num_key_value_heads: 1,
+            head_dim: 4,
+            intermediate_size: 8,
+            vocab_size: 16,
+            max_position_embeddings: None,
+            sliding_window: None,
+            rope_theta: None,
+            rms_norm_eps: Some(1e-5),
+            bos_token_id: None,
+            eos_token_id: None,
+            tie_word_embeddings: false,
+            hidden_act: Some("silu".to_string()),
+            attention_bias: false,
+            attention_qkv_bias: false,
+            attention_output_bias: false,
+            qk_norm: true,
+            mlp_bias: false,
+            linear_conv_kernel_dim: None,
+            linear_key_head_dim: None,
+            linear_value_head_dim: None,
+            linear_num_key_heads: None,
+            linear_num_value_heads: None,
+            attention_layer_types: vec![HfAttentionLayerKind::Full; layers],
+            mlp_layer_types: vec![HfMlpLayerKind::Dense; layers],
+            moe_intermediate_size: None,
+            shared_expert_intermediate_size: None,
+            num_experts: None,
+            num_experts_per_tok: None,
+            decoder_sparse_step: None,
+            norm_topk_prob: false,
+            moe_first_k_dense_replace: None,
+            moe_layer_freq: None,
+            num_expert_groups: None,
+            topk_group: None,
+            topk_method: None,
+            scoring_func: None,
+            routed_scaling_factor: None,
+            q_lora_rank: None,
+            kv_lora_rank: None,
+            o_lora_rank: None,
+            o_groups: None,
+            qk_nope_head_dim: None,
+            qk_rope_head_dim: None,
+            v_head_dim: None,
+            index_topk: None,
+            index_n_heads: None,
+            index_head_dim: None,
+            compress_ratios: Vec::new(),
+            hc_mult: None,
+            hc_sinkhorn_iters: None,
+            hc_eps: None,
+            num_nextn_predict_layers: None,
+            num_hash_layers: None,
+            swiglu_limit: None,
+            expert_dtype: None,
+            torch_dtype: Some(DType::F16),
+        }
     }
 }

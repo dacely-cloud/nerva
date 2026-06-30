@@ -353,6 +353,13 @@ fn values_for_qwen3_moe_entry(entry: &HfTensorManifestEntry) -> Vec<u16> {
         WeightBlockRole::AttentionNorm
         | WeightBlockRole::QueryNorm
         | WeightBlockRole::KeyNorm
+        | WeightBlockRole::DeepSeekQALoraNorm
+        | WeightBlockRole::DeepSeekKvANorm
+        | WeightBlockRole::DeepSeekIndexerKeyNorm
+        | WeightBlockRole::DeepSeekV4QNorm
+        | WeightBlockRole::DeepSeekV4KvNorm
+        | WeightBlockRole::DeepSeekV4CompressorNorm
+        | WeightBlockRole::DeepSeekV4IndexerCompressorNorm
         | WeightBlockRole::LinearNorm
         | WeightBlockRole::MlpNorm
         | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
@@ -465,6 +472,13 @@ fn values_for_entry_role(role: WeightBlockRole, elements: usize) -> Vec<u16> {
         WeightBlockRole::AttentionNorm
         | WeightBlockRole::QueryNorm
         | WeightBlockRole::KeyNorm
+        | WeightBlockRole::DeepSeekQALoraNorm
+        | WeightBlockRole::DeepSeekKvANorm
+        | WeightBlockRole::DeepSeekIndexerKeyNorm
+        | WeightBlockRole::DeepSeekV4QNorm
+        | WeightBlockRole::DeepSeekV4KvNorm
+        | WeightBlockRole::DeepSeekV4CompressorNorm
+        | WeightBlockRole::DeepSeekV4IndexerCompressorNorm
         | WeightBlockRole::LinearNorm
         | WeightBlockRole::MlpNorm
         | WeightBlockRole::FinalNorm => vec![f32_to_f16_bits(1.0); elements],
@@ -472,6 +486,7 @@ fn values_for_entry_role(role: WeightBlockRole, elements: usize) -> Vec<u16> {
         | WeightBlockRole::KeyBias
         | WeightBlockRole::ValueBias
         | WeightBlockRole::OutputBias
+        | WeightBlockRole::DeepSeekIndexerKeyNormBias
         | WeightBlockRole::LinearConvProjection
         | WeightBlockRole::LinearQkvProjection
         | WeightBlockRole::LinearZProjection
@@ -484,17 +499,77 @@ fn values_for_entry_role(role: WeightBlockRole, elements: usize) -> Vec<u16> {
         | WeightBlockRole::KeyProjection
         | WeightBlockRole::ValueProjection
         | WeightBlockRole::OutputProjection
+        | WeightBlockRole::DeepSeekQALoraProjection
+        | WeightBlockRole::DeepSeekQALoraScaleInv
+        | WeightBlockRole::DeepSeekQBProjection
+        | WeightBlockRole::DeepSeekQBScaleInv
+        | WeightBlockRole::DeepSeekKvAProjection
+        | WeightBlockRole::DeepSeekKvAScaleInv
+        | WeightBlockRole::DeepSeekKvBProjection
+        | WeightBlockRole::DeepSeekKvBScaleInv
+        | WeightBlockRole::DeepSeekOutputScaleInv
+        | WeightBlockRole::DeepSeekIndexerQueryProjection
+        | WeightBlockRole::DeepSeekIndexerQueryScaleInv
+        | WeightBlockRole::DeepSeekIndexerKeyProjection
+        | WeightBlockRole::DeepSeekIndexerKeyScaleInv
+        | WeightBlockRole::DeepSeekIndexerWeightsProjection
+        | WeightBlockRole::DeepSeekV4HcHeadBase
+        | WeightBlockRole::DeepSeekV4HcHeadFn
+        | WeightBlockRole::DeepSeekV4HcHeadScale
+        | WeightBlockRole::DeepSeekV4HcAttnBase
+        | WeightBlockRole::DeepSeekV4HcAttnFn
+        | WeightBlockRole::DeepSeekV4HcAttnScale
+        | WeightBlockRole::DeepSeekV4HcFfnBase
+        | WeightBlockRole::DeepSeekV4HcFfnFn
+        | WeightBlockRole::DeepSeekV4HcFfnScale
+        | WeightBlockRole::DeepSeekV4AttentionSink
+        | WeightBlockRole::DeepSeekV4WqAProjection
+        | WeightBlockRole::DeepSeekV4WqAScale
+        | WeightBlockRole::DeepSeekV4WqBProjection
+        | WeightBlockRole::DeepSeekV4WqBScale
+        | WeightBlockRole::DeepSeekV4WkvProjection
+        | WeightBlockRole::DeepSeekV4WkvScale
+        | WeightBlockRole::DeepSeekV4WoAProjection
+        | WeightBlockRole::DeepSeekV4WoAScale
+        | WeightBlockRole::DeepSeekV4WoBProjection
+        | WeightBlockRole::DeepSeekV4WoBScale
+        | WeightBlockRole::DeepSeekV4CompressorApe
+        | WeightBlockRole::DeepSeekV4CompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4CompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4IndexerWqBProjection
+        | WeightBlockRole::DeepSeekV4IndexerWqBScale
+        | WeightBlockRole::DeepSeekV4IndexerCompressorApe
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection
+        | WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection
+        | WeightBlockRole::DeepSeekV4IndexerWeightsProjection
+        | WeightBlockRole::DeepSeekV4HashRouteTable
         | WeightBlockRole::GateProjection
         | WeightBlockRole::UpProjection
         | WeightBlockRole::DownProjection
+        | WeightBlockRole::GateScaleInv
+        | WeightBlockRole::UpScaleInv
+        | WeightBlockRole::DownScaleInv
         | WeightBlockRole::RouterProjection
+        | WeightBlockRole::RouterCorrectionBias
         | WeightBlockRole::ExpertGateProjection
         | WeightBlockRole::ExpertUpProjection
         | WeightBlockRole::ExpertGateUpProjection
         | WeightBlockRole::ExpertDownProjection
+        | WeightBlockRole::ExpertGateScaleInv
+        | WeightBlockRole::ExpertUpScaleInv
+        | WeightBlockRole::ExpertDownScaleInv
+        | WeightBlockRole::DeepSeekV4ExpertGateScale
+        | WeightBlockRole::DeepSeekV4ExpertUpScale
+        | WeightBlockRole::DeepSeekV4ExpertDownScale
         | WeightBlockRole::SharedExpertGateProjection
         | WeightBlockRole::SharedExpertUpProjection
         | WeightBlockRole::SharedExpertDownProjection
+        | WeightBlockRole::SharedExpertGateScaleInv
+        | WeightBlockRole::SharedExpertUpScaleInv
+        | WeightBlockRole::SharedExpertDownScaleInv
+        | WeightBlockRole::DeepSeekV4SharedExpertGateScale
+        | WeightBlockRole::DeepSeekV4SharedExpertUpScale
+        | WeightBlockRole::DeepSeekV4SharedExpertDownScale
         | WeightBlockRole::SharedExpertRouterProjection => vec![0; elements],
     }
 }
