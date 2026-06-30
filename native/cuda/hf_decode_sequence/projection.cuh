@@ -91,11 +91,4 @@ cudaError_t encoded_row_major_gemm_tokens_best(
     const uint16_t *input, uint32_t rows, uint32_t cols, uint32_t tokens,
     uint32_t dtype, float beta, float *output);
 
-cudaError_t launch_deepseek_fp8_f32_scale_matvec(
-    cudaStream_t stream, const uint8_t *weights, const float *scales,
-    const float *input, uint32_t rows, uint32_t cols, uint32_t block_rows,
-    uint32_t block_cols, float *output);
-cudaError_t launch_deepseek_fp8_f32_scale_encoded_matvec(
-    cudaStream_t stream, const uint8_t *weights, const float *scales,
-    const uint16_t *input, uint32_t input_dtype, uint32_t rows, uint32_t cols,
-    uint32_t block_rows, uint32_t block_cols, float *output);
+#include "deepseek/projection.cuh"
