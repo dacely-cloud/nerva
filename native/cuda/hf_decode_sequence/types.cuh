@@ -63,6 +63,9 @@ constexpr uint32_t kDeepSeekV32PackedKvRopeValues = 64;
 constexpr uint32_t kDeepSeekV32PackedKvTokenBytes =
     kDeepSeekV32PackedKvNopeBytes + kDeepSeekV32PackedKvScaleBytes +
     kDeepSeekV32PackedKvRopeValues * 2u;
+constexpr uint32_t kDeepSeekV32IndexerKvBlockTokens = 64;
+constexpr uint32_t kDeepSeekV32IndexerKvTileTokens = 16;
+constexpr uint32_t kDeepSeekV32IndexerKvTileHeadBytes = 16;
 constexpr uint32_t kDeepSeekV4PackedKvDefaultBlockTokens = 64;
 constexpr uint32_t kDeepSeekV4PackedKvC128BlockTokens = 2;
 constexpr uint32_t kDeepSeekV4PackedKvAlignmentBytes = 576;

@@ -155,6 +155,15 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
       session->hidden, block_rows, block_cols, scratch.k);
   if (err != cudaSuccess) return err;
 
+  hf_deepseek_v32_indexer_kv_encode_kernel<<<1, 1, 0, session->stream>>>(
+      session->device_arena, layout, session->dtype, session->hidden,
+      session->device_step, max_steps, session->rope_theta,
+      session->device_projection_input, session->device_deepseek_indexer_kv,
+      deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
+      deepseek_v32_indexer_kv_block_count(session, layout));
+  err = cudaGetLastError();
+  if (err != cudaSuccess) return err;
+
   hf_decode_rms_norm_f32_to_encoded_kernel<<<1, kDecodeNormThreads, 0,
                                              session->stream>>>(
       session->device_arena, layout.q_norm, scratch.q,

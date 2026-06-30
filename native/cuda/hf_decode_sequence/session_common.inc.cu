@@ -251,6 +251,18 @@ bool layout_is_deepseek_v32_mla_packed(const SequenceLayerLayout &layout) {
          layout.deepseek_qk_rope_head_dim == kDeepSeekV32PackedKvRopeValues;
 }
 
+bool layout_is_deepseek_v32_indexer_native(
+    const SequenceLayerLayout &layout) {
+  return layout.attention_kind == kAttentionKindDeepSeekMla &&
+         layout.deepseek_mode == kDeepSeekModeV32MlaIndexer &&
+         (layout.deepseek_flags & kDeepSeekFlagSparseIndexer) != 0 &&
+         layout.deepseek_index_head_dim != 0 &&
+         layout.deepseek_indexer_k != kMissingOffset &&
+         layout.deepseek_indexer_k_scale != kMissingOffset &&
+         layout.deepseek_indexer_k_norm != kMissingOffset &&
+         layout.deepseek_indexer_k_norm_bias != kMissingOffset;
+}
+
 bool layout_deepseek_v4_mlp_supported(const SequenceLayerLayout &layout) {
   return layout.mlp_kind == kMlpKindDense ||
          layout.mlp_kind == kMlpKindSparseMoe;
@@ -305,6 +317,69 @@ uint32_t deepseek_v32_mla_kv_block_count(
       (static_cast<uint64_t>(session->max_context_tokens) +
        kDeepSeekV32PackedKvBlockTokens - 1u) /
       kDeepSeekV32PackedKvBlockTokens);
+}
+
+uint64_t deepseek_v32_indexer_kv_token_bytes(
+    const SequenceLayerLayout &layout) {
+  if (!layout_is_deepseek_v32_indexer_native(layout)) {
+    return 0;
+  }
+  const uint64_t scale_bytes =
+      ((static_cast<uint64_t>(layout.deepseek_index_head_dim) + 127u) / 128u) *
+      sizeof(float);
+  return static_cast<uint64_t>(layout.deepseek_index_head_dim) + scale_bytes;
+}
+
+uint64_t deepseek_v32_indexer_kv_page_bytes(
+    const SequenceLayerLayout &layout) {
+  const uint64_t token_bytes = deepseek_v32_indexer_kv_token_bytes(layout);
+  return token_bytes == 0
+             ? 0
+             : sat_mul_u64(kDeepSeekV32IndexerKvBlockTokens, token_bytes);
+}
+
+uint64_t deepseek_v32_indexer_kv_layer_bytes(
+    const SequenceLayerLayout &layout, uint32_t max_context_tokens) {
+  const uint64_t page_bytes = deepseek_v32_indexer_kv_page_bytes(layout);
+  if (page_bytes == 0 || max_context_tokens == 0) {
+    return 0;
+  }
+  const uint64_t blocks =
+      (static_cast<uint64_t>(max_context_tokens) +
+       kDeepSeekV32IndexerKvBlockTokens - 1u) /
+      kDeepSeekV32IndexerKvBlockTokens;
+  return sat_mul_u64(blocks, page_bytes);
+}
+
+uint64_t deepseek_v32_indexer_kv_layer_offset_bytes(
+    const NervaCudaHfDecodeSequenceSession *session,
+    uint32_t target_layer_index) {
+  if (session == nullptr) {
+    return 0;
+  }
+  uint64_t offset = 0;
+  const uint32_t capped_layer =
+      std::min(target_layer_index,
+               static_cast<uint32_t>(session->host_layouts.size()));
+  for (uint32_t layer_index = 0; layer_index < capped_layer; ++layer_index) {
+    offset = sat_add_u64(
+        offset, deepseek_v32_indexer_kv_layer_bytes(
+                    session->host_layouts[layer_index],
+                    session->max_context_tokens));
+  }
+  return offset;
+}
+
+uint32_t deepseek_v32_indexer_kv_block_count(
+    const NervaCudaHfDecodeSequenceSession *session,
+    const SequenceLayerLayout &layout) {
+  if (session == nullptr || !layout_is_deepseek_v32_indexer_native(layout)) {
+    return 0;
+  }
+  return static_cast<uint32_t>(
+      (static_cast<uint64_t>(session->max_context_tokens) +
+       kDeepSeekV32IndexerKvBlockTokens - 1u) /
+      kDeepSeekV32IndexerKvBlockTokens);
 }
 
 bool layout_is_deepseek_v4_swa_native(const SequenceLayerLayout &layout) {
@@ -609,6 +684,8 @@ void accumulate_deepseek_v4_compressed_runtime_bytes(
   for (const SequenceLayerLayout &layout : layouts) {
     swa_kv = sat_add_u64(
         swa_kv, deepseek_v4_swa_kv_layer_bytes(layout, max_context_tokens));
+    idx_kv = sat_add_u64(
+        idx_kv, deepseek_v32_indexer_kv_layer_bytes(layout, max_context_tokens));
     if (!layout_is_deepseek_v4_compressed_native(layout)) {
       continue;
     }

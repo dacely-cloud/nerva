@@ -1004,6 +1004,194 @@ fn deepseek_v32_mla_snapshot_matches_runtime_fp8_ds_mla_page() {
 }
 
 #[test]
+fn deepseek_v32_indexer_snapshot_matches_vllm_paged_fp8_k_cache_layout() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let hidden = 4usize;
+    let heads = 1usize;
+    let kv_heads = 1usize;
+    let qk_nope = 128usize;
+    let qk_rope = 64usize;
+    let head_dim = qk_nope + qk_rope;
+    let kv_lora = 512usize;
+    let v_head = 128usize;
+    let index_head_dim = 128usize;
+    let intermediate = 4usize;
+    let vocab_size = 8usize;
+    let mut layer = tiny_deepseek_v32_descriptor_layer();
+    let deepseek = layer
+        .deepseek
+        .as_mut()
+        .expect("tiny DeepSeek V3.2 layer should carry DeepSeek metadata");
+    deepseek.q_lora_rank = 2;
+    deepseek.kv_lora_rank = kv_lora;
+    deepseek.qk_nope_head_dim = qk_nope;
+    deepseek.qk_rope_head_dim = qk_rope;
+    deepseek.v_head_dim = v_head;
+    deepseek.index_n_heads = 1;
+    deepseek.index_head_dim = index_head_dim;
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: hidden as u32,
+        heads: heads as u32,
+        kv_heads: kv_heads as u32,
+        head_dim: head_dim as u32,
+        intermediate: intermediate as u32,
+        vocab_size: vocab_size as u32,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept full-size V3.2 indexer dimensions");
+    assert_ne!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(
+        plan.deepseek_indexer_k_scale,
+        CUDA_HF_SEQUENCE_MISSING_OFFSET
+    );
+    assert_ne!(
+        plan.deepseek_indexer_k_norm,
+        CUDA_HF_SEQUENCE_MISSING_OFFSET
+    );
+    assert_ne!(
+        plan.deepseek_indexer_k_norm_bias,
+        CUDA_HF_SEQUENCE_MISSING_OFFSET
+    );
+
+    let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    for dim in 0..hidden {
+        weight_storage[dim] = f32_to_bf16_bits(1.0);
+        write_arena_f32(&mut weight_storage, plan.rms_attn + (dim * 2) as u64, 1.0);
+    }
+    for dim in 0..kv_lora {
+        write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
+    }
+    for dim in 0..index_head_dim {
+        write_arena_f32(
+            &mut weight_storage,
+            plan.deepseek_indexer_k_norm + (dim * 2) as u64,
+            1.0,
+        );
+    }
+    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    for row in 0..(kv_lora + qk_rope) {
+        write_arena_byte(&mut weight_storage, plan.w_k, row * hidden, one_fp8);
+    }
+    let kv_scale_blocks = (kv_lora + qk_rope).div_ceil(128);
+    for block in 0..kv_scale_blocks {
+        write_arena_f32(
+            &mut weight_storage,
+            plan.deepseek_kv_a_scale + (block * 2) as u64,
+            1.0,
+        );
+    }
+    let pos_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let neg_fp8 = f32_to_f8_e4m3fn_bits_nearest(-1.0);
+    for row in 0..index_head_dim {
+        let value = if row % 2 == 0 { pos_fp8 } else { neg_fp8 };
+        write_arena_byte(
+            &mut weight_storage,
+            plan.deepseek_indexer_k,
+            row * hidden,
+            value,
+        );
+    }
+    write_arena_f32(&mut weight_storage, plan.deepseek_indexer_k_scale, 1.0);
+
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: plan.resident_weight_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+        hidden,
+        heads,
+        kv_heads,
+        head_dim,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 4,
+        rms_eps: 0.0,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: CudaHfDecodeSequenceExperimentalRtConfig::default(),
+    };
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V3.2 indexer cache session should create: {:?}",
+        created.summary.error
+    );
+    let mut session = created
+        .session
+        .expect("V3.2 indexer cache session handle should exist");
+    let summary = session.run(&[0], 1, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V3.2 one-token run should populate the indexer K cache: {:?}",
+        summary.error
+    );
+
+    let page_bytes = 64 * (index_head_dim + core::mem::size_of::<f32>());
+    let snapshot = session.deepseek_v32_indexer_kv_snapshot(0, page_bytes);
+    assert_eq!(
+        snapshot.status,
+        SmokeStatus::Ok,
+        "V3.2 indexer KV snapshot should copy device cache: {:?}",
+        snapshot.error
+    );
+    assert_eq!(snapshot.block_count, 1);
+    assert_eq!(snapshot.layer_offset_bytes, 0);
+    assert_eq!(snapshot.layer_bytes, page_bytes as u64);
+    assert_eq!(snapshot.page_bytes, page_bytes as u64);
+    assert_eq!(snapshot.copied_bytes, page_bytes as u64);
+
+    let mut expected = vec![0u8; page_bytes];
+    let value_bytes = 64 * index_head_dim;
+    let scale = 1.0f32 / 256.0;
+    let pos_quant = f32_to_f8_e4m3fn_bits_nearest(256.0);
+    let neg_quant = f32_to_f8_e4m3fn_bits_nearest(-256.0);
+    for dim in 0..index_head_dim {
+        let tile_store_offset = (dim / 16) * 16 * 16 + dim % 16;
+        expected[tile_store_offset] = if dim % 2 == 0 { pos_quant } else { neg_quant };
+    }
+    expected[value_bytes..value_bytes + core::mem::size_of::<f32>()]
+        .copy_from_slice(&scale.to_le_bytes());
+    assert_page_bytes_eq(
+        &snapshot.bytes,
+        &expected,
+        "V3.2 indexer K cache page must match vLLM tiled fp8+f32-scale layout",
+    );
+    assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
+}
+
+#[test]
 fn deepseek_v3_mla_serial_prefill_writes_prompt_cache_rows() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
