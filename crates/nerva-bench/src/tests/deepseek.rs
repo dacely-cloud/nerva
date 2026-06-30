@@ -1,8 +1,8 @@
 use crate::model_io::deepseek::{
     DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
     deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
-    run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_parity_gate,
-    run_deepseek_vllm_reference_audit,
+    run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_compare,
+    run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
 };
 
 #[test]
@@ -533,10 +533,69 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"hf-cuda-generate\""));
     assert!(json.contains("\"vllm_generate\""));
     assert!(json.contains("\"tools/deepseek_vllm_generate.py\""));
+    assert!(json.contains("\"compare\""));
+    assert!(json.contains("\"deepseek-vllm-compare\""));
+    assert!(json.contains("\"vllm.json\""));
+    assert!(json.contains("\"nerva.json\""));
     assert!(json.contains("\"--vllm-root\""));
     assert!(json.contains("\"--max-model-len\""));
     assert!(json.contains("\"--max-tokens\""));
     assert!(json.contains("same greedy sampler temperature=0 top_p=1 top_k=0 seed=0"));
+    assert!(json.contains("run deepseek-vllm-compare on the two JSON artifacts"));
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn deepseek_vllm_compare_checks_tokens_text_and_throughput() {
+    let dir = std::env::temp_dir().join(format!(
+        "nerva-bench-deepseek-vllm-compare-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let vllm_path = dir.join("vllm.json");
+    let nerva_path = dir.join("nerva.json");
+    std::fs::write(
+        &vllm_path,
+        r#"{"status":"ok","schema":"nerva-vllm-generate-v1","tokens":[11,22,33],"generated_text":"same","tokens_per_second":100.0}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &nerva_path,
+        r#"{"status":"ok","schema":"nerva-hf-cuda-generate-v1","tokens":[11,22,33],"generated_text":"same","perf":{"tokens_per_second":125.0,"token_p99_ms":9.0}}"#,
+    )
+    .unwrap();
+
+    let json = run_deepseek_vllm_compare(
+        Some(vllm_path.to_string_lossy().into_owned()),
+        Some(nerva_path.to_string_lossy().into_owned()),
+    )
+    .expect("DeepSeek vLLM comparison should parse generated artifacts");
+
+    assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-compare-v1\""));
+    assert!(json.contains("\"status\":\"throughput_ok_latency_missing\""));
+    assert!(json.contains("\"token_parity\":true"));
+    assert!(json.contains("\"text_parity\":true"));
+    assert!(json.contains("\"throughput_speedup_vs_vllm\":1.25"));
+    assert!(json.contains("\"throughput_claim_allowed\":true"));
+    assert!(json.contains("\"claim_allowed\":false"));
+    assert!(json.contains("p99 latency is missing from one or both artifacts"));
+
+    let mismatch_path = dir.join("nerva-mismatch.json");
+    std::fs::write(
+        &mismatch_path,
+        r#"{"status":"ok","tokens":[11,99,33],"generated_text":"different","tokens_per_second":125.0}"#,
+    )
+    .unwrap();
+    let mismatch = run_deepseek_vllm_compare(
+        Some(vllm_path.to_string_lossy().into_owned()),
+        Some(mismatch_path.to_string_lossy().into_owned()),
+    )
+    .expect("DeepSeek vLLM mismatch comparison should parse generated artifacts");
+    assert!(mismatch.contains("\"status\":\"mismatch\""));
+    assert!(mismatch.contains("\"token_parity\":false"));
+    assert!(mismatch.contains("\"text_parity\":false"));
+    assert!(mismatch.contains("\"first_mismatch_index\":1"));
 
     let _ = std::fs::remove_dir_all(dir);
 }

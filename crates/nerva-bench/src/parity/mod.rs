@@ -1,7 +1,7 @@
-mod compare;
-mod hash;
+pub(crate) mod compare;
+pub(crate) mod hash;
 mod json;
-mod parser;
+pub(crate) mod parser;
 pub(crate) mod run;
 pub(crate) mod summary;
 

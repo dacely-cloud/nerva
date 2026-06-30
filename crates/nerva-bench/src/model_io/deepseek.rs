@@ -41,6 +41,9 @@ use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::parser::parse_hf_config_metadata;
 
 use crate::json::{json_escape, json_string_array};
+use crate::parity::compare::compare_token_slices;
+use crate::parity::hash::hash_tokens;
+use crate::parity::parser::parse_vllm_token_ids;
 
 pub(crate) struct DeepSeekCudaPrimitiveReport<'a> {
     pub(crate) name: &'a str,
@@ -312,9 +315,19 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
         "--dtype".to_string(),
         "bfloat16".to_string(),
     ];
+    let compare = vec![
+        "cargo".to_string(),
+        "run".to_string(),
+        "-p".to_string(),
+        "nerva-bench".to_string(),
+        "--".to_string(),
+        "deepseek-vllm-compare".to_string(),
+        "vllm.json".to_string(),
+        "nerva.json".to_string(),
+    ];
 
     Ok(format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-plan-v1\",\"architecture\":{},\"checkpoint_dir\":\"{}\",\"checkpoint_exists\":{},\"config_path\":\"{}\",\"config_status\":\"{}\",\"config_error\":{},\"weights_present\":{},\"prompt_spec\":\"{}\",\"prompt_status\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_root\":\"{}\",\"vllm_reference_status\":\"{}\",\"vllm_reference_units_total\":{},\"vllm_reference_units_ok\":{},\"runtime_units_total\":{},\"runtime_blocking_units_total\":{},\"runtime_blocking_units\":{},\"commands\":{{\"nerva_generate\":{},\"nerva_bench_generate\":{},\"vllm_generate\":{}}},\"required_comparison\":[\"same checkpoint directory\",\"same prompt text\",\"same greedy sampler temperature=0 top_p=1 top_k=0 seed=0\",\"compare generated token ids and generated text\",\"compare post-load/decode tokens_per_second and p99 latency\"],\"runtime_parity_status\":\"{}\",\"performance_status\":\"{}\",\"benchmark_allowed\":{},\"claim_allowed\":false}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-plan-v1\",\"architecture\":{},\"checkpoint_dir\":\"{}\",\"checkpoint_exists\":{},\"config_path\":\"{}\",\"config_status\":\"{}\",\"config_error\":{},\"weights_present\":{},\"prompt_spec\":\"{}\",\"prompt_status\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_root\":\"{}\",\"vllm_reference_status\":\"{}\",\"vllm_reference_units_total\":{},\"vllm_reference_units_ok\":{},\"runtime_units_total\":{},\"runtime_blocking_units_total\":{},\"runtime_blocking_units\":{},\"commands\":{{\"nerva_generate\":{},\"nerva_bench_generate\":{},\"vllm_generate\":{},\"compare\":{}}},\"required_comparison\":[\"same checkpoint directory\",\"same prompt text\",\"same greedy sampler temperature=0 top_p=1 top_k=0 seed=0\",\"compare generated token ids and generated text\",\"compare post-load/decode tokens_per_second and p99 latency\",\"run deepseek-vllm-compare on the two JSON artifacts\"],\"runtime_parity_status\":\"{}\",\"performance_status\":\"{}\",\"benchmark_allowed\":{},\"claim_allowed\":false}}",
         status,
         json_opt_string(architecture.as_deref()),
         json_escape(&checkpoint_dir),
@@ -337,6 +350,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
         json_string_array(&nerva_generate),
         json_string_array(&nerva_bench),
         json_string_array(&vllm_generate),
+        json_string_array(&compare),
         if benchmark_allowed {
             "ready_for_same_checkpoint_run"
         } else {
@@ -348,6 +362,124 @@ pub(crate) fn run_deepseek_vllm_benchmark_plan(
             "not_benchmarked"
         },
         benchmark_allowed,
+    ))
+}
+
+pub(crate) fn run_deepseek_vllm_compare(
+    vllm_artifact_path: Option<String>,
+    nerva_artifact_path: Option<String>,
+) -> Result<String, String> {
+    let vllm_artifact_path =
+        vllm_artifact_path.ok_or_else(|| "deepseek-vllm-compare requires vllm_json".to_string())?;
+    let nerva_artifact_path = nerva_artifact_path
+        .ok_or_else(|| "deepseek-vllm-compare requires nerva_json".to_string())?;
+    let vllm_json = std::fs::read_to_string(&vllm_artifact_path)
+        .map_err(|err| format!("failed to read {vllm_artifact_path}: {err}"))?;
+    let nerva_json = std::fs::read_to_string(&nerva_artifact_path)
+        .map_err(|err| format!("failed to read {nerva_artifact_path}: {err}"))?;
+    deepseek_vllm_compare_json(
+        &vllm_artifact_path,
+        &nerva_artifact_path,
+        &vllm_json,
+        &nerva_json,
+    )
+}
+
+fn deepseek_vllm_compare_json(
+    vllm_artifact_path: &str,
+    nerva_artifact_path: &str,
+    vllm_json: &str,
+    nerva_json: &str,
+) -> Result<String, String> {
+    let (vllm_source_format, vllm_tokens) = parse_vllm_token_ids(vllm_json)?;
+    let (nerva_source_format, nerva_tokens) = parse_vllm_token_ids(nerva_json)?;
+    let comparison = compare_token_slices(&vllm_tokens, &nerva_tokens);
+    let vllm_token_hash = hash_tokens(&vllm_tokens);
+    let nerva_token_hash = hash_tokens(&nerva_tokens);
+    let token_parity = comparison.mismatched_tokens == 0
+        && comparison.missing_tokens == 0
+        && comparison.extra_tokens == 0
+        && vllm_token_hash == nerva_token_hash;
+
+    let vllm_text = find_first_json_string_field(vllm_json, "generated_text")?;
+    let nerva_text = find_first_json_string_field(nerva_json, "generated_text")?;
+    let text_parity = match (&vllm_text, &nerva_text) {
+        (Some(vllm), Some(nerva)) => vllm == nerva,
+        _ => false,
+    };
+
+    let vllm_tps = find_first_json_number_field(vllm_json, "tokens_per_second")?;
+    let nerva_tps = find_first_json_number_field(nerva_json, "tokens_per_second")?;
+    let throughput_speedup = match (nerva_tps, vllm_tps) {
+        (Some(nerva), Some(vllm)) if vllm > 0.0 => Some(nerva / vllm),
+        _ => None,
+    };
+    let throughput_comparable = throughput_speedup.is_some();
+    let throughput_ok = throughput_speedup.is_some_and(|speedup| speedup >= 1.0);
+
+    let vllm_p99 = find_deepseek_p99_ms(vllm_json)?;
+    let nerva_p99 = find_deepseek_p99_ms(nerva_json)?;
+    let p99_ratio = match (nerva_p99, vllm_p99) {
+        (Some(nerva), Some(vllm)) if vllm > 0.0 => Some(nerva / vllm),
+        _ => None,
+    };
+    let latency_comparable = p99_ratio.is_some();
+    let latency_ok = p99_ratio.is_some_and(|ratio| ratio <= 1.0);
+
+    let status = if !token_parity || !text_parity {
+        "mismatch"
+    } else if !throughput_comparable {
+        "not_comparable"
+    } else if !throughput_ok {
+        "performance_regression"
+    } else if !latency_comparable {
+        "throughput_ok_latency_missing"
+    } else if !latency_ok {
+        "latency_regression"
+    } else {
+        "ok"
+    };
+    let claim_allowed = status == "ok";
+    let throughput_claim_allowed = token_parity && text_parity && throughput_ok;
+
+    Ok(format!(
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-compare-v1\",\"vllm_artifact\":\"{}\",\"nerva_artifact\":\"{}\",\"source_formats\":{{\"vllm\":\"{}\",\"nerva\":\"{}\"}},\"token_parity\":{},\"text_parity\":{},\"matched_tokens\":{},\"mismatched_tokens\":{},\"missing_tokens\":{},\"extra_tokens\":{},\"first_mismatch_index\":{},\"vllm_token_hash\":{},\"nerva_token_hash\":{},\"vllm_generated_tokens\":{},\"nerva_generated_tokens\":{},\"vllm_tokens_per_second\":{},\"nerva_tokens_per_second\":{},\"throughput_speedup_vs_vllm\":{},\"throughput_comparable\":{},\"throughput_ok\":{},\"vllm_p99_ms\":{},\"nerva_p99_ms\":{},\"p99_ratio_vs_vllm\":{},\"latency_comparable\":{},\"latency_ok\":{},\"throughput_claim_allowed\":{},\"claim_allowed\":{},\"blocking_reasons\":{}}}",
+        status,
+        json_escape(vllm_artifact_path),
+        json_escape(nerva_artifact_path),
+        json_escape(vllm_source_format),
+        json_escape(nerva_source_format),
+        token_parity,
+        text_parity,
+        comparison.matched_tokens,
+        comparison.mismatched_tokens,
+        comparison.missing_tokens,
+        comparison.extra_tokens,
+        json_opt_usize(comparison.first_mismatch_index),
+        vllm_token_hash,
+        nerva_token_hash,
+        vllm_tokens.len(),
+        nerva_tokens.len(),
+        json_opt_f64(vllm_tps),
+        json_opt_f64(nerva_tps),
+        json_opt_f64(throughput_speedup),
+        throughput_comparable,
+        throughput_ok,
+        json_opt_f64(vllm_p99),
+        json_opt_f64(nerva_p99),
+        json_opt_f64(p99_ratio),
+        latency_comparable,
+        latency_ok,
+        throughput_claim_allowed,
+        claim_allowed,
+        json_string_array(&deepseek_compare_blocking_reasons(
+            token_parity,
+            text_parity,
+            throughput_comparable,
+            throughput_ok,
+            latency_comparable,
+            latency_ok,
+        )),
     ))
 }
 
@@ -1969,6 +2101,166 @@ fn json_opt_string(value: Option<&str>) -> String {
         || "null".to_string(),
         |value| format!("\"{}\"", json_escape(value)),
     )
+}
+
+fn json_opt_usize(value: Option<usize>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
+fn json_opt_f64(value: Option<f64>) -> String {
+    match value {
+        Some(value) if value.is_finite() && value.fract() == 0.0 => format!("{value:.1}"),
+        Some(value) if value.is_finite() => value.to_string(),
+        _ => "null".to_string(),
+    }
+}
+
+fn deepseek_compare_blocking_reasons(
+    token_parity: bool,
+    text_parity: bool,
+    throughput_comparable: bool,
+    throughput_ok: bool,
+    latency_comparable: bool,
+    latency_ok: bool,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if !token_parity {
+        reasons.push("generated token IDs differ".to_string());
+    }
+    if !text_parity {
+        reasons.push("generated text differs or is missing".to_string());
+    }
+    if !throughput_comparable {
+        reasons.push("tokens_per_second is missing from one or both artifacts".to_string());
+    } else if !throughput_ok {
+        reasons.push("NERVA throughput is below vLLM throughput".to_string());
+    }
+    if !latency_comparable {
+        reasons.push("p99 latency is missing from one or both artifacts".to_string());
+    } else if !latency_ok {
+        reasons.push("NERVA p99 latency is above vLLM p99 latency".to_string());
+    }
+    reasons
+}
+
+fn find_deepseek_p99_ms(source: &str) -> Result<Option<f64>, String> {
+    for key in ["token_p99_ms", "p99_ms", "decode_p99_ms"] {
+        if let Some(value) = find_first_json_number_field(source, key)? {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+fn find_first_json_number_field(source: &str, key: &str) -> Result<Option<f64>, String> {
+    let Some(start) = find_json_value_start_for_key(source, key)? else {
+        return Ok(None);
+    };
+    let bytes = source.as_bytes();
+    if bytes.get(start..start + 4) == Some(b"null") {
+        return Ok(None);
+    }
+    let mut end = start;
+    while matches!(
+        bytes.get(end),
+        Some(b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+    ) {
+        end += 1;
+    }
+    if end == start {
+        return Err(format!("JSON key {key} is not numeric"));
+    }
+    source[start..end]
+        .parse::<f64>()
+        .map(Some)
+        .map_err(|_| format!("JSON key {key} is not a valid f64"))
+}
+
+fn find_first_json_string_field(source: &str, key: &str) -> Result<Option<String>, String> {
+    let Some(start) = find_json_value_start_for_key(source, key)? else {
+        return Ok(None);
+    };
+    if source.as_bytes().get(start) != Some(&b'"') {
+        return Ok(None);
+    }
+    parse_json_string_at(source, start).map(|(value, _)| Some(value))
+}
+
+fn find_json_value_start_for_key(source: &str, key: &str) -> Result<Option<usize>, String> {
+    let bytes = source.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let (field, after_field) = parse_json_string_at(source, index)?;
+        index = after_field;
+        if field != key {
+            continue;
+        }
+        let colon = skip_json_ws(bytes, after_field);
+        if bytes.get(colon) != Some(&b':') {
+            return Err(format!("JSON key {key} is missing ':'"));
+        }
+        return Ok(Some(skip_json_ws(bytes, colon + 1)));
+    }
+    Ok(None)
+}
+
+fn parse_json_string_at(source: &str, start: usize) -> Result<(String, usize), String> {
+    if source.as_bytes().get(start) != Some(&b'"') {
+        return Err("expected JSON string".to_string());
+    }
+    let mut out = String::new();
+    let mut chars = source[start + 1..].char_indices();
+    while let Some((offset, ch)) = chars.next() {
+        let index = start + 1 + offset;
+        match ch {
+            '"' => return Ok((out, index + 1)),
+            '\\' => {
+                let Some((_, escaped)) = chars.next() else {
+                    return Err("JSON string escape is incomplete".to_string());
+                };
+                match escaped {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    '/' => out.push('/'),
+                    'b' => out.push('\u{0008}'),
+                    'f' => out.push('\u{000c}'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    'u' => {
+                        let mut codepoint = 0u32;
+                        for _ in 0..4 {
+                            let Some((_, hex)) = chars.next() else {
+                                return Err("JSON unicode escape is incomplete".to_string());
+                            };
+                            let Some(value) = hex.to_digit(16) else {
+                                return Err("JSON unicode escape has non-hex digit".to_string());
+                            };
+                            codepoint = (codepoint << 4) | value;
+                        }
+                        let Some(decoded) = char::from_u32(codepoint) else {
+                            return Err("JSON unicode escape is invalid".to_string());
+                        };
+                        out.push(decoded);
+                    }
+                    _ => return Err("unsupported JSON string escape".to_string()),
+                }
+            }
+            ch => out.push(ch),
+        }
+    }
+    Err("JSON string is not closed".to_string())
+}
+
+fn skip_json_ws(bytes: &[u8], mut index: usize) -> usize {
+    while matches!(bytes.get(index), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+        index += 1;
+    }
+    index
 }
 
 fn json_opt_architecture(value: Option<&str>) -> String {

@@ -6,7 +6,7 @@ use crate::{
         config::{run_layout_probe, run_manifest_probe, run_metadata_probe},
         deepseek::{
             run_deepseek_cuda_primitive_bench, run_deepseek_cuda_readiness,
-            run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan,
+            run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_compare,
             run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
         },
         resident::{
@@ -181,6 +181,9 @@ pub(crate) fn run_artifact_probe(command: &str, args: &[String]) -> Result<Strin
                 max_new_tokens,
                 args.get(4).cloned(),
             )
+        }
+        "deepseek-vllm-compare" => {
+            run_deepseek_vllm_compare(args.first().cloned(), args.get(1).cloned())
         }
         "safetensors" => run_safetensors_probe(args.first().cloned(), args.get(1).cloned()),
         "safetensors-shards" => run_safetensors_shard_probe(
