@@ -686,6 +686,163 @@ fn deepseek_v3_mla_snapshot_matches_vllm_latent_cache_row() {
 }
 
 #[test]
+fn deepseek_v3_mla_snapshot_matches_fullsize_vllm_cache_page() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let hidden = 4usize;
+    let heads = 1usize;
+    let kv_heads = 1usize;
+    let qk_nope = 128usize;
+    let qk_rope = 64usize;
+    let head_dim = qk_nope + qk_rope;
+    let kv_lora = 512usize;
+    let v_head = 128usize;
+    let intermediate = 4usize;
+    let vocab_size = 8usize;
+    let mut layer = tiny_deepseek_v3_descriptor_layer();
+    let deepseek = layer
+        .deepseek
+        .as_mut()
+        .expect("tiny DeepSeek V3 layer should carry DeepSeek metadata");
+    deepseek.q_lora_rank = 2;
+    deepseek.kv_lora_rank = kv_lora;
+    deepseek.qk_nope_head_dim = qk_nope;
+    deepseek.qk_rope_head_dim = qk_rope;
+    deepseek.v_head_dim = v_head;
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: hidden as u32,
+        heads: heads as u32,
+        kv_heads: kv_heads as u32,
+        head_dim: head_dim as u32,
+        intermediate: intermediate as u32,
+        vocab_size: vocab_size as u32,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept full-size V3 MLA cache dimensions");
+    assert_eq!(plan.deepseek_kv_cache_width, (kv_lora + qk_rope) as u32);
+    assert_eq!(plan.deepseek_qk_head_dim, head_dim as u32);
+    assert_eq!(plan.deepseek_q_rows, head_dim as u32);
+    assert_eq!(plan.deepseek_kv_b_rows, (qk_nope + v_head) as u32);
+    assert_eq!(plan.deepseek_value_rows, v_head as u32);
+    assert_ne!(plan.w_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.deepseek_kv_a_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.rms_attn, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.k_norm, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+
+    let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    for dim in 0..hidden {
+        weight_storage[dim] = f32_to_bf16_bits(1.0);
+        weight_storage[plan.rms_attn as usize + dim] = f32_to_bf16_bits(1.0);
+    }
+    for dim in 0..kv_lora {
+        weight_storage[plan.k_norm as usize + dim] = f32_to_bf16_bits(1.0);
+    }
+    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    for row in 0..(kv_lora + qk_rope) {
+        write_arena_byte(&mut weight_storage, plan.w_k, row * hidden, one_fp8);
+    }
+    let scale_blocks = (kv_lora + qk_rope).div_ceil(128);
+    for block in 0..scale_blocks {
+        write_arena_f32(
+            &mut weight_storage,
+            plan.deepseek_kv_a_scale + (block * 2) as u64,
+            1.0,
+        );
+    }
+
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: plan.resident_weight_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+        hidden,
+        heads,
+        kv_heads,
+        head_dim,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 4,
+        rms_eps: 1.0e-5,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: CudaHfDecodeSequenceExperimentalRtConfig::default(),
+    };
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V3 MLA full-size cache session should create: {:?}",
+        created.summary.error
+    );
+    let mut session = created
+        .session
+        .expect("V3 MLA full-size cache session handle should exist");
+    let summary = session.run(&[0], 1, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V3 MLA one-token run should populate the full-size latent cache: {:?}",
+        summary.error
+    );
+
+    let page_bytes = 16 * (kv_lora + qk_rope) * core::mem::size_of::<u16>();
+    let snapshot = session.deepseek_v3_mla_kv_snapshot(0, page_bytes);
+    assert_eq!(
+        snapshot.status,
+        SmokeStatus::Ok,
+        "V3 MLA full-size KV snapshot should copy device cache: {:?}",
+        snapshot.error
+    );
+    assert_eq!(snapshot.block_count, 1);
+    assert_eq!(snapshot.layer_offset_bytes, 0);
+    assert_eq!(snapshot.layer_bytes, page_bytes as u64);
+    assert_eq!(snapshot.page_bytes, page_bytes as u64);
+    assert_eq!(snapshot.copied_bytes, page_bytes as u64);
+
+    let one = f32_to_bf16_bits(1.0).to_le_bytes();
+    let mut expected = vec![0u8; page_bytes];
+    for dim in 0..(kv_lora + qk_rope) {
+        let offset = dim * core::mem::size_of::<u16>();
+        expected[offset..offset + 2].copy_from_slice(&one);
+    }
+    assert_page_bytes_eq(
+        &snapshot.bytes,
+        &expected,
+        "V3 MLA full-size latent cache page must match vLLM [kv_c, k_pe] ordering",
+    );
+    assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
+}
+
+#[test]
 fn deepseek_v3_mla_serial_prefill_writes_prompt_cache_rows() {
     let _guard = super::cuda_lock::cuda_test_lock();
 

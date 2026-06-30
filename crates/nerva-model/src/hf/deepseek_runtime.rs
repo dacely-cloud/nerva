@@ -587,6 +587,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32
     ) {
         primitives.push("cuda_hf_sequence_deepseek_v3_mla_kv_page_contents".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v3_mla_fullsize_kv_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v3_mla_serial_prefill_cache_rows".to_string());
     }
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
@@ -711,12 +712,13 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_execution_guard",
                 "cuda_hf_sequence_deepseek_v3_mla_kv_page_contents",
+                "cuda_hf_sequence_deepseek_v3_mla_fullsize_kv_page_contents",
                 "cuda_hf_sequence_deepseek_v3_mla_serial_prefill_cache_rows",
             ],
             &[
                 "replace serial MLA prefill with token-batched vLLM-equivalent MLA prefill",
                 "consume DeepSeek native sequence layout offsets in MLA kernels",
-                "run full-size V3 MLA KV page differential against vLLM",
+                "run direct full-size V3 MLA KV page differential against vLLM runtime",
                 "match vLLM DeepseekV2MLAAttention output numerics",
             ],
         ),
