@@ -232,3 +232,67 @@ impl CudaDeepSeekSavePartialStatesSummary {
         )
     }
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CudaDeepSeekCompressNormRopeFp8CacheSummary {
+    pub status: SmokeStatus,
+    pub return_code: i32,
+    pub cuda_error: i32,
+    pub num_tokens: u32,
+    pub head_size: u32,
+    pub rope_head_dim: u32,
+    pub compress_ratio: u32,
+    pub quant_block: u32,
+    pub token_stride: u32,
+    pub scale_dim: u32,
+    pub scale_format: u32,
+    pub written_tokens: u32,
+    pub skipped_tokens: u32,
+    pub kv_cache_bytes: u64,
+    pub output_hash: u64,
+    pub kv_cache: Vec<u8>,
+    pub device_arena_bytes: u64,
+    pub pinned_host_bytes: u64,
+    pub h2d_bytes: u64,
+    pub d2h_bytes: u64,
+    pub kernel_launches: u64,
+    pub sync_calls: u64,
+    pub hot_path_allocations: u64,
+    pub error: Option<String>,
+}
+
+impl CudaDeepSeekCompressNormRopeFp8CacheSummary {
+    pub fn to_json(&self) -> String {
+        let status = match self.status {
+            SmokeStatus::Ok => "ok",
+            SmokeStatus::Unavailable => "unavailable",
+            SmokeStatus::Failed => "failed",
+        };
+        format!(
+            "{{\"status\":\"{}\",\"return_code\":{},\"cuda_error\":{},\"num_tokens\":{},\"head_size\":{},\"rope_head_dim\":{},\"compress_ratio\":{},\"quant_block\":{},\"token_stride\":{},\"scale_dim\":{},\"scale_format\":{},\"written_tokens\":{},\"skipped_tokens\":{},\"kv_cache_bytes\":{},\"output_hash\":{},\"device_arena_bytes\":{},\"pinned_host_bytes\":{},\"H2D_bytes\":{},\"D2H_bytes\":{},\"kernel_launches\":{},\"sync_calls\":{},\"hot_path_allocations\":{},\"error\":{}}}",
+            status,
+            self.return_code,
+            self.cuda_error,
+            self.num_tokens,
+            self.head_size,
+            self.rope_head_dim,
+            self.compress_ratio,
+            self.quant_block,
+            self.token_stride,
+            self.scale_dim,
+            self.scale_format,
+            self.written_tokens,
+            self.skipped_tokens,
+            self.kv_cache_bytes,
+            self.output_hash,
+            self.device_arena_bytes,
+            self.pinned_host_bytes,
+            self.h2d_bytes,
+            self.d2h_bytes,
+            self.kernel_launches,
+            self.sync_calls,
+            self.hot_path_allocations,
+            json_opt_str(self.error.as_deref()),
+        )
+    }
+}

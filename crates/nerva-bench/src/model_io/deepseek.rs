@@ -343,6 +343,11 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
         ),
         bench_primitive("c128_topk_metadata", iterations, bench_c128_topk_metadata),
         bench_primitive("save_partial_states", iterations, bench_save_partial_states),
+        bench_primitive(
+            "compress_norm_rope_fp8_cache",
+            iterations,
+            bench_compress_norm_rope_fp8_cache,
+        ),
         bench_primitive("routed_moe_forward", iterations, bench_moe_forward),
     ];
     Ok(deepseek_cuda_primitive_bench_report_json(
@@ -402,6 +407,8 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let compressed_slots = nerva_cuda::deepseek_kv::probe::deepseek_compressed_slot_mapping_smoke();
     let c128_topk = nerva_cuda::deepseek_kv::probe::deepseek_c128_topk_metadata_smoke();
     let partial_states = nerva_cuda::deepseek_kv::probe::deepseek_save_partial_states_smoke();
+    let compress_cache =
+        nerva_cuda::deepseek_kv::probe::deepseek_compress_norm_rope_fp8_cache_smoke();
     let mla_json = mla.to_json();
     let moe_json = moe.to_json();
     let quant_json = quant.to_json();
@@ -412,6 +419,7 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
     let compressed_slots_json = compressed_slots.to_json();
     let c128_topk_json = c128_topk.to_json();
     let partial_states_json = partial_states.to_json();
+    let compress_cache_json = compress_cache.to_json();
     let primitives = [
         DeepSeekCudaPrimitiveReport {
             name: "cuda_deepseek_mla_decode_mqa_smoke",
@@ -462,6 +470,11 @@ pub(crate) fn run_deepseek_cuda_readiness(config_path: Option<String>) -> Result
             name: "cuda_deepseek_save_partial_states_smoke",
             status: smoke_status_label(&partial_states.status),
             summary_json: &partial_states_json,
+        },
+        DeepSeekCudaPrimitiveReport {
+            name: "cuda_deepseek_compress_norm_rope_fp8_cache_smoke",
+            status: smoke_status_label(&compress_cache.status),
+            summary_json: &compress_cache_json,
         },
     ];
     deepseek_cuda_readiness_report_json(config_path, &primitives)
@@ -736,6 +749,8 @@ fn implemented_primitives(metadata: &HfModelMetadata) -> Vec<String> {
         primitives.push("cuda_deepseek_c128_topk_metadata_smoke".to_string());
         primitives.push("cuda_deepseek_save_partial_states_api".to_string());
         primitives.push("cuda_deepseek_save_partial_states_smoke".to_string());
+        primitives.push("cuda_deepseek_compress_norm_rope_fp8_cache_api".to_string());
+        primitives.push("cuda_deepseek_compress_norm_rope_fp8_cache_smoke".to_string());
     }
 
     primitives
@@ -904,12 +919,14 @@ fn coverage_for_unit(
                     "cuda_deepseek_qkv_rmsnorm_smoke",
                     "cuda_deepseek_save_partial_states_api",
                     "cuda_deepseek_save_partial_states_smoke",
+                    "cuda_deepseek_compress_norm_rope_fp8_cache_api",
+                    "cuda_deepseek_compress_norm_rope_fp8_cache_smoke",
                     "cuda_deepseek_compressed_slot_mapping_api",
                     "cuda_deepseek_compressed_slot_mapping_smoke",
                 ],
                 &[
-                    "implement C4/C128 compressor kernels",
-                    "fuse compress, norm, RoPE, quant, and cache insert against vLLM",
+                    "integrate C4/C128 compressor kernels into exact runtime",
+                    "add MXFP4 indexer compressor cache path",
                 ],
             ),
             (HfArchitectureKind::DeepSeekV4, "deepseek_v4_sparse_indexer") => (
@@ -1596,6 +1613,22 @@ fn bench_save_partial_states() -> DeepSeekPrimitiveMetrics {
     let slot_mapping = [1, -1, 4];
     let summary =
         deepseek_save_partial_states(&kv, &score, &ape, &positions, &slot_mapping, 4, 3, 4, 4, 2);
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn bench_compress_norm_rope_fp8_cache() -> DeepSeekPrimitiveMetrics {
+    let summary = nerva_cuda::deepseek_kv::probe::deepseek_compress_norm_rope_fp8_cache_smoke();
     DeepSeekPrimitiveMetrics {
         status: summary.status,
         output_hash: summary.output_hash,

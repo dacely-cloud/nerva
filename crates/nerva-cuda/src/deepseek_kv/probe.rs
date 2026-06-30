@@ -1,10 +1,15 @@
 use crate::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
+use crate::deepseek_kv::compress_cache::{
+    CudaDeepSeekCompressNormRopeFp8CacheInput, DEEPSEEK_COMPRESS_SCALE_E8M0,
+    deepseek_compress_norm_rope_fp8_cache,
+};
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use crate::deepseek_kv::partial_states::deepseek_save_partial_states;
 use crate::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
 use crate::deepseek_kv::summary::{
-    CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekCompressedSlotMappingSummary,
-    CudaDeepSeekKvSummary, CudaDeepSeekSavePartialStatesSummary,
+    CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekCompressNormRopeFp8CacheSummary,
+    CudaDeepSeekCompressedSlotMappingSummary, CudaDeepSeekKvSummary,
+    CudaDeepSeekSavePartialStatesSummary,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -177,6 +182,169 @@ pub fn deepseek_save_partial_states_smoke() -> CudaDeepSeekSavePartialStatesSumm
     summary
 }
 
+pub fn deepseek_compress_norm_rope_fp8_cache_smoke() -> CudaDeepSeekCompressNormRopeFp8CacheSummary
+{
+    let fixture = compress_cache_fixture(DEEPSEEK_COMPRESS_SCALE_E8M0);
+    let summary = deepseek_compress_norm_rope_fp8_cache(fixture.input.clone());
+    if summary.status != SmokeStatus::Ok {
+        return summary;
+    }
+
+    let expected = reference_compress_norm_rope_fp8_cache(&fixture);
+    if summary.kv_cache == expected
+        && summary.written_tokens == 2
+        && summary.skipped_tokens == 0
+        && summary.kernel_launches == 1
+        && summary.sync_calls == 1
+        && summary.hot_path_allocations == 0
+        && summary.output_hash != 0
+    {
+        return summary;
+    }
+
+    let mut failed = summary;
+    failed.status = SmokeStatus::Failed;
+    failed.error = Some("DeepSeek fused compress/norm/RoPE FP8 cache smoke mismatch".to_string());
+    failed
+}
+
+#[derive(Clone)]
+pub(crate) struct CompressCacheFixture {
+    pub(crate) input: CudaDeepSeekCompressNormRopeFp8CacheInput<'static>,
+}
+
+pub(crate) fn compress_cache_fixture(scale_format: u32) -> CompressCacheFixture {
+    let head_size = 4;
+    let rope_head_dim = 2;
+    let quant_block = 2;
+    let token_stride = if scale_format == DEEPSEEK_COMPRESS_SCALE_E8M0 {
+        6
+    } else {
+        4
+    };
+    let scale_dim = if scale_format == DEEPSEEK_COMPRESS_SCALE_E8M0 {
+        2
+    } else {
+        size_of::<f32>() as u32
+    };
+    let kv_cache_block_size = 4;
+    let kv_cache_block_stride = kv_cache_block_size * (token_stride + scale_dim);
+    CompressCacheFixture {
+        input: CudaDeepSeekCompressNormRopeFp8CacheInput {
+            state_cache: &[
+                0.2, -0.3, 0.4, -0.5, 0.0, 0.2, -0.1, 0.3, // row 0
+                0.6, -0.7, 0.8, -0.9, 0.4, -0.2, 0.1, -0.5, // row 1
+                -1.0, 1.1, -1.2, 1.3, 0.3, 0.6, -0.4, 0.2, // row 2
+                1.4, -1.5, 1.6, -1.7, -0.3, 0.7, 0.5, -0.6, // row 3
+            ],
+            token_to_req_indices: &[0, 0],
+            positions: &[1, 3],
+            slot_mapping: &[0, 1],
+            block_table: &[0],
+            kv_slot_mapping: &[0, 1],
+            rms_norm_weight: &[1.0, 1.1, 0.9, 1.2],
+            cos_sin_cache: &[1.0, 0.0, 0.8, 0.2, 0.6, 0.8],
+            num_reqs: 1,
+            block_table_stride: 1,
+            state_block_size: 4,
+            kv_cache_block_size,
+            head_size,
+            state_width: 4,
+            rope_head_dim,
+            compress_ratio: 2,
+            overlap: 0,
+            quant_block,
+            token_stride,
+            scale_dim,
+            scale_format,
+            num_state_blocks: 1,
+            num_kv_blocks: 1,
+            kv_cache_block_stride,
+            cos_sin_stride: 2,
+            rms_norm_eps: 1.0e-5,
+            fp8_max: 448.0,
+        },
+    }
+}
+
+pub(crate) fn reference_compress_norm_rope_fp8_cache(fixture: &CompressCacheFixture) -> Vec<u8> {
+    let input = &fixture.input;
+    let mut kv_cache =
+        vec![0u8; input.num_kv_blocks as usize * input.kv_cache_block_stride as usize];
+    for token_idx in 0..input.positions.len() {
+        let position = input.positions[token_idx];
+        if input.slot_mapping[token_idx] < 0
+            || position < 0
+            || (position + 1) % input.compress_ratio as i64 != 0
+            || input.kv_slot_mapping[token_idx] < 0
+        {
+            continue;
+        }
+        let compressed = reference_compressed_state(input, token_idx);
+        let variance =
+            compressed.iter().map(|value| value * value).sum::<f32>() / input.head_size as f32;
+        let rrms = 1.0 / (variance + input.rms_norm_eps).sqrt();
+        let normed = compressed
+            .iter()
+            .zip(input.rms_norm_weight.iter())
+            .map(|(value, weight)| value * rrms * weight)
+            .collect::<Vec<_>>();
+        let rotated = reference_rope(input, position, &normed);
+        let kv_slot = input.kv_slot_mapping[token_idx] as usize;
+        let kv_pos = kv_slot % input.kv_cache_block_size as usize;
+        let data_base = kv_pos * input.token_stride as usize;
+        let scale_base = input.kv_cache_block_size as usize * input.token_stride as usize
+            + kv_pos * input.scale_dim as usize;
+        if input.scale_format == DEEPSEEK_COMPRESS_SCALE_E8M0 {
+            let nope = (input.head_size - input.rope_head_dim) as usize;
+            for block in 0..(input.head_size / input.quant_block) as usize {
+                let start = block * input.quant_block as usize;
+                let end = start + input.quant_block as usize;
+                let absmax = normed[start..end]
+                    .iter()
+                    .copied()
+                    .map(|value| bf16_to_f32(f32_to_bf16_bits(value)).abs())
+                    .fold(0.0f32, f32::max);
+                let scale = 2.0f32.powf(((absmax.max(1.0e-4) / input.fp8_max).log2()).ceil());
+                if block < nope / input.quant_block as usize {
+                    kv_cache[scale_base + block] = encode_e8m0_scale(scale);
+                }
+                for dim in start..end.min(nope) {
+                    let quant_input = bf16_to_f32(f32_to_bf16_bits(normed[dim]));
+                    let scaled = (quant_input / scale).clamp(-input.fp8_max, input.fp8_max);
+                    kv_cache[data_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+                }
+            }
+            kv_cache[scale_base + nope / input.quant_block as usize] = 0;
+            for dim in nope..input.head_size as usize {
+                let bits = f32_to_bf16_bits(rotated[dim]);
+                let offset = data_base + nope + (dim - nope) * 2;
+                kv_cache[offset] = (bits & 0xff) as u8;
+                kv_cache[offset + 1] = (bits >> 8) as u8;
+            }
+        } else {
+            let bf16_rotated = rotated
+                .iter()
+                .copied()
+                .map(|value| bf16_to_f32(f32_to_bf16_bits(value)))
+                .collect::<Vec<_>>();
+            let absmax = bf16_rotated
+                .iter()
+                .copied()
+                .map(f32::abs)
+                .fold(0.0f32, f32::max);
+            let scale = 2.0f32.powf(((absmax.max(1.0e-4) / input.fp8_max).log2()).ceil());
+            kv_cache[scale_base..scale_base + size_of::<f32>()]
+                .copy_from_slice(&scale.to_ne_bytes());
+            for (dim, value) in bf16_rotated.iter().copied().enumerate() {
+                let scaled = (value / scale).clamp(-input.fp8_max, input.fp8_max);
+                kv_cache[data_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+            }
+        }
+    }
+    kv_cache
+}
+
 fn save_partial_state_matches(state_cache: &[f32]) -> bool {
     let mut expected = vec![0.0f32; 2 * 4 * 2 * 4];
     let row_stride = 8usize;
@@ -221,4 +389,148 @@ fn v4_layout_matches(
         return false;
     }
     true
+}
+
+fn reference_compressed_state(
+    input: &CudaDeepSeekCompressNormRopeFp8CacheInput<'_>,
+    token_idx: usize,
+) -> Vec<f32> {
+    let mut out = vec![0.0f32; input.head_size as usize];
+    let position = input.positions[token_idx];
+    let req_idx = input.token_to_req_indices[token_idx] as usize;
+    let window_tokens = (1 + input.overlap) * input.compress_ratio;
+    let start = position - window_tokens as i64 + 1;
+    let row_stride = input.state_width as usize * 2;
+    let block_stride = input.state_block_size as usize * row_stride;
+    for dim in 0..input.head_size as usize {
+        let mut max_score = f32::NEG_INFINITY;
+        for window in 0..window_tokens as usize {
+            let pos = start + window as i64;
+            if pos < 0 {
+                continue;
+            }
+            let block_idx = pos as usize / input.state_block_size as usize;
+            if block_idx >= input.block_table_stride as usize {
+                continue;
+            }
+            let block_number =
+                input.block_table[req_idx * input.block_table_stride as usize + block_idx];
+            if block_number < 0 {
+                continue;
+            }
+            let block_offset = pos as usize % input.state_block_size as usize;
+            let head_offset = if window as u32 >= input.compress_ratio {
+                input.head_size as usize
+            } else {
+                0
+            };
+            let base =
+                block_number as usize * block_stride + block_offset * row_stride + head_offset;
+            max_score = max_score.max(input.state_cache[base + input.state_width as usize + dim]);
+        }
+        let mut weighted = 0.0f32;
+        let mut denom = 0.0f32;
+        for window in 0..window_tokens as usize {
+            let pos = start + window as i64;
+            if pos < 0 {
+                continue;
+            }
+            let block_idx = pos as usize / input.state_block_size as usize;
+            if block_idx >= input.block_table_stride as usize {
+                continue;
+            }
+            let block_number =
+                input.block_table[req_idx * input.block_table_stride as usize + block_idx];
+            if block_number < 0 {
+                continue;
+            }
+            let block_offset = pos as usize % input.state_block_size as usize;
+            let head_offset = if window as u32 >= input.compress_ratio {
+                input.head_size as usize
+            } else {
+                0
+            };
+            let base =
+                block_number as usize * block_stride + block_offset * row_stride + head_offset;
+            let score = input.state_cache[base + input.state_width as usize + dim];
+            let weight = (score - max_score).exp();
+            weighted += input.state_cache[base + dim] * weight;
+            denom += weight;
+        }
+        out[dim] = if denom > 0.0 { weighted / denom } else { 0.0 };
+    }
+    out
+}
+
+fn reference_rope(
+    input: &CudaDeepSeekCompressNormRopeFp8CacheInput<'_>,
+    position: i64,
+    normed: &[f32],
+) -> Vec<f32> {
+    let mut rotated = normed.to_vec();
+    let nope = (input.head_size - input.rope_head_dim) as usize;
+    let half_rope = input.rope_head_dim as usize / 2;
+    let compressed_pos =
+        (position as usize / input.compress_ratio as usize) * input.compress_ratio as usize;
+    let cs_base = compressed_pos * input.cos_sin_stride as usize;
+    for pair in 0..half_rope {
+        let base = nope + pair * 2;
+        let even = normed[base];
+        let odd = normed[base + 1];
+        let cos = input.cos_sin_cache[cs_base + pair];
+        let sin = input.cos_sin_cache[cs_base + half_rope + pair];
+        rotated[base] = even * cos - odd * sin;
+        rotated[base + 1] = odd * cos + even * sin;
+    }
+    rotated
+}
+
+fn f32_to_bf16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let lsb = (bits >> 16) & 1;
+    ((bits + 0x7fff + lsb) >> 16) as u16
+}
+
+fn bf16_to_f32(bits: u16) -> f32 {
+    f32::from_bits((bits as u32) << 16)
+}
+
+fn encode_e8m0_scale(scale: f32) -> u8 {
+    (scale.log2().ceil() as i32 + 127).clamp(0, 255) as u8
+}
+
+fn f32_to_f8_e4m3fn_bits_nearest(value: f32) -> u8 {
+    if value.is_nan() {
+        return 0x7f;
+    }
+    let mut best_bits = 0u8;
+    let mut best_error = f32::INFINITY;
+    for bits in 0u8..=254 {
+        let candidate = f8_e4m3fn_bits_to_f32(bits);
+        if candidate.is_nan() {
+            continue;
+        }
+        let error = (candidate - value).abs();
+        if error < best_error || (error == best_error && bits < best_bits) {
+            best_error = error;
+            best_bits = bits;
+        }
+    }
+    best_bits
+}
+
+fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
+    let sign = if bits & 0x80 == 0 { 1.0 } else { -1.0 };
+    let exp = (bits >> 3) & 0x0f;
+    let frac = bits & 0x07;
+    if exp == 0 {
+        if frac == 0 {
+            return sign * 0.0;
+        }
+        return sign * ((frac as f32) * 0.125) * 2.0f32.powi(-6);
+    }
+    if exp == 0x0f && frac == 0x07 {
+        return f32::NAN;
+    }
+    sign * (1.0 + (frac as f32) * 0.125) * 2.0f32.powi(exp as i32 - 7)
 }

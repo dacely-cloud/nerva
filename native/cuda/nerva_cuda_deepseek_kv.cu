@@ -1,10 +1,61 @@
 #include "nerva_cuda_api.h"
+#include "deepseek_quant.cuh"
 
 #include <cuda_runtime.h>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
 namespace {
+
+constexpr uint32_t kDeepSeekScaleFormatE8M0 = 0;
+constexpr uint32_t kDeepSeekScaleFormatF32 = 1;
+constexpr uint32_t kDeepSeekMaxCompressHeadSize = 512;
+
+__device__ __forceinline__ uint16_t f32_to_bf16_bits(float value) {
+  const uint32_t bits = __float_as_uint(value);
+  const uint32_t lsb = (bits >> 16u) & 1u;
+  const uint32_t rounded = bits + 0x7fffu + lsb;
+  return static_cast<uint16_t>(rounded >> 16u);
+}
+
+__device__ __forceinline__ float bf16_bits_to_f32(uint16_t bits) {
+  return __uint_as_float(static_cast<uint32_t>(bits) << 16u);
+}
+
+__device__ uint8_t f32_to_f8_e4m3fn_bits_nearest(float value) {
+  if (isnan(value)) {
+    return 0x7fu;
+  }
+  uint8_t best_bits = 0;
+  float best_error = INFINITY;
+  for (uint32_t bits = 0; bits <= 254u; ++bits) {
+    const float candidate =
+        nerva::deepseek::f8_e4m3fn_bits_to_f32(static_cast<uint8_t>(bits));
+    if (isnan(candidate)) {
+      continue;
+    }
+    const float error = fabsf(candidate - value);
+    if (error < best_error ||
+        (error == best_error && bits < static_cast<uint32_t>(best_bits))) {
+      best_error = error;
+      best_bits = static_cast<uint8_t>(bits);
+    }
+  }
+  return best_bits;
+}
+
+__device__ __forceinline__ uint8_t encode_e8m0_scale(float scale) {
+  int exponent = static_cast<int>(ceilf(log2f(scale)));
+  exponent += 127;
+  if (exponent < 0) {
+    exponent = 0;
+  }
+  if (exponent > 255) {
+    exponent = 255;
+  }
+  return static_cast<uint8_t>(exponent);
+}
 
 __global__ void fp8_ds_mla_pack_kernel(const uint8_t *nope_fp8,
                                        const uint16_t *rope_bf16,
@@ -233,6 +284,257 @@ __global__ void save_partial_states_kernel(float *state_cache,
   }
 }
 
+__global__ void compress_norm_rope_fp8_cache_kernel(
+    const float *state_cache,
+    const int32_t *token_to_req_indices,
+    const int64_t *positions,
+    const int64_t *slot_mapping,
+    const int32_t *block_table,
+    const int64_t *kv_slot_mapping,
+    const float *rms_norm_weight,
+    const float *cos_sin_cache,
+    uint8_t *kv_cache,
+    uint32_t *written_flags,
+    uint32_t num_tokens,
+    uint32_t num_reqs,
+    uint32_t block_table_stride,
+    uint32_t state_block_size,
+    uint32_t kv_cache_block_size,
+    uint32_t head_size,
+    uint32_t state_width,
+    uint32_t rope_head_dim,
+    uint32_t compress_ratio,
+    uint32_t overlap,
+    uint32_t quant_block,
+    uint32_t token_stride,
+    uint32_t scale_dim,
+    uint32_t scale_format,
+    uint32_t num_state_blocks,
+    uint32_t num_kv_blocks,
+    uint32_t kv_cache_block_stride,
+    uint32_t cos_sin_stride,
+    float rms_norm_eps,
+    float fp8_max) {
+  __shared__ float compressed[kDeepSeekMaxCompressHeadSize];
+  __shared__ float normed[kDeepSeekMaxCompressHeadSize];
+  __shared__ float rotated[kDeepSeekMaxCompressHeadSize];
+  __shared__ float reduce[kDeepSeekMaxCompressHeadSize];
+  __shared__ float scales[16];
+
+  const uint32_t token_idx = blockIdx.x;
+  const uint32_t tid = threadIdx.x;
+  if (token_idx >= num_tokens) {
+    return;
+  }
+
+  if (tid == 0) {
+    written_flags[token_idx] = 0;
+  }
+
+  const int64_t slot_id = slot_mapping[token_idx];
+  const int64_t position = positions[token_idx];
+  const int32_t req_idx = token_to_req_indices[token_idx];
+  const int64_t kv_slot_idx = kv_slot_mapping[token_idx];
+  const bool boundary =
+      position >= 0 &&
+      ((position + 1) % static_cast<int64_t>(compress_ratio)) == 0;
+  const bool valid =
+      slot_id >= 0 && boundary && req_idx >= 0 &&
+      req_idx < static_cast<int32_t>(num_reqs) && kv_slot_idx >= 0 &&
+      static_cast<uint64_t>(kv_slot_idx) <
+          static_cast<uint64_t>(num_kv_blocks) * kv_cache_block_size;
+  if (!valid) {
+    return;
+  }
+
+  const uint32_t window_tokens = (1u + overlap) * compress_ratio;
+  const int64_t start =
+      position - static_cast<int64_t>(window_tokens) + 1ll;
+  const uint64_t row_stride =
+      static_cast<uint64_t>(state_width) * 2ull;
+  const uint64_t state_block_stride =
+      static_cast<uint64_t>(state_block_size) * row_stride;
+
+  if (tid < head_size) {
+    float max_score = -INFINITY;
+    for (uint32_t window = 0; window < window_tokens; ++window) {
+      const int64_t pos = start + static_cast<int64_t>(window);
+      if (pos < 0) {
+        continue;
+      }
+      const uint32_t block_index =
+          static_cast<uint32_t>(pos) / state_block_size;
+      if (block_index >= block_table_stride) {
+        continue;
+      }
+      const int32_t block_number =
+          block_table[static_cast<uint32_t>(req_idx) * block_table_stride +
+                      block_index];
+      if (block_number < 0 ||
+          block_number >= static_cast<int32_t>(num_state_blocks)) {
+        continue;
+      }
+      const uint32_t block_offset =
+          static_cast<uint32_t>(pos) % state_block_size;
+      const uint32_t head_offset = window >= compress_ratio ? head_size : 0u;
+      const uint64_t base =
+          static_cast<uint64_t>(block_number) * state_block_stride +
+          static_cast<uint64_t>(block_offset) * row_stride + head_offset;
+      const float score = state_cache[base + state_width + tid];
+      max_score = fmaxf(max_score, score);
+    }
+
+    float weighted = 0.0f;
+    float denom = 0.0f;
+    for (uint32_t window = 0; window < window_tokens; ++window) {
+      const int64_t pos = start + static_cast<int64_t>(window);
+      if (pos < 0) {
+        continue;
+      }
+      const uint32_t block_index =
+          static_cast<uint32_t>(pos) / state_block_size;
+      if (block_index >= block_table_stride) {
+        continue;
+      }
+      const int32_t block_number =
+          block_table[static_cast<uint32_t>(req_idx) * block_table_stride +
+                      block_index];
+      if (block_number < 0 ||
+          block_number >= static_cast<int32_t>(num_state_blocks)) {
+        continue;
+      }
+      const uint32_t block_offset =
+          static_cast<uint32_t>(pos) % state_block_size;
+      const uint32_t head_offset = window >= compress_ratio ? head_size : 0u;
+      const uint64_t base =
+          static_cast<uint64_t>(block_number) * state_block_stride +
+          static_cast<uint64_t>(block_offset) * row_stride + head_offset;
+      const float score = state_cache[base + state_width + tid];
+      const float weight = expf(score - max_score);
+      weighted += state_cache[base + tid] * weight;
+      denom += weight;
+    }
+    compressed[tid] = denom > 0.0f ? weighted / denom : 0.0f;
+    reduce[tid] = compressed[tid] * compressed[tid];
+  } else if (tid < kDeepSeekMaxCompressHeadSize) {
+    compressed[tid] = 0.0f;
+    reduce[tid] = 0.0f;
+  }
+  __syncthreads();
+
+  for (uint32_t stride = kDeepSeekMaxCompressHeadSize / 2u; stride > 0;
+       stride >>= 1u) {
+    if (tid < stride) {
+      reduce[tid] += reduce[tid + stride];
+    }
+    __syncthreads();
+  }
+  const float rrms = rsqrtf(reduce[0] / static_cast<float>(head_size) +
+                           rms_norm_eps);
+  if (tid < head_size) {
+    normed[tid] = compressed[tid] * rrms * rms_norm_weight[tid];
+  }
+  __syncthreads();
+
+  const uint32_t nope_head_dim = head_size - rope_head_dim;
+  const uint32_t half_rope = rope_head_dim / 2u;
+  const uint32_t compressed_pos =
+      (static_cast<uint32_t>(position) / compress_ratio) * compress_ratio;
+  if (tid < head_size) {
+    float value = normed[tid];
+    if (tid >= nope_head_dim) {
+      const uint32_t rope_local = tid - nope_head_dim;
+      const uint32_t pair_local = rope_local / 2u;
+      const uint32_t pair_base = nope_head_dim + pair_local * 2u;
+      const float even = normed[pair_base];
+      const float odd = normed[pair_base + 1u];
+      const uint64_t cs_base =
+          static_cast<uint64_t>(compressed_pos) * cos_sin_stride;
+      const float cos_v = cos_sin_cache[cs_base + pair_local];
+      const float sin_v = cos_sin_cache[cs_base + half_rope + pair_local];
+      value = (rope_local & 1u) == 0u ? even * cos_v - odd * sin_v
+                                      : odd * cos_v + even * sin_v;
+    }
+    rotated[tid] = value;
+  }
+  __syncthreads();
+
+  const uint64_t kv_block_idx =
+      static_cast<uint64_t>(kv_slot_idx) / kv_cache_block_size;
+  const uint64_t kv_pos_in_block =
+      static_cast<uint64_t>(kv_slot_idx) % kv_cache_block_size;
+  uint8_t *cache_block =
+      kv_cache + kv_block_idx * static_cast<uint64_t>(kv_cache_block_stride);
+  uint8_t *data_ptr = cache_block + kv_pos_in_block * token_stride;
+  uint8_t *scale_ptr =
+      cache_block + static_cast<uint64_t>(kv_cache_block_size) * token_stride +
+      kv_pos_in_block * scale_dim;
+
+  if (scale_format == kDeepSeekScaleFormatE8M0) {
+    const uint32_t blocks = head_size / quant_block;
+    for (uint32_t block = tid; block < blocks; block += blockDim.x) {
+      float absmax = 0.0f;
+      for (uint32_t offset = 0; offset < quant_block; ++offset) {
+        const uint32_t dim = block * quant_block + offset;
+        const float quant_input = bf16_bits_to_f32(f32_to_bf16_bits(normed[dim]));
+        absmax = fmaxf(absmax, fabsf(quant_input));
+      }
+      const float raw = fmaxf(absmax, 1.0e-4f) / fp8_max;
+      scales[block] = exp2f(ceilf(log2f(raw)));
+    }
+    __syncthreads();
+
+    if (tid < nope_head_dim) {
+      const uint32_t block = tid / quant_block;
+      const float scale = scales[block];
+      const float quant_input = bf16_bits_to_f32(f32_to_bf16_bits(normed[tid]));
+      const float scaled = fminf(fmaxf(quant_input / scale, -fp8_max), fp8_max);
+      data_ptr[tid] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+    }
+    if (tid >= nope_head_dim && tid < head_size) {
+      const uint32_t rope_local = tid - nope_head_dim;
+      const uint16_t bits = f32_to_bf16_bits(rotated[tid]);
+      uint8_t *rope_ptr = data_ptr + nope_head_dim + rope_local * 2u;
+      rope_ptr[0] = static_cast<uint8_t>(bits & 0xffu);
+      rope_ptr[1] = static_cast<uint8_t>(bits >> 8u);
+    }
+    if (tid < scale_dim) {
+      const uint32_t nope_blocks = nope_head_dim / quant_block;
+      scale_ptr[tid] = tid < nope_blocks ? encode_e8m0_scale(scales[tid]) : 0u;
+    }
+  } else {
+    float absmax = 0.0f;
+    if (tid < head_size) {
+      reduce[tid] = fabsf(bf16_bits_to_f32(f32_to_bf16_bits(rotated[tid])));
+    } else if (tid < kDeepSeekMaxCompressHeadSize) {
+      reduce[tid] = 0.0f;
+    }
+    __syncthreads();
+    for (uint32_t stride = kDeepSeekMaxCompressHeadSize / 2u; stride > 0;
+         stride >>= 1u) {
+      if (tid < stride) {
+        reduce[tid] = fmaxf(reduce[tid], reduce[tid + stride]);
+      }
+      __syncthreads();
+    }
+    absmax = reduce[0];
+    const float raw = fmaxf(absmax, 1.0e-4f) / fp8_max;
+    const float scale = exp2f(ceilf(log2f(raw)));
+    if (tid == 0) {
+      *reinterpret_cast<float *>(scale_ptr) = scale;
+    }
+    if (tid < head_size) {
+      const float quant_input = bf16_bits_to_f32(f32_to_bf16_bits(rotated[tid]));
+      const float scaled = fminf(fmaxf(quant_input / scale, -fp8_max), fp8_max);
+      data_ptr[tid] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+    }
+  }
+
+  if (tid == 0) {
+    written_flags[token_idx] = 1;
+  }
+}
+
 uint64_t hash_bytes(const uint8_t *values, uint64_t len) {
   uint64_t hash = 1469598103934665603ull;
   for (uint64_t i = 0; i < len; ++i) {
@@ -262,6 +564,11 @@ void clear_result(NervaCudaDeepSeekSavePartialStatesResult *out) {
   out->status = -1;
 }
 
+void clear_result(NervaCudaDeepSeekCompressNormRopeFp8CacheResult *out) {
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+}
+
 int fail(NervaCudaDeepSeekKvFp8DsMlaPackResult *out, cudaError_t err) {
   out->cuda_error = static_cast<int32_t>(err);
   out->status = -1;
@@ -281,6 +588,13 @@ int fail(NervaCudaDeepSeekC128TopkMetadataResult *out, cudaError_t err) {
 }
 
 int fail(NervaCudaDeepSeekSavePartialStatesResult *out, cudaError_t err) {
+  out->cuda_error = static_cast<int32_t>(err);
+  out->status = -1;
+  return -1;
+}
+
+int fail(NervaCudaDeepSeekCompressNormRopeFp8CacheResult *out,
+         cudaError_t err) {
   out->cuda_error = static_cast<int32_t>(err);
   out->status = -1;
   return -1;
@@ -323,6 +637,54 @@ bool validate_request(const NervaCudaDeepSeekSavePartialStatesRequest *request) 
          request->block_size > 0 && request->head_size > 0 &&
          request->state_width >= request->head_size &&
          request->compress_ratio > 0 && request->num_blocks > 0;
+}
+
+bool validate_request(
+    const NervaCudaDeepSeekCompressNormRopeFp8CacheRequest *request) {
+  if (request == nullptr || request->state_cache == nullptr ||
+      request->token_to_req_indices == nullptr || request->positions == nullptr ||
+      request->slot_mapping == nullptr || request->block_table == nullptr ||
+      request->kv_slot_mapping == nullptr || request->rms_norm_weight == nullptr ||
+      request->cos_sin_cache == nullptr || request->kv_cache == nullptr) {
+    return false;
+  }
+  if (request->num_tokens == 0 || request->num_reqs == 0 ||
+      request->block_table_stride == 0 || request->state_block_size == 0 ||
+      request->kv_cache_block_size == 0 || request->head_size == 0 ||
+      request->head_size > kDeepSeekMaxCompressHeadSize ||
+      request->state_width < request->head_size * (1u + request->overlap) ||
+      request->rope_head_dim > request->head_size ||
+      (request->rope_head_dim & 1u) != 0 || request->compress_ratio == 0 ||
+      request->quant_block == 0 ||
+      (request->head_size % request->quant_block) != 0 ||
+      request->head_size / request->quant_block > 16u ||
+      request->num_state_blocks == 0 || request->num_kv_blocks == 0 ||
+      request->kv_cache_block_stride == 0 || request->cos_sin_stride == 0 ||
+      request->cos_sin_values == 0 || !isfinite(request->rms_norm_eps) ||
+      !isfinite(request->fp8_max) || request->rms_norm_eps <= 0.0f ||
+      request->fp8_max <= 0.0f) {
+    return false;
+  }
+  const uint32_t nope_head_dim = request->head_size - request->rope_head_dim;
+  if (request->scale_format == kDeepSeekScaleFormatE8M0) {
+    const uint32_t nope_blocks = nope_head_dim / request->quant_block;
+    const uint32_t expected_stride = nope_head_dim + request->rope_head_dim * 2u;
+    return request->rope_head_dim > 0 && request->token_stride == expected_stride &&
+           request->scale_dim >= nope_blocks + 1u &&
+           request->kv_cache_block_stride >=
+               request->kv_cache_block_size * request->token_stride +
+                   request->kv_cache_block_size * request->scale_dim &&
+           request->cos_sin_stride >= request->rope_head_dim;
+  }
+  if (request->scale_format == kDeepSeekScaleFormatF32) {
+    return request->token_stride == request->head_size &&
+           request->scale_dim == sizeof(float) &&
+           request->kv_cache_block_stride >=
+               request->kv_cache_block_size * request->token_stride +
+                   request->kv_cache_block_size * request->scale_dim &&
+           request->cos_sin_stride >= request->rope_head_dim;
+  }
+  return false;
 }
 
 }  // namespace
@@ -1018,6 +1380,269 @@ cleanup:
   if (d_ape != nullptr) cudaFree(d_ape);
   if (d_score != nullptr) cudaFree(d_score);
   if (d_kv != nullptr) cudaFree(d_kv);
+  if (err != cudaSuccess) {
+    return fail(out, err);
+  }
+  return out->status == 0 ? 0 : -1;
+}
+
+extern "C" int nerva_cuda_deepseek_compress_norm_rope_fp8_cache(
+    const NervaCudaDeepSeekCompressNormRopeFp8CacheRequest *request,
+    NervaCudaDeepSeekCompressNormRopeFp8CacheResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  clear_result(out);
+  if (!validate_request(request)) {
+    return -1;
+  }
+
+  out->num_tokens = request->num_tokens;
+  out->head_size = request->head_size;
+  out->rope_head_dim = request->rope_head_dim;
+  out->compress_ratio = request->compress_ratio;
+  out->quant_block = request->quant_block;
+  out->token_stride = request->token_stride;
+  out->scale_dim = request->scale_dim;
+  out->scale_format = request->scale_format;
+
+  cudaError_t err = cudaGetDeviceCount(&out->device_count);
+  if (err != cudaSuccess) {
+    return fail(out, err);
+  }
+  if (out->device_count <= 0) {
+    return fail(out, cudaErrorNoDevice);
+  }
+  err = cudaSetDevice(0);
+  if (err != cudaSuccess) {
+    return fail(out, err);
+  }
+
+  float *d_state_cache = nullptr;
+  int32_t *d_token_to_req = nullptr;
+  int64_t *d_positions = nullptr;
+  int64_t *d_slot_mapping = nullptr;
+  int32_t *d_block_table = nullptr;
+  int64_t *d_kv_slot_mapping = nullptr;
+  float *d_rms_weight = nullptr;
+  float *d_cos_sin_cache = nullptr;
+  uint8_t *d_kv_cache = nullptr;
+  uint32_t *d_written_flags = nullptr;
+  uint8_t *h_kv_cache = nullptr;
+  uint32_t *h_written_flags = nullptr;
+  cudaStream_t stream = nullptr;
+
+  const uint64_t state_values =
+      static_cast<uint64_t>(request->num_state_blocks) *
+      request->state_block_size * request->state_width * 2ull;
+  const uint64_t state_bytes = state_values * sizeof(float);
+  const uint64_t token_to_req_bytes =
+      static_cast<uint64_t>(request->num_tokens) * sizeof(int32_t);
+  const uint64_t positions_bytes =
+      static_cast<uint64_t>(request->num_tokens) * sizeof(int64_t);
+  const uint64_t slot_mapping_bytes =
+      static_cast<uint64_t>(request->num_tokens) * sizeof(int64_t);
+  const uint64_t block_table_bytes =
+      static_cast<uint64_t>(request->num_reqs) * request->block_table_stride *
+      sizeof(int32_t);
+  const uint64_t kv_slot_mapping_bytes =
+      static_cast<uint64_t>(request->num_tokens) * sizeof(int64_t);
+  const uint64_t rms_weight_bytes =
+      static_cast<uint64_t>(request->head_size) * sizeof(float);
+  const uint64_t cos_sin_bytes =
+      static_cast<uint64_t>(request->cos_sin_values) * sizeof(float);
+  const uint64_t kv_cache_bytes =
+      static_cast<uint64_t>(request->num_kv_blocks) *
+      request->kv_cache_block_stride;
+  const uint64_t flags_bytes =
+      static_cast<uint64_t>(request->num_tokens) * sizeof(uint32_t);
+  out->kv_cache_bytes = kv_cache_bytes;
+
+  err = cudaMalloc(reinterpret_cast<void **>(&d_state_cache), state_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_token_to_req),
+                   token_to_req_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_positions), positions_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_slot_mapping),
+                   slot_mapping_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_block_table),
+                   block_table_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_kv_slot_mapping),
+                   kv_slot_mapping_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_rms_weight),
+                   rms_weight_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_cos_sin_cache),
+                   cos_sin_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_kv_cache), kv_cache_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMalloc(reinterpret_cast<void **>(&d_written_flags), flags_bytes);
+  if (err != cudaSuccess) goto cleanup;
+  out->device_arena_bytes =
+      state_bytes + token_to_req_bytes + positions_bytes + slot_mapping_bytes +
+      block_table_bytes + kv_slot_mapping_bytes + rms_weight_bytes +
+      cos_sin_bytes + kv_cache_bytes + flags_bytes;
+
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_kv_cache),
+                      kv_cache_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaHostAlloc(reinterpret_cast<void **>(&h_written_flags),
+                      flags_bytes,
+                      cudaHostAllocDefault);
+  if (err != cudaSuccess) goto cleanup;
+  out->pinned_host_bytes = kv_cache_bytes + flags_bytes;
+
+  err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(d_state_cache,
+                        request->state_cache,
+                        state_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_token_to_req,
+                        request->token_to_req_indices,
+                        token_to_req_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_positions,
+                        request->positions,
+                        positions_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_slot_mapping,
+                        request->slot_mapping,
+                        slot_mapping_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_block_table,
+                        request->block_table,
+                        block_table_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_kv_slot_mapping,
+                        request->kv_slot_mapping,
+                        kv_slot_mapping_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_rms_weight,
+                        request->rms_norm_weight,
+                        rms_weight_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(d_cos_sin_cache,
+                        request->cos_sin_cache,
+                        cos_sin_bytes,
+                        cudaMemcpyHostToDevice,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->h2d_bytes = state_bytes + token_to_req_bytes + positions_bytes +
+                   slot_mapping_bytes + block_table_bytes +
+                   kv_slot_mapping_bytes + rms_weight_bytes + cos_sin_bytes;
+
+  err = cudaMemsetAsync(d_kv_cache, 0, kv_cache_bytes, stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemsetAsync(d_written_flags, 0, flags_bytes, stream);
+  if (err != cudaSuccess) goto cleanup;
+
+  {
+    constexpr uint32_t threads = kDeepSeekMaxCompressHeadSize;
+    compress_norm_rope_fp8_cache_kernel<<<request->num_tokens,
+                                           threads,
+                                           0,
+                                           stream>>>(
+        d_state_cache,
+        d_token_to_req,
+        d_positions,
+        d_slot_mapping,
+        d_block_table,
+        d_kv_slot_mapping,
+        d_rms_weight,
+        d_cos_sin_cache,
+        d_kv_cache,
+        d_written_flags,
+        request->num_tokens,
+        request->num_reqs,
+        request->block_table_stride,
+        request->state_block_size,
+        request->kv_cache_block_size,
+        request->head_size,
+        request->state_width,
+        request->rope_head_dim,
+        request->compress_ratio,
+        request->overlap,
+        request->quant_block,
+        request->token_stride,
+        request->scale_dim,
+        request->scale_format,
+        request->num_state_blocks,
+        request->num_kv_blocks,
+        request->kv_cache_block_stride,
+        request->cos_sin_stride,
+        request->rms_norm_eps,
+        request->fp8_max);
+    out->kernel_launches += 1;
+  }
+  err = cudaGetLastError();
+  if (err != cudaSuccess) goto cleanup;
+
+  err = cudaMemcpyAsync(h_kv_cache,
+                        d_kv_cache,
+                        kv_cache_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  err = cudaMemcpyAsync(h_written_flags,
+                        d_written_flags,
+                        flags_bytes,
+                        cudaMemcpyDeviceToHost,
+                        stream);
+  if (err != cudaSuccess) goto cleanup;
+  out->d2h_bytes = kv_cache_bytes + flags_bytes;
+
+  err = cudaStreamSynchronize(stream);
+  out->sync_calls += 1;
+  if (err != cudaSuccess) goto cleanup;
+
+  memcpy(request->kv_cache, h_kv_cache, kv_cache_bytes);
+  for (uint32_t idx = 0; idx < request->num_tokens; ++idx) {
+    if (h_written_flags[idx] != 0) {
+      out->written_tokens += 1;
+    } else {
+      out->skipped_tokens += 1;
+    }
+  }
+  out->output_hash = hash_bytes(request->kv_cache, kv_cache_bytes);
+  out->status = 0;
+
+cleanup:
+  if (stream != nullptr) cudaStreamDestroy(stream);
+  if (h_written_flags != nullptr) cudaFreeHost(h_written_flags);
+  if (h_kv_cache != nullptr) cudaFreeHost(h_kv_cache);
+  if (d_written_flags != nullptr) cudaFree(d_written_flags);
+  if (d_kv_cache != nullptr) cudaFree(d_kv_cache);
+  if (d_cos_sin_cache != nullptr) cudaFree(d_cos_sin_cache);
+  if (d_rms_weight != nullptr) cudaFree(d_rms_weight);
+  if (d_kv_slot_mapping != nullptr) cudaFree(d_kv_slot_mapping);
+  if (d_block_table != nullptr) cudaFree(d_block_table);
+  if (d_slot_mapping != nullptr) cudaFree(d_slot_mapping);
+  if (d_positions != nullptr) cudaFree(d_positions);
+  if (d_token_to_req != nullptr) cudaFree(d_token_to_req);
+  if (d_state_cache != nullptr) cudaFree(d_state_cache);
   if (err != cudaSuccess) {
     return fail(out, err);
   }

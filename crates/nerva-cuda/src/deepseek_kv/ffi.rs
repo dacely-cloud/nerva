@@ -159,6 +159,68 @@ pub(crate) struct NervaCudaDeepSeekSavePartialStatesResult {
     pub(crate) hot_path_allocations: u64,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaDeepSeekCompressNormRopeFp8CacheRequest {
+    pub(crate) num_tokens: u32,
+    pub(crate) num_reqs: u32,
+    pub(crate) block_table_stride: u32,
+    pub(crate) state_block_size: u32,
+    pub(crate) kv_cache_block_size: u32,
+    pub(crate) head_size: u32,
+    pub(crate) state_width: u32,
+    pub(crate) rope_head_dim: u32,
+    pub(crate) compress_ratio: u32,
+    pub(crate) overlap: u32,
+    pub(crate) quant_block: u32,
+    pub(crate) token_stride: u32,
+    pub(crate) scale_dim: u32,
+    pub(crate) scale_format: u32,
+    pub(crate) num_state_blocks: u32,
+    pub(crate) num_kv_blocks: u32,
+    pub(crate) kv_cache_block_stride: u32,
+    pub(crate) cos_sin_stride: u32,
+    pub(crate) cos_sin_values: u32,
+    pub(crate) rms_norm_eps: f32,
+    pub(crate) fp8_max: f32,
+    pub(crate) state_cache: *const f32,
+    pub(crate) token_to_req_indices: *const i32,
+    pub(crate) positions: *const i64,
+    pub(crate) slot_mapping: *const i64,
+    pub(crate) block_table: *const i32,
+    pub(crate) kv_slot_mapping: *const i64,
+    pub(crate) rms_norm_weight: *const f32,
+    pub(crate) cos_sin_cache: *const f32,
+    pub(crate) kv_cache: *mut u8,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NervaCudaDeepSeekCompressNormRopeFp8CacheResult {
+    pub(crate) status: i32,
+    pub(crate) cuda_error: i32,
+    pub(crate) device_count: i32,
+    pub(crate) num_tokens: u32,
+    pub(crate) head_size: u32,
+    pub(crate) rope_head_dim: u32,
+    pub(crate) compress_ratio: u32,
+    pub(crate) quant_block: u32,
+    pub(crate) token_stride: u32,
+    pub(crate) scale_dim: u32,
+    pub(crate) scale_format: u32,
+    pub(crate) written_tokens: u32,
+    pub(crate) skipped_tokens: u32,
+    pub(crate) kv_cache_bytes: u64,
+    pub(crate) output_hash: u64,
+    pub(crate) device_arena_bytes: u64,
+    pub(crate) pinned_host_bytes: u64,
+    pub(crate) h2d_bytes: u64,
+    pub(crate) d2h_bytes: u64,
+    pub(crate) kernel_launches: u64,
+    pub(crate) sync_calls: u64,
+    pub(crate) hot_path_allocations: u64,
+}
+
 unsafe extern "C" {
     fn nerva_cuda_deepseek_kv_fp8_ds_mla_pack(
         request: *const NervaCudaDeepSeekKvFp8DsMlaPackRequest,
@@ -175,6 +237,10 @@ unsafe extern "C" {
     fn nerva_cuda_deepseek_save_partial_states(
         request: *const NervaCudaDeepSeekSavePartialStatesRequest,
         out: *mut NervaCudaDeepSeekSavePartialStatesResult,
+    ) -> c_int;
+    fn nerva_cuda_deepseek_compress_norm_rope_fp8_cache(
+        request: *const NervaCudaDeepSeekCompressNormRopeFp8CacheRequest,
+        out: *mut NervaCudaDeepSeekCompressNormRopeFp8CacheResult,
     ) -> c_int;
 }
 
@@ -204,4 +270,11 @@ pub(crate) fn run_deepseek_save_partial_states(
     out: &mut NervaCudaDeepSeekSavePartialStatesResult,
 ) -> c_int {
     unsafe { nerva_cuda_deepseek_save_partial_states(request, out) }
+}
+
+pub(crate) fn run_deepseek_compress_norm_rope_fp8_cache(
+    request: &NervaCudaDeepSeekCompressNormRopeFp8CacheRequest,
+    out: &mut NervaCudaDeepSeekCompressNormRopeFp8CacheResult,
+) -> c_int {
+    unsafe { nerva_cuda_deepseek_compress_norm_rope_fp8_cache(request, out) }
 }

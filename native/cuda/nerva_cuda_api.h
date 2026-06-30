@@ -1435,6 +1435,64 @@ typedef struct NervaCudaDeepSeekSavePartialStatesResult {
   uint64_t hot_path_allocations;
 } NervaCudaDeepSeekSavePartialStatesResult;
 
+typedef struct NervaCudaDeepSeekCompressNormRopeFp8CacheRequest {
+  uint32_t num_tokens;
+  uint32_t num_reqs;
+  uint32_t block_table_stride;
+  uint32_t state_block_size;
+  uint32_t kv_cache_block_size;
+  uint32_t head_size;
+  uint32_t state_width;
+  uint32_t rope_head_dim;
+  uint32_t compress_ratio;
+  uint32_t overlap;
+  uint32_t quant_block;
+  uint32_t token_stride;
+  uint32_t scale_dim;
+  uint32_t scale_format;
+  uint32_t num_state_blocks;
+  uint32_t num_kv_blocks;
+  uint32_t kv_cache_block_stride;
+  uint32_t cos_sin_stride;
+  uint32_t cos_sin_values;
+  float rms_norm_eps;
+  float fp8_max;
+  const float *state_cache;
+  const int32_t *token_to_req_indices;
+  const int64_t *positions;
+  const int64_t *slot_mapping;
+  const int32_t *block_table;
+  const int64_t *kv_slot_mapping;
+  const float *rms_norm_weight;
+  const float *cos_sin_cache;
+  uint8_t *kv_cache;
+} NervaCudaDeepSeekCompressNormRopeFp8CacheRequest;
+
+typedef struct NervaCudaDeepSeekCompressNormRopeFp8CacheResult {
+  int32_t status;
+  int32_t cuda_error;
+  int32_t device_count;
+  uint32_t num_tokens;
+  uint32_t head_size;
+  uint32_t rope_head_dim;
+  uint32_t compress_ratio;
+  uint32_t quant_block;
+  uint32_t token_stride;
+  uint32_t scale_dim;
+  uint32_t scale_format;
+  uint32_t written_tokens;
+  uint32_t skipped_tokens;
+  uint64_t kv_cache_bytes;
+  uint64_t output_hash;
+  uint64_t device_arena_bytes;
+  uint64_t pinned_host_bytes;
+  uint64_t h2d_bytes;
+  uint64_t d2h_bytes;
+  uint64_t kernel_launches;
+  uint64_t sync_calls;
+  uint64_t hot_path_allocations;
+} NervaCudaDeepSeekCompressNormRopeFp8CacheResult;
+
 typedef struct NervaCudaDeepSeekMoeSmokeResult {
   int32_t status;
   int32_t cuda_error;
@@ -1592,6 +1650,9 @@ int nerva_cuda_deepseek_c128_topk_metadata(
 int nerva_cuda_deepseek_save_partial_states(
     const NervaCudaDeepSeekSavePartialStatesRequest *request,
     NervaCudaDeepSeekSavePartialStatesResult *out);
+int nerva_cuda_deepseek_compress_norm_rope_fp8_cache(
+    const NervaCudaDeepSeekCompressNormRopeFp8CacheRequest *request,
+    NervaCudaDeepSeekCompressNormRopeFp8CacheResult *out);
 int nerva_cuda_deepseek_moe_smoke(NervaCudaDeepSeekMoeSmokeResult *out);
 int nerva_cuda_deepseek_moe_forward(
     const NervaCudaDeepSeekMoeForwardRequest *request,
