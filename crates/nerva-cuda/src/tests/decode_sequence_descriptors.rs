@@ -41,8 +41,54 @@ fn encode_e8m0_scale(scale: f32) -> u8 {
     (scale.log2().ceil() as i32 + 127).clamp(0, 255) as u8
 }
 
-fn expected_zero_deepseek_v4_swa_fp8_ds_mla_page(
-    written_tokens: usize,
+fn f32_to_bf16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let lsb = (bits >> 16) & 1;
+    ((bits + 0x7fff + lsb) >> 16) as u16
+}
+
+fn bf16_to_f32(bits: u16) -> f32 {
+    f32::from_bits((bits as u32) << 16)
+}
+
+fn f32_to_f8_e4m3fn_bits_nearest(value: f32) -> u8 {
+    if value.is_nan() {
+        return 0x7f;
+    }
+    let mut best_bits = 0u8;
+    let mut best_error = f32::INFINITY;
+    for bits in 0u8..=254 {
+        let candidate = f8_e4m3fn_bits_to_f32(bits);
+        if candidate.is_nan() {
+            continue;
+        }
+        let error = (candidate - value).abs();
+        if error < best_error || (error == best_error && bits < best_bits) {
+            best_error = error;
+            best_bits = bits;
+        }
+    }
+    best_bits
+}
+
+fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
+    let sign = if bits & 0x80 == 0 { 1.0 } else { -1.0 };
+    let exp = (bits >> 3) & 0x0f;
+    let frac = bits & 0x07;
+    if exp == 0 {
+        if frac == 0 {
+            return sign * 0.0;
+        }
+        return sign * ((frac as f32) * 0.125) * 2.0f32.powi(-6);
+    }
+    if exp == 0x0f && frac == 0x07 {
+        return f32::NAN;
+    }
+    sign * (1.0 + (frac as f32) * 0.125) * 2.0f32.powi(exp as i32 - 7)
+}
+
+fn expected_deepseek_v4_swa_fp8_ds_mla_page(
+    token_kv: &[[f32; 2]],
     qk_nope: usize,
     qk_rope: usize,
     page_bytes: usize,
@@ -50,12 +96,129 @@ fn expected_zero_deepseek_v4_swa_fp8_ds_mla_page(
     let token_stride = qk_nope + qk_rope * 2;
     let scale_dim = qk_nope / 64 + 1;
     let scale_base = 64 * token_stride;
-    let zero_scale = encode_e8m0_scale(1.0e-4 / 448.0);
     let mut expected = vec![0u8; page_bytes];
-    for token in 0..written_tokens {
-        expected[scale_base + token * scale_dim] = zero_scale;
+    for (token, kv) in token_kv.iter().enumerate() {
+        let data_base = token * token_stride;
+        for scale_index in 0..scale_dim {
+            let start = scale_index * 64;
+            let end = (start + 64).min(qk_nope);
+            let mut absmax = 0.0f32;
+            for value in kv.iter().take(end).skip(start) {
+                let quant_input = bf16_to_f32(f32_to_bf16_bits(*value));
+                absmax = absmax.max(quant_input.abs());
+            }
+            let scale = (absmax.max(1.0e-4) / 448.0).log2().ceil().exp2();
+            expected[scale_base + token * scale_dim + scale_index] = if start < qk_nope {
+                encode_e8m0_scale(scale)
+            } else {
+                0
+            };
+            for (dim, value) in kv.iter().enumerate().take(end).skip(start) {
+                let quant_input = bf16_to_f32(f32_to_bf16_bits(*value));
+                let scaled = (quant_input / scale).clamp(-448.0, 448.0);
+                expected[data_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+            }
+        }
+        for (dim, value) in kv.iter().enumerate().take(qk_nope + qk_rope).skip(qk_nope) {
+            let bits = f32_to_bf16_bits(*value);
+            let rope_local = dim - qk_nope;
+            let offset = data_base + qk_nope + rope_local * 2;
+            expected[offset] = (bits & 0xff) as u8;
+            expected[offset + 1] = (bits >> 8) as u8;
+        }
     }
     expected
+}
+
+fn expected_zero_deepseek_v4_swa_fp8_ds_mla_page(
+    written_tokens: usize,
+    qk_nope: usize,
+    qk_rope: usize,
+    page_bytes: usize,
+) -> Vec<u8> {
+    expected_deepseek_v4_swa_fp8_ds_mla_page(
+        &vec![[0.0, 0.0]; written_tokens],
+        qk_nope,
+        qk_rope,
+        page_bytes,
+    )
+}
+
+fn descriptor_source_element(arena_offset: u64, hidden: usize, vocab_size: usize) -> usize {
+    let offset = arena_offset as usize;
+    let embedding_elements = hidden * vocab_size;
+    if offset >= embedding_elements + hidden * 2 {
+        offset - hidden * 2
+    } else {
+        offset
+    }
+}
+
+fn write_descriptor_u16(
+    storage: &mut [u16],
+    arena_offset: u64,
+    hidden: usize,
+    vocab_size: usize,
+    value: u16,
+) {
+    let index = descriptor_source_element(arena_offset, hidden, vocab_size);
+    storage[index] = value;
+}
+
+fn write_descriptor_byte(
+    storage: &mut [u16],
+    arena_offset: u64,
+    byte_offset: usize,
+    hidden: usize,
+    vocab_size: usize,
+    value: u8,
+) {
+    let base = descriptor_source_element(arena_offset, hidden, vocab_size) * 2;
+    let absolute = base + byte_offset;
+    let slot = absolute / 2;
+    if absolute % 2 == 0 {
+        storage[slot] = (storage[slot] & 0xff00) | value as u16;
+    } else {
+        storage[slot] = (storage[slot] & 0x00ff) | ((value as u16) << 8);
+    }
+}
+
+fn descriptor_weight_blocks<'a>(
+    storage: &'a [u16],
+    hidden: usize,
+    vocab_size: usize,
+    resident_weight_bytes: u64,
+) -> Vec<CudaHfDecodeSequenceWeightBlock> {
+    let embedding_elements = hidden * vocab_size;
+    let embedding_bytes = (embedding_elements * core::mem::size_of::<u16>()) as u64;
+    assert!(resident_weight_bytes >= embedding_bytes);
+    let mut blocks = vec![CudaHfDecodeSequenceWeightBlock {
+        host_source: storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: embedding_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    if resident_weight_bytes > embedding_bytes {
+        blocks.push(CudaHfDecodeSequenceWeightBlock {
+            host_source: unsafe { storage.as_ptr().add(embedding_elements) },
+            source_file: core::ptr::null(),
+            source_file_len: 0,
+            file_offset_begin: 0,
+            block_id: 2,
+            block_version: 1,
+            offset_bytes: embedding_bytes,
+            bytes: resident_weight_bytes - embedding_bytes,
+            strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+            reserved: 0,
+        });
+    }
+    blocks
 }
 
 #[test]
@@ -988,6 +1151,174 @@ fn deepseek_v4_swa_dense_session_runs_through_sampling() {
     assert_eq!(
         snapshot.bytes, expected,
         "V4 SWA packed fp8_ds_mla page bytes must match vLLM offsets"
+    );
+    assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
+}
+
+#[test]
+fn deepseek_v4_swa_dense_snapshot_matches_nonzero_fp8_ds_mla_page() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let hidden = 4usize;
+    let heads = 2usize;
+    let kv_heads = 1usize;
+    let head_dim = 2usize;
+    let intermediate = 4usize;
+    let vocab_size = 8usize;
+    let rms_eps = 1.0e-5f32;
+    let layer = tiny_deepseek_v4_swa_dense_descriptor_layer();
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: hidden as u32,
+        heads: heads as u32,
+        kv_heads: kv_heads as u32,
+        head_dim: head_dim as u32,
+        intermediate: intermediate as u32,
+        vocab_size: vocab_size as u32,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept tiny V4 SWA dense layer");
+    assert_ne!(plan.w_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.deepseek_kv_a_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.k_norm, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+
+    let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    for dim in 0..hidden {
+        weight_storage[dim] = 0x3c00;
+        write_descriptor_u16(
+            &mut weight_storage,
+            plan.rms_attn + dim as u64,
+            hidden,
+            vocab_size,
+            f32_to_bf16_bits(1.0),
+        );
+    }
+    for dim in 0..head_dim {
+        write_descriptor_u16(
+            &mut weight_storage,
+            plan.k_norm + dim as u64,
+            hidden,
+            vocab_size,
+            f32_to_bf16_bits(1.0),
+        );
+    }
+    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    write_descriptor_byte(
+        &mut weight_storage,
+        plan.w_k,
+        0,
+        hidden,
+        vocab_size,
+        one_fp8,
+    );
+    write_descriptor_byte(
+        &mut weight_storage,
+        plan.w_k,
+        hidden,
+        hidden,
+        vocab_size,
+        one_fp8,
+    );
+    write_descriptor_byte(
+        &mut weight_storage,
+        plan.deepseek_kv_a_scale,
+        0,
+        hidden,
+        vocab_size,
+        encode_e8m0_scale(1.0),
+    );
+
+    let weight_blocks = descriptor_weight_blocks(
+        &weight_storage,
+        hidden,
+        vocab_size,
+        plan.resident_weight_bytes,
+    );
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden,
+        heads,
+        kv_heads,
+        head_dim,
+        intermediate,
+        vocab_size,
+        max_context_tokens: 4,
+        rms_eps,
+        rope_theta: Some(10_000.0),
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: weight_blocks.len() as u32,
+            gpu_resident_blocks: weight_blocks.len() as u32,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: Default::default(),
+    };
+
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V4 SWA dense DeepSeek should pass non-zero descriptor session creation: {:?}",
+        created.summary.error
+    );
+    let swa_kv_bytes = created.summary.deepseek_v4_swa_kv_bytes as usize;
+    let mut session = created
+        .session
+        .expect("V4 SWA dense session handle should exist");
+
+    let summary = session.run(&[0], 2, None);
+    assert_eq!(
+        summary.status,
+        SmokeStatus::Ok,
+        "V4 SWA dense DeepSeek non-zero path should run through sampling: {:?}",
+        summary.error
+    );
+    assert_eq!(summary.steps, 2);
+    assert_eq!(summary.tokens, vec![0, 0]);
+    assert_eq!(summary.kv_tokens, 2);
+
+    let snapshot = session.deepseek_v4_swa_kv_snapshot(0, swa_kv_bytes);
+    assert_eq!(
+        snapshot.status,
+        SmokeStatus::Ok,
+        "V4 SWA packed KV snapshot should copy non-zero device cache: {:?}",
+        snapshot.error
+    );
+    assert_eq!(snapshot.block_count, 1);
+    assert_eq!(snapshot.layer_bytes, 576);
+    assert_eq!(snapshot.page_bytes, 576);
+    assert_eq!(snapshot.copied_bytes, 576);
+
+    let normalized_k = 1.0_f32 / (1.0_f32 + rms_eps).sqrt();
+    let expected = expected_deepseek_v4_swa_fp8_ds_mla_page(
+        &[[normalized_k, normalized_k], [normalized_k, normalized_k]],
+        1,
+        1,
+        576,
+    );
+    let zero_expected = expected_zero_deepseek_v4_swa_fp8_ds_mla_page(2, 1, 1, 576);
+    assert_ne!(
+        expected, zero_expected,
+        "non-zero V4 SWA verifier must exercise fp8/bf16 packed contents"
+    );
+    assert_eq!(
+        snapshot.bytes, expected,
+        "V4 SWA packed fp8_ds_mla page bytes must match non-zero vLLM offsets"
     );
     assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
 }
