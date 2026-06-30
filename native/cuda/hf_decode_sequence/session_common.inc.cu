@@ -862,6 +862,25 @@ bool session_has_deepseek_layers(
   return false;
 }
 
+bool session_has_only_deepseek_v3_layers(
+    const NervaCudaHfDecodeSequenceSession *session) {
+  if (session == nullptr ||
+      session->host_layouts.size() != session->layer_count ||
+      session->layer_count == 0) {
+    return false;
+  }
+  bool has_deepseek = false;
+  for (const SequenceLayerLayout &layout : session->host_layouts) {
+    if (layout.attention_kind == kAttentionKindDeepSeekMla) {
+      if (!layout_is_deepseek_v3_mla(layout)) {
+        return false;
+      }
+      has_deepseek = true;
+    }
+  }
+  return has_deepseek;
+}
+
 bool use_cublas_layer_path(const NervaCudaHfDecodeSequenceSession *session) {
   const uint32_t attention_hidden = session->heads * session->head_dim;
   return session->hidden >= 128 && attention_hidden == session->hidden &&
@@ -873,6 +892,14 @@ bool use_cublas_layer_path(const NervaCudaHfDecodeSequenceSession *session) {
          (!session_has_dense_mlp_layers(session) ||
           session->device_gate_up_packed != nullptr) &&
          session->cublas != nullptr && session->cublas_lt != nullptr;
+}
+
+bool use_layer_decode_path(const NervaCudaHfDecodeSequenceSession *session) {
+  return use_cublas_layer_path(session) ||
+         (session_has_only_deepseek_v3_layers(session) &&
+          session->device_projection_input != nullptr &&
+          session->device_scratch != nullptr && session->device_arena != nullptr &&
+          session->cublas != nullptr && session->cublas_lt != nullptr);
 }
 
 bool use_cublas_prefill_path(const NervaCudaHfDecodeSequenceSession *session) {

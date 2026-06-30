@@ -91,7 +91,7 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
     err = cudaStreamBeginCapture(session->stream, cudaStreamCaptureModeGlobal);
     capture_started = err == cudaSuccess;
     if (err == cudaSuccess) {
-      err = use_cublas_layer_path(session)
+      err = use_layer_decode_path(session)
                 ? launch_cublas_layer_session_step(
                       session, max_steps, prompt_token_count, has_eos_token,
                       eos_token, attention_chunks)

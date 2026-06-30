@@ -125,7 +125,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     delete session;
     return -1;
   }
-  if (request_has_deepseek_layers) {
+  if (has_unsupported_deepseek_layers(request->layers, request->layer_count)) {
     out->cuda_error = static_cast<int32_t>(cudaErrorNotSupported);
     out->failure_stage = kCreateStageInvalidRequest;
     delete session;
@@ -719,32 +719,13 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
     err = cudaStreamBeginCapture(session->stream, cudaStreamCaptureModeGlobal);
     capture_started = err == cudaSuccess;
     if (err == cudaSuccess) {
-      hf_decode_sequence_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
-          session->device_arena, session->arena_layout, session->device_layouts,
-          session->layer_count, session->dtype, session->hidden, session->heads,
-          session->kv_heads, session->head_dim, session->intermediate, 0,
-          session->device_step, context_steps, session->device_prompt_tokens,
-          request->prompt_token_count, session->rms_eps, session->rope_theta,
-          session->device_scratch, session->device_kv_keys,
-          session->device_kv_values, session->kv_block_count,
-          session->device_kv_block_table,
-          session->device_slots, session->device_linear_gdn_conv_state,
-          session->device_linear_gdn_recurrent_state);
-      err = cudaGetLastError();
-    }
-    if (err == cudaSuccess) {
-      float *device_logits = session->device_scratch + session->hidden * 2;
-      err = final_head_gemv(session->cublas, session->device_arena,
-                            session->arena_layout, session->dtype,
-                            session->hidden, session->vocab_size,
-                            device_logits);
-    }
-    if (err == cudaSuccess) {
-      float *device_logits = session->device_scratch + session->hidden * 2;
-      err = launch_hf_decode_final_head_sampler(
-          session->stream, session->device_step, context_steps,
-          request->has_eos_token, request->eos_token, device_logits,
-          session->vocab_size, session->device_slots, session->active_sampler);
+      err = use_layer_decode_path(session)
+                ? launch_cublas_layer_session_step(
+                      session, context_steps, request->prompt_token_count,
+                      request->has_eos_token, request->eos_token, 0)
+                : launch_monolithic_session_step(
+                      session, context_steps, request->prompt_token_count,
+                      request->has_eos_token, request->eos_token);
     }
     if (capture_started) {
       cudaError_t end_err = cudaStreamEndCapture(session->stream, &graph);

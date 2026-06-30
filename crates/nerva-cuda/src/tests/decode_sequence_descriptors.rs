@@ -13,6 +13,7 @@ use crate::decode::hf_sequence::layout_plan::{
 use crate::decode::hf_sequence::request::{
     CUDA_HF_DECODE_SEQUENCE_DTYPE_F16, CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
+use crate::decode::hf_sequence::session::request::CudaHfDecodeSequenceSessionConfig;
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{
     CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
@@ -607,6 +608,95 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
     assert_eq!(footprint.resident_weight_bytes, plan.resident_weight_bytes);
     assert_eq!(footprint.resident_kv_bytes, 192);
     assert_eq!(footprint.scratch_bytes, 200);
+}
+
+#[test]
+fn deepseek_v32_session_create_passes_native_create_guard() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let layer = tiny_deepseek_v32_descriptor_layer();
+    let layers = [layer];
+    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        layers: &layers,
+        layer_index: 0,
+    }
+    .plan()
+    .expect("native layout planner should accept tiny V3.2 descriptor layer");
+    let weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+        host_source: weight_storage.as_ptr(),
+        source_file: core::ptr::null(),
+        source_file_len: 0,
+        file_offset_begin: 0,
+        block_id: 1,
+        block_version: 1,
+        offset_bytes: 0,
+        bytes: plan.resident_weight_bytes,
+        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+        reserved: 0,
+    }];
+    let config = CudaHfDecodeSequenceSessionConfig {
+        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+        hidden: 4,
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate: 4,
+        vocab_size: 8,
+        max_context_tokens: 4,
+        rms_eps: 1e-5,
+        rope_theta: None,
+        embeddings: &[],
+        layers: &layers,
+        final_norm_weight: &[],
+        lm_head: &[],
+        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+            blocks: 1,
+            gpu_resident_blocks: 1,
+            gpu_staged_blocks: 0,
+            weight_bytes: plan.resident_weight_bytes,
+            gpu_resident_weight_bytes: plan.resident_weight_bytes,
+            gpu_staged_weight_bytes: 0,
+            descriptor_hash: hash_weight_blocks(&weight_blocks),
+        }),
+        weight_blocks: &weight_blocks,
+        detailed_profile: false,
+        experimental_rt: Default::default(),
+    };
+
+    let created = config.create();
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V3.2 DeepSeek should pass session creation: {:?}",
+        created.summary.error
+    );
+    let mut session = created.session.expect("V3.2 session handle should exist");
+    assert_eq!(
+        created.summary.resident_weight_bytes,
+        plan.resident_weight_bytes
+    );
+
+    let summary = session.run(&[0], 2, None);
+    assert_eq!(summary.status, SmokeStatus::Failed);
+    assert!(
+        summary
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("cuda_error=801")),
+        "expected V3.2 runtime to reach remaining MLA attention guard, got {:?}",
+        summary.error
+    );
 }
 
 #[test]

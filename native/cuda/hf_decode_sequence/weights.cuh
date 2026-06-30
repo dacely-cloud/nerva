@@ -30,6 +30,8 @@ uint64_t pinned_weight_staging_bytes(
 bool valid_layer(const NervaCudaHfDecodeChainLayer &layer, bool require_sources);
 bool has_deepseek_layers(const NervaCudaHfDecodeChainLayer *layers,
                          uint32_t layer_count);
+bool has_unsupported_deepseek_layers(const NervaCudaHfDecodeChainLayer *layers,
+                                     uint32_t layer_count);
 bool valid_request(const NervaCudaHfDecodeSequenceRequest *request);
 void clear_result(const NervaCudaHfDecodeSequenceRequest *request,
                   NervaCudaHfDecodeSequenceResult *out);

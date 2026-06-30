@@ -89,6 +89,22 @@ bool has_deepseek_layers(const NervaCudaHfDecodeChainLayer *layers,
   return false;
 }
 
+bool has_unsupported_deepseek_layers(const NervaCudaHfDecodeChainLayer *layers,
+                                     uint32_t layer_count) {
+  if (layers == nullptr) {
+    return false;
+  }
+  for (uint32_t index = 0; index < layer_count; ++index) {
+    const NervaCudaHfDecodeChainLayer &layer = layers[index];
+    if (layer.attention_kind == kAttentionKindDeepSeekMla &&
+        layer.deepseek_mode != kDeepSeekModeV3Mla &&
+        layer.deepseek_mode != kDeepSeekModeV32MlaIndexer) {
+      return true;
+    }
+  }
+  return false;
+}
+
 uint64_t ceil_div_u64_local(uint64_t value, uint64_t divisor) {
   return divisor == 0 ? 0 : (value + divisor - 1u) / divisor;
 }
