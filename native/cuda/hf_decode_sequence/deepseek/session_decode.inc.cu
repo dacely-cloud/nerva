@@ -283,18 +283,13 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
 
   cudaError_t err = deepseek_profile_begin_if(session, profile);
   if (err != cudaSuccess) return err;
-  err = launch_deepseek_fp8_f32_scale_encoded_matvec(
+  err = launch_deepseek_fp8_f32_scale_dual_encoded_matvec_varrows(
       session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_q),
       deepseek_scale_ptr(session->device_arena, layout.deepseek_q_a_scale),
-      session->device_projection_input, session->dtype, q_lora_rank,
-      session->hidden, block_rows, block_cols, scratch.q);
-  if (err != cudaSuccess) return err;
-
-  err = launch_deepseek_fp8_f32_scale_encoded_matvec(
-      session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_k),
+      deepseek_fp8_ptr(session->device_arena, layout.w_k),
       deepseek_scale_ptr(session->device_arena, layout.deepseek_kv_a_scale),
-      session->device_projection_input, session->dtype, kv_a_rows,
-      session->hidden, block_rows, block_cols, scratch.k);
+      session->device_projection_input, session->dtype, q_lora_rank, kv_a_rows,
+      session->hidden, block_rows, block_cols, scratch.q, scratch.k);
   if (err != cudaSuccess) return err;
   err = deepseek_profile_end_if(session, profile, profile == nullptr
                                                     ? nullptr
@@ -764,17 +759,14 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
     err = deepseek_v4_aux_join(session, 2u);
     if (err != cudaSuccess) return err;
   } else {
-    err = launch_deepseek_fp8_e8m0_scale_encoded_matvec(
+    err = launch_deepseek_fp8_e8m0_scale_dual_encoded_matvec_varrows(
         session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_q),
         deepseek_fp8_ptr(session->device_arena, layout.deepseek_q_a_scale),
-        session->device_projection_input, session->dtype, q_lora_rank,
-        session->hidden, block_rows, block_cols, scratch.q);
-    if (err != cudaSuccess) return err;
-    err = launch_deepseek_fp8_e8m0_scale_encoded_matvec(
-        session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_k),
+        deepseek_fp8_ptr(session->device_arena, layout.w_k),
         deepseek_fp8_ptr(session->device_arena, layout.deepseek_kv_a_scale),
-        session->device_projection_input, session->dtype, session->head_dim,
-        session->hidden, block_rows, block_cols, scratch.k);
+        session->device_projection_input, session->dtype, q_lora_rank,
+        session->head_dim, session->hidden, block_rows, block_cols, scratch.q,
+        scratch.k);
     if (err != cudaSuccess) return err;
   }
   err = deepseek_profile_end_if(session, profile, profile == nullptr

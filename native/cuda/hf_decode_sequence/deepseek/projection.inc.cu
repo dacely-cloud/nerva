@@ -56,12 +56,14 @@ __device__ __forceinline__ void deepseek_fp8_dual_encoded_matvec_body(
     uint32_t input_dtype,
     float *output_a,
     float *output_b,
-    uint32_t rows,
+    uint32_t rows_a,
+    uint32_t rows_b,
     uint32_t cols,
     uint32_t block_rows,
     uint32_t block_cols) {
   const uint32_t row_start = blockIdx.x * kDeepSeekFp8ProjectionRowTile;
-  if (row_start >= rows) {
+  const uint32_t row_limit = rows_a > rows_b ? rows_a : rows_b;
+  if (row_start >= row_limit) {
     return;
   }
   extern __shared__ float partial[];
@@ -74,21 +76,25 @@ __device__ __forceinline__ void deepseek_fp8_dual_encoded_matvec_body(
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
-      if (row >= rows) {
+      if (row >= row_limit) {
         continue;
       }
       const uint32_t scale_idx =
           deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
                                             block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
-      const float weight_a =
-          nerva::deepseek::f8_e4m3fn_bits_to_f32(weights_a[row_base + col]) *
-          scales_a.get(scale_idx);
-      const float weight_b =
-          nerva::deepseek::f8_e4m3fn_bits_to_f32(weights_b[row_base + col]) *
-          scales_b.get(scale_idx);
-      sum_a[row_tile] += weight_a * input_value;
-      sum_b[row_tile] += weight_b * input_value;
+      if (row < rows_a) {
+        const float weight_a =
+            nerva::deepseek::f8_e4m3fn_bits_to_f32(weights_a[row_base + col]) *
+            scales_a.get(scale_idx);
+        sum_a[row_tile] += weight_a * input_value;
+      }
+      if (row < rows_b) {
+        const float weight_b =
+            nerva::deepseek::f8_e4m3fn_bits_to_f32(weights_b[row_base + col]) *
+            scales_b.get(scale_idx);
+        sum_b[row_tile] += weight_b * input_value;
+      }
     }
   }
   for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
@@ -119,8 +125,10 @@ __device__ __forceinline__ void deepseek_fp8_dual_encoded_matvec_body(
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
-      if (row < rows) {
+      if (row < rows_a) {
         output_a[row] = partial[row_tile * blockDim.x];
+      }
+      if (row < rows_b) {
         output_b[row] =
             partial[(kDeepSeekFp8ProjectionRowTile + row_tile) * blockDim.x];
       }
@@ -240,14 +248,15 @@ __global__ void deepseek_fp8_f32_scale_dual_encoded_matvec_kernel(
     uint32_t input_dtype,
     float *output_a,
     float *output_b,
-    uint32_t rows,
+    uint32_t rows_a,
+    uint32_t rows_b,
     uint32_t cols,
     uint32_t block_rows,
     uint32_t block_cols) {
   deepseek_fp8_dual_encoded_matvec_body(
       weights_a, DeepSeekFp8F32ScaleReader{scales_a}, weights_b,
       DeepSeekFp8F32ScaleReader{scales_b}, input, input_dtype, output_a,
-      output_b, rows, cols, block_rows, block_cols);
+      output_b, rows_a, rows_b, cols, block_rows, block_cols);
 }
 
 __global__ void deepseek_fp8_f32_scale_slots_encoded_matvec_kernel(
@@ -479,14 +488,15 @@ __global__ void deepseek_fp8_e8m0_scale_dual_encoded_matvec_kernel(
     uint32_t input_dtype,
     float *output_a,
     float *output_b,
-    uint32_t rows,
+    uint32_t rows_a,
+    uint32_t rows_b,
     uint32_t cols,
     uint32_t block_rows,
     uint32_t block_cols) {
   deepseek_fp8_dual_encoded_matvec_body(
       weights_a, DeepSeekFp8E8M0ScaleReader{scales_a}, weights_b,
       DeepSeekFp8E8M0ScaleReader{scales_b}, input, input_dtype, output_a,
-      output_b, rows, cols, block_rows, block_cols);
+      output_b, rows_a, rows_b, cols, block_rows, block_cols);
 }
 
 __global__ void deepseek_fp8_e8m0_scale_encoded_gemm_tokens_kernel(
@@ -783,24 +793,36 @@ cudaError_t launch_deepseek_fp8_f32_scale_dual_encoded_matvec(
     const uint8_t *weights_b, const float *scales_b, const uint16_t *input,
     uint32_t input_dtype, uint32_t rows, uint32_t cols, uint32_t block_rows,
     uint32_t block_cols, float *output_a, float *output_b) {
+  return launch_deepseek_fp8_f32_scale_dual_encoded_matvec_varrows(
+      stream, weights_a, scales_a, weights_b, scales_b, input, input_dtype,
+      rows, rows, cols, block_rows, block_cols, output_a, output_b);
+}
+
+cudaError_t launch_deepseek_fp8_f32_scale_dual_encoded_matvec_varrows(
+    cudaStream_t stream, const uint8_t *weights_a, const float *scales_a,
+    const uint8_t *weights_b, const float *scales_b, const uint16_t *input,
+    uint32_t input_dtype, uint32_t rows_a, uint32_t rows_b, uint32_t cols,
+    uint32_t block_rows, uint32_t block_cols, float *output_a,
+    float *output_b) {
   if (weights_a == nullptr || scales_a == nullptr || weights_b == nullptr ||
       scales_b == nullptr || input == nullptr || output_a == nullptr ||
-      output_b == nullptr || rows == 0 || cols == 0 || block_rows == 0 ||
-      block_cols == 0 || input_dtype > kDTypeBF16) {
+      output_b == nullptr || rows_a == 0 || rows_b == 0 || cols == 0 ||
+      block_rows == 0 || block_cols == 0 || input_dtype > kDTypeBF16) {
     return cudaErrorInvalidValue;
   }
   constexpr uint32_t threads = 256;
+  const uint32_t row_limit = rows_a > rows_b ? rows_a : rows_b;
   const size_t shared_bytes =
       threads * kDeepSeekFp8ProjectionRowTile * 2u * sizeof(float);
   const uint32_t blocks =
-      (rows + kDeepSeekFp8ProjectionRowTile - 1) /
+      (row_limit + kDeepSeekFp8ProjectionRowTile - 1) /
       kDeepSeekFp8ProjectionRowTile;
   deepseek_fp8_f32_scale_dual_encoded_matvec_kernel<<<blocks,
                                                       threads,
                                                       shared_bytes,
                                                       stream>>>(
       weights_a, scales_a, weights_b, scales_b, input, input_dtype, output_a,
-      output_b, rows, cols, block_rows, block_cols);
+      output_b, rows_a, rows_b, cols, block_rows, block_cols);
   return cudaGetLastError();
 }
 
@@ -885,24 +907,36 @@ cudaError_t launch_deepseek_fp8_e8m0_scale_dual_encoded_matvec(
     const uint8_t *weights_b, const uint8_t *scales_b, const uint16_t *input,
     uint32_t input_dtype, uint32_t rows, uint32_t cols, uint32_t block_rows,
     uint32_t block_cols, float *output_a, float *output_b) {
+  return launch_deepseek_fp8_e8m0_scale_dual_encoded_matvec_varrows(
+      stream, weights_a, scales_a, weights_b, scales_b, input, input_dtype,
+      rows, rows, cols, block_rows, block_cols, output_a, output_b);
+}
+
+cudaError_t launch_deepseek_fp8_e8m0_scale_dual_encoded_matvec_varrows(
+    cudaStream_t stream, const uint8_t *weights_a, const uint8_t *scales_a,
+    const uint8_t *weights_b, const uint8_t *scales_b, const uint16_t *input,
+    uint32_t input_dtype, uint32_t rows_a, uint32_t rows_b, uint32_t cols,
+    uint32_t block_rows, uint32_t block_cols, float *output_a,
+    float *output_b) {
   if (weights_a == nullptr || scales_a == nullptr || weights_b == nullptr ||
       scales_b == nullptr || input == nullptr || output_a == nullptr ||
-      output_b == nullptr || rows == 0 || cols == 0 || block_rows == 0 ||
-      block_cols == 0 || input_dtype > kDTypeBF16) {
+      output_b == nullptr || rows_a == 0 || rows_b == 0 || cols == 0 ||
+      block_rows == 0 || block_cols == 0 || input_dtype > kDTypeBF16) {
     return cudaErrorInvalidValue;
   }
   constexpr uint32_t threads = 256;
+  const uint32_t row_limit = rows_a > rows_b ? rows_a : rows_b;
   const size_t shared_bytes =
       threads * kDeepSeekFp8ProjectionRowTile * 2u * sizeof(float);
   const uint32_t blocks =
-      (rows + kDeepSeekFp8ProjectionRowTile - 1) /
+      (row_limit + kDeepSeekFp8ProjectionRowTile - 1) /
       kDeepSeekFp8ProjectionRowTile;
   deepseek_fp8_e8m0_scale_dual_encoded_matvec_kernel<<<blocks,
                                                        threads,
                                                        shared_bytes,
                                                        stream>>>(
       weights_a, scales_a, weights_b, scales_b, input, input_dtype, output_a,
-      output_b, rows, cols, block_rows, block_cols);
+      output_b, rows_a, rows_b, cols, block_rows, block_cols);
   return cudaGetLastError();
 }
 
