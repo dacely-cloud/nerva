@@ -12,21 +12,22 @@ __device__ __forceinline__ float e8m0_exponent_bits_to_f32(uint8_t bits) {
 }
 
 __device__ __forceinline__ float f8_e4m3fn_bits_to_f32(uint8_t bits) {
-  const float sign = (bits & 0x80u) ? -1.0f : 1.0f;
+  const uint32_t sign = static_cast<uint32_t>(bits & 0x80u) << 24;
   const uint8_t exp = (bits >> 3) & 0x0fu;
   const uint8_t frac = bits & 0x07u;
 
   if (exp == 0) {
     if (frac == 0) {
-      return sign * 0.0f;
+      return __uint_as_float(sign);
     }
-    return sign * ldexpf(static_cast<float>(frac) * 0.125f, -6);
+    const float value = static_cast<float>(frac) * 0.001953125f;
+    return sign == 0 ? value : -value;
   }
   if (exp == 0x0fu && frac == 0x07u) {
-    return NAN;
+    return __uint_as_float(0x7fffffffu);
   }
-  return sign * ldexpf(1.0f + static_cast<float>(frac) * 0.125f,
-                       static_cast<int>(exp) - 7);
+  return __uint_as_float(sign | ((static_cast<uint32_t>(exp) + 120u) << 23) |
+                         (static_cast<uint32_t>(frac) << 20));
 }
 
 __device__ __forceinline__ float mxfp4_e2m1_nibble_to_f32(uint8_t nibble) {

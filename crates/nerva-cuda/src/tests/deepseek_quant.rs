@@ -305,6 +305,34 @@ fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
 }
 
 #[test]
+fn deepseek_fp8_device_decode_matches_reference_for_all_bytes() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let weights = (0u8..=255).collect::<Vec<_>>();
+    let scales = [0x7f];
+    let summary = deepseek_fp8_e4m3fn_e8m0_dequant(&weights, &scales, 16, 16, 16, 16);
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    for (bits, actual) in weights.iter().zip(summary.output.iter()) {
+        let expected = f8_e4m3fn_bits_to_f32(*bits);
+        if expected.is_nan() {
+            assert!(actual.is_nan(), "bits {bits:#04x} actual={actual}");
+        } else {
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "bits {bits:#04x} actual={actual} expected={expected}"
+            );
+        }
+    }
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+}
+
+#[test]
 fn deepseek_quant_dequant_apis_match_reference_values() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
