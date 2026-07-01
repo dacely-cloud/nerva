@@ -125,7 +125,11 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
 
-  hf_deepseek_v32_indexer_query_state_kernel<<<1, 1, 0, session->stream>>>(
+  const uint32_t indexer_query_blocks =
+      layout.deepseek_index_n_heads == 0 ? 1u : layout.deepseek_index_n_heads;
+  hf_deepseek_v32_indexer_query_state_kernel<<<indexer_query_blocks,
+                                                kDecodeThreads, 0,
+                                                session->stream>>>(
       session->device_arena, layout, session->dtype, q_lora_rank,
       session->device_step, max_steps, session->rope_theta,
       session->device_projection_input,

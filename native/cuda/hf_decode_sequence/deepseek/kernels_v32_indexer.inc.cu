@@ -248,8 +248,11 @@ __global__ void hf_deepseek_v32_indexer_query_state_kernel(
     uint8_t *deepseek_indexer_state,
     uint64_t deepseek_indexer_state_offset_bytes,
     uint64_t *deepseek_runtime_counters) {
-  if (blockIdx.x != 0 || threadIdx.x != 0 ||
-      (step_cursor != nullptr && *step_cursor >= max_steps)) {
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return;
+  }
+  const uint32_t head = blockIdx.x;
+  if (head >= layout.deepseek_index_n_heads) {
     return;
   }
   if (arena == nullptr || qr_norm == nullptr ||
@@ -276,8 +279,10 @@ __global__ void hf_deepseek_v32_indexer_query_state_kernel(
       token_ptr +
       deepseek_v32_indexer_query_state_weights_offset_bytes(layout));
 
-  float query[kDeepSeekSessionMaxIndexerQueryValues];
-  for (uint32_t row = 0; row < query_rows; ++row) {
+  __shared__ float query_head[kDeepSeekSessionMaxCompressHeadSize];
+  __shared__ float q_scale;
+  for (uint32_t dim = threadIdx.x; dim < index_head_dim; dim += blockDim.x) {
+    const uint32_t row = head * index_head_dim + dim;
     float sum = 0.0f;
     for (uint32_t col = 0; col < q_lora_rank; ++col) {
       sum += deepseek_fp8_scaled_weight(
@@ -286,8 +291,9 @@ __global__ void hf_deepseek_v32_indexer_query_state_kernel(
                  row, col) *
              encoded_to_f32(qr_norm[col], dtype);
     }
-    query[row] = sum;
+    query_head[dim] = sum;
   }
+  __syncthreads();
 
   const uint32_t rope_dim =
       layout.deepseek_qk_rope_head_dim <= index_head_dim
@@ -296,41 +302,41 @@ __global__ void hf_deepseek_v32_indexer_query_state_kernel(
   const uint32_t rope_half = rope_dim / 2u;
   const float softmax_scale = rsqrtf(static_cast<float>(index_head_dim));
   const float head_scale = rsqrtf(static_cast<float>(index_heads));
-  for (uint32_t head = 0; head < index_heads; ++head) {
-    float *query_head = query + head * index_head_dim;
-    for (uint32_t offset = 0; offset < rope_half; ++offset) {
-      const uint32_t left = offset;
-      const uint32_t right = offset + rope_half;
-      const float left_value = query_head[left];
-      const float right_value = query_head[right];
-      query_head[left] = deepseek_rope_value_serial(
-          left_value, right_value, offset, rope_dim, position, rope_theta,
-          false);
-      query_head[right] = deepseek_rope_value_serial(
-          left_value, right_value, offset, rope_dim, position, rope_theta,
-          true);
-    }
+  for (uint32_t offset = threadIdx.x; offset < rope_half; offset += blockDim.x) {
+    const uint32_t left = offset;
+    const uint32_t right = offset + rope_half;
+    const float left_value = query_head[left];
+    const float right_value = query_head[right];
+    query_head[left] = deepseek_rope_value_serial(
+        left_value, right_value, offset, rope_dim, position, rope_theta,
+        false);
+    query_head[right] = deepseek_rope_value_serial(
+        left_value, right_value, offset, rope_dim, position, rope_theta,
+        true);
+  }
+  __syncthreads();
 
+  if (threadIdx.x == 0) {
     float absmax = 0.0f;
     for (uint32_t dim = 0; dim < index_head_dim; ++dim) {
       query_head[dim] = deepseek_session_bf16_bits_to_f32(
           deepseek_session_f32_to_bf16_bits(query_head[dim]));
       absmax = fmaxf(absmax, fabsf(query_head[dim]));
     }
-    const float q_scale =
-        exp2f(ceilf(log2f(fmaxf(absmax, 1.0e-4f) / 448.0f)));
+    q_scale = exp2f(ceilf(log2f(fmaxf(absmax, 1.0e-4f) / 448.0f)));
     q_scales[head] = q_scale;
     weights[head] *= q_scale * softmax_scale * head_scale;
+  }
+  __syncthreads();
 
-    for (uint32_t dim = 0; dim < index_head_dim; ++dim) {
-      const float scaled =
-          fminf(fmaxf(query_head[dim] / q_scale, -448.0f), 448.0f);
-      q_fp8[static_cast<uint64_t>(head) * index_head_dim + dim] =
-          deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
-    }
+  for (uint32_t dim = threadIdx.x; dim < index_head_dim; dim += blockDim.x) {
+    const float scaled =
+        fminf(fmaxf(query_head[dim] / q_scale, -448.0f), 448.0f);
+    q_fp8[static_cast<uint64_t>(head) * index_head_dim + dim] =
+        deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
   }
 
-  if (deepseek_runtime_counters != nullptr) {
+  if (blockIdx.x == 0 && threadIdx.x == 0 && deepseek_runtime_counters != nullptr) {
     atomicAdd(
         reinterpret_cast<unsigned long long *>(
             deepseek_runtime_counters +
