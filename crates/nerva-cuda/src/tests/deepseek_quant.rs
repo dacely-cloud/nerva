@@ -1,9 +1,10 @@
 use crate::deepseek_quant::dequant::{
-    deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_fp8_e4m3fn_f32_scale_encoded_matvec,
-    deepseek_fp8_e4m3fn_f32_scale_matvec, deepseek_mxfp4_e2m1_e8m0_dequant,
+    deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_fp8_e4m3fn_f32_scale_encoded_gemm_tokens,
+    deepseek_fp8_e4m3fn_f32_scale_encoded_matvec, deepseek_fp8_e4m3fn_f32_scale_matvec,
+    deepseek_mxfp4_e2m1_e8m0_dequant,
 };
 use crate::deepseek_quant::inv_rope::{
-    CudaDeepSeekFusedInvRopeFp8QuantSummary, deepseek_fused_inv_rope_fp8_quant,
+    deepseek_fused_inv_rope_fp8_quant, CudaDeepSeekFusedInvRopeFp8QuantSummary,
 };
 use crate::deepseek_quant::probe::{deepseek_fused_inv_rope_fp8_quant_smoke, deepseek_quant_smoke};
 use crate::deepseek_quant::summary::CudaDeepSeekQuantSummary;
@@ -320,9 +321,7 @@ fn deepseek_quant_dequant_apis_match_reference_values() {
     assert_eq!(fp8.block_cols, 2);
     assert_eq!(
         fp8.output,
-        [
-            1.0, 2.0, 1.0, -2.0, 128.0, 240.0, 512.0, 896.0, 0.0625, 0.125, 2.0, 4.0
-        ]
+        [1.0, 2.0, 1.0, -2.0, 128.0, 240.0, 512.0, 896.0, 0.0625, 0.125, 2.0, 4.0]
     );
     assert_eq!(fp8.kernel_launches, 1);
     assert_eq!(fp8.sync_calls, 1);
@@ -404,8 +403,76 @@ fn deepseek_fp8_f32_scale_encoded_matvec_matches_reference_values() {
     assert!(summary.output_hash != 0);
 }
 
+#[test]
+fn deepseek_fp8_f32_scale_encoded_gemm_tokens_matches_reference_values() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let weights = [
+        0x38, 0x40, 0x30, 0xb8, 0x70, 0x77, 0x78, 0x7e, 0x20, 0x28, 0x30, 0x38,
+    ];
+    let scales = [1.0, 2.0, 0.5, 4.0];
+    let input_f32 = [0.5, -1.0, 2.0, 0.25, -1.5, 0.75, -0.5, 3.0];
+    let input = input_f32.map(f32_to_bf16_bits);
+    const BF16: u32 = 1;
+
+    let summary = deepseek_fp8_e4m3fn_f32_scale_encoded_gemm_tokens(
+        &weights, &scales, &input, BF16, 3, 4, 2, 2, 2,
+    );
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let expected =
+        reference_fp8_f32_scale_encoded_gemm_tokens(&weights, &scales, &input, 3, 4, 2, 2, 2);
+    assert_eq!(summary.rows, 3);
+    assert_eq!(summary.cols, 4);
+    assert_eq!(summary.tokens, 2);
+    assert_eq!(summary.block_rows, 2);
+    assert_eq!(summary.block_cols, 2);
+    for (idx, (actual, expected)) in summary.output.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (actual - expected).abs() <= 1e-5,
+            "output[{idx}] actual={actual} expected={expected}"
+        );
+    }
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+    assert!(summary.output_hash != 0);
+}
+
 fn f32_to_bf16_bits(value: f32) -> u16 {
     let bits = value.to_bits();
     let lsb = (bits >> 16) & 1;
     ((bits + 0x7fff + lsb) >> 16) as u16
+}
+
+fn bf16_bits_to_f32(bits: u16) -> f32 {
+    f32::from_bits((bits as u32) << 16)
+}
+
+fn reference_fp8_f32_scale_encoded_gemm_tokens(
+    weights: &[u8],
+    scales: &[f32],
+    input: &[u16],
+    rows: usize,
+    cols: usize,
+    tokens: usize,
+    block_rows: usize,
+    block_cols: usize,
+) -> Vec<f32> {
+    let scale_cols = cols.div_ceil(block_cols);
+    let mut output = vec![0.0f32; rows * tokens];
+    for token in 0..tokens {
+        for row in 0..rows {
+            let mut sum = 0.0f32;
+            for col in 0..cols {
+                let scale_idx = (row / block_rows) * scale_cols + (col / block_cols);
+                let weight = f8_e4m3fn_bits_to_f32(weights[row * cols + col]) * scales[scale_idx];
+                sum += weight * bf16_bits_to_f32(input[token * cols + col]);
+            }
+            output[token * rows + row] = sum;
+        }
+    }
+    output
 }
