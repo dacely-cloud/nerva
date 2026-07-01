@@ -113,6 +113,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_aux_qk_projection_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_aux_compressor_indexer_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_aux_output_group_projection_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_swa_parallel_head_attention_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_external_output_projection_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_descriptor_abi"));

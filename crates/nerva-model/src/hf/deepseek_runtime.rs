@@ -924,6 +924,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_aux_qk_projection_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_aux_compressor_indexer_runtime".to_string());
         primitives
+            .push("cuda_hf_sequence_deepseek_v4_aux_output_group_projection_runtime".to_string());
+        primitives
             .push("cuda_hf_sequence_deepseek_v4_external_output_projection_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_mhc_head_final_norm_runtime".to_string());
@@ -1306,6 +1308,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources",
                 "cuda_hf_sequence_deepseek_v4_aux_qk_projection_runtime",
                 "cuda_hf_sequence_deepseek_v4_aux_compressor_indexer_runtime",
+                "cuda_hf_sequence_deepseek_v4_aux_output_group_projection_runtime",
                 "cuda_hf_sequence_deepseek_v4_swa_parallel_head_attention_runtime",
                 "cuda_hf_sequence_deepseek_v4_external_output_projection_runtime",
             ],

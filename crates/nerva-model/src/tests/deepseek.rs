@@ -374,6 +374,7 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
     for primitive in [
         "cuda_hf_sequence_deepseek_v4_aux_qk_projection_runtime",
         "cuda_hf_sequence_deepseek_v4_aux_compressor_indexer_runtime",
+        "cuda_hf_sequence_deepseek_v4_aux_output_group_projection_runtime",
     ] {
         assert!(
             parallel_attention
