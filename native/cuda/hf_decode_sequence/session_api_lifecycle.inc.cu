@@ -283,6 +283,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
         static_cast<uint64_t>(kDeepSeekSparseTopKSlotCapacity) *
         sizeof(int32_t);
     session->deepseek_sparse_topk_count_bytes = sizeof(uint32_t);
+    session->deepseek_sparse_topk_scores_bytes =
+        static_cast<uint64_t>(request->max_context_tokens) * sizeof(float);
   }
   if (has_deepseek_layout || session->deepseek_compressor_state_bytes != 0 ||
       session->deepseek_v32_mla_kv_bytes != 0 ||

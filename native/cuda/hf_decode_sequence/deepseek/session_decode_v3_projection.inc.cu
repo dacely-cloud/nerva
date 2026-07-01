@@ -285,7 +285,8 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
       session->device_deepseek_sparse_topk_slots != nullptr &&
       session->device_deepseek_sparse_topk_count != nullptr;
   if (has_precomputed_v32_sparse_attention) {
-    hf_deepseek_v32_sparse_topk_select_kernel<<<1, 1, 0, session->stream>>>(
+    hf_deepseek_v32_sparse_topk_select_kernel<<<1, kDecodeThreads, 0,
+                                                 session->stream>>>(
         layout, session->device_step, max_steps,
         reinterpret_cast<const uint8_t *>(session->device_deepseek_indexer_state),
         deepseek_v32_indexer_query_state_layer_offset_bytes(session,
@@ -296,6 +297,9 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
         session->kv_block_count, session->device_kv_block_table,
         session->device_deepseek_sparse_topk_slots,
         session->device_deepseek_sparse_topk_count,
+        session->device_deepseek_sparse_topk_scores,
+        static_cast<uint32_t>(session->deepseek_sparse_topk_scores_bytes /
+                              sizeof(float)),
         session->device_deepseek_runtime_counters);
     err = cudaGetLastError();
     if (err != cudaSuccess) return err;

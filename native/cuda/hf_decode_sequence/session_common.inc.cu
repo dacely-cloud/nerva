@@ -71,6 +71,7 @@ void free_session_fields(NervaCudaHfDecodeSequenceSession *session) {
   cudaFree(session->device_deepseek_mhc_residual);
   cudaFree(session->device_deepseek_sparse_topk_count);
   cudaFree(session->device_deepseek_sparse_topk_slots);
+  cudaFree(session->device_deepseek_sparse_topk_scores);
   cudaFree(session->device_deepseek_runtime_counters);
   cudaFree(session->device_kv_values);
   cudaFree(session->device_kv_keys);
@@ -171,6 +172,7 @@ uint64_t session_device_footprint(
          session->deepseek_mhc_comb_mix_bytes +
          session->deepseek_sparse_topk_slots_bytes +
          session->deepseek_sparse_topk_count_bytes +
+         session->deepseek_sparse_topk_scores_bytes +
          session->deepseek_runtime_counters_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
@@ -201,6 +203,7 @@ uint64_t session_fixed_footprint_without_prefill_chunk(
          session->deepseek_mhc_comb_mix_bytes +
          session->deepseek_sparse_topk_slots_bytes +
          session->deepseek_sparse_topk_count_bytes +
+         session->deepseek_sparse_topk_scores_bytes +
          session->deepseek_runtime_counters_bytes +
          session->kv_block_table_bytes +
          session->prompt_bytes + session->slots_bytes +
