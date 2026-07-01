@@ -251,8 +251,12 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
   }
   if (layout.w_q == kMissingOffset ||
       layout.deepseek_q_a_scale == kMissingOffset ||
+      layout.q_norm == kMissingOffset ||
+      layout.deepseek_q_b == kMissingOffset ||
+      layout.deepseek_q_b_scale == kMissingOffset ||
       layout.w_k == kMissingOffset ||
-      layout.deepseek_kv_a_scale == kMissingOffset) {
+      layout.deepseek_kv_a_scale == kMissingOffset ||
+      layout.k_norm == kMissingOffset) {
     return cudaErrorInvalidValue;
   }
   const uint32_t q_lora_rank = layout.deepseek_q_lora_rank;
@@ -263,6 +267,9 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
     return cudaErrorInvalidValue;
   }
   const uint32_t attention_hidden = session->heads * session->head_dim;
+  if (q_lora_rank > attention_hidden) {
+    return cudaErrorInvalidValue;
+  }
   LayerScratch scratch =
       layer_scratch_ptrs(session->device_scratch, session->hidden,
                          attention_hidden, session->head_dim,
@@ -295,6 +302,32 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       session->hidden, block_rows, block_cols, scratch.k);
   if (err != cudaSuccess) return err;
 
+  hf_deepseek_v4_q_a_norm_kernel<<<1, kDecodeNormThreads, 0,
+                                   session->stream>>>(
+      session->device_arena, layout, session->hidden, session->heads,
+      session->head_dim, session->intermediate, session->device_step,
+      max_steps, session->rms_eps, session->device_scratch);
+  err = cudaGetLastError();
+  if (err != cudaSuccess) return err;
+
+  err = launch_deepseek_fp8_e8m0_scale_matvec(
+      session->stream,
+      deepseek_fp8_ptr(session->device_arena, layout.deepseek_q_b),
+      deepseek_fp8_ptr(session->device_arena, layout.deepseek_q_b_scale),
+      scratch.q_gate, attention_hidden, q_lora_rank, block_rows, block_cols,
+      scratch.q);
+  if (err != cudaSuccess) return err;
+
+  hf_deepseek_v4_finalize_preprojected_qk_kernel<<<session->heads + 1u,
+                                                    kDecodeThreads, 0,
+                                                    session->stream>>>(
+      session->device_arena, layout, session->dtype, session->hidden,
+      session->heads, session->head_dim, session->intermediate,
+      session->device_step, max_steps, session->rms_eps, session->rope_theta,
+      session->device_scratch);
+  err = cudaGetLastError();
+  if (err != cudaSuccess) return err;
+
   hf_deepseek_v4_swa_dense_layer_kernel<<<1, 1, 0, session->stream>>>(
       session->device_arena, layout, layer_index, session->dtype,
       session->hidden, session->heads, session->head_dim,
@@ -321,6 +354,6 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       session->device_deepseek_mhc_post_mix,
       session->device_deepseek_mhc_comb_mix,
       session->device_deepseek_runtime_counters,
-      session->experimental_rt_local_window_tokens, 1u);
+      session->experimental_rt_local_window_tokens, 2u);
   return cudaGetLastError();
 }

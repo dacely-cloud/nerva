@@ -86,6 +86,16 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     float *deepseek_mhc_comb_mix,
     uint64_t *deepseek_runtime_counters, uint32_t local_window_tokens,
     uint32_t preprojected_qk);
+__global__ void hf_deepseek_v4_q_a_norm_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    uint32_t heads, uint32_t head_dim, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, float rms_eps,
+    float *scratch);
+__global__ void hf_deepseek_v4_finalize_preprojected_qk_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t heads, uint32_t head_dim,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float rms_eps, float rope_theta, float *scratch);
 __global__ void hf_deepseek_v4_attn_mhc_pre_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t heads, uint32_t head_dim,
