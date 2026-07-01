@@ -1,18 +1,20 @@
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{
     GeneratedText, McpToolResult, PromptInput, ReasoningMode, ResponseStreamOptions,
     StreamEmissionState, StreamKind, StreamMeta, append_assistant_instruction, apply_stop_strings,
-    augment_prompt_with_mcp_tool, chat_messages_to_prompt, completion_prompts, completion_text,
+    augment_prompt_with_mcp_tool, chat_completion_request_messages, chat_messages_to_prompt,
+    chat_prompt_for_reasoning, completion_prompts, completion_text, conversation_items_prompt,
     decode_chunked_body, emit_stream_text, finish_reason, first_sse_json_payload,
     generated_metadata, hash_tokens, mcp_tool_invocation_from_request, normalize_batch_endpoint,
     parse_http_endpoint, parse_mcp_http_response, parse_multipart_file_upload,
     percent_decode_query, prompt_format_for_reasoning, reject_unsupported_generation_options,
-    reject_unsupported_generation_options_with_tools, request_metadata, request_n,
+    reject_unsupported_generation_options_with_tools, request_chat_store, request_conversation_id,
+    cancelled_response_value, compact_response_item, request_metadata, request_n,
     request_optional_string, request_response_format_instruction, request_stop_strings,
     request_store, response_input_items, response_output_text, response_stream_completed_response,
-    responses_input_to_prompt, send_stream_reasoning_delta, session_json,
-    shared_fork_batch_supported, split_generated_reasoning, text_delta,
+    responses_input_to_prompt, send_stream_reasoning_delta, session_json, shared_fork_batch_supported,
+    split_generated_reasoning, text_delta,
 };
 use crate::openai::SessionRecord;
 use nerva_model::causal_lm::types::HfCausalLmStopReason;
@@ -141,6 +143,127 @@ fn maps_deepseek_reasoning_mode_to_prompt_format() {
 }
 
 #[test]
+fn renders_deepseek_v4_multi_turn_prompt_like_vllm() {
+    let prompt = chat_prompt_for_reasoning(
+        &json!({
+            "thinking": true,
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Hello"},
+                {
+                    "role": "assistant",
+                    "reasoning_content": "The user said hello, I should greet back.",
+                    "content": "Hi there! How can I help you?"
+                },
+                {"role": "user", "content": "What is the capital of France?"},
+                {
+                    "role": "assistant",
+                    "reasoning_content": "The user asks about the capital of France. It is Paris.",
+                    "content": "The capital of France is Paris."
+                }
+            ]
+        }),
+        ReasoningMode::DeepSeekThinking,
+    )
+    .unwrap();
+
+    let PromptInput::Text { text, format } = prompt else {
+        panic!("DeepSeek chat prompt should render text");
+    };
+    assert_eq!(format, PromptFormat::Raw);
+    assert_eq!(
+        text,
+        "<｜begin▁of▁sentence｜>You are a helpful assistant.<｜User｜>Hello<｜Assistant｜></think>Hi there! How can I help you?<｜end▁of▁sentence｜><｜User｜>What is the capital of France?<｜Assistant｜><think>The user asks about the capital of France. It is Paris.</think>The capital of France is Paris.<｜end▁of▁sentence｜>"
+    );
+}
+
+#[test]
+fn renders_deepseek_v4_tools_as_dsml_prompt_context() {
+    let prompt = chat_prompt_for_reasoning(
+        &json!({
+            "thinking": true,
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"]
+                    }
+                }
+            }],
+            "messages": [
+                {"role": "user", "content": "Weather?"},
+                {
+                    "role": "assistant",
+                    "reasoning": "Need weather.",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"city\":\"Paris\"}"
+                        }
+                    }]
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
+            ]
+        }),
+        ReasoningMode::DeepSeekThinking,
+    )
+    .unwrap();
+
+    let PromptInput::Text { text, format } = prompt else {
+        panic!("DeepSeek chat prompt should render text");
+    };
+    assert_eq!(format, PromptFormat::Raw);
+    assert!(text.contains("## Tools"));
+    assert!(text.contains("<｜DSML｜tool_calls>"));
+    assert!(text.contains("<｜DSML｜invoke name=\"get_weather\">"));
+    assert!(
+        text.contains("<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>")
+    );
+    assert!(text.contains("<｜User｜><tool_result>sunny</tool_result><｜Assistant｜><think>"));
+}
+
+#[test]
+fn renders_deepseek_v4_max_and_none_reasoning_effort() {
+    let max_prompt = chat_prompt_for_reasoning(
+        &json!({
+            "thinking": true,
+            "reasoning_effort": "xhigh",
+            "messages": [{"role": "user", "content": "solve it"}]
+        }),
+        ReasoningMode::DeepSeekThinking,
+    )
+    .unwrap();
+    let PromptInput::Text { text, .. } = max_prompt else {
+        panic!("DeepSeek chat prompt should render text");
+    };
+    assert!(text.starts_with("<｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum"));
+    assert!(text.ends_with("<｜Assistant｜><think>"));
+
+    let none_prompt = chat_prompt_for_reasoning(
+        &json!({
+            "thinking": true,
+            "reasoning_effort": "none",
+            "messages": [{"role": "user", "content": "answer"}]
+        }),
+        ReasoningMode::DeepSeekThinking,
+    )
+    .unwrap();
+    let PromptInput::Text { text, .. } = none_prompt else {
+        panic!("DeepSeek chat prompt should render text");
+    };
+    assert_eq!(
+        text,
+        "<｜begin▁of▁sentence｜><｜User｜>answer<｜Assistant｜></think>"
+    );
+}
+
+#[test]
 fn streams_chat_reasoning_delta_as_reasoning_field() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(2);
     let meta = StreamMeta {
@@ -178,6 +301,7 @@ fn builds_streamed_response_completed_payload() {
             store: true,
             metadata: json!({"trace": "abc"}),
             previous_response_id: Some("resp-prev".to_string()),
+            conversation_id: None,
             input_items: vec![json!({"id": "in-1", "role": "user", "content": "hello"})],
         }),
     };
@@ -197,6 +321,7 @@ fn builds_streamed_response_completed_payload() {
     assert_eq!(response["metadata"], json!({"trace": "abc"}));
     assert_eq!(response["store"], true);
     assert_eq!(response["previous_response_id"], "resp-prev");
+    assert_eq!(response["conversation"], Value::Null);
     assert_eq!(response["output_text"], "answer");
     assert_eq!(response["usage"]["total_tokens"], 5);
     assert_eq!(response["output"][0]["content"][0]["text"], "answer");
@@ -399,6 +524,8 @@ fn parses_n_and_optional_strings() {
 fn parses_response_store_controls_and_input_items() {
     assert!(request_store(&json!({})).unwrap());
     assert!(!request_store(&json!({"store": false})).unwrap());
+    assert!(!request_chat_store(&json!({})).unwrap());
+    assert!(request_chat_store(&json!({"store": true})).unwrap());
     assert_eq!(
         request_metadata(&json!({"metadata": {"trace": "abc"}})).unwrap(),
         json!({"trace": "abc"})
@@ -412,6 +539,49 @@ fn parses_response_store_controls_and_input_items() {
 
     let items = response_input_items(&json!({"input": [{"role": "user", "content": "hi"}]}));
     assert_eq!(items, vec![json!({"role": "user", "content": "hi"})]);
+}
+
+#[test]
+fn extracts_chat_completion_request_messages() {
+    let messages = chat_completion_request_messages(&json!({
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"}
+        ]
+    }));
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[1]["content"], "hi");
+}
+
+#[test]
+fn parses_conversation_id_and_renders_items() {
+    assert_eq!(
+        request_conversation_id(&json!({"conversation": "conv_123"})).unwrap(),
+        Some("conv_123".to_string())
+    );
+    assert_eq!(
+        request_conversation_id(&json!({"conversation": {"id": "conv_456"}})).unwrap(),
+        Some("conv_456".to_string())
+    );
+    assert!(request_conversation_id(&json!({"conversation": {}})).is_err());
+
+    let prompt = conversation_items_prompt(&[
+        json!({
+            "id": "msg-user",
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}]
+        }),
+        json!({
+            "id": "msg-assistant",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hi back"}]
+        }),
+    ])
+    .unwrap();
+    assert_eq!(prompt, "User: hello\nAssistant: hi back\n");
 }
 
 #[test]
@@ -429,6 +599,29 @@ fn extracts_stored_response_output_text() {
         })),
         "nested"
     );
+}
+
+#[test]
+fn builds_cancelled_and_compacted_response_values() {
+    let response = json!({
+        "id": "resp_1",
+        "status": "completed",
+        "output_text": "answer",
+        "error": null,
+        "incomplete_details": null
+    });
+
+    let cancelled = cancelled_response_value(response.clone());
+    assert_eq!(cancelled["status"], "cancelled");
+    assert_eq!(cancelled["incomplete_details"]["reason"], "cancelled");
+    assert!(cancelled["error"].is_null());
+
+    let compaction = compact_response_item("cmpct_1".to_string(), &response, &[json!("hello")]);
+    assert_eq!(compaction["id"], "cmpct_1");
+    assert_eq!(compaction["type"], "compaction");
+    let encrypted_content = compaction["encrypted_content"].as_str().unwrap();
+    assert!(encrypted_content.contains("Input:\nhello"));
+    assert!(encrypted_content.contains("Output:\nanswer"));
 }
 
 #[test]

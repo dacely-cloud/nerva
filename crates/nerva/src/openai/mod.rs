@@ -14,26 +14,34 @@ use crate::json::json_escape;
 
 mod admin;
 mod batches;
+mod chat_store;
 mod context_cache;
+mod conversations;
+mod deepseek_prompt;
 mod endpoints;
 mod files;
 mod generation;
 mod mcp;
 mod requests;
 mod response_store;
+mod response_tokens;
 mod sessions;
 mod streaming;
 mod types;
 
 pub(crate) use admin::*;
 pub(crate) use batches::*;
+pub(crate) use chat_store::*;
 pub(crate) use context_cache::*;
+pub(crate) use conversations::*;
+pub(crate) use deepseek_prompt::*;
 pub(crate) use endpoints::*;
 pub(crate) use files::*;
 pub(crate) use generation::*;
 pub(crate) use mcp::*;
 pub(crate) use requests::*;
 pub(crate) use response_store::*;
+pub(crate) use response_tokens::*;
 pub(crate) use sessions::*;
 pub(crate) use streaming::*;
 pub(crate) use types::*;
@@ -55,6 +63,8 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
         files: Mutex::new(HashMap::new()),
         batches: Mutex::new(HashMap::new()),
         responses: Mutex::new(HashMap::new()),
+        conversations: Mutex::new(HashMap::new()),
+        chat_completions: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
         request_count: AtomicU64::new(0),
         generated_tokens: AtomicU64::new(0),
@@ -111,15 +121,74 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
                 .route("/v1/mcp/call", web::post().to(call_mcp_tool))
                 .route("/v1/completions", web::post().to(completions))
                 .route("/v1/chat/completions", web::post().to(chat_completions))
+                .route("/v1/chat/completions", web::get().to(list_chat_completions))
+                .route(
+                    "/v1/chat/completions/{completion_id}",
+                    web::get().to(get_chat_completion),
+                )
+                .route(
+                    "/v1/chat/completions/{completion_id}",
+                    web::post().to(update_chat_completion),
+                )
+                .route(
+                    "/v1/chat/completions/{completion_id}",
+                    web::delete().to(delete_chat_completion),
+                )
+                .route(
+                    "/v1/chat/completions/{completion_id}/messages",
+                    web::get().to(list_chat_completion_messages),
+                )
                 .route("/v1/responses", web::post().to(responses))
+                .route(
+                    "/v1/responses/input_tokens",
+                    web::post().to(count_response_input_tokens),
+                )
+                .route("/v1/responses/compact", web::post().to(compact_response))
                 .route("/v1/responses/{response_id}", web::get().to(get_response))
                 .route(
                     "/v1/responses/{response_id}",
                     web::delete().to(delete_response),
                 )
                 .route(
+                    "/v1/responses/{response_id}/cancel",
+                    web::post().to(cancel_response),
+                )
+                .route(
+                    "/v1/responses/{response_id}/compact",
+                    web::post().to(compact_response_by_id),
+                )
+                .route(
                     "/v1/responses/{response_id}/input_items",
                     web::get().to(list_response_input_items),
+                )
+                .route("/v1/conversations", web::post().to(create_conversation))
+                .route(
+                    "/v1/conversations/{conversation_id}",
+                    web::get().to(get_conversation),
+                )
+                .route(
+                    "/v1/conversations/{conversation_id}",
+                    web::post().to(update_conversation),
+                )
+                .route(
+                    "/v1/conversations/{conversation_id}",
+                    web::delete().to(delete_conversation),
+                )
+                .route(
+                    "/v1/conversations/{conversation_id}/items",
+                    web::post().to(create_conversation_items),
+                )
+                .route(
+                    "/v1/conversations/{conversation_id}/items",
+                    web::get().to(list_conversation_items),
+                )
+                .route(
+                    "/v1/conversations/{conversation_id}/items/{item_id}",
+                    web::get().to(get_conversation_item),
+                )
+                .route(
+                    "/v1/conversations/{conversation_id}/items/{item_id}",
+                    web::delete().to(delete_conversation_item),
                 )
                 .route("/v1/embeddings", web::post().to(unsupported_embeddings))
                 .route("/pooling", web::post().to(unsupported_pooling))

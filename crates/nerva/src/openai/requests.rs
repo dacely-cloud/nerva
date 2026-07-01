@@ -154,6 +154,10 @@ pub(crate) fn request_store(body: &Value) -> Result<bool, ApiError> {
     request_bool(body, "store", true)
 }
 
+pub(crate) fn request_chat_store(body: &Value) -> Result<bool, ApiError> {
+    request_bool(body, "store", false)
+}
+
 pub(crate) fn request_echo(body: &Value) -> Result<bool, ApiError> {
     request_bool(body, "echo", false)
 }
@@ -177,6 +181,7 @@ pub(crate) fn request_reasoning_mode(
     }
 }
 
+#[cfg(test)]
 pub(crate) const fn prompt_format_for_reasoning(mode: ReasoningMode) -> PromptFormat {
     match mode {
         ReasoningMode::None => PromptFormat::Auto,
@@ -240,7 +245,11 @@ fn request_template_bool(body: &Value, name: &'static str) -> Result<Option<bool
     Ok(top_level.or(template))
 }
 
-fn request_bool(body: &Value, name: &'static str, default: bool) -> Result<bool, ApiError> {
+pub(crate) fn request_bool(
+    body: &Value,
+    name: &'static str,
+    default: bool,
+) -> Result<bool, ApiError> {
     match body.get(name) {
         Some(Value::Bool(value)) => Ok(*value),
         Some(Value::Null) | None => Ok(default),
@@ -361,14 +370,19 @@ pub(crate) fn responses_input_to_prompt(body: &Value) -> Result<String, ApiError
     Ok(prompt)
 }
 
-fn message_content_text(content: Option<&Value>) -> Result<String, ApiError> {
+pub(crate) fn message_content_text(content: Option<&Value>) -> Result<String, ApiError> {
     match content {
         Some(Value::String(text)) => Ok(text.clone()),
         Some(Value::Array(parts)) => {
             let mut text = String::new();
             for part in parts {
                 match part.get("type").and_then(Value::as_str) {
-                    Some("text") | Some("input_text") | None => {
+                    Some("text")
+                    | Some("input_text")
+                    | Some("output_text")
+                    | Some("summary_text")
+                    | Some("reasoning_text")
+                    | None => {
                         if let Some(value) = part.get("text").and_then(Value::as_str) {
                             if !text.is_empty() {
                                 text.push('\n');

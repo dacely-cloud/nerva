@@ -21,8 +21,8 @@ use crate::cli::args::{AUTO_CONTEXT_MARGIN, DEFAULT_SEED};
 use super::{
     ApiError, AppState, GenerateOptions, GeneratedText, PreparedGeneration, PromptInput,
     ResolvedServeConfig, StreamEmissionState, StreamKind, StreamMeta, StreamRunStats,
-    apply_stop_strings, auto_sampler_seed, completion_text, emit_stream_text,
-    ensure_session_for_request, finish_reason, record_context_cache_probe,
+    append_response_to_conversation, apply_stop_strings, auto_sampler_seed, completion_text,
+    emit_stream_text, ensure_session_for_request, finish_reason, record_context_cache_probe,
     record_session_generation, response_stream_completed_response, send_stream_done,
     send_stream_error, send_stream_final, stochastic_sampling_requested,
     store_response_if_requested, validate_sampling,
@@ -183,6 +183,14 @@ fn generate_text_stream_sync(
                 response_options.input_items.clone(),
                 response_options.store,
             )?);
+            if let Some(response_json) = completed_response.as_ref() {
+                append_response_to_conversation(
+                    state,
+                    response_options.conversation_id.as_deref(),
+                    &response_options.input_items,
+                    response_json,
+                )?;
+            }
         }
         send_stream_final(
             &tx,

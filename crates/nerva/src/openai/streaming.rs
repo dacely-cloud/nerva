@@ -306,6 +306,7 @@ pub(crate) fn response_stream_completed_response(
         "metadata": response_options.metadata.clone(),
         "store": response_options.store,
         "previous_response_id": response_options.previous_response_id.clone(),
+        "conversation": response_options.conversation_id.clone(),
         "output": output,
         "output_text": emitted.content,
         "usage": {

@@ -5,16 +5,17 @@ use serde_json::{Value, json};
 
 use super::{
     ApiError, AppState, BatchRecord, BatchRequestCounts, GenerateOptions, PromptInput,
-    ReasoningMode, append_assistant_instruction, apply_response_format_instruction, authorize,
-    chat_messages_to_prompt, completion_echo_prefix, completion_prompts, empty_text_prompt,
-    generate_text_batch_direct_sync, generate_text_direct_sync, generated_metadata,
-    insert_generated_file, lock_files, previous_response_context, prompt_format_for_reasoning,
-    reject_unsupported_generation_options, request_echo, request_f32, request_include_reasoning,
-    request_max_tokens, request_metadata, request_n, request_optional_string,
-    request_reasoning_mode, request_response_format_instruction, request_stop_strings,
-    request_store, request_suffix, request_u32, request_u64_opt, require_known_model,
-    response_input_items, responses_input_to_prompt, shared_fork_batch_supported,
-    split_generated_reasoning, store_response_if_requested, unix_seconds, usage,
+    ReasoningMode, append_response_to_conversation, apply_response_format_instruction, authorize,
+    chat_prompt_for_reasoning, completion_echo_prefix, completion_prompts, conversation_context,
+    empty_text_prompt, generate_text_batch_direct_sync, generate_text_direct_sync,
+    generated_metadata, insert_generated_file, lock_files, previous_response_context,
+    reject_unsupported_generation_options, request_conversation_id, request_echo, request_f32,
+    request_include_reasoning, request_max_tokens, request_metadata, request_n,
+    request_optional_string, request_reasoning_mode, request_response_format_instruction,
+    request_stop_strings, request_store, request_suffix, request_u32, request_u64_opt,
+    require_known_model, response_input_items, responses_prompt_for_reasoning,
+    shared_fork_batch_supported, split_generated_reasoning, store_response_if_requested,
+    unix_seconds, usage,
 };
 
 pub(crate) async fn create_batch(
@@ -425,14 +426,13 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
 
 fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError> {
     let n = request_n(body)?;
-    let prompt = chat_messages_to_prompt(body)?;
-    let response_format_instruction = request_response_format_instruction(body)?;
-    let prompt = match response_format_instruction.as_deref() {
-        Some(instruction) => append_assistant_instruction(prompt, instruction),
-        None => prompt,
-    };
     let include_reasoning = request_include_reasoning(body)?;
     let reasoning_mode = request_reasoning_mode(state, body)?;
+    let response_format_instruction = request_response_format_instruction(body)?;
+    let prompt = apply_response_format_instruction(
+        chat_prompt_for_reasoning(body, reasoning_mode)?,
+        response_format_instruction.as_deref(),
+    )?;
     let max_tokens = request_max_tokens(state, body)?;
     let temperature = request_f32(body, "temperature", 1.0)?;
     let top_p = request_f32(body, "top_p", 1.0)?;
@@ -448,10 +448,7 @@ fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result
         let generated = generate_text_direct_sync(
             state,
             GenerateOptions {
-                prompt: PromptInput::Text {
-                    text: prompt.clone(),
-                    format: prompt_format_for_reasoning(reasoning_mode),
-                },
+                prompt: prompt.clone(),
                 max_tokens,
                 temperature,
                 top_p,
@@ -499,26 +496,39 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
     let store = request_store(body)?;
     let metadata = request_metadata(body)?;
     let previous_response_id = request_optional_string(body, "previous_response_id")?;
+    let conversation_id = request_conversation_id(body)?;
+    let conversation_context = conversation_context(state, conversation_id.as_deref())?;
     let previous_context = previous_response_context(state, previous_response_id.as_deref())?;
     let input_items = response_input_items(body);
-    let prompt = responses_input_to_prompt(body)?;
-    let response_format_instruction = request_response_format_instruction(body)?;
-    let mut prompt = match response_format_instruction.as_deref() {
-        Some(instruction) => append_assistant_instruction(prompt, instruction),
-        None => prompt,
-    };
-    if let Some(previous_context) = previous_context {
-        prompt = format!("{previous_context}{prompt}");
-    }
     let include_reasoning = request_include_reasoning(body)?;
     let reasoning_mode = request_reasoning_mode(state, body)?;
+    let response_format_instruction = request_response_format_instruction(body)?;
+    let mut prompt = apply_response_format_instruction(
+        responses_prompt_for_reasoning(body, reasoning_mode)?,
+        response_format_instruction.as_deref(),
+    )?;
+    if let Some(previous_context) = previous_context {
+        prompt = match prompt {
+            PromptInput::Text { text, format } => PromptInput::Text {
+                text: format!("{previous_context}{text}"),
+                format,
+            },
+            prompt => prompt,
+        };
+    }
+    if let Some(conversation_context) = conversation_context {
+        prompt = match prompt {
+            PromptInput::Text { text, format } => PromptInput::Text {
+                text: format!("{conversation_context}{text}"),
+                format,
+            },
+            prompt => prompt,
+        };
+    }
     let generated = generate_text_direct_sync(
         state,
         GenerateOptions {
-            prompt: PromptInput::Text {
-                text: prompt,
-                format: prompt_format_for_reasoning(reasoning_mode),
-            },
+            prompt,
             max_tokens: request_max_tokens(state, body)?,
             temperature: request_f32(body, "temperature", 1.0)?,
             top_p: request_f32(body, "top_p", 1.0)?,
@@ -571,6 +581,7 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
         "metadata": metadata.clone(),
         "store": store,
         "previous_response_id": previous_response_id,
+        "conversation": conversation_id.clone(),
         "output": output,
         "output_text": split.content,
         "nerva": generated_metadata(&generated),
@@ -580,7 +591,15 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
             "total_tokens": generated.prompt_tokens + completion_tokens
         }
     });
-    store_response_if_requested(state, response_json, input_items, store)
+    let response_json =
+        store_response_if_requested(state, response_json, input_items.clone(), store)?;
+    append_response_to_conversation(
+        state,
+        conversation_id.as_deref(),
+        &input_items,
+        &response_json,
+    )?;
+    Ok(response_json)
 }
 
 fn update_batch_counts(

@@ -61,6 +61,7 @@ struct ChainLayerLayout {
   uint32_t num_experts;
   uint32_t experts_per_token;
   uint32_t norm_topk_prob;
+  float deepseek_swiglu_limit;
 };
 
 __device__ float encoded_to_f32(uint16_t value, uint32_t dtype) {
@@ -81,6 +82,14 @@ __device__ uint16_t f32_to_encoded(float value, uint32_t dtype) {
 
 __device__ float silu(float value) {
   return value / (1.0f + expf(-value));
+}
+
+__device__ float swiglu(float gate, float up, float swiglu_limit) {
+  if (isfinite(swiglu_limit) && swiglu_limit > 0.0f) {
+    gate = fminf(gate, swiglu_limit);
+    up = fminf(fmaxf(up, -swiglu_limit), swiglu_limit);
+  }
+  return silu(gate) * up;
 }
 
 __device__ float sigmoid(float value) {
@@ -277,7 +286,7 @@ __device__ void run_sparse_moe_mlp(uint16_t *arena, ChainLayerLayout layout,
       float sum = 0.0f;
       for (uint32_t col = 0; col < moe_intermediate; ++col) {
         sum += encoded_to_f32(down_row[col], dtype) *
-               (silu(gate[col]) * up[col]);
+               swiglu(gate[col], up[col], layout.deepseek_swiglu_limit);
       }
       down[row] += expert_weight * sum;
     }
@@ -315,7 +324,7 @@ __device__ void run_sparse_moe_mlp(uint16_t *arena, ChainLayerLayout layout,
       float sum = 0.0f;
       for (uint32_t col = 0; col < shared_intermediate; ++col) {
         sum += encoded_to_f32(down_row[col], dtype) *
-               (silu(gate[col]) * up[col]);
+               swiglu(gate[col], up[col], layout.deepseek_swiglu_limit);
       }
       down[row] += shared_gate_weight * sum;
     }
@@ -393,7 +402,8 @@ __device__ void run_layer(uint16_t *arena, ChainLayerLayout layout, uint64_t inp
     mat_vec(arena + layout.w_gate, mlp_norm, intermediate, hidden, dtype, gate);
     mat_vec(arena + layout.w_up, mlp_norm, intermediate, hidden, dtype, up);
     for (uint32_t index = 0; index < intermediate; ++index) {
-      ff[index] = silu(gate[index]) * up[index];
+      ff[index] = swiglu(gate[index], up[index],
+                         layout.deepseek_swiglu_limit);
     }
     mat_vec(arena + layout.w_down, ff, hidden, intermediate, dtype, down);
   }
@@ -572,6 +582,7 @@ void pack_layer(ChainLayerLayout &layout, uint64_t &cursor,
   layout.num_experts = layer.num_experts;
   layout.experts_per_token = layer.experts_per_token;
   layout.norm_topk_prob = layer.norm_topk_prob;
+  layout.deepseek_swiglu_limit = layer.deepseek_swiglu_limit;
   layout.w_gate = kMissingOffset;
   layout.w_up = kMissingOffset;
   layout.w_down = kMissingOffset;

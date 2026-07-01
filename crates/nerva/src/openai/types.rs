@@ -64,6 +64,8 @@ pub(crate) struct AppState {
     pub(crate) files: Mutex<HashMap<String, FileRecord>>,
     pub(crate) batches: Mutex<HashMap<String, BatchRecord>>,
     pub(crate) responses: Mutex<HashMap<String, StoredResponseRecord>>,
+    pub(crate) conversations: Mutex<HashMap<String, ConversationRecord>>,
+    pub(crate) chat_completions: Mutex<HashMap<String, StoredChatCompletionRecord>>,
     pub(crate) next_id: AtomicU64,
     pub(crate) request_count: AtomicU64,
     pub(crate) generated_tokens: AtomicU64,
@@ -237,6 +239,22 @@ pub(crate) struct StoredResponseRecord {
     pub(crate) input_items: Vec<Value>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ConversationRecord {
+    pub(crate) id: String,
+    pub(crate) created_at: u64,
+    pub(crate) updated_at: u64,
+    pub(crate) metadata: Value,
+    pub(crate) items: Vec<Value>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StoredChatCompletionRecord {
+    pub(crate) response: Value,
+    pub(crate) messages: Vec<Value>,
+    pub(crate) metadata: Value,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct BatchRequestCounts {
     pub(crate) total: u64,
@@ -264,6 +282,7 @@ pub(crate) struct ResponseStreamOptions {
     pub(crate) store: bool,
     pub(crate) metadata: Value,
     pub(crate) previous_response_id: Option<String>,
+    pub(crate) conversation_id: Option<String>,
     pub(crate) input_items: Vec<Value>,
 }
 

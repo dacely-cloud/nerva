@@ -5,18 +5,19 @@ use serde_json::{Value, json};
 
 use super::{
     ApiError, AppState, GenerateOptions, PromptInput, ReasoningMode, ResponseStreamOptions,
-    StreamKind, StreamMeta, append_assistant_instruction, apply_response_format_instruction,
-    augment_prompt_with_mcp_tool, authorize, chat_messages_to_prompt, completion_echo_prefix,
-    completion_prompts, empty_text_prompt, execute_request_mcp_tool, generate_text,
-    generate_text_batch, generate_text_stream, generated_metadata, mcp_tool_result_json,
-    previous_response_context, prompt_format_for_reasoning, reject_unsupported_generation_options,
-    reject_unsupported_generation_options_with_tools, request_echo, request_f32,
+    StreamKind, StreamMeta, append_response_to_conversation, apply_response_format_instruction,
+    augment_prompt_with_mcp_tool, authorize, chat_completion_request_messages,
+    chat_prompt_for_reasoning, completion_echo_prefix, completion_prompts, conversation_context,
+    empty_text_prompt, execute_request_mcp_tool, generate_text, generate_text_batch,
+    generate_text_stream, generated_metadata, mcp_tool_result_json, previous_response_context,
+    reject_unsupported_generation_options, reject_unsupported_generation_options_with_tools,
+    request_chat_store, request_conversation_id, request_echo, request_f32,
     request_include_reasoning, request_max_tokens, request_metadata, request_n,
     request_optional_string, request_reasoning_mode, request_response_format_instruction,
     request_stop_strings, request_store, request_stream, request_suffix, request_u32,
-    request_u64_opt, require_known_model, response_input_items, responses_input_to_prompt,
-    shared_fork_batch_supported, split_generated_reasoning, store_response_if_requested,
-    unix_seconds, usage,
+    request_u64_opt, require_known_model, response_input_items, responses_prompt_for_reasoning,
+    shared_fork_batch_supported, split_generated_reasoning, store_chat_completion_if_requested,
+    store_response_if_requested, unix_seconds, usage,
 };
 
 pub(crate) async fn completions(
@@ -188,27 +189,27 @@ pub(crate) async fn chat_completions(
         require_known_model(&state, &body)?;
         reject_unsupported_generation_options_with_tools(&body)?;
         let n = request_n(&body)?;
-        let tool_result = execute_request_mcp_tool(state.clone(), &body).await?;
-        let response_format_instruction = request_response_format_instruction(&body)?;
-        let prompt = augment_prompt_with_mcp_tool(
-            chat_messages_to_prompt(&body)?,
-            tool_result.as_ref(),
-            &body,
-        );
-        let prompt = match response_format_instruction.as_deref() {
-            Some(instruction) => append_assistant_instruction(prompt, instruction),
-            None => prompt,
-        };
-        let created = unix_seconds();
-        let id = state.next_response_id("chatcmpl");
+        let store = request_chat_store(&body)?;
+        let metadata = request_metadata(&body)?;
+        let request_messages = chat_completion_request_messages(&body);
         let include_reasoning = request_include_reasoning(&body)?;
         let reasoning_mode = request_reasoning_mode(&state, &body)?;
-        let prompt_format = prompt_format_for_reasoning(reasoning_mode);
-        let options = GenerateOptions {
-            prompt: PromptInput::Text {
-                text: prompt,
-                format: prompt_format,
+        let tool_result = execute_request_mcp_tool(state.clone(), &body).await?;
+        let response_format_instruction = request_response_format_instruction(&body)?;
+        let prompt = apply_response_format_instruction(
+            match chat_prompt_for_reasoning(&body, reasoning_mode)? {
+                PromptInput::Text { text, format } => PromptInput::Text {
+                    text: augment_prompt_with_mcp_tool(text, tool_result.as_ref(), &body),
+                    format,
+                },
+                prompt => prompt,
             },
+            response_format_instruction.as_deref(),
+        )?;
+        let created = unix_seconds();
+        let id = state.next_response_id("chatcmpl");
+        let options = GenerateOptions {
+            prompt,
             max_tokens: request_max_tokens(&state, &body)?,
             temperature: request_f32(&body, "temperature", 1.0)?,
             top_p: request_f32(&body, "top_p", 1.0)?,
@@ -272,12 +273,21 @@ pub(crate) async fn chat_completions(
             "object": "chat.completion",
             "created": created,
             "model": state.config.model_id,
+            "metadata": metadata.clone(),
+            "store": store,
             "choices": choices,
             "usage": usage(prompt_tokens, completion_tokens)
         });
         if let Some(tool_result) = tool_result {
             response["mcp_tool_results"] = json!([mcp_tool_result_json(&tool_result)]);
         }
+        let response = store_chat_completion_if_requested(
+            &state,
+            response,
+            request_messages,
+            metadata,
+            store,
+        )?;
         Ok::<_, ApiError>(HttpResponse::Ok().json(response))
     }
     .await;
@@ -297,32 +307,46 @@ pub(crate) async fn responses(
         let store = request_store(&body)?;
         let metadata = request_metadata(&body)?;
         let previous_response_id = request_optional_string(&body, "previous_response_id")?;
+        let conversation_id = request_conversation_id(&body)?;
         let tool_result = execute_request_mcp_tool(state.clone(), &body).await?;
         let response_format_instruction = request_response_format_instruction(&body)?;
+        let conversation_context = conversation_context(&state, conversation_id.as_deref())?;
         let previous_context = previous_response_context(&state, previous_response_id.as_deref())?;
         let input_items = response_input_items(&body);
-        let prompt = augment_prompt_with_mcp_tool(
-            responses_input_to_prompt(&body)?,
-            tool_result.as_ref(),
-            &body,
-        );
-        let mut prompt = match response_format_instruction.as_deref() {
-            Some(instruction) => append_assistant_instruction(prompt, instruction),
-            None => prompt,
-        };
+        let include_reasoning = request_include_reasoning(&body)?;
+        let reasoning_mode = request_reasoning_mode(&state, &body)?;
+        let mut prompt = apply_response_format_instruction(
+            match responses_prompt_for_reasoning(&body, reasoning_mode)? {
+                PromptInput::Text { text, format } => PromptInput::Text {
+                    text: augment_prompt_with_mcp_tool(text, tool_result.as_ref(), &body),
+                    format,
+                },
+                prompt => prompt,
+            },
+            response_format_instruction.as_deref(),
+        )?;
         if let Some(previous_context) = previous_context {
-            prompt = format!("{previous_context}{prompt}");
+            prompt = match prompt {
+                PromptInput::Text { text, format } => PromptInput::Text {
+                    text: format!("{previous_context}{text}"),
+                    format,
+                },
+                prompt => prompt,
+            };
+        }
+        if let Some(conversation_context) = conversation_context {
+            prompt = match prompt {
+                PromptInput::Text { text, format } => PromptInput::Text {
+                    text: format!("{conversation_context}{text}"),
+                    format,
+                },
+                prompt => prompt,
+            };
         }
         let created = unix_seconds();
         let id = state.next_response_id("resp");
-        let include_reasoning = request_include_reasoning(&body)?;
-        let reasoning_mode = request_reasoning_mode(&state, &body)?;
-        let prompt_format = prompt_format_for_reasoning(reasoning_mode);
         let options = GenerateOptions {
-            prompt: PromptInput::Text {
-                text: prompt,
-                format: prompt_format,
-            },
+            prompt,
             max_tokens: request_max_tokens(&state, &body)?,
             temperature: request_f32(&body, "temperature", 1.0)?,
             top_p: request_f32(&body, "top_p", 1.0)?,
@@ -349,6 +373,7 @@ pub(crate) async fn responses(
                         store,
                         metadata,
                         previous_response_id,
+                        conversation_id,
                         input_items,
                     }),
                 },
@@ -409,6 +434,7 @@ pub(crate) async fn responses(
             "metadata": metadata.clone(),
             "store": store,
             "previous_response_id": previous_response_id,
+            "conversation": conversation_id.clone(),
             "output": output,
             "output_text": split.content,
             "nerva": generated_metadata(&generated),
@@ -418,7 +444,14 @@ pub(crate) async fn responses(
                 "total_tokens": generated.prompt_tokens + completion_tokens
             }
         });
-        let response_json = store_response_if_requested(&state, response_json, input_items, store)?;
+        let response_json =
+            store_response_if_requested(&state, response_json, input_items.clone(), store)?;
+        append_response_to_conversation(
+            &state,
+            conversation_id.as_deref(),
+            &input_items,
+            &response_json,
+        )?;
         Ok::<_, ApiError>(HttpResponse::Ok().json(response_json))
     }
     .await;
