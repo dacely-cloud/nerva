@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use actix_web::http::StatusCode;
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
@@ -76,6 +78,8 @@ struct AppState {
     sessions: Mutex<HashMap<String, SessionRecord>>,
     context_cache: Mutex<ContextCacheState>,
     mcp_servers: Mutex<HashMap<String, McpServerRecord>>,
+    files: Mutex<HashMap<String, FileRecord>>,
+    batches: Mutex<HashMap<String, BatchRecord>>,
     next_id: AtomicU64,
     request_count: AtomicU64,
     generated_tokens: AtomicU64,
@@ -175,7 +179,51 @@ struct McpServerRecord {
     updated: u64,
     transport: String,
     endpoint: String,
+    status: String,
+    capabilities: Value,
+    tools: Value,
+    last_error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct FileRecord {
+    id: String,
+    object: &'static str,
+    bytes: usize,
+    created_at: u64,
+    filename: String,
+    purpose: String,
     status: &'static str,
+    content: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct BatchRecord {
+    id: String,
+    object: &'static str,
+    endpoint: String,
+    input_file_id: String,
+    completion_window: String,
+    status: String,
+    created_at: u64,
+    in_progress_at: Option<u64>,
+    finalizing_at: Option<u64>,
+    completed_at: Option<u64>,
+    failed_at: Option<u64>,
+    cancelled_at: Option<u64>,
+    expires_at: Option<u64>,
+    output_file_id: Option<String>,
+    error_file_id: Option<String>,
+    request_counts: BatchRequestCounts,
+    metadata: Value,
+    errors: Vec<Value>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct BatchRequestCounts {
+    total: u64,
+    completed: u64,
+    failed: u64,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -232,6 +280,14 @@ impl ApiError {
         }
     }
 
+    fn bad_gateway(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            code: "upstream_error",
+            message: message.into(),
+        }
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -266,6 +322,8 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
         sessions: Mutex::new(HashMap::new()),
         context_cache: Mutex::new(ContextCacheState::default()),
         mcp_servers: Mutex::new(HashMap::new()),
+        files: Mutex::new(HashMap::new()),
+        batches: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
         request_count: AtomicU64::new(0),
         generated_tokens: AtomicU64::new(0),
@@ -311,6 +369,15 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
                     "/v1/mcp/servers/{server_id}",
                     web::delete().to(delete_mcp_server),
                 )
+                .route(
+                    "/v1/mcp/servers/{server_id}/tools",
+                    web::get().to(list_mcp_server_tools),
+                )
+                .route(
+                    "/v1/mcp/servers/{server_id}/call",
+                    web::post().to(call_mcp_server_tool),
+                )
+                .route("/v1/mcp/call", web::post().to(call_mcp_tool))
                 .route("/v1/completions", web::post().to(completions))
                 .route("/v1/chat/completions", web::post().to(chat_completions))
                 .route("/v1/responses", web::post().to(responses))
@@ -338,20 +405,20 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
                     web::post().to(unsupported_multimodal),
                 )
                 .route("/v1/moderations", web::post().to(unsupported_moderations))
-                .route("/v1/batches", web::post().to(unsupported_batch_api))
-                .route("/v1/batches", web::get().to(unsupported_batch_api))
-                .route("/v1/batches/{_id}", web::get().to(unsupported_batch_api))
+                .route("/v1/batches", web::post().to(create_batch))
+                .route("/v1/batches", web::get().to(list_batches))
+                .route("/v1/batches/{batch_id}", web::get().to(get_batch))
                 .route(
-                    "/v1/batches/{_id}/cancel",
-                    web::post().to(unsupported_batch_api),
+                    "/v1/batches/{batch_id}/cancel",
+                    web::post().to(cancel_batch),
                 )
-                .route("/v1/files", web::post().to(unsupported_files_api))
-                .route("/v1/files", web::get().to(unsupported_files_api))
-                .route("/v1/files/{_id}", web::get().to(unsupported_files_api))
-                .route("/v1/files/{_id}", web::delete().to(unsupported_files_api))
+                .route("/v1/files", web::post().to(create_file))
+                .route("/v1/files", web::get().to(list_files))
+                .route("/v1/files/{file_id}", web::get().to(get_file))
+                .route("/v1/files/{file_id}", web::delete().to(delete_file))
                 .route(
-                    "/v1/files/{_id}/content",
-                    web::get().to(unsupported_files_api),
+                    "/v1/files/{file_id}/content",
+                    web::get().to(get_file_content),
                 )
                 .route(
                     "/v1/fine_tuning/jobs",
@@ -656,6 +723,237 @@ async fn delete_context_cache(
     response.unwrap_or_else(ApiError::into_response)
 }
 
+async fn create_file(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    body: web::Bytes,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let upload = parse_file_upload(&request, &body)?;
+        if upload.content.is_empty() {
+            return Err(ApiError::bad_request(
+                "uploaded file content must not be empty",
+            ));
+        }
+        let id = state.next_response_id("file");
+        let record = FileRecord {
+            id: id.clone(),
+            object: "file",
+            bytes: upload.content.len(),
+            created_at: unix_seconds(),
+            filename: upload.filename,
+            purpose: upload.purpose,
+            status: "processed",
+            content: upload.content,
+        };
+        lock_files(&state)?.insert(id, record.clone());
+        Ok::<_, ApiError>(HttpResponse::Ok().json(file_json(&record)))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn list_files(state: web::Data<AppState>, request: HttpRequest) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let purpose = query_param(request.query_string(), "purpose");
+        let files = lock_files(&state)?
+            .values()
+            .filter(|file| {
+                purpose
+                    .as_deref()
+                    .is_none_or(|purpose| purpose == file.purpose)
+            })
+            .map(file_json)
+            .collect::<Vec<_>>();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "object": "list",
+            "data": files
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn get_file(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = path.into_inner();
+        let files = lock_files(&state)?;
+        let record = files
+            .get(&id)
+            .ok_or_else(|| ApiError::not_found(format!("file '{id}' does not exist")))?;
+        Ok::<_, ApiError>(HttpResponse::Ok().json(file_json(record)))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn delete_file(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = path.into_inner();
+        let deleted = lock_files(&state)?.remove(&id).is_some();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "id": id,
+            "object": "file",
+            "deleted": deleted
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn get_file_content(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = path.into_inner();
+        let files = lock_files(&state)?;
+        let record = files
+            .get(&id)
+            .ok_or_else(|| ApiError::not_found(format!("file '{id}' does not exist")))?;
+        Ok::<_, ApiError>(
+            HttpResponse::Ok()
+                .content_type(file_content_type(&record.filename))
+                .body(record.content.clone()),
+        )
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn create_batch(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let input_file_id = body
+            .get("input_file_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiError::bad_request("batch requires input_file_id"))?
+            .to_string();
+        if !lock_files(&state)?.contains_key(&input_file_id) {
+            return Err(ApiError::not_found(format!(
+                "input file '{input_file_id}' does not exist"
+            )));
+        }
+        let endpoint = body
+            .get("endpoint")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiError::bad_request("batch requires endpoint"))?;
+        let endpoint = normalize_batch_endpoint(endpoint)?;
+        let completion_window = body
+            .get("completion_window")
+            .and_then(Value::as_str)
+            .unwrap_or("24h")
+            .to_string();
+        let metadata = body.get("metadata").cloned().unwrap_or(Value::Null);
+        let now = unix_seconds();
+        let id = state.next_response_id("batch");
+        let record = BatchRecord {
+            id: id.clone(),
+            object: "batch",
+            endpoint,
+            input_file_id,
+            completion_window,
+            status: "validating".to_string(),
+            created_at: now,
+            in_progress_at: None,
+            finalizing_at: None,
+            completed_at: None,
+            failed_at: None,
+            cancelled_at: None,
+            expires_at: Some(now.saturating_add(24 * 60 * 60)),
+            output_file_id: None,
+            error_file_id: None,
+            request_counts: BatchRequestCounts::default(),
+            metadata,
+            errors: Vec::new(),
+        };
+        lock_batches(&state)?.insert(id.clone(), record.clone());
+        let state_for_job = state.clone();
+        actix_web::rt::task::spawn_blocking(move || run_batch_job(state_for_job, id));
+        Ok::<_, ApiError>(HttpResponse::Ok().json(batch_json(&record)))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn list_batches(state: web::Data<AppState>, request: HttpRequest) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let batches = lock_batches(&state)?
+            .values()
+            .map(batch_json)
+            .collect::<Vec<_>>();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "object": "list",
+            "data": batches
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn get_batch(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = path.into_inner();
+        let batches = lock_batches(&state)?;
+        let record = batches
+            .get(&id)
+            .ok_or_else(|| ApiError::not_found(format!("batch '{id}' does not exist")))?;
+        Ok::<_, ApiError>(HttpResponse::Ok().json(batch_json(record)))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn cancel_batch(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = path.into_inner();
+        let now = unix_seconds();
+        let mut batches = lock_batches(&state)?;
+        let record = batches
+            .get_mut(&id)
+            .ok_or_else(|| ApiError::not_found(format!("batch '{id}' does not exist")))?;
+        if !matches!(
+            record.status.as_str(),
+            "completed" | "failed" | "expired" | "cancelled"
+        ) {
+            record.status = "cancelled".to_string();
+            record.cancelled_at = Some(now);
+        }
+        Ok::<_, ApiError>(HttpResponse::Ok().json(batch_json(record)))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
 async fn register_mcp_server(
     state: web::Data<AppState>,
     request: HttpRequest,
@@ -681,15 +979,26 @@ async fn register_mcp_server(
                 ApiError::bad_request("MCP server registration requires endpoint or url")
             })?
             .to_string();
+        let probe = body.get("probe").and_then(Value::as_bool).unwrap_or(true);
         let now = unix_seconds();
-        let record = McpServerRecord {
+        let mut record = McpServerRecord {
             id: id.clone(),
             created: now,
             updated: now,
             transport,
             endpoint,
-            status: "registered",
+            status: "registered".to_string(),
+            capabilities: Value::Null,
+            tools: json!([]),
+            last_error: None,
         };
+        if probe {
+            let probe = probe_mcp_server(&record)?;
+            record.status = "connected".to_string();
+            record.capabilities = probe.capabilities;
+            record.tools = probe.tools;
+            record.updated = unix_seconds();
+        }
         lock_mcp_servers(&state)?.insert(id, record.clone());
         Ok::<_, ApiError>(HttpResponse::Ok().json(mcp_server_json(&record)))
     }
@@ -707,6 +1016,87 @@ async fn list_mcp_servers(state: web::Data<AppState>, request: HttpRequest) -> H
         Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
             "object": "list",
             "data": servers
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn list_mcp_server_tools(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = path.into_inner();
+        let servers = lock_mcp_servers(&state)?;
+        let record = servers
+            .get(&id)
+            .ok_or_else(|| ApiError::not_found(format!("MCP server '{id}' does not exist")))?;
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "object": "list",
+            "data": record.tools
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn call_mcp_server_tool(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    call_mcp_tool_by_id(state, request, id, body).await
+}
+
+async fn call_mcp_tool(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    let id = match body.get("server_id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => {
+            return ApiError::bad_request("MCP tool call requires server_id").into_response();
+        }
+    };
+    call_mcp_tool_by_id(state, request, id, body).await
+}
+
+async fn call_mcp_tool_by_id(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    id: String,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let name = body
+            .get("name")
+            .or_else(|| body.get("tool"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiError::bad_request("MCP tool call requires name"))?;
+        let arguments = body
+            .get("arguments")
+            .or_else(|| body.get("args"))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let record = {
+            let servers = lock_mcp_servers(&state)?;
+            servers
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| ApiError::not_found(format!("MCP server '{id}' does not exist")))?
+        };
+        let result = call_mcp_tool_sync(&record, name, arguments)?;
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "server_id": id,
+            "tool": name,
+            "result": result
         })))
     }
     .await;
@@ -1093,20 +1483,6 @@ async fn unsupported_moderations(request: HttpRequest, state: web::Data<AppState
         return error.into_response();
     }
     ApiError::unsupported("moderations require a moderation model backend; this NERVA build serves causal LM text generation only").into_response()
-}
-
-async fn unsupported_batch_api(request: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
-    if let Err(error) = authorize(&state, &request) {
-        return error.into_response();
-    }
-    ApiError::unsupported("OpenAI batch jobs require persistent request storage and offline scheduling; this NERVA server currently serves online text requests").into_response()
-}
-
-async fn unsupported_files_api(request: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
-    if let Err(error) = authorize(&state, &request) {
-        return error.into_response();
-    }
-    ApiError::unsupported("OpenAI files require a persistent file store; this NERVA server currently serves online text requests").into_response()
 }
 
 async fn unsupported_fine_tuning(request: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
@@ -1945,6 +2321,942 @@ fn request_optional_string(body: &Value, name: &'static str) -> Result<Option<St
     }
 }
 
+#[derive(Clone, Debug)]
+struct ParsedFileUpload {
+    filename: String,
+    purpose: String,
+    content: Vec<u8>,
+}
+
+fn parse_file_upload(request: &HttpRequest, body: &[u8]) -> Result<ParsedFileUpload, ApiError> {
+    let content_type = request
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if content_type.starts_with("multipart/form-data") {
+        let boundary = multipart_boundary(content_type)
+            .ok_or_else(|| ApiError::bad_request("multipart upload is missing boundary"))?;
+        return parse_multipart_file_upload(body, &boundary);
+    }
+    if content_type.starts_with("application/json") || looks_like_json(body) {
+        let value: Value = serde_json::from_slice(body)
+            .map_err(|err| ApiError::bad_request(format!("invalid file JSON upload: {err}")))?;
+        let content = value
+            .get("content")
+            .or_else(|| value.get("data"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiError::bad_request("JSON file upload requires content or data"))?
+            .as_bytes()
+            .to_vec();
+        let filename = value
+            .get("filename")
+            .and_then(Value::as_str)
+            .unwrap_or("upload.jsonl")
+            .to_string();
+        let purpose = value
+            .get("purpose")
+            .and_then(Value::as_str)
+            .unwrap_or("batch")
+            .to_string();
+        return Ok(ParsedFileUpload {
+            filename,
+            purpose,
+            content,
+        });
+    }
+    let filename =
+        query_param(request.query_string(), "filename").unwrap_or_else(|| "upload.bin".to_string());
+    let purpose = query_param(request.query_string(), "purpose").unwrap_or_else(|| "batch".into());
+    Ok(ParsedFileUpload {
+        filename,
+        purpose,
+        content: body.to_vec(),
+    })
+}
+
+fn looks_like_json(body: &[u8]) -> bool {
+    body.iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| byte == b'{' || byte == b'[')
+}
+
+fn multipart_boundary(content_type: &str) -> Option<String> {
+    content_type
+        .split(';')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix("boundary="))
+        .map(|boundary| boundary.trim_matches('"').to_string())
+        .filter(|boundary| !boundary.is_empty())
+}
+
+fn parse_multipart_file_upload(body: &[u8], boundary: &str) -> Result<ParsedFileUpload, ApiError> {
+    let text = String::from_utf8_lossy(body);
+    let marker = format!("--{boundary}");
+    let mut filename = None;
+    let mut purpose = None;
+    let mut content = None;
+    for raw_part in text.split(&marker) {
+        let part = raw_part.trim_start_matches("\r\n");
+        if part.is_empty() || part.starts_with("--") {
+            continue;
+        }
+        let Some((headers, value)) = part.split_once("\r\n\r\n") else {
+            continue;
+        };
+        let disposition = headers
+            .lines()
+            .find(|line| {
+                line.to_ascii_lowercase()
+                    .starts_with("content-disposition:")
+            })
+            .unwrap_or("");
+        let Some(name) = disposition_param(disposition, "name") else {
+            continue;
+        };
+        let value = value
+            .strip_suffix("\r\n")
+            .unwrap_or(value)
+            .strip_suffix("--")
+            .unwrap_or(value);
+        match name.as_str() {
+            "purpose" => purpose = Some(value.trim().to_string()),
+            "file" => {
+                filename = disposition_param(disposition, "filename")
+                    .or_else(|| query_filename_from_headers(headers).map(str::to_string));
+                content = Some(value.as_bytes().to_vec());
+            }
+            _ => {}
+        }
+    }
+    Ok(ParsedFileUpload {
+        filename: filename.unwrap_or_else(|| "upload.jsonl".to_string()),
+        purpose: purpose.unwrap_or_else(|| "batch".to_string()),
+        content: content.ok_or_else(|| ApiError::bad_request("multipart upload requires file"))?,
+    })
+}
+
+fn disposition_param(disposition: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    disposition
+        .split(';')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix(&prefix))
+        .map(|value| value.trim_matches('"').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn query_filename_from_headers(headers: &str) -> Option<&str> {
+    headers
+        .lines()
+        .find_map(|line| line.strip_prefix("filename:"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn file_content_type(filename: &str) -> &'static str {
+    if filename.ends_with(".jsonl") {
+        "application/jsonl"
+    } else if filename.ends_with(".json") {
+        "application/json"
+    } else if filename.ends_with(".txt") {
+        "text/plain; charset=utf-8"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+fn query_param(query: &str, name: &str) -> Option<String> {
+    query.split('&').find_map(|part| {
+        let (key, value) = part.split_once('=')?;
+        (percent_decode_query(key) == name).then(|| percent_decode_query(value))
+    })
+}
+
+fn percent_decode_query(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let hi = hex_value(bytes[index + 1]);
+                let lo = hex_value(bytes[index + 2]);
+                if let (Some(hi), Some(lo)) = (hi, lo) {
+                    out.push((hi << 4) | lo);
+                    index += 3;
+                } else {
+                    out.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn normalize_batch_endpoint(endpoint: &str) -> Result<String, ApiError> {
+    let endpoint = endpoint.trim();
+    let path = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        endpoint
+            .find("/v1/")
+            .map(|index| &endpoint[index..])
+            .ok_or_else(|| ApiError::bad_request("batch endpoint URL must contain /v1/ path"))?
+    } else {
+        endpoint
+    };
+    match path {
+        "/v1/completions" | "/v1/chat/completions" | "/v1/responses" => Ok(path.to_string()),
+        _ => Err(ApiError::unsupported(format!(
+            "batch endpoint '{path}' is not implemented"
+        ))),
+    }
+}
+
+fn run_batch_job(state: web::Data<AppState>, batch_id: String) {
+    if let Err(error) = run_batch_job_inner(&state, &batch_id) {
+        mark_batch_failed(&state, &batch_id, error.message);
+    }
+}
+
+fn run_batch_job_inner(state: &AppState, batch_id: &str) -> Result<(), ApiError> {
+    let (endpoint, input_file_id) = {
+        let mut batches = lock_batches(state)?;
+        let batch = batches
+            .get_mut(batch_id)
+            .ok_or_else(|| ApiError::not_found(format!("batch '{batch_id}' does not exist")))?;
+        batch.status = "in_progress".to_string();
+        batch.in_progress_at = Some(unix_seconds());
+        (batch.endpoint.clone(), batch.input_file_id.clone())
+    };
+    let input = {
+        let files = lock_files(state)?;
+        files
+            .get(&input_file_id)
+            .map(|file| file.content.clone())
+            .ok_or_else(|| {
+                ApiError::not_found(format!("input file '{input_file_id}' does not exist"))
+            })?
+    };
+    let input = String::from_utf8(input).map_err(|err| {
+        ApiError::bad_request(format!("batch input file must be UTF-8 JSONL: {err}"))
+    })?;
+    let mut output_lines = Vec::new();
+    let mut error_lines = Vec::new();
+    let mut counts = BatchRequestCounts::default();
+    let mut errors = Vec::new();
+    for (line_index, line) in input.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if batch_cancelled(state, batch_id) {
+            return Ok(());
+        }
+        counts.total = counts.total.saturating_add(1);
+        match run_batch_line(state, &endpoint, line, line_index) {
+            Ok(line) => {
+                output_lines.push(line.to_string());
+                counts.completed = counts.completed.saturating_add(1);
+            }
+            Err(line) => {
+                errors.push(batch_error_summary(&line));
+                error_lines.push(line.to_string());
+                counts.failed = counts.failed.saturating_add(1);
+            }
+        }
+        update_batch_counts(state, batch_id, counts, errors.clone())?;
+    }
+    {
+        let mut batches = lock_batches(state)?;
+        if let Some(batch) = batches.get_mut(batch_id) {
+            if batch.status == "cancelled" {
+                return Ok(());
+            }
+            batch.status = "finalizing".to_string();
+            batch.finalizing_at = Some(unix_seconds());
+        }
+    }
+    let output_file_id = (!output_lines.is_empty()).then(|| {
+        insert_generated_file(
+            state,
+            format!("{batch_id}_output.jsonl"),
+            "batch_output",
+            output_lines.join("\n").into_bytes(),
+        )
+    });
+    let error_file_id = (!error_lines.is_empty()).then(|| {
+        insert_generated_file(
+            state,
+            format!("{batch_id}_errors.jsonl"),
+            "batch_error",
+            error_lines.join("\n").into_bytes(),
+        )
+    });
+    let mut batches = lock_batches(state)?;
+    if let Some(batch) = batches.get_mut(batch_id) {
+        if batch.status != "cancelled" {
+            batch.status = "completed".to_string();
+            batch.completed_at = Some(unix_seconds());
+            batch.output_file_id = output_file_id.transpose()?;
+            batch.error_file_id = error_file_id.transpose()?;
+            batch.request_counts = counts;
+            batch.errors = errors;
+        }
+    }
+    Ok(())
+}
+
+fn run_batch_line(
+    state: &AppState,
+    batch_endpoint: &str,
+    line: &str,
+    line_index: usize,
+) -> Result<Value, Value> {
+    let id = state.next_response_id("batch_req");
+    let item: Value = serde_json::from_str(line).map_err(|err| {
+        batch_error_line(
+            id.clone(),
+            format!("line-{line_index}"),
+            "invalid_json",
+            format!("batch JSONL line is invalid: {err}"),
+        )
+    })?;
+    let custom_id = item
+        .get("custom_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("line-{line_index}"));
+    let method = item.get("method").and_then(Value::as_str).unwrap_or("POST");
+    if method != "POST" {
+        return Err(batch_error_line(
+            id,
+            custom_id,
+            "invalid_method",
+            "batch requests must use POST",
+        ));
+    }
+    let item_endpoint = item
+        .get("url")
+        .and_then(Value::as_str)
+        .map(normalize_batch_endpoint)
+        .transpose()
+        .map_err(|err| batch_error_line(id.clone(), custom_id.clone(), err.code, err.message))?
+        .unwrap_or_else(|| batch_endpoint.to_string());
+    if item_endpoint != batch_endpoint {
+        return Err(batch_error_line(
+            id,
+            custom_id,
+            "endpoint_mismatch",
+            format!("batch item endpoint '{item_endpoint}' does not match '{batch_endpoint}'"),
+        ));
+    }
+    let body = item.get("body").cloned().unwrap_or_else(|| json!({}));
+    match execute_batch_generation_sync(state, &item_endpoint, &body) {
+        Ok(body) => Ok(json!({
+            "id": id,
+            "custom_id": custom_id,
+            "response": {
+                "status_code": 200,
+                "request_id": id,
+                "body": body
+            },
+            "error": null
+        })),
+        Err(error) => Err(batch_error_line(id, custom_id, error.code, error.message)),
+    }
+}
+
+fn execute_batch_generation_sync(
+    state: &AppState,
+    endpoint: &str,
+    body: &Value,
+) -> Result<Value, ApiError> {
+    require_known_model(state, body)?;
+    reject_unsupported_generation_options(body)?;
+    match endpoint {
+        "/v1/completions" => batch_completion_response_sync(state, body),
+        "/v1/chat/completions" => batch_chat_completion_response_sync(state, body),
+        "/v1/responses" => batch_response_sync(state, body),
+        _ => Err(ApiError::unsupported(format!(
+            "batch endpoint '{endpoint}' is not implemented"
+        ))),
+    }
+}
+
+fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError> {
+    let n = request_n(body)?;
+    let prompts = completion_prompts(body)?;
+    let max_tokens = request_max_tokens(state, body)?;
+    let temperature = request_f32(body, "temperature", 1.0)?;
+    let top_p = request_f32(body, "top_p", 1.0)?;
+    let top_k = request_u32(body, "top_k", 0)?;
+    let seed = request_u64_opt(body, "seed")?;
+    let stop = request_stop_strings(body)?;
+    let session_id = request_optional_string(body, "session_id")?;
+    let cache_key = request_optional_string(body, "cache_key")?;
+    let created = unix_seconds();
+    let mut choices = Vec::new();
+    let mut prompt_tokens = 0usize;
+    let mut completion_tokens = 0usize;
+    if n > 1 && prompts.len() == 1 && shared_fork_batch_supported(temperature, top_p, top_k, seed) {
+        let generated = generate_text_batch_direct_sync(
+            state,
+            GenerateOptions {
+                prompt: prompts.into_iter().next().unwrap_or_else(empty_text_prompt),
+                max_tokens,
+                temperature,
+                top_p,
+                top_k,
+                seed,
+                stop,
+                session_id,
+                cache_key,
+            },
+            n,
+        )?;
+        for item in generated {
+            prompt_tokens += item.prompt_tokens;
+            completion_tokens += item.token_ids.len();
+            choices.push(json!({
+                "text": item.text,
+                "index": choices.len(),
+                "logprobs": null,
+                "finish_reason": item.finish_reason
+            }));
+        }
+    } else {
+        if n > 1 {
+            return Err(ApiError::unsupported(
+                "batch n > 1 currently requires one prompt with greedy sampler",
+            ));
+        }
+        for prompt in prompts {
+            let generated = generate_text_direct_sync(
+                state,
+                GenerateOptions {
+                    prompt,
+                    max_tokens,
+                    temperature,
+                    top_p,
+                    top_k,
+                    seed,
+                    stop: stop.clone(),
+                    session_id: session_id.clone(),
+                    cache_key: cache_key.clone(),
+                },
+            )?;
+            prompt_tokens += generated.prompt_tokens;
+            completion_tokens += generated.token_ids.len();
+            choices.push(json!({
+                "text": generated.text,
+                "index": choices.len(),
+                "logprobs": null,
+                "finish_reason": generated.finish_reason
+            }));
+        }
+    }
+    Ok(json!({
+        "id": state.next_response_id("cmpl"),
+        "object": "text_completion",
+        "created": created,
+        "model": state.config.model_id,
+        "choices": choices,
+        "usage": usage(prompt_tokens, completion_tokens)
+    }))
+}
+
+fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError> {
+    reject_n_gt_one(body)?;
+    let prompt = chat_messages_to_prompt(body)?;
+    let generated = generate_text_direct_sync(
+        state,
+        GenerateOptions {
+            prompt: PromptInput::Text {
+                text: prompt,
+                format: PromptFormat::Auto,
+            },
+            max_tokens: request_max_tokens(state, body)?,
+            temperature: request_f32(body, "temperature", 1.0)?,
+            top_p: request_f32(body, "top_p", 1.0)?,
+            top_k: request_u32(body, "top_k", 0)?,
+            seed: request_u64_opt(body, "seed")?,
+            stop: request_stop_strings(body)?,
+            session_id: request_optional_string(body, "session_id")?,
+            cache_key: request_optional_string(body, "cache_key")?,
+        },
+    )?;
+    let completion_tokens = generated.token_ids.len();
+    Ok(json!({
+        "id": state.next_response_id("chatcmpl"),
+        "object": "chat.completion",
+        "created": unix_seconds(),
+        "model": state.config.model_id,
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": generated.text
+            },
+            "logprobs": null,
+            "finish_reason": generated.finish_reason
+        }],
+        "usage": usage(generated.prompt_tokens, completion_tokens)
+    }))
+}
+
+fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError> {
+    let prompt = responses_input_to_prompt(body)?;
+    let generated = generate_text_direct_sync(
+        state,
+        GenerateOptions {
+            prompt: PromptInput::Text {
+                text: prompt,
+                format: PromptFormat::Auto,
+            },
+            max_tokens: request_max_tokens(state, body)?,
+            temperature: request_f32(body, "temperature", 1.0)?,
+            top_p: request_f32(body, "top_p", 1.0)?,
+            top_k: request_u32(body, "top_k", 0)?,
+            seed: request_u64_opt(body, "seed")?,
+            stop: request_stop_strings(body)?,
+            session_id: request_optional_string(body, "session_id")?,
+            cache_key: request_optional_string(body, "cache_key")?,
+        },
+    )?;
+    let completion_tokens = generated.token_ids.len();
+    Ok(json!({
+        "id": state.next_response_id("resp"),
+        "object": "response",
+        "created_at": unix_seconds(),
+        "status": "completed",
+        "error": null,
+        "incomplete_details": null,
+        "model": state.config.model_id,
+        "output": [{
+            "id": state.next_response_id("msg"),
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "id": state.next_response_id("ct"),
+                "type": "output_text",
+                "text": generated.text,
+                "annotations": []
+            }]
+        }],
+        "output_text": generated.text,
+        "usage": {
+            "input_tokens": generated.prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": generated.prompt_tokens + completion_tokens
+        }
+    }))
+}
+
+fn generate_text_direct_sync(
+    state: &AppState,
+    options: GenerateOptions,
+) -> Result<GeneratedText, ApiError> {
+    state.scheduler_admitted.fetch_add(1, Ordering::Relaxed);
+    state.scheduler_active.fetch_add(1, Ordering::Relaxed);
+    let result = generate_text_sync(state, &state.runtime, state.config.as_ref(), options);
+    state.scheduler_active.fetch_sub(1, Ordering::Relaxed);
+    state.scheduler_completed.fetch_add(1, Ordering::Relaxed);
+    if let Ok(generated) = &result {
+        state
+            .generated_tokens
+            .fetch_add(generated.token_ids.len() as u64, Ordering::Relaxed);
+        record_session_generation(
+            state,
+            &StreamRunStats {
+                generated_tokens: generated.token_ids.len(),
+                prompt_tokens: generated.prompt_tokens,
+                prompt_hash: generated.prompt_hash,
+                cache_key: generated.cache_key.clone(),
+                cache_hit: generated.cache_hit,
+                session_id: generated.session_id.clone(),
+            },
+        );
+    }
+    result
+}
+
+fn generate_text_batch_direct_sync(
+    state: &AppState,
+    options: GenerateOptions,
+    request_count: usize,
+) -> Result<Vec<GeneratedText>, ApiError> {
+    state.scheduler_admitted.fetch_add(1, Ordering::Relaxed);
+    state.scheduler_active.fetch_add(1, Ordering::Relaxed);
+    let result = generate_text_batch_sync(
+        state,
+        &state.runtime,
+        state.config.as_ref(),
+        options,
+        request_count,
+    );
+    state.scheduler_active.fetch_sub(1, Ordering::Relaxed);
+    state.scheduler_completed.fetch_add(1, Ordering::Relaxed);
+    if let Ok(generated) = &result {
+        let total_generated = generated
+            .iter()
+            .map(|item| item.token_ids.len())
+            .sum::<usize>();
+        state
+            .generated_tokens
+            .fetch_add(total_generated as u64, Ordering::Relaxed);
+        for item in generated {
+            record_session_generation(
+                state,
+                &StreamRunStats {
+                    generated_tokens: item.token_ids.len(),
+                    prompt_tokens: item.prompt_tokens,
+                    prompt_hash: item.prompt_hash,
+                    cache_key: item.cache_key.clone(),
+                    cache_hit: item.cache_hit,
+                    session_id: item.session_id.clone(),
+                },
+            );
+        }
+    }
+    result
+}
+
+fn insert_generated_file(
+    state: &AppState,
+    filename: String,
+    purpose: &str,
+    content: Vec<u8>,
+) -> Result<String, ApiError> {
+    let id = state.next_response_id("file");
+    let record = FileRecord {
+        id: id.clone(),
+        object: "file",
+        bytes: content.len(),
+        created_at: unix_seconds(),
+        filename,
+        purpose: purpose.to_string(),
+        status: "processed",
+        content,
+    };
+    lock_files(state)?.insert(id.clone(), record);
+    Ok(id)
+}
+
+fn update_batch_counts(
+    state: &AppState,
+    batch_id: &str,
+    counts: BatchRequestCounts,
+    errors: Vec<Value>,
+) -> Result<(), ApiError> {
+    let mut batches = lock_batches(state)?;
+    if let Some(batch) = batches.get_mut(batch_id) {
+        batch.request_counts = counts;
+        batch.errors = errors;
+    }
+    Ok(())
+}
+
+fn batch_cancelled(state: &AppState, batch_id: &str) -> bool {
+    lock_batches(state)
+        .ok()
+        .and_then(|batches| {
+            batches
+                .get(batch_id)
+                .map(|batch| batch.status == "cancelled")
+        })
+        .unwrap_or(false)
+}
+
+fn mark_batch_failed(state: &AppState, batch_id: &str, message: String) {
+    if let Ok(mut batches) = lock_batches(state) {
+        if let Some(batch) = batches.get_mut(batch_id) {
+            batch.status = "failed".to_string();
+            batch.failed_at = Some(unix_seconds());
+            batch.errors.push(json!({
+                "code": "batch_failed",
+                "message": message,
+                "param": null,
+                "line": null
+            }));
+        }
+    }
+}
+
+fn batch_error_line(
+    id: String,
+    custom_id: String,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> Value {
+    json!({
+        "id": id,
+        "custom_id": custom_id,
+        "response": null,
+        "error": {
+            "code": code.into(),
+            "message": message.into()
+        }
+    })
+}
+
+fn batch_error_summary(line: &Value) -> Value {
+    json!({
+        "code": line
+            .get("error")
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or("batch_item_failed"),
+        "message": line
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("batch item failed"),
+        "param": line.get("custom_id").cloned().unwrap_or(Value::Null),
+        "line": null
+    })
+}
+
+#[derive(Clone, Debug)]
+struct McpProbe {
+    capabilities: Value,
+    tools: Value,
+}
+
+fn probe_mcp_server(record: &McpServerRecord) -> Result<McpProbe, ApiError> {
+    if !matches!(record.transport.as_str(), "streamable_http" | "http") {
+        return Err(ApiError::unsupported(format!(
+            "MCP transport '{}' is not implemented; use streamable_http",
+            record.transport
+        )));
+    }
+    let initialized = mcp_http_json_rpc(
+        &record.endpoint,
+        "initialize",
+        json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "nerva",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        }),
+    )?;
+    let capabilities = initialized
+        .get("capabilities")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let tools = mcp_http_json_rpc(&record.endpoint, "tools/list", json!({}))
+        .map(|result| result.get("tools").cloned().unwrap_or_else(|| json!([])))
+        .unwrap_or_else(|_| json!([]));
+    Ok(McpProbe {
+        capabilities,
+        tools,
+    })
+}
+
+fn call_mcp_tool_sync(
+    record: &McpServerRecord,
+    name: &str,
+    arguments: Value,
+) -> Result<Value, ApiError> {
+    if !matches!(record.transport.as_str(), "streamable_http" | "http") {
+        return Err(ApiError::unsupported(format!(
+            "MCP transport '{}' is not implemented; use streamable_http",
+            record.transport
+        )));
+    }
+    mcp_http_json_rpc(
+        &record.endpoint,
+        "tools/call",
+        json!({
+            "name": name,
+            "arguments": arguments
+        }),
+    )
+}
+
+fn mcp_http_json_rpc(endpoint: &str, method: &str, params: Value) -> Result<Value, ApiError> {
+    let target = parse_http_endpoint(endpoint)?;
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": format!("nerva-{:x}", unix_seconds()),
+        "method": method,
+        "params": params
+    })
+    .to_string();
+    let address = format!("{}:{}", target.host, target.port);
+    let socket_addr = address
+        .to_socket_addrs()
+        .map_err(|err| ApiError::bad_gateway(format!("failed to resolve MCP endpoint: {err}")))?
+        .next()
+        .ok_or_else(|| ApiError::bad_gateway("MCP endpoint resolved no addresses"))?;
+    let mut stream =
+        TcpStream::connect_timeout(&socket_addr, Duration::from_secs(10)).map_err(|err| {
+            ApiError::bad_gateway(format!("failed to connect to MCP endpoint: {err}"))
+        })?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+    let request = format!(
+        concat!(
+            "POST {} HTTP/1.1\r\n",
+            "Host: {}\r\n",
+            "Content-Type: application/json\r\n",
+            "Accept: application/json, text/event-stream\r\n",
+            "Content-Length: {}\r\n",
+            "Connection: close\r\n",
+            "\r\n",
+            "{}"
+        ),
+        target.path,
+        target.host,
+        body.len(),
+        body
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| ApiError::bad_gateway(format!("failed to write MCP request: {err}")))?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|err| ApiError::bad_gateway(format!("failed to read MCP response: {err}")))?;
+    parse_mcp_http_response(&response)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HttpEndpoint {
+    host: String,
+    port: u16,
+    path: String,
+}
+
+fn parse_http_endpoint(endpoint: &str) -> Result<HttpEndpoint, ApiError> {
+    let rest = endpoint.strip_prefix("http://").ok_or_else(|| {
+        ApiError::unsupported("MCP streamable_http currently supports http:// endpoints")
+    })?;
+    let (authority, path) = rest
+        .split_once('/')
+        .map(|(authority, path)| (authority, format!("/{path}")))
+        .unwrap_or((rest, "/".to_string()));
+    if authority.is_empty() {
+        return Err(ApiError::bad_request("MCP endpoint host must not be empty"));
+    }
+    let (host, port) = if let Some((host, port)) = authority.rsplit_once(':') {
+        let port = port
+            .parse::<u16>()
+            .map_err(|_| ApiError::bad_request("MCP endpoint port is invalid"))?;
+        (host.to_string(), port)
+    } else {
+        (authority.to_string(), 80)
+    };
+    Ok(HttpEndpoint { host, port, path })
+}
+
+fn parse_mcp_http_response(response: &[u8]) -> Result<Value, ApiError> {
+    let split = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| ApiError::bad_gateway("MCP response is missing HTTP headers"))?;
+    let header_bytes = &response[..split];
+    let body_bytes = &response[split + 4..];
+    let headers = String::from_utf8_lossy(header_bytes);
+    let status_line = headers.lines().next().unwrap_or("");
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|status| status.parse::<u16>().ok())
+        .unwrap_or(0);
+    if !(200..300).contains(&status) {
+        return Err(ApiError::bad_gateway(format!(
+            "MCP endpoint returned HTTP status {status}"
+        )));
+    }
+    let chunked = headers
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("transfer-encoding: chunked"));
+    let body = if chunked {
+        decode_chunked_body(body_bytes)?
+    } else {
+        body_bytes.to_vec()
+    };
+    let text = String::from_utf8_lossy(&body);
+    let json_text = if headers.lines().any(|line| {
+        line.to_ascii_lowercase()
+            .starts_with("content-type: text/event-stream")
+    }) {
+        first_sse_json_payload(&text)
+            .ok_or_else(|| ApiError::bad_gateway("MCP SSE response contained no JSON data"))?
+    } else {
+        text.trim().to_string()
+    };
+    let value: Value = serde_json::from_str(&json_text)
+        .map_err(|err| ApiError::bad_gateway(format!("invalid MCP JSON-RPC response: {err}")))?;
+    if let Some(error) = value.get("error") {
+        return Err(ApiError::bad_gateway(format!(
+            "MCP JSON-RPC error: {}",
+            error
+        )));
+    }
+    value
+        .get("result")
+        .cloned()
+        .ok_or_else(|| ApiError::bad_gateway("MCP JSON-RPC response is missing result"))
+}
+
+fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, ApiError> {
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+    while offset < body.len() {
+        let line_end = body[offset..]
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .map(|index| offset + index)
+            .ok_or_else(|| ApiError::bad_gateway("invalid chunked MCP response"))?;
+        let line = String::from_utf8_lossy(&body[offset..line_end]);
+        let size_hex = line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_hex, 16)
+            .map_err(|_| ApiError::bad_gateway("invalid chunk size in MCP response"))?;
+        offset = line_end + 2;
+        if size == 0 {
+            break;
+        }
+        let end = offset
+            .checked_add(size)
+            .ok_or_else(|| ApiError::bad_gateway("chunk size overflow in MCP response"))?;
+        if end > body.len() {
+            return Err(ApiError::bad_gateway("truncated chunked MCP response"));
+        }
+        out.extend_from_slice(&body[offset..end]);
+        offset = end.saturating_add(2);
+    }
+    Ok(out)
+}
+
+fn first_sse_json_payload(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let data = line.strip_prefix("data:")?.trim();
+        (!data.is_empty() && data != "[DONE]").then(|| data.to_string())
+    })
+}
+
 fn record_context_cache_probe(
     state: &AppState,
     key: &str,
@@ -2068,6 +3380,24 @@ fn lock_mcp_servers(
         .map_err(|_| ApiError::internal("MCP server registry lock poisoned"))
 }
 
+fn lock_files(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, HashMap<String, FileRecord>>, ApiError> {
+    state
+        .files
+        .lock()
+        .map_err(|_| ApiError::internal("file registry lock poisoned"))
+}
+
+fn lock_batches(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, HashMap<String, BatchRecord>>, ApiError> {
+    state
+        .batches
+        .lock()
+        .map_err(|_| ApiError::internal("batch registry lock poisoned"))
+}
+
 fn session_json(record: &SessionRecord) -> Value {
     json!({
         "id": record.id,
@@ -2102,7 +3432,57 @@ fn mcp_server_json(record: &McpServerRecord) -> Value {
         "updated": record.updated,
         "transport": record.transport,
         "endpoint": record.endpoint,
-        "status": record.status
+        "status": record.status,
+        "capabilities": record.capabilities,
+        "tools": record.tools,
+        "last_error": record.last_error
+    })
+}
+
+fn file_json(record: &FileRecord) -> Value {
+    json!({
+        "id": record.id,
+        "object": record.object,
+        "bytes": record.bytes,
+        "created_at": record.created_at,
+        "filename": record.filename,
+        "purpose": record.purpose,
+        "status": record.status,
+        "status_details": null
+    })
+}
+
+fn batch_json(record: &BatchRecord) -> Value {
+    json!({
+        "id": record.id,
+        "object": record.object,
+        "endpoint": record.endpoint,
+        "input_file_id": record.input_file_id,
+        "completion_window": record.completion_window,
+        "status": record.status,
+        "created_at": record.created_at,
+        "in_progress_at": record.in_progress_at,
+        "expires_at": record.expires_at,
+        "finalizing_at": record.finalizing_at,
+        "completed_at": record.completed_at,
+        "failed_at": record.failed_at,
+        "cancelled_at": record.cancelled_at,
+        "output_file_id": record.output_file_id,
+        "error_file_id": record.error_file_id,
+        "request_counts": {
+            "total": record.request_counts.total,
+            "completed": record.request_counts.completed,
+            "failed": record.request_counts.failed
+        },
+        "metadata": record.metadata,
+        "errors": if record.errors.is_empty() {
+            Value::Null
+        } else {
+            json!({
+                "object": "list",
+                "data": record.errors.clone()
+            })
+        }
     })
 }
 
