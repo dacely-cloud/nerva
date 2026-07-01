@@ -100,6 +100,9 @@ def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[s
                     "VLLM_USE_DEEP_GEMM_E8M0": os.environ.get(
                         "VLLM_USE_DEEP_GEMM_E8M0"
                     ),
+                    "VLLM_USE_DEEP_GEMM_TMA_ALIGNED_SCALES": os.environ.get(
+                        "VLLM_USE_DEEP_GEMM_TMA_ALIGNED_SCALES"
+                    ),
                 },
                 "sampler": {
                     "temperature": args.temperature,
@@ -216,6 +219,9 @@ def run_generation(args: argparse.Namespace) -> None:
                     ),
                     "VLLM_USE_DEEP_GEMM_E8M0": os.environ.get(
                         "VLLM_USE_DEEP_GEMM_E8M0"
+                    ),
+                    "VLLM_USE_DEEP_GEMM_TMA_ALIGNED_SCALES": os.environ.get(
+                        "VLLM_USE_DEEP_GEMM_TMA_ALIGNED_SCALES"
                     ),
                 },
                 "sampler": {

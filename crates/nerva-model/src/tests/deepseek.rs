@@ -371,8 +371,8 @@ fn deepseek_v32_projection_coverage_tracks_live_scale_runtime() {
         "cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime",
         "cuda_hf_sequence_deepseek_v32_output_projection_scale_logits_runtime",
         "cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime",
-        "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile16_weight_reuse",
-        "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row2_token16_input_reuse",
+        "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_token4_weight_reuse",
+        "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row8_token4_input_reuse",
     ] {
         assert!(
             primitives.iter().any(|item| item == primitive),

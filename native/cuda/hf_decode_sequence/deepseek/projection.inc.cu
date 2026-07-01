@@ -1,7 +1,7 @@
 #include "../../deepseek_quant.cuh"
 
-constexpr uint32_t kDeepSeekFp8ProjectionTokenTile = 16;
-constexpr uint32_t kDeepSeekFp8ProjectionRowTile = 2;
+constexpr uint32_t kDeepSeekFp8ProjectionTokenTile = 4;
+constexpr uint32_t kDeepSeekFp8ProjectionRowTile = 8;
 
 __global__ void deepseek_fp8_f32_scale_matvec_kernel(
     const uint8_t *weights,
