@@ -3487,13 +3487,16 @@ fn deepseek_v4_swa_dense_snapshot_matches_fullsize_fp8_ds_mla_page() {
     assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
 }
 
-fn tiny_deepseek_v4_swa_sparse_moe_layer(hash_router: bool) -> CudaHfDecodeChainLayer<'static> {
+fn tiny_deepseek_v4_swa_sparse_moe_layer(
+    hash_router: bool,
+    experts_per_token: usize,
+) -> CudaHfDecodeChainLayer<'static> {
     let mut layer = tiny_deepseek_v4_swa_dense_descriptor_layer();
     layer.mlp_kind = CUDA_HF_MLP_SPARSE_MOE;
     layer.moe_intermediate = 4;
     layer.shared_expert_intermediate = 2;
     layer.num_experts = 2;
-    layer.experts_per_token = 1;
+    layer.experts_per_token = experts_per_token;
     layer.norm_topk_prob = true;
     layer.deepseek = layer.deepseek.map(|mut deepseek| {
         deepseek.flags |= CUDA_HF_DEEPSEEK_FLAG_MOE;
@@ -3678,8 +3681,9 @@ fn run_tiny_v4_swa_sparse_moe_descriptor(
     hash_router: bool,
     expert_payload: bool,
     shared_payload: bool,
+    experts_per_token: usize,
 ) -> Option<(CudaHfDecodeSequenceSummary, u64)> {
-    let layer = tiny_deepseek_v4_swa_sparse_moe_layer(hash_router);
+    let layer = tiny_deepseek_v4_swa_sparse_moe_layer(hash_router, experts_per_token);
     let layers = [layer];
     let plan = CudaHfDecodeSequenceLayoutPlanRequest {
         hidden: 4,
@@ -3790,11 +3794,12 @@ fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
     let Some((zero_summary, zero_hash)) =
-        run_tiny_v4_swa_sparse_moe_descriptor(false, false, false)
+        run_tiny_v4_swa_sparse_moe_descriptor(false, false, false, 1)
     else {
         return;
     };
-    let Some((summary, nonzero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, true, false)
+    let Some((summary, nonzero_hash)) =
+        run_tiny_v4_swa_sparse_moe_descriptor(false, true, false, 1)
     else {
         return;
     };
@@ -3816,14 +3821,45 @@ fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
 }
 
 #[test]
-fn deepseek_v4_swa_hash_moe_session_runs_through_sampling() {
+fn deepseek_v4_swa_sparse_moe_top2_parallel_experts_runs_through_sampling() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
-    let Some((zero_summary, zero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(true, false, false)
+    let Some((zero_summary, zero_hash)) =
+        run_tiny_v4_swa_sparse_moe_descriptor(false, false, false, 2)
     else {
         return;
     };
-    let Some((summary, nonzero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(true, true, false)
+    let Some((summary, nonzero_hash)) =
+        run_tiny_v4_swa_sparse_moe_descriptor(false, true, false, 2)
+    else {
+        return;
+    };
+    assert_eq!(summary.deepseek_v3_grouped_router_selections, 0);
+    assert_eq!(
+        summary.deepseek_v4_bias_router_selections,
+        summary.graph_replays
+    );
+    assert_eq!(
+        zero_summary.deepseek_v4_bias_router_selections,
+        zero_summary.graph_replays
+    );
+    assert_ne!(
+        nonzero_hash, zero_hash,
+        "top-2 V4 sparse MoE must preserve both routed expert contributions"
+    );
+    assert!(summary.graph_nodes > 0);
+}
+
+#[test]
+fn deepseek_v4_swa_hash_moe_session_runs_through_sampling() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let Some((zero_summary, zero_hash)) =
+        run_tiny_v4_swa_sparse_moe_descriptor(true, false, false, 1)
+    else {
+        return;
+    };
+    let Some((summary, nonzero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(true, true, false, 1)
     else {
         return;
     };
@@ -3849,10 +3885,10 @@ fn deepseek_v4_swa_hash_moe_session_runs_through_sampling() {
 fn deepseek_v4_swa_sparse_moe_shared_expert_changes_state() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
-    let Some((_, zero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, false, false) else {
+    let Some((_, zero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, false, false, 1) else {
         return;
     };
-    let Some((summary, shared_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, false, true)
+    let Some((summary, shared_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, false, true, 1)
     else {
         return;
     };

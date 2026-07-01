@@ -702,9 +702,16 @@ uint64_t layer_scratch_elements(const SequenceLayerLayout &layout,
                                 uint64_t kv_hidden,
                                 uint64_t intermediate) {
   if (layout_is_native_deepseek_session(layout)) {
-    return full_attention_scratch_elements(
+    uint64_t total = full_attention_scratch_elements(
         hidden, layer_attention_workspace_rows(layout, attention_hidden),
         layout_deepseek_kv_cache_width(layout, kv_hidden), intermediate);
+    if (layout.mlp_kind == kMlpKindSparseMoe &&
+        layout.experts_per_token > 1u) {
+      const uint64_t extra_ranks = layout.experts_per_token - 1u;
+      total = sat_add_u64(total, sat_mul_u64(extra_ranks, intermediate));
+      total = sat_add_u64(total, sat_mul_u64(extra_ranks, hidden));
+    }
+    return total;
   }
   if (layout.attention_kind != kAttentionKindLinearGdn) {
     return full_attention_scratch_elements(hidden, attention_hidden, kv_hidden,

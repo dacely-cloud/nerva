@@ -8,6 +8,43 @@ __device__ __forceinline__ float *deepseek_moe_route_weights(
   return s.up;
 }
 
+__device__ __forceinline__ uint64_t deepseek_moe_extra_scratch_base(
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate) {
+  return static_cast<uint64_t>(hidden) * 5u +
+         static_cast<uint64_t>(attention_hidden) * 3u +
+         static_cast<uint64_t>(kv_hidden) * 2u +
+         static_cast<uint64_t>(intermediate) * 3u;
+}
+
+__device__ __forceinline__ float *deepseek_v4_moe_rank_ff(
+    float *scratch, const LayerScratch &s, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t rank) {
+  if (rank == 0) {
+    return s.ff;
+  }
+  return scratch +
+         deepseek_moe_extra_scratch_base(hidden, attention_hidden, kv_hidden,
+                                         intermediate) +
+         static_cast<uint64_t>(rank - 1u) * intermediate;
+}
+
+__device__ __forceinline__ float *deepseek_v4_moe_rank_down(
+    float *scratch, const LayerScratch &s, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t top_k, uint32_t rank) {
+  if (rank == 0) {
+    return s.down;
+  }
+  const uint64_t base =
+      deepseek_moe_extra_scratch_base(hidden, attention_hidden, kv_hidden,
+                                      intermediate);
+  const uint64_t extra_ff =
+      static_cast<uint64_t>(top_k - 1u) * intermediate;
+  return scratch + base + extra_ff + static_cast<uint64_t>(rank - 1u) * hidden;
+}
+
 __global__ void hf_deepseek_v3_sparse_moe_router_logits_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
@@ -351,6 +388,8 @@ __global__ void hf_deepseek_v4_sparse_moe_expert_gate_up_kernel(
   const uint32_t row = blockIdx.x;
   const uint32_t num_experts = layout.num_experts;
   const uint32_t moe_intermediate = layout.moe_intermediate;
+  float *rank_ff = deepseek_v4_moe_rank_ff(
+      scratch, s, hidden, attention_hidden, kv_hidden, intermediate, rank);
   if (row >= moe_intermediate || num_experts == 0 ||
       moe_intermediate == 0 || moe_intermediate > intermediate ||
       (hidden & 1u) != 0) {
@@ -384,7 +423,7 @@ __global__ void hf_deepseek_v4_sparse_moe_expert_gate_up_kernel(
   gate_sum = block_sum(gate_sum);
   up_sum = block_sum(up_sum);
   if (threadIdx.x == 0) {
-    s.ff[row] =
+    rank_ff[row] =
         deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
   }
 }
@@ -406,6 +445,15 @@ __global__ void hf_deepseek_v4_sparse_moe_expert_down_kernel(
   const uint32_t row = blockIdx.x;
   const uint32_t num_experts = layout.num_experts;
   const uint32_t moe_intermediate = layout.moe_intermediate;
+  const uint32_t top_k = layout.experts_per_token;
+  if (top_k == 0) {
+    return;
+  }
+  const float *rank_ff = deepseek_v4_moe_rank_ff(
+      scratch, s, hidden, attention_hidden, kv_hidden, intermediate, rank);
+  float *rank_down = deepseek_v4_moe_rank_down(
+      scratch, s, hidden, attention_hidden, kv_hidden, intermediate, top_k,
+      rank);
   if (row >= hidden || num_experts == 0 || moe_intermediate == 0 ||
       moe_intermediate > intermediate || (moe_intermediate & 1u) != 0) {
     return;
@@ -422,12 +470,40 @@ __global__ void hf_deepseek_v4_sparse_moe_expert_down_kernel(
     down_sum += deepseek_mxfp4_rank3_scaled_weight(
                     arena, expert_down, expert_down_scale, hidden,
                     half_intermediate, expert, row, col) *
-                s.ff[col];
+                rank_ff[col];
   }
   down_sum = block_sum(down_sum);
   if (threadIdx.x == 0) {
-    s.down[row] += expert_weight * down_sum;
+    rank_down[row] = expert_weight * down_sum;
   }
+}
+
+__global__ void hf_deepseek_v4_sparse_moe_reduce_down_kernel(
+    SequenceLayerLayout layout, uint32_t hidden, uint32_t attention_hidden,
+    uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
+    uint32_t max_steps, float *scratch) {
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return;
+  }
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const uint32_t *route_ids = deepseek_moe_route_ids(s);
+  if (route_ids[0] != 0u) {
+    return;
+  }
+  const uint32_t row = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint32_t top_k = layout.experts_per_token;
+  if (row >= hidden || top_k <= 1u) {
+    return;
+  }
+  float sum = 0.0f;
+  for (uint32_t rank = 0; rank < top_k; ++rank) {
+    const float *rank_down = deepseek_v4_moe_rank_down(
+        scratch, s, hidden, attention_hidden, kv_hidden, intermediate, top_k,
+        rank);
+    sum += rank_down[row];
+  }
+  s.down[row] = sum;
 }
 
 __global__ void hf_deepseek_v3_sparse_moe_expert_down_kernel(
