@@ -1,32 +1,32 @@
 use crate::decode::hf_chain::layer::{
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR,
     CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
+    CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
     CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
+    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::layout_plan::{
-    CudaHfDecodeSequenceLayoutPlan, CudaHfDecodeSequenceLayoutPlanRequest,
-    CUDA_HF_SEQUENCE_MISSING_OFFSET,
+    CUDA_HF_SEQUENCE_MISSING_OFFSET, CudaHfDecodeSequenceLayoutPlan,
+    CudaHfDecodeSequenceLayoutPlanRequest,
 };
 use crate::decode::hf_sequence::request::{
-    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest, CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
-    CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::session::request::{
-    CudaHfDecodeSequenceExperimentalRtConfig, CudaHfDecodeSequenceSessionConfig,
-    CudaHfDecodeSequenceSessionCreateOutput, CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX,
-    CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX, CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL,
+    CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX, CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX,
+    CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL, CudaHfDecodeSequenceExperimentalRtConfig,
+    CudaHfDecodeSequenceSessionConfig, CudaHfDecodeSequenceSessionCreateOutput,
 };
 use crate::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{
-    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
-    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
+    CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -1779,7 +1779,7 @@ fn deepseek_v32_sparse_mla_output_matches_vllm_flashmla_topk2_reference() {
             f32_to_f8_e4m3fn_bits_nearest(weight),
         );
     }
-    write_arena_f32(&mut weight_storage, plan.deepseek_kv_b_scale, 1.0);
+    write_arena_f32(&mut weight_storage, plan.deepseek_kv_b_scale, 2.0);
 
     for row in 0..4usize {
         write_arena_byte(
@@ -1887,10 +1887,10 @@ fn deepseek_v32_sparse_mla_output_matches_vllm_flashmla_topk2_reference() {
         "V3.2 sparse top-k should select [0], [0,1], [2,0] like the vLLM decode scorer"
     );
 
-    let expected_attention_hash = deepseek_sparse_attention_output_hash_head0(&[2.0, 3.0, 4.0]);
+    let expected_attention_hash = deepseek_sparse_attention_output_hash_head0(&[4.0, 6.0, 8.0]);
     assert_eq!(
         summary.deepseek_sparse_attention_output_hash, expected_attention_hash,
-        "V3.2 sparse MLA output should match the vLLM/FlashMLA sparse decode reference"
+        "V3.2 sparse MLA output should consume the packed KV-B projection scale like vLLM/FlashMLA"
     );
 }
 

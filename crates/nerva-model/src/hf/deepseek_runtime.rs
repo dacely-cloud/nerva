@@ -997,10 +997,11 @@ fn coverage_for_unit(
                 "cuda_fp8_e4m3fn_f32_scale_encoded_gemm_tokens_api",
                 "cuda_hf_sequence_deepseek_footprint_accounting",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime",
             ],
             &[
                 "fuse block-FP8 dequant with projection GEMM",
-                "consume packed DeepSeek q_a/kv_a/q_b/kv_b/o projection scale offsets in decode",
+                "add full-output decode regression covering q_a/kv_a/q_b/o projection scale offsets",
                 "benchmark projection throughput against vLLM fused kernels",
             ],
         ),

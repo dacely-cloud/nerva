@@ -307,6 +307,36 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
 }
 
 #[test]
+fn deepseek_v32_projection_coverage_tracks_live_kv_b_scale_runtime() {
+    let metadata = parse_hf_config_metadata(deepseek_v32_config()).unwrap();
+    let coverage = deepseek_execution_unit_coverage(&metadata);
+    let unit = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v3_block_fp8_projection_gemm")
+        .expect("DeepSeek V3.2 should report projection GEMM coverage");
+
+    assert_eq!(unit.status, "partial");
+    assert!(
+        unit.validated_primitives
+            .iter()
+            .any(|item| item == "cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime"),
+        "V3.2 projection coverage must include the live CUDA KV-B scale regression"
+    );
+    assert!(
+        unit.remaining_gaps
+            .iter()
+            .all(|gap| !gap.contains("consume packed DeepSeek q_a/kv_a/q_b/kv_b/o")),
+        "coverage should not claim all packed projection scales are ignored after KV-B is tested"
+    );
+    assert!(
+        unit.remaining_gaps
+            .iter()
+            .any(|gap| gap.contains("q_a/kv_a/q_b/o projection scale offsets")),
+        "remaining projection-scale work should stay explicit until full-output decode coverage exists"
+    );
+}
+
+#[test]
 fn deepseek_vllm_kv_plan_matches_v3_and_v32_mla_cache_contracts() {
     let v3 = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
     let dims = deepseek_mla_dimensions(&v3).unwrap();
