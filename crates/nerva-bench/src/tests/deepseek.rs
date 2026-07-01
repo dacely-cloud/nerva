@@ -61,8 +61,10 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_deepseek_megamoe_fp8_fp4_expert_smoke"));
     assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_api"));
     assert!(json.contains("cuda_deepseek_fused_inv_rope_fp8_quant_smoke"));
-    assert!(json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile8_weight_reuse"));
-    assert!(json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row2_token8_input_reuse"));
+    assert!(json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile16_weight_reuse"));
+    assert!(
+        json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row2_token16_input_reuse")
+    );
     assert!(json.contains("deepseek_v4_sqrtsoftplus_hash_router_reference"));
     assert!(json.contains("deepseek_v4_full_routed_moe_hash_reference"));
     assert!(json.contains("precision_moe_deepseek_v4_sqrtsoftplus_router"));
@@ -182,10 +184,12 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_output_projection_scale_logits_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime"));
-    assert!(json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile8_weight_reuse"));
-    assert!(json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row2_token8_input_reuse"));
+    assert!(json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile16_weight_reuse"));
+    assert!(
+        json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row2_token16_input_reuse")
+    );
     assert!(json.contains(
-        "replace scalar row2/token8 FP8 projection tile with vLLM-class tensor-core/DeepGEMM kernel"
+        "replace scalar row2/token16 FP8 projection tile with vLLM-class tensor-core/DeepGEMM kernel"
     ));
     assert!(!json.contains("CTA-per-row"));
     assert!(!json.contains("consume packed DeepSeek q_a/kv_a/q_b/kv_b/o"));

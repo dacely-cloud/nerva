@@ -1822,10 +1822,10 @@ fn bench_quant_fp8() -> DeepSeekPrimitiveMetrics {
 }
 
 fn bench_projection_fp8_e8m0_gemm_tokens() -> DeepSeekPrimitiveMetrics {
-    const ROWS: u32 = 64;
-    const COLS: u32 = 128;
-    const TOKENS: u32 = 8;
-    const BLOCK_ROWS: u32 = 16;
+    const ROWS: u32 = 1024;
+    const COLS: u32 = 2048;
+    const TOKENS: u32 = 16;
+    const BLOCK_ROWS: u32 = 128;
     const BLOCK_COLS: u32 = 128;
     const BF16: u32 = 1;
 
