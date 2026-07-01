@@ -44,6 +44,21 @@ pub(super) struct CudaDecodeCounters {
     sync_calls: u64,
     host_causality_edges: u64,
     hot_path_allocations: u64,
+    deepseek_compressor_state_writes: u64,
+    deepseek_compressed_kv_writes: u64,
+    deepseek_indexer_state_writes: u64,
+    deepseek_indexer_kv_writes: u64,
+    deepseek_compressed_kv_attention_reads: u64,
+    deepseek_compressed_kv_attention_slots_scanned: u64,
+    deepseek_sparse_topk_selections: u64,
+    deepseek_sparse_topk_slots_selected: u64,
+    deepseek_sparse_topk_candidates_scored: u64,
+    deepseek_sparse_topk_selection_hash: u64,
+    deepseek_v3_grouped_router_selections: u64,
+    deepseek_v4_bias_router_selections: u64,
+    deepseek_v4_hash_router_selections: u64,
+    deepseek_raw_attention_tokens_scanned: u64,
+    deepseek_sparse_attention_output_hash: u64,
     cuda_footprint: CudaHfDecodeSequenceFootprint,
     cuda_device_total_memory_bytes: Option<usize>,
     cuda_device_free_memory_bytes: Option<usize>,
@@ -88,6 +103,22 @@ impl CudaDecodeCounters {
         self.sync_calls += cuda.sync_calls;
         self.host_causality_edges += cuda.host_causality_edges;
         self.hot_path_allocations += cuda.hot_path_allocations;
+        self.deepseek_compressor_state_writes += cuda.deepseek_compressor_state_writes;
+        self.deepseek_compressed_kv_writes += cuda.deepseek_compressed_kv_writes;
+        self.deepseek_indexer_state_writes += cuda.deepseek_indexer_state_writes;
+        self.deepseek_indexer_kv_writes += cuda.deepseek_indexer_kv_writes;
+        self.deepseek_compressed_kv_attention_reads += cuda.deepseek_compressed_kv_attention_reads;
+        self.deepseek_compressed_kv_attention_slots_scanned +=
+            cuda.deepseek_compressed_kv_attention_slots_scanned;
+        self.deepseek_sparse_topk_selections += cuda.deepseek_sparse_topk_selections;
+        self.deepseek_sparse_topk_slots_selected += cuda.deepseek_sparse_topk_slots_selected;
+        self.deepseek_sparse_topk_candidates_scored += cuda.deepseek_sparse_topk_candidates_scored;
+        self.deepseek_sparse_topk_selection_hash ^= cuda.deepseek_sparse_topk_selection_hash;
+        self.deepseek_v3_grouped_router_selections += cuda.deepseek_v3_grouped_router_selections;
+        self.deepseek_v4_bias_router_selections += cuda.deepseek_v4_bias_router_selections;
+        self.deepseek_v4_hash_router_selections += cuda.deepseek_v4_hash_router_selections;
+        self.deepseek_raw_attention_tokens_scanned += cuda.deepseek_raw_attention_tokens_scanned;
+        self.deepseek_sparse_attention_output_hash ^= cuda.deepseek_sparse_attention_output_hash;
         self.cuda_footprint = cuda.planned_footprint;
         self.cuda_device_total_memory_bytes = cuda.device_total_memory_bytes;
         self.cuda_device_free_memory_bytes = cuda.device_free_memory_bytes;
@@ -183,6 +214,22 @@ pub(super) fn build_summary(
         hot_path_allocations: counters.hot_path_allocations
             + hot_path_allocations(&parts.ledgers)
             + hot_path_allocations(cpu_ledgers),
+        deepseek_compressor_state_writes: counters.deepseek_compressor_state_writes,
+        deepseek_compressed_kv_writes: counters.deepseek_compressed_kv_writes,
+        deepseek_indexer_state_writes: counters.deepseek_indexer_state_writes,
+        deepseek_indexer_kv_writes: counters.deepseek_indexer_kv_writes,
+        deepseek_compressed_kv_attention_reads: counters.deepseek_compressed_kv_attention_reads,
+        deepseek_compressed_kv_attention_slots_scanned: counters
+            .deepseek_compressed_kv_attention_slots_scanned,
+        deepseek_sparse_topk_selections: counters.deepseek_sparse_topk_selections,
+        deepseek_sparse_topk_slots_selected: counters.deepseek_sparse_topk_slots_selected,
+        deepseek_sparse_topk_candidates_scored: counters.deepseek_sparse_topk_candidates_scored,
+        deepseek_sparse_topk_selection_hash: counters.deepseek_sparse_topk_selection_hash,
+        deepseek_v3_grouped_router_selections: counters.deepseek_v3_grouped_router_selections,
+        deepseek_v4_bias_router_selections: counters.deepseek_v4_bias_router_selections,
+        deepseek_v4_hash_router_selections: counters.deepseek_v4_hash_router_selections,
+        deepseek_raw_attention_tokens_scanned: counters.deepseek_raw_attention_tokens_scanned,
+        deepseek_sparse_attention_output_hash: counters.deepseek_sparse_attention_output_hash,
         output_hash,
         expected_hash,
         resident_weights: parts.resident_weights,

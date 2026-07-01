@@ -239,6 +239,7 @@ fn generate_json_output(
         .iter()
         .enumerate()
         .map(|(index, chunk)| {
+            let deepseek = DeepSeekCliCounters::from_seed(chunk).to_json();
             let chunk_wall_ns = chunk
                 .critical_paths
                 .iter()
@@ -250,7 +251,7 @@ fn generate_json_output(
                 .map(|path| path.device_timeline_active_ns)
                 .sum::<u64>();
             format!(
-                "{{\"chunk_index\":{},\"requested_tokens\":{},\"observed_tokens\":{},\"wall_ns\":{},\"device_ns\":{},\"tokens_per_second\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"graph_nodes\":{},\"graph_replays\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"experimental_rt_selector_launches\":{},\"experimental_rt_sparse_attention_chunks\":{},\"experimental_rt_dense_attention_chunks\":{},\"experimental_rt_attention_chunks\":{},\"h2d_bytes\":{},\"d2h_bytes\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{}}}",
+                "{{\"chunk_index\":{},\"requested_tokens\":{},\"observed_tokens\":{},\"wall_ns\":{},\"device_ns\":{},\"tokens_per_second\":{},\"projection_ns\":{},\"qkv_projection_ns\":{},\"attention_output_projection_ns\":{},\"gate_up_projection_ns\":{},\"down_projection_ns\":{},\"lm_head_projection_ns\":{},\"attention_ns\":{},\"mlp_ns\":{},\"norm_ns\":{},\"sampling_ns\":{},\"graph_nodes\":{},\"graph_replays\":{},\"graph_cache_hits\":{},\"kernel_launches\":{},\"experimental_rt_selector_launches\":{},\"experimental_rt_sparse_attention_chunks\":{},\"experimental_rt_dense_attention_chunks\":{},\"experimental_rt_attention_chunks\":{},\"h2d_bytes\":{},\"d2h_bytes\":{},\"sync_calls\":{},\"host_causality_edges\":{},\"hot_path_allocations\":{},\"deepseek\":{}}}",
                 index,
                 chunk.steps_requested,
                 chunk.tokens.len(),
@@ -280,6 +281,7 @@ fn generate_json_output(
                 chunk.sync_calls,
                 chunk.host_causality_edges,
                 chunk.hot_path_allocations,
+                deepseek,
             )
         })
         .collect::<Vec<_>>()
@@ -329,8 +331,9 @@ fn generate_json_output(
     let semantic_rt_retrieval = false;
     let experimental_prefill_local_window_tokens =
         experimental_prefill_local_window_tokens_from_env();
+    let deepseek = deepseek_output_json(output);
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"profiling\":{},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"selector_policy\":\"{}\",\"rt_core_page_selector\":{},\"semantic_page_selection\":{},\"semantic_rt_retrieval\":{},\"kv_page_descriptor_selector\":{},\"live_query_descriptor_selector\":{},\"query_key_aware_selector\":{},\"query_key_fused_selector\":{},\"page_tokens\":{},\"pages\":{},\"selected_pages\":{},\"local_pages\":{},\"sink_pages\":{},\"far_pages\":{},\"selected_tokens\":{},\"local_page_tokens\":{},\"sink_page_tokens\":{},\"far_tokens\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"experimental_prefill_local_window_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"token_p50_ms\":{},\"token_p95_ms\":{},\"token_p99_ms\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}]{}}}",
+        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"profiling\":{},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"selector_policy\":\"{}\",\"rt_core_page_selector\":{},\"semantic_page_selection\":{},\"semantic_rt_retrieval\":{},\"kv_page_descriptor_selector\":{},\"live_query_descriptor_selector\":{},\"query_key_aware_selector\":{},\"query_key_fused_selector\":{},\"page_tokens\":{},\"pages\":{},\"selected_pages\":{},\"local_pages\":{},\"sink_pages\":{},\"far_pages\":{},\"selected_tokens\":{},\"local_page_tokens\":{},\"sink_page_tokens\":{},\"far_tokens\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"experimental_prefill_local_window_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"token_p50_ms\":{},\"token_p95_ms\":{},\"token_p99_ms\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"deepseek\":{},\"chunks\":[{}]{}}}",
         json_escape(output.backend),
         env!("CARGO_PKG_VERSION"),
         json_escape(path),
@@ -409,9 +412,131 @@ fn generate_json_output(
             .iter()
             .map(|summary| summary.hot_path_allocations)
             .sum::<u64>(),
+        deepseek,
         chunks,
         token_critical_paths_field
     ))
+}
+
+fn deepseek_output_json(output: &HfCudaDeviceGenerateOutput) -> String {
+    let prefill = DeepSeekCliCounters::from_prefill(output);
+    let mut decode = DeepSeekCliCounters::default();
+    for chunk in &output.stream.chunks {
+        decode.add(DeepSeekCliCounters::from_seed(chunk));
+    }
+    let mut total = prefill;
+    total.add(decode);
+    format!(
+        "{{\"prefill\":{},\"decode\":{},\"total\":{}}}",
+        prefill.to_json(),
+        decode.to_json(),
+        total.to_json()
+    )
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct DeepSeekCliCounters {
+    compressor_state_writes: u64,
+    compressed_kv_writes: u64,
+    indexer_state_writes: u64,
+    indexer_kv_writes: u64,
+    compressed_kv_attention_reads: u64,
+    compressed_kv_attention_slots_scanned: u64,
+    sparse_topk_selections: u64,
+    sparse_topk_slots_selected: u64,
+    sparse_topk_candidates_scored: u64,
+    sparse_topk_selection_hash: u64,
+    v3_grouped_router_selections: u64,
+    v4_bias_router_selections: u64,
+    v4_hash_router_selections: u64,
+    raw_attention_tokens_scanned: u64,
+    sparse_attention_output_hash: u64,
+}
+
+impl DeepSeekCliCounters {
+    fn from_prefill(output: &HfCudaDeviceGenerateOutput) -> Self {
+        let summary = &output.stream.start;
+        Self {
+            compressor_state_writes: summary.deepseek_compressor_state_writes,
+            compressed_kv_writes: summary.deepseek_compressed_kv_writes,
+            indexer_state_writes: summary.deepseek_indexer_state_writes,
+            indexer_kv_writes: summary.deepseek_indexer_kv_writes,
+            compressed_kv_attention_reads: summary.deepseek_compressed_kv_attention_reads,
+            compressed_kv_attention_slots_scanned: summary
+                .deepseek_compressed_kv_attention_slots_scanned,
+            sparse_topk_selections: summary.deepseek_sparse_topk_selections,
+            sparse_topk_slots_selected: summary.deepseek_sparse_topk_slots_selected,
+            sparse_topk_candidates_scored: summary.deepseek_sparse_topk_candidates_scored,
+            sparse_topk_selection_hash: summary.deepseek_sparse_topk_selection_hash,
+            v3_grouped_router_selections: summary.deepseek_v3_grouped_router_selections,
+            v4_bias_router_selections: summary.deepseek_v4_bias_router_selections,
+            v4_hash_router_selections: summary.deepseek_v4_hash_router_selections,
+            raw_attention_tokens_scanned: summary.deepseek_raw_attention_tokens_scanned,
+            sparse_attention_output_hash: summary.deepseek_sparse_attention_output_hash,
+        }
+    }
+
+    fn from_seed(
+        summary: &nerva_runtime::engine::hf_cuda_decode::summary::HfCudaSeedDecodeSummary,
+    ) -> Self {
+        Self {
+            compressor_state_writes: summary.deepseek_compressor_state_writes,
+            compressed_kv_writes: summary.deepseek_compressed_kv_writes,
+            indexer_state_writes: summary.deepseek_indexer_state_writes,
+            indexer_kv_writes: summary.deepseek_indexer_kv_writes,
+            compressed_kv_attention_reads: summary.deepseek_compressed_kv_attention_reads,
+            compressed_kv_attention_slots_scanned: summary
+                .deepseek_compressed_kv_attention_slots_scanned,
+            sparse_topk_selections: summary.deepseek_sparse_topk_selections,
+            sparse_topk_slots_selected: summary.deepseek_sparse_topk_slots_selected,
+            sparse_topk_candidates_scored: summary.deepseek_sparse_topk_candidates_scored,
+            sparse_topk_selection_hash: summary.deepseek_sparse_topk_selection_hash,
+            v3_grouped_router_selections: summary.deepseek_v3_grouped_router_selections,
+            v4_bias_router_selections: summary.deepseek_v4_bias_router_selections,
+            v4_hash_router_selections: summary.deepseek_v4_hash_router_selections,
+            raw_attention_tokens_scanned: summary.deepseek_raw_attention_tokens_scanned,
+            sparse_attention_output_hash: summary.deepseek_sparse_attention_output_hash,
+        }
+    }
+
+    fn add(&mut self, other: Self) {
+        self.compressor_state_writes += other.compressor_state_writes;
+        self.compressed_kv_writes += other.compressed_kv_writes;
+        self.indexer_state_writes += other.indexer_state_writes;
+        self.indexer_kv_writes += other.indexer_kv_writes;
+        self.compressed_kv_attention_reads += other.compressed_kv_attention_reads;
+        self.compressed_kv_attention_slots_scanned += other.compressed_kv_attention_slots_scanned;
+        self.sparse_topk_selections += other.sparse_topk_selections;
+        self.sparse_topk_slots_selected += other.sparse_topk_slots_selected;
+        self.sparse_topk_candidates_scored += other.sparse_topk_candidates_scored;
+        self.sparse_topk_selection_hash ^= other.sparse_topk_selection_hash;
+        self.v3_grouped_router_selections += other.v3_grouped_router_selections;
+        self.v4_bias_router_selections += other.v4_bias_router_selections;
+        self.v4_hash_router_selections += other.v4_hash_router_selections;
+        self.raw_attention_tokens_scanned += other.raw_attention_tokens_scanned;
+        self.sparse_attention_output_hash ^= other.sparse_attention_output_hash;
+    }
+
+    fn to_json(self) -> String {
+        format!(
+            "{{\"compressor_state_writes\":{},\"compressed_kv_writes\":{},\"indexer_state_writes\":{},\"indexer_kv_writes\":{},\"compressed_kv_attention_reads\":{},\"compressed_kv_attention_slots_scanned\":{},\"sparse_topk_selections\":{},\"sparse_topk_slots_selected\":{},\"sparse_topk_candidates_scored\":{},\"sparse_topk_selection_hash\":{},\"v3_grouped_router_selections\":{},\"v4_bias_router_selections\":{},\"v4_hash_router_selections\":{},\"raw_attention_tokens_scanned\":{},\"sparse_attention_output_hash\":{}}}",
+            self.compressor_state_writes,
+            self.compressed_kv_writes,
+            self.indexer_state_writes,
+            self.indexer_kv_writes,
+            self.compressed_kv_attention_reads,
+            self.compressed_kv_attention_slots_scanned,
+            self.sparse_topk_selections,
+            self.sparse_topk_slots_selected,
+            self.sparse_topk_candidates_scored,
+            self.sparse_topk_selection_hash,
+            self.v3_grouped_router_selections,
+            self.v4_bias_router_selections,
+            self.v4_hash_router_selections,
+            self.raw_attention_tokens_scanned,
+            self.sparse_attention_output_hash,
+        )
+    }
 }
 
 fn generated_json_text(

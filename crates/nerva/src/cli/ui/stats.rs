@@ -21,6 +21,19 @@ pub(crate) struct DecodeStats {
     pub sync_calls: u64,
     pub hot_path_allocations: u64,
     pub host_causality_edges: u64,
+    pub deepseek_compressor_state_writes: u64,
+    pub deepseek_compressed_kv_writes: u64,
+    pub deepseek_indexer_state_writes: u64,
+    pub deepseek_indexer_kv_writes: u64,
+    pub deepseek_compressed_kv_attention_reads: u64,
+    pub deepseek_compressed_kv_attention_slots_scanned: u64,
+    pub deepseek_sparse_topk_selections: u64,
+    pub deepseek_sparse_topk_slots_selected: u64,
+    pub deepseek_sparse_topk_candidates_scored: u64,
+    pub deepseek_v3_grouped_router_selections: u64,
+    pub deepseek_v4_bias_router_selections: u64,
+    pub deepseek_v4_hash_router_selections: u64,
+    pub deepseek_raw_attention_tokens_scanned: u64,
 }
 
 impl DecodeStats {
@@ -45,6 +58,24 @@ impl DecodeStats {
             stats.sync_calls += chunk.sync_calls;
             stats.hot_path_allocations += chunk.hot_path_allocations;
             stats.host_causality_edges += chunk.host_causality_edges;
+            stats.deepseek_compressor_state_writes += chunk.deepseek_compressor_state_writes;
+            stats.deepseek_compressed_kv_writes += chunk.deepseek_compressed_kv_writes;
+            stats.deepseek_indexer_state_writes += chunk.deepseek_indexer_state_writes;
+            stats.deepseek_indexer_kv_writes += chunk.deepseek_indexer_kv_writes;
+            stats.deepseek_compressed_kv_attention_reads +=
+                chunk.deepseek_compressed_kv_attention_reads;
+            stats.deepseek_compressed_kv_attention_slots_scanned +=
+                chunk.deepseek_compressed_kv_attention_slots_scanned;
+            stats.deepseek_sparse_topk_selections += chunk.deepseek_sparse_topk_selections;
+            stats.deepseek_sparse_topk_slots_selected += chunk.deepseek_sparse_topk_slots_selected;
+            stats.deepseek_sparse_topk_candidates_scored +=
+                chunk.deepseek_sparse_topk_candidates_scored;
+            stats.deepseek_v3_grouped_router_selections +=
+                chunk.deepseek_v3_grouped_router_selections;
+            stats.deepseek_v4_bias_router_selections += chunk.deepseek_v4_bias_router_selections;
+            stats.deepseek_v4_hash_router_selections += chunk.deepseek_v4_hash_router_selections;
+            stats.deepseek_raw_attention_tokens_scanned +=
+                chunk.deepseek_raw_attention_tokens_scanned;
             for path in &chunk.critical_paths {
                 stats.wall_ns += path.wall_latency_ns;
                 latencies.push(path.wall_latency_ns);
@@ -63,6 +94,22 @@ impl DecodeStats {
         } else {
             self.wall_ns / self.tokens as u64
         }
+    }
+
+    pub(crate) fn has_deepseek_activity(&self) -> bool {
+        self.deepseek_compressor_state_writes != 0
+            || self.deepseek_compressed_kv_writes != 0
+            || self.deepseek_indexer_state_writes != 0
+            || self.deepseek_indexer_kv_writes != 0
+            || self.deepseek_compressed_kv_attention_reads != 0
+            || self.deepseek_compressed_kv_attention_slots_scanned != 0
+            || self.deepseek_sparse_topk_selections != 0
+            || self.deepseek_sparse_topk_slots_selected != 0
+            || self.deepseek_sparse_topk_candidates_scored != 0
+            || self.deepseek_v3_grouped_router_selections != 0
+            || self.deepseek_v4_bias_router_selections != 0
+            || self.deepseek_v4_hash_router_selections != 0
+            || self.deepseek_raw_attention_tokens_scanned != 0
     }
 }
 

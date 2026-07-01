@@ -756,6 +756,76 @@ impl NervaCliLoggerInner {
         }
         self.print_plain_report_block_line("");
 
+        if stats.has_deepseek_activity() || deepseek_prefill_activity(output) {
+            self.print_plain_report_block_line(paint(self.color, Tone::Orange, "DEEPSEEK"));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "prefill raw scan",
+                format!(
+                    "{} tokens",
+                    output.stream.start.deepseek_raw_attention_tokens_scanned
+                ),
+                Tone::Cyan,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "decode raw scan",
+                format!("{} tokens", stats.deepseek_raw_attention_tokens_scanned),
+                Tone::Cyan,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "top-k selections",
+                stats.deepseek_sparse_topk_selections.to_string(),
+                Tone::Green,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "top-k candidates",
+                stats.deepseek_sparse_topk_candidates_scored.to_string(),
+                Tone::Yellow,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "top-k slots",
+                stats.deepseek_sparse_topk_slots_selected.to_string(),
+                Tone::Green,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "compressed reads",
+                format!(
+                    "{} reads / {} slots",
+                    stats.deepseek_compressed_kv_attention_reads,
+                    stats.deepseek_compressed_kv_attention_slots_scanned
+                ),
+                Tone::Blue,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "state writes",
+                format!(
+                    "compressor {}  indexer {}  indexer-kv {}",
+                    stats.deepseek_compressor_state_writes,
+                    stats.deepseek_indexer_state_writes,
+                    stats.deepseek_indexer_kv_writes
+                ),
+                Tone::Magenta,
+            ));
+            self.print_plain_report_block_line(report_kv_line(
+                self.color,
+                "router",
+                format!(
+                    "v3-grouped {}  v4-bias {}  v4-hash {}",
+                    stats.deepseek_v3_grouped_router_selections,
+                    stats.deepseek_v4_bias_router_selections,
+                    stats.deepseek_v4_hash_router_selections
+                ),
+                Tone::Orange,
+            ));
+            self.print_plain_report_block_line("");
+        }
+
         self.print_plain_report_block_line(paint(self.color, Tone::Magenta, "CUDA GRAPH"));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
@@ -1122,6 +1192,25 @@ fn decode_drift(
         delta,
         tone: tone_for_delta,
     })
+}
+
+fn deepseek_prefill_activity(
+    output: &nerva_runtime::engine::hf_cuda_decode::file_backed::generate::HfCudaDeviceGenerateOutput,
+) -> bool {
+    let summary = &output.stream.start;
+    summary.deepseek_compressor_state_writes != 0
+        || summary.deepseek_compressed_kv_writes != 0
+        || summary.deepseek_indexer_state_writes != 0
+        || summary.deepseek_indexer_kv_writes != 0
+        || summary.deepseek_compressed_kv_attention_reads != 0
+        || summary.deepseek_compressed_kv_attention_slots_scanned != 0
+        || summary.deepseek_sparse_topk_selections != 0
+        || summary.deepseek_sparse_topk_slots_selected != 0
+        || summary.deepseek_sparse_topk_candidates_scored != 0
+        || summary.deepseek_v3_grouped_router_selections != 0
+        || summary.deepseek_v4_bias_router_selections != 0
+        || summary.deepseek_v4_hash_router_selections != 0
+        || summary.deepseek_raw_attention_tokens_scanned != 0
 }
 
 fn mean_ns(values: &[u64]) -> u64 {
