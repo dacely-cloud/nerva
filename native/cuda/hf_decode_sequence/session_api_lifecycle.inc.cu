@@ -1012,6 +1012,21 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
     err = initialize_experimental_rt_kv_descriptor_selector_after_prefill(
         session, request->prompt_token_count);
   }
+  uint64_t deepseek_runtime_counters[kDeepSeekRuntimeCounterCount] = {};
+  if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaMemcpyAsync(deepseek_runtime_counters,
+                          session->device_deepseek_runtime_counters,
+                          session->deepseek_runtime_counters_bytes,
+                          cudaMemcpyDeviceToHost, session->stream);
+    out->d2h_bytes += session->deepseek_runtime_counters_bytes;
+  }
+  if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
+    err = cudaStreamSynchronize(session->stream);
+    if (err == cudaSuccess) {
+      out->sync_calls += 1;
+      fill_deepseek_runtime_counter_result(out, deepseek_runtime_counters);
+    }
+  }
   if (err == cudaSuccess) {
     stash_prefill_metrics(session, out);
     session->active_prompt_token_count = request->prompt_token_count;

@@ -1,32 +1,32 @@
 use crate::decode::hf_chain::layer::{
+    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR,
     CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
-    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
+    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
     CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::layout_plan::{
-    CUDA_HF_SEQUENCE_MISSING_OFFSET, CudaHfDecodeSequenceLayoutPlan,
-    CudaHfDecodeSequenceLayoutPlanRequest,
+    CudaHfDecodeSequenceLayoutPlan, CudaHfDecodeSequenceLayoutPlanRequest,
+    CUDA_HF_SEQUENCE_MISSING_OFFSET,
 };
 use crate::decode::hf_sequence::request::{
-    CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
-    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
+    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest, CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
 };
 use crate::decode::hf_sequence::session::request::{
-    CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX, CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX,
-    CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL, CudaHfDecodeSequenceExperimentalRtConfig,
-    CudaHfDecodeSequenceSessionConfig, CudaHfDecodeSequenceSessionCreateOutput,
+    CudaHfDecodeSequenceExperimentalRtConfig, CudaHfDecodeSequenceSessionConfig,
+    CudaHfDecodeSequenceSessionCreateOutput, CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX,
+    CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX, CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL,
 };
 use crate::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{
-    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
-    CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
+    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -1995,6 +1995,45 @@ fn deepseek_v32_mla_batched_prefill_uses_f32_norm_cache_rows() {
         "V3.2 MLA batched prefill must commit prompt rows with f32 norm weights",
     );
     assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
+}
+
+#[test]
+fn deepseek_v32_sparse_indexer_batched_prefill_populates_prefix_state() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let mut layer = tiny_deepseek_v32_descriptor_layer();
+    let deepseek = layer
+        .deepseek
+        .as_mut()
+        .expect("tiny DeepSeek V3.2 layer should carry DeepSeek metadata");
+    deepseek.index_topk = 1;
+    let created = create_tiny_deepseek_mla_cache_session(layer, true, 3);
+    if created.summary.status == SmokeStatus::Unavailable {
+        return;
+    }
+    assert_eq!(
+        created.summary.status,
+        SmokeStatus::Ok,
+        "V3.2 sparse-indexer MLA session should create before batched prefill: {:?}",
+        created.summary.error
+    );
+    let mut session = created
+        .session
+        .expect("V3.2 sparse-indexer MLA session handle should exist");
+    let prefill = CudaHfDecodeSequenceLoop::start_session(&mut session, &[0, 1, 2], None);
+    assert_eq!(
+        prefill.status,
+        SmokeStatus::Ok,
+        "V3.2 sparse-indexer batched prefill should accept a three-token prompt: {:?}",
+        prefill.error
+    );
+    assert_eq!(prefill.kv_tokens, 3);
+    assert_eq!(prefill.graph_replays, 1);
+    assert_eq!(prefill.deepseek_indexer_state_writes, 3);
+    assert_eq!(prefill.deepseek_indexer_kv_writes, 3);
+    assert_eq!(prefill.deepseek_sparse_topk_selections, 1);
+    assert_eq!(prefill.deepseek_sparse_topk_slots_selected, 1);
+    assert_eq!(prefill.deepseek_sparse_topk_candidates_scored, 3);
 }
 
 #[test]
@@ -4783,6 +4822,10 @@ fn create_tiny_deepseek_mla_cache_session(
     let intermediate = 4usize;
     let vocab_size = 8usize;
     let layers = [layer];
+    let active_sparse_indexer = layers[0]
+        .deepseek
+        .as_ref()
+        .is_some_and(|deepseek| deepseek.index_topk > 0);
     let plan = CudaHfDecodeSequenceLayoutPlanRequest {
         hidden: hidden as u32,
         heads: heads as u32,
@@ -4814,6 +4857,16 @@ fn create_tiny_deepseek_mla_cache_session(
         for dim in 0..2usize {
             write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
         }
+        if active_sparse_indexer {
+            for dim in 0..2usize {
+                write_arena_f32(&mut weight_storage, plan.q_norm + (dim * 2) as u64, 1.0);
+                write_arena_f32(
+                    &mut weight_storage,
+                    plan.deepseek_indexer_k_norm + (dim * 2) as u64,
+                    1.0,
+                );
+            }
+        }
     } else {
         for dim in 0..hidden {
             weight_storage[plan.rms_attn as usize + dim] = f32_to_bf16_bits(1.0);
@@ -4821,12 +4874,66 @@ fn create_tiny_deepseek_mla_cache_session(
         for dim in 0..2usize {
             weight_storage[plan.k_norm as usize + dim] = f32_to_bf16_bits(1.0);
         }
+        if active_sparse_indexer {
+            for dim in 0..2usize {
+                weight_storage[plan.q_norm as usize + dim] = f32_to_bf16_bits(1.0);
+                weight_storage[plan.deepseek_indexer_k_norm as usize + dim] = f32_to_bf16_bits(1.0);
+            }
+        }
     }
     let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
     for row in 0..3usize {
         write_arena_byte(&mut weight_storage, plan.w_k, row * hidden, one_fp8);
     }
     write_arena_f32(&mut weight_storage, plan.deepseek_kv_a_scale, 1.0);
+    if active_sparse_indexer {
+        assert_ne!(plan.w_q, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+        assert_ne!(plan.deepseek_q_a_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+        assert_ne!(plan.q_norm, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+        assert_ne!(plan.deepseek_indexer_q, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+        assert_ne!(
+            plan.deepseek_indexer_q_scale,
+            CUDA_HF_SEQUENCE_MISSING_OFFSET
+        );
+        assert_ne!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+        assert_ne!(
+            plan.deepseek_indexer_k_scale,
+            CUDA_HF_SEQUENCE_MISSING_OFFSET
+        );
+        assert_ne!(
+            plan.deepseek_indexer_k_norm,
+            CUDA_HF_SEQUENCE_MISSING_OFFSET
+        );
+        assert_ne!(
+            plan.deepseek_indexer_k_norm_bias,
+            CUDA_HF_SEQUENCE_MISSING_OFFSET
+        );
+        assert_ne!(
+            plan.deepseek_indexer_weights,
+            CUDA_HF_SEQUENCE_MISSING_OFFSET
+        );
+        for row in 0..2usize {
+            write_arena_byte(&mut weight_storage, plan.w_q, row * hidden + row, one_fp8);
+            write_arena_byte(
+                &mut weight_storage,
+                plan.deepseek_indexer_k,
+                row * hidden + row,
+                one_fp8,
+            );
+        }
+        for row in 0..4usize {
+            write_arena_byte(
+                &mut weight_storage,
+                plan.deepseek_indexer_q,
+                row * 2 + (row % 2),
+                one_fp8,
+            );
+            weight_storage[plan.deepseek_indexer_weights as usize + row] = f32_to_bf16_bits(1.0);
+        }
+        write_arena_f32(&mut weight_storage, plan.deepseek_q_a_scale, 1.0);
+        write_arena_f32(&mut weight_storage, plan.deepseek_indexer_q_scale, 1.0);
+        write_arena_f32(&mut weight_storage, plan.deepseek_indexer_k_scale, 1.0);
+    }
 
     let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
         host_source: weight_storage.as_ptr(),

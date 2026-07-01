@@ -161,6 +161,175 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
   }
 }
 
+__global__ void hf_deepseek_v32_indexer_kv_encode_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, float rope_theta, const uint16_t *projection_input,
+    uint32_t projection_input_stride, uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint64_t *deepseek_runtime_counters) {
+  const uint32_t local_token = blockIdx.x;
+  if (local_token >= chunk_tokens || projection_input_stride < hidden) {
+    return;
+  }
+  if (arena == nullptr || projection_input == nullptr ||
+      deepseek_indexer_kv == nullptr || deepseek_indexer_kv_block_count == 0 ||
+      layout.attention_kind != kAttentionKindDeepSeekMla ||
+      layout.deepseek_mode != kDeepSeekModeV32MlaIndexer ||
+      (layout.deepseek_flags & kDeepSeekFlagSparseIndexer) == 0 ||
+      layout.deepseek_index_head_dim == 0 ||
+      layout.deepseek_index_head_dim > kDeepSeekSessionMaxCompressHeadSize ||
+      layout.deepseek_indexer_k == kMissingOffset ||
+      layout.deepseek_indexer_k_scale == kMissingOffset ||
+      layout.deepseek_indexer_k_norm == kMissingOffset ||
+      layout.deepseek_indexer_k_norm_bias == kMissingOffset) {
+    return;
+  }
+
+  const uint32_t position = chunk_start + local_token;
+  if (position >= max_steps) {
+    return;
+  }
+  const uint32_t block = position / kDeepSeekV32IndexerKvBlockTokens;
+  if (block >= deepseek_indexer_kv_block_count) {
+    return;
+  }
+
+  const uint16_t *token_projection =
+      projection_input +
+      static_cast<uint64_t>(local_token) * projection_input_stride;
+  const uint32_t head_dim = layout.deepseek_index_head_dim;
+  __shared__ float values[kDeepSeekSessionMaxCompressHeadSize];
+  __shared__ float mean;
+  __shared__ float inv_std;
+  __shared__ float scale;
+  for (uint32_t row = 0; row < head_dim; ++row) {
+    float sum = 0.0f;
+    for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+      sum += deepseek_fp8_scaled_weight(
+                 arena, layout.deepseek_indexer_k,
+                 layout.deepseek_indexer_k_scale, head_dim, hidden, row,
+                 col) *
+             encoded_to_f32(token_projection[col], dtype);
+    }
+    sum = block_sum(sum);
+    if (threadIdx.x == 0) {
+      values[row] = sum;
+    }
+  }
+  __syncthreads();
+
+  float mean_sum = 0.0f;
+  for (uint32_t row = threadIdx.x; row < head_dim; row += blockDim.x) {
+    mean_sum += values[row];
+  }
+  mean_sum = block_sum(mean_sum);
+  if (threadIdx.x == 0) {
+    mean = mean_sum / static_cast<float>(head_dim);
+  }
+  __syncthreads();
+
+  float variance_sum = 0.0f;
+  for (uint32_t row = threadIdx.x; row < head_dim; row += blockDim.x) {
+    const float centered = values[row] - mean;
+    variance_sum += centered * centered;
+  }
+  variance_sum = block_sum(variance_sum);
+  if (threadIdx.x == 0) {
+    inv_std =
+        rsqrtf(variance_sum / static_cast<float>(head_dim) + 1.0e-6f);
+  }
+  __syncthreads();
+
+  for (uint32_t row = threadIdx.x; row < head_dim; row += blockDim.x) {
+    const float weight =
+        f32_from_u16_slots(arena + layout.deepseek_indexer_k_norm, row);
+    const float bias = f32_from_u16_slots(
+        arena + layout.deepseek_indexer_k_norm_bias, row);
+    values[row] = (values[row] - mean) * inv_std * weight + bias;
+  }
+  __syncthreads();
+
+  const uint32_t rope_dim =
+      layout.deepseek_qk_rope_head_dim <= head_dim
+          ? layout.deepseek_qk_rope_head_dim
+          : 0u;
+  const uint32_t rope_half = rope_dim / 2u;
+  for (uint32_t offset = threadIdx.x; offset < rope_half; offset += blockDim.x) {
+    const uint32_t left = offset;
+    const uint32_t right = offset + rope_half;
+    const float left_value = values[left];
+    const float right_value = values[right];
+    values[left] = deepseek_rope_value_serial(
+        left_value, right_value, offset, rope_dim, position, rope_theta,
+        false, layout);
+    values[right] = deepseek_rope_value_serial(
+        left_value, right_value, offset, rope_dim, position, rope_theta,
+        true, layout);
+  }
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    float absmax = 0.0f;
+    for (uint32_t dim = 0; dim < head_dim; ++dim) {
+      values[dim] = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(values[dim]));
+      absmax = fmaxf(absmax, fabsf(values[dim]));
+    }
+    scale = exp2f(ceilf(log2f(fmaxf(absmax, 1.0e-4f) / 448.0f)));
+  }
+  __syncthreads();
+
+  const uint32_t scale_bytes =
+      ((head_dim + 127u) / 128u) * sizeof(float);
+  const uint64_t page_bytes =
+      static_cast<uint64_t>(kDeepSeekV32IndexerKvBlockTokens) *
+      (static_cast<uint64_t>(head_dim) + scale_bytes);
+  const uint32_t block_offset =
+      position % kDeepSeekV32IndexerKvBlockTokens;
+  uint8_t *block_ptr = deepseek_indexer_kv +
+                       deepseek_indexer_kv_offset_bytes +
+                       static_cast<uint64_t>(block) * page_bytes;
+  const uint32_t tile_block_id =
+      block_offset / kDeepSeekV32IndexerKvTileTokens;
+  const uint32_t tile_block_offset =
+      block_offset % kDeepSeekV32IndexerKvTileTokens;
+  for (uint32_t dim = threadIdx.x; dim < head_dim; dim += blockDim.x) {
+    const float scaled = fminf(fmaxf(values[dim] / scale, -448.0f), 448.0f);
+    const uint32_t tile_store_offset =
+        (dim / kDeepSeekV32IndexerKvTileHeadBytes) *
+            kDeepSeekV32IndexerKvTileTokens *
+            kDeepSeekV32IndexerKvTileHeadBytes +
+        (dim % kDeepSeekV32IndexerKvTileHeadBytes);
+    const uint64_t value_offset =
+        static_cast<uint64_t>(tile_block_id) *
+            kDeepSeekV32IndexerKvTileTokens * head_dim +
+        static_cast<uint64_t>(tile_block_offset) *
+            kDeepSeekV32IndexerKvTileHeadBytes +
+        tile_store_offset;
+    block_ptr[value_offset] =
+        deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
+  }
+
+  uint8_t *scale_ptr =
+      block_ptr +
+      static_cast<uint64_t>(kDeepSeekV32IndexerKvBlockTokens) * head_dim +
+      static_cast<uint64_t>(block_offset) * scale_bytes;
+  for (uint32_t scale_index = threadIdx.x;
+       scale_index < scale_bytes / sizeof(float);
+       scale_index += blockDim.x) {
+    reinterpret_cast<float *>(scale_ptr)[scale_index] = scale;
+  }
+  if (threadIdx.x == 0 && deepseek_runtime_counters != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterIndexerKvWrites),
+        1ull);
+  }
+}
+
 __device__ __forceinline__ bool deepseek_v32_indexer_query_state_supported(
     const SequenceLayerLayout &layout) {
   return layout.attention_kind == kAttentionKindDeepSeekMla &&
@@ -234,6 +403,51 @@ __global__ void hf_deepseek_v32_indexer_weight_state_kernel(
                                 static_cast<uint64_t>(head) * hidden + col],
                           kDTypeBF16) *
            encoded_to_f32(projection_input[col], dtype);
+  }
+  sum = block_sum(sum);
+  if (threadIdx.x == 0) {
+    weights[head] = sum;
+  }
+}
+
+__global__ void hf_deepseek_v32_indexer_weight_state_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, const uint16_t *projection_input,
+    uint32_t projection_input_stride, uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes) {
+  const uint32_t head = blockIdx.x;
+  const uint32_t local_token = blockIdx.y;
+  if (head >= layout.deepseek_index_n_heads || local_token >= chunk_tokens ||
+      projection_input_stride < hidden) {
+    return;
+  }
+  if (arena == nullptr || projection_input == nullptr ||
+      deepseek_indexer_state == nullptr ||
+      !deepseek_v32_indexer_query_state_supported(layout)) {
+    return;
+  }
+  const uint32_t position = chunk_start + local_token;
+  if (position >= max_steps) {
+    return;
+  }
+  const uint16_t *token_projection =
+      projection_input +
+      static_cast<uint64_t>(local_token) * projection_input_stride;
+  const uint64_t token_bytes =
+      deepseek_v32_indexer_query_state_token_bytes(layout);
+  uint8_t *token_ptr = deepseek_indexer_state +
+                       deepseek_indexer_state_offset_bytes +
+                       static_cast<uint64_t>(position) * token_bytes;
+  auto *weights = reinterpret_cast<float *>(
+      token_ptr +
+      deepseek_v32_indexer_query_state_weights_offset_bytes(layout));
+  float sum = 0.0f;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    sum += encoded_to_f32(arena[layout.deepseek_indexer_weights +
+                                static_cast<uint64_t>(head) * hidden + col],
+                          kDTypeBF16) *
+           encoded_to_f32(token_projection[col], dtype);
   }
   sum = block_sum(sum);
   if (threadIdx.x == 0) {
@@ -337,6 +551,114 @@ __global__ void hf_deepseek_v32_indexer_query_state_kernel(
   }
 
   if (blockIdx.x == 0 && threadIdx.x == 0 && deepseek_runtime_counters != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterIndexerStateWrites),
+        1ull);
+  }
+}
+
+__global__ void hf_deepseek_v32_indexer_query_state_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t q_lora_rank, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, float rope_theta, const uint16_t *qr_norm,
+    uint32_t qr_norm_stride, uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    uint64_t *deepseek_runtime_counters) {
+  const uint32_t head = blockIdx.x;
+  const uint32_t local_token = blockIdx.y;
+  if (head >= layout.deepseek_index_n_heads || local_token >= chunk_tokens ||
+      qr_norm_stride < q_lora_rank) {
+    return;
+  }
+  if (arena == nullptr || qr_norm == nullptr ||
+      deepseek_indexer_state == nullptr ||
+      !deepseek_v32_indexer_query_state_supported(layout) ||
+      q_lora_rank != layout.deepseek_q_lora_rank) {
+    return;
+  }
+  const uint32_t position = chunk_start + local_token;
+  if (position >= max_steps) {
+    return;
+  }
+
+  const uint16_t *token_qr_norm =
+      qr_norm + static_cast<uint64_t>(local_token) * qr_norm_stride;
+  const uint32_t index_heads = layout.deepseek_index_n_heads;
+  const uint32_t index_head_dim = layout.deepseek_index_head_dim;
+  const uint32_t query_rows = index_heads * index_head_dim;
+  const uint64_t token_bytes =
+      deepseek_v32_indexer_query_state_token_bytes(layout);
+  uint8_t *token_ptr = deepseek_indexer_state +
+                       deepseek_indexer_state_offset_bytes +
+                       static_cast<uint64_t>(position) * token_bytes;
+  uint8_t *q_fp8 = token_ptr;
+  auto *q_scales = reinterpret_cast<float *>(
+      token_ptr +
+      deepseek_v32_indexer_query_state_q_scale_offset_bytes(layout));
+  auto *weights = reinterpret_cast<float *>(
+      token_ptr +
+      deepseek_v32_indexer_query_state_weights_offset_bytes(layout));
+
+  __shared__ float query_head[kDeepSeekSessionMaxCompressHeadSize];
+  __shared__ float q_scale;
+  for (uint32_t dim = threadIdx.x; dim < index_head_dim; dim += blockDim.x) {
+    const uint32_t row = head * index_head_dim + dim;
+    float sum = 0.0f;
+    for (uint32_t col = 0; col < q_lora_rank; ++col) {
+      sum += deepseek_fp8_scaled_weight(
+                 arena, layout.deepseek_indexer_q,
+                 layout.deepseek_indexer_q_scale, query_rows, q_lora_rank,
+                 row, col) *
+             encoded_to_f32(token_qr_norm[col], dtype);
+    }
+    query_head[dim] = sum;
+  }
+  __syncthreads();
+
+  const uint32_t rope_dim =
+      layout.deepseek_qk_rope_head_dim <= index_head_dim
+          ? layout.deepseek_qk_rope_head_dim
+          : 0u;
+  const uint32_t rope_half = rope_dim / 2u;
+  const float softmax_scale = rsqrtf(static_cast<float>(index_head_dim));
+  const float head_scale = rsqrtf(static_cast<float>(index_heads));
+  for (uint32_t offset = threadIdx.x; offset < rope_half; offset += blockDim.x) {
+    const uint32_t left = offset;
+    const uint32_t right = offset + rope_half;
+    const float left_value = query_head[left];
+    const float right_value = query_head[right];
+    query_head[left] = deepseek_rope_value_serial(
+        left_value, right_value, offset, rope_dim, position, rope_theta,
+        false, layout);
+    query_head[right] = deepseek_rope_value_serial(
+        left_value, right_value, offset, rope_dim, position, rope_theta,
+        true, layout);
+  }
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    float absmax = 0.0f;
+    for (uint32_t dim = 0; dim < index_head_dim; ++dim) {
+      query_head[dim] = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(query_head[dim]));
+      absmax = fmaxf(absmax, fabsf(query_head[dim]));
+    }
+    q_scale = exp2f(ceilf(log2f(fmaxf(absmax, 1.0e-4f) / 448.0f)));
+    q_scales[head] = q_scale;
+    weights[head] *= q_scale * softmax_scale * head_scale;
+  }
+  __syncthreads();
+
+  for (uint32_t dim = threadIdx.x; dim < index_head_dim; dim += blockDim.x) {
+    const float scaled =
+        fminf(fmaxf(query_head[dim] / q_scale, -448.0f), 448.0f);
+    q_fp8[static_cast<uint64_t>(head) * index_head_dim + dim] =
+        deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
+  }
+
+  if (head == 0 && threadIdx.x == 0 && deepseek_runtime_counters != nullptr) {
     atomicAdd(
         reinterpret_cast<unsigned long long *>(
             deepseek_runtime_counters +

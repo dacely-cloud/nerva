@@ -13,16 +13,37 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v32_indexer_kv_encode_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, float rope_theta, const uint16_t *projection_input,
+    uint32_t projection_input_stride, uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v32_indexer_weight_state_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
     const uint16_t *projection_input, uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes);
+__global__ void hf_deepseek_v32_indexer_weight_state_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, const uint16_t *projection_input,
+    uint32_t projection_input_stride, uint8_t *deepseek_indexer_state,
     uint64_t deepseek_indexer_state_offset_bytes);
 __global__ void hf_deepseek_v32_indexer_query_state_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t q_lora_rank, uint32_t *step_cursor, uint32_t max_steps,
     float rope_theta, const uint16_t *qr_norm,
     uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v32_indexer_query_state_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t q_lora_rank, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, float rope_theta, const uint16_t *qr_norm,
+    uint32_t qr_norm_stride, uint8_t *deepseek_indexer_state,
     uint64_t deepseek_indexer_state_offset_bytes,
     uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v32_sparse_topk_select_kernel(

@@ -841,12 +841,25 @@ bool use_deepseek_v3_single_layer_prefill_cache_path(
   }
   const SequenceLayerLayout layout = session->host_layouts[0];
   if (!layout_is_deepseek_v3_mla(layout) ||
-      (layout_is_deepseek_v32_indexer_native(layout) &&
-       layout.deepseek_index_topk != 0) ||
       layout.rms_attn == kMissingOffset || layout.w_k == kMissingOffset ||
       layout.deepseek_kv_a_scale == kMissingOffset ||
       layout.k_norm == kMissingOffset || layout.deepseek_kv_lora_rank == 0 ||
       layout.deepseek_qk_rope_head_dim == 0) {
+    return false;
+  }
+  const bool active_sparse_indexer =
+      layout_is_deepseek_v32_indexer_query_native(layout) &&
+      layout.deepseek_index_topk != 0;
+  if (active_sparse_indexer &&
+      (layout.w_q == kMissingOffset ||
+       layout.deepseek_q_a_scale == kMissingOffset ||
+       layout.q_norm == kMissingOffset ||
+       layout.deepseek_indexer_q == kMissingOffset ||
+       layout.deepseek_indexer_q_scale == kMissingOffset ||
+       session->device_prefill_o == nullptr ||
+       session->device_prefill_attn == nullptr ||
+       layout.deepseek_q_lora_rank > session->hidden ||
+       layout.deepseek_q_lora_rank > session->heads * session->head_dim)) {
     return false;
   }
   const uint32_t kv_a_rows =
@@ -868,8 +881,14 @@ cudaError_t launch_deepseek_v3_single_layer_prefill_cache_path(
   }
   const SequenceLayerLayout layout = session->host_layouts[0];
   const uint32_t kv_lora_rank = layout.deepseek_kv_lora_rank;
+  const uint32_t q_lora_rank = layout.deepseek_q_lora_rank;
   const uint32_t kv_a_rows =
       layout.deepseek_kv_lora_rank + layout.deepseek_qk_rope_head_dim;
+  const bool active_sparse_indexer =
+      layout_is_deepseek_v32_indexer_query_native(layout) &&
+      layout.deepseek_index_topk != 0;
+  const uint32_t prefix_tokens =
+      prompt_token_count == 0 ? 0 : prompt_token_count - 1u;
   constexpr uint32_t block_rows = 128;
   constexpr uint32_t block_cols = 128;
   cudaError_t err = cudaEventRecord(session->device_start, session->stream);
@@ -878,6 +897,10 @@ cudaError_t launch_deepseek_v3_single_layer_prefill_cache_path(
        chunk_start += session->prefill_chunk_tokens) {
     const uint32_t chunk_tokens = std::min(session->prefill_chunk_tokens,
                                           prompt_token_count - chunk_start);
+    const uint32_t indexer_tokens =
+        active_sparse_indexer && chunk_start < prefix_tokens
+            ? std::min(chunk_tokens, prefix_tokens - chunk_start)
+            : 0u;
     hf_prefill_embed_range_kernel<<<chunk_tokens, kDecodeThreads, 0,
                                     session->stream>>>(
         session->device_arena, session->arena_layout, session->hidden,
@@ -900,6 +923,33 @@ cudaError_t launch_deepseek_v3_single_layer_prefill_cache_path(
       if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
     }
 
+    if (err == cudaSuccess && indexer_tokens != 0) {
+      hf_deepseek_v32_indexer_kv_encode_tokens_kernel<<<
+          indexer_tokens, kDecodeThreads, 0, session->stream>>>(
+          session->device_arena, layout, session->dtype, session->hidden,
+          chunk_start, indexer_tokens, session->max_context_tokens,
+          session->rope_theta, session->device_prefill_norm, session->hidden,
+          session->device_deepseek_indexer_kv,
+          deepseek_v32_indexer_kv_layer_offset_bytes(session, 0),
+          deepseek_v32_indexer_kv_block_count(session, layout),
+          session->device_deepseek_runtime_counters);
+      err = cudaGetLastError();
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
+
+    if (err == cudaSuccess && indexer_tokens != 0) {
+      const dim3 weight_grid(layout.deepseek_index_n_heads, indexer_tokens);
+      hf_deepseek_v32_indexer_weight_state_tokens_kernel<<<
+          weight_grid, kDecodeThreads, 0, session->stream>>>(
+          session->device_arena, layout, session->dtype, session->hidden,
+          chunk_start, indexer_tokens, session->max_context_tokens,
+          session->device_prefill_norm, session->hidden,
+          reinterpret_cast<uint8_t *>(session->device_deepseek_indexer_state),
+          deepseek_v32_indexer_query_state_layer_offset_bytes(session, 0));
+      err = cudaGetLastError();
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
+
     if (err == cudaSuccess) {
       err = launch_deepseek_fp8_f32_scale_encoded_gemm_tokens(
           session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_k),
@@ -908,6 +958,43 @@ cudaError_t launch_deepseek_v3_single_layer_prefill_cache_path(
           session->device_prefill_norm, session->dtype, kv_a_rows,
           session->hidden, chunk_tokens, block_rows, block_cols,
           session->device_prefill_qkv);
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
+
+    if (err == cudaSuccess && indexer_tokens != 0) {
+      err = launch_deepseek_fp8_f32_scale_encoded_gemm_tokens(
+          session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_q),
+          deepseek_scale_ptr(session->device_arena,
+                             layout.deepseek_q_a_scale),
+          session->device_prefill_norm, session->dtype, q_lora_rank,
+          session->hidden, indexer_tokens, block_rows, block_cols,
+          session->device_prefill_o);
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
+
+    if (err == cudaSuccess && indexer_tokens != 0) {
+      hf_deepseek_rms_norm_f32_tokens_kernel<<<indexer_tokens,
+                                               kDecodeNormThreads, 0,
+                                               session->stream>>>(
+          session->device_arena, layout.q_norm, session->device_prefill_o,
+          deepseek_norm_weight_dtype(layout), session->dtype, q_lora_rank,
+          q_lora_rank, q_lora_rank, indexer_tokens, session->rms_eps,
+          session->device_prefill_attn);
+      err = cudaGetLastError();
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
+
+    if (err == cudaSuccess && indexer_tokens != 0) {
+      const dim3 query_grid(layout.deepseek_index_n_heads, indexer_tokens);
+      hf_deepseek_v32_indexer_query_state_tokens_kernel<<<
+          query_grid, kDecodeThreads, 0, session->stream>>>(
+          session->device_arena, layout, session->dtype, q_lora_rank,
+          chunk_start, indexer_tokens, session->max_context_tokens,
+          session->rope_theta, session->device_prefill_attn, q_lora_rank,
+          reinterpret_cast<uint8_t *>(session->device_deepseek_indexer_state),
+          deepseek_v32_indexer_query_state_layer_offset_bytes(session, 0),
+          session->device_deepseek_runtime_counters);
+      err = cudaGetLastError();
       if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
     }
 
@@ -938,6 +1025,12 @@ cudaError_t launch_deepseek_v3_single_layer_prefill_cache_path(
     }
   }
 
+  if (err == cudaSuccess) {
+    hf_decode_set_step_kernel<<<1, 1, 0, session->stream>>>(
+        session->device_step, prompt_token_count - 1u);
+    err = cudaGetLastError();
+    if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+  }
   if (err == cudaSuccess) {
     err = ensure_session_graph(session, session->max_context_tokens,
                                prompt_token_count, has_eos_token, eos_token, 0,
