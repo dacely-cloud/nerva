@@ -329,6 +329,9 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
         "cuda_deepseek_megamoe_fp8_fp4_expert_api",
         "cuda_deepseek_megamoe_fp8_fp4_expert_smoke",
         "deepseek_full_routed_moe_reference",
+        "cuda_hf_sequence_deepseek_v4_mxfp4_expert_gate_up_runtime",
+        "cuda_hf_sequence_deepseek_v4_mxfp4_expert_down_runtime",
+        "cuda_hf_sequence_deepseek_v4_parallel_sparse_moe_runtime",
     ] {
         assert!(
             primitives.iter().any(|item| item == primitive),
@@ -352,6 +355,12 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
             .validated_primitives
             .iter()
             .any(|item| item == "deepseek_v4_full_routed_moe_hash_reference")
+    );
+    assert!(
+        router
+            .validated_primitives
+            .iter()
+            .any(|item| item == "cuda_hf_sequence_deepseek_v4_sparse_moe_route_runtime")
     );
 
     let parity = coverage

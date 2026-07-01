@@ -825,6 +825,10 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_bias_router_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_hash_router_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_sparse_moe_route_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_mxfp4_expert_gate_up_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_mxfp4_expert_down_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v4_parallel_sparse_moe_runtime".to_string());
         primitives.push("deepseek_qkv_rmsnorm_reference".to_string());
         primitives.push("cuda_deepseek_qkv_rmsnorm_api".to_string());
         primitives.push("cuda_deepseek_qkv_rmsnorm_smoke".to_string());
@@ -1297,6 +1301,7 @@ fn coverage_for_unit(
                 "cuda_deepseek_v4_sqrtsoftplus_hash_router_smoke",
                 "cuda_hf_sequence_deepseek_v4_bias_router_runtime",
                 "cuda_hf_sequence_deepseek_v4_hash_router_runtime",
+                "cuda_hf_sequence_deepseek_v4_sparse_moe_route_runtime",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
             ],
             &["run same-checkpoint full-layer routed output differential against /root/vllm"],
@@ -1318,9 +1323,12 @@ fn coverage_for_unit(
                 "cuda_deepseek_routed_moe_api",
                 "cuda_deepseek_routed_moe_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_v4_mxfp4_expert_gate_up_runtime",
+                "cuda_hf_sequence_deepseek_v4_mxfp4_expert_down_runtime",
+                "cuda_hf_sequence_deepseek_v4_parallel_sparse_moe_runtime",
             ],
             &[
-                "replace reference V4 MegaMoE fp8/fp4 expert kernel with DeepGEMM-equivalent batched expert kernels",
+                "replace per-rank row-parallel MXFP4 decode expert kernels with DeepGEMM-equivalent batched MegaMoE kernels",
                 "integrate dynamic EPLB rebalance and physical expert weight exchange into full runtime",
                 "benchmark MegaMoE against vLLM deep_gemm_mega_moe/FusedMoE",
             ],

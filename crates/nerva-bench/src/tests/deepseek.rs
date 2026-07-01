@@ -105,6 +105,10 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_selection_hash"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_sparse_attention_swa_plus_topk"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_sparse_moe_route_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_mxfp4_expert_gate_up_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_mxfp4_expert_down_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_parallel_sparse_moe_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources"));
     assert!(json.contains("cuda_hf_sequence_deepseek_descriptor_abi"));
     assert!(json.contains("cuda_hf_sequence_deepseek_footprint_accounting"));
@@ -118,7 +122,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("\"unit\":\"deepseek_v4_megamoe_int8_fp4_experts\""));
     assert!(
         json.contains(
-            "replace reference V4 MegaMoE fp8/fp4 expert kernel with DeepGEMM-equivalent batched expert kernels"
+            "replace per-rank row-parallel MXFP4 decode expert kernels with DeepGEMM-equivalent batched MegaMoE kernels"
         )
     );
     assert!(json.contains(
