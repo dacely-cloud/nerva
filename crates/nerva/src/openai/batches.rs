@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use actix_web::{HttpRequest, HttpResponse, web};
 use serde_json::{Value, json};
 
+use crate::cli::args::{DEFAULT_TEMPERATURE, DEFAULT_TOP_P};
+
 use super::{
     ApiError, AppState, BatchRecord, BatchRequestCounts, GenerateOptions, PromptInput,
     ReasoningMode, append_response_to_conversation, apply_response_format_instruction, authorize,
@@ -329,8 +331,8 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
     let n = request_n(body)?;
     let prompts = completion_prompts(body)?;
     let max_tokens = request_max_tokens(state, body)?;
-    let temperature = request_f32(body, "temperature", 1.0)?;
-    let top_p = request_f32(body, "top_p", 1.0)?;
+    let temperature = request_f32(body, "temperature", DEFAULT_TEMPERATURE)?;
+    let top_p = request_f32(body, "top_p", DEFAULT_TOP_P)?;
     let top_k = request_u32(body, "top_k", 0)?;
     let seed = request_u64_opt(body, "seed")?;
     let stop = request_stop_strings(body)?;
@@ -434,8 +436,8 @@ fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result
         response_format_instruction.as_deref(),
     )?;
     let max_tokens = request_max_tokens(state, body)?;
-    let temperature = request_f32(body, "temperature", 1.0)?;
-    let top_p = request_f32(body, "top_p", 1.0)?;
+    let temperature = request_f32(body, "temperature", DEFAULT_TEMPERATURE)?;
+    let top_p = request_f32(body, "top_p", DEFAULT_TOP_P)?;
     let top_k = request_u32(body, "top_k", 0)?;
     let seed = request_u64_opt(body, "seed")?;
     let stop = request_stop_strings(body)?;
@@ -530,8 +532,8 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
         GenerateOptions {
             prompt,
             max_tokens: request_max_tokens(state, body)?,
-            temperature: request_f32(body, "temperature", 1.0)?,
-            top_p: request_f32(body, "top_p", 1.0)?,
+            temperature: request_f32(body, "temperature", DEFAULT_TEMPERATURE)?,
+            top_p: request_f32(body, "top_p", DEFAULT_TOP_P)?,
             top_k: request_u32(body, "top_k", 0)?,
             seed: request_u64_opt(body, "seed")?,
             stop: request_stop_strings(body)?,
