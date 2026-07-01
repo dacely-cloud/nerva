@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -31,6 +32,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vllm-root", default="/root/vllm")
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
+    parser.add_argument("--linear-backend", default="auto")
+    parser.add_argument("--moe-backend", default="auto")
+    parser.add_argument("--attention-backend", default="auto")
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--warmup-runs", type=int, default=1)
     parser.add_argument("--enable-prefix-caching", action="store_true")
@@ -85,6 +89,18 @@ def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[s
                 "warmup_runs": args.warmup_runs,
                 "dtype": args.dtype,
                 "enable_prefix_caching": args.enable_prefix_caching,
+                "kernel": {
+                    "linear_backend": args.linear_backend,
+                    "moe_backend": args.moe_backend,
+                    "attention_backend": args.attention_backend,
+                    "VLLM_USE_DEEP_GEMM": os.environ.get("VLLM_USE_DEEP_GEMM"),
+                    "VLLM_MOE_USE_DEEP_GEMM": os.environ.get(
+                        "VLLM_MOE_USE_DEEP_GEMM"
+                    ),
+                    "VLLM_USE_DEEP_GEMM_E8M0": os.environ.get(
+                        "VLLM_USE_DEEP_GEMM_E8M0"
+                    ),
+                },
                 "sampler": {
                     "temperature": args.temperature,
                     "top_p": args.top_p,
@@ -110,6 +126,14 @@ def run_generation(args: argparse.Namespace) -> None:
 
     from vllm import LLM, SamplingParams
 
+    engine_kwargs: dict[str, Any] = {}
+    if args.linear_backend != "auto":
+        engine_kwargs["linear_backend"] = args.linear_backend
+    if args.moe_backend != "auto":
+        engine_kwargs["moe_backend"] = args.moe_backend
+    if args.attention_backend != "auto":
+        engine_kwargs["attention_config"] = {"backend": args.attention_backend}
+
     llm = LLM(
         model=args.model,
         tokenizer=args.model,
@@ -122,6 +146,7 @@ def run_generation(args: argparse.Namespace) -> None:
         disable_log_stats=args.disable_log_stats,
         enable_prefix_caching=args.enable_prefix_caching,
         seed=args.seed,
+        **engine_kwargs,
     )
     sampling = SamplingParams(
         temperature=args.temperature,
@@ -181,6 +206,18 @@ def run_generation(args: argparse.Namespace) -> None:
                 "measured_runs": args.runs,
                 "warmup_runs": args.warmup_runs,
                 "enable_prefix_caching": args.enable_prefix_caching,
+                "kernel": {
+                    "linear_backend": args.linear_backend,
+                    "moe_backend": args.moe_backend,
+                    "attention_backend": args.attention_backend,
+                    "VLLM_USE_DEEP_GEMM": os.environ.get("VLLM_USE_DEEP_GEMM"),
+                    "VLLM_MOE_USE_DEEP_GEMM": os.environ.get(
+                        "VLLM_MOE_USE_DEEP_GEMM"
+                    ),
+                    "VLLM_USE_DEEP_GEMM_E8M0": os.environ.get(
+                        "VLLM_USE_DEEP_GEMM_E8M0"
+                    ),
+                },
                 "sampler": {
                     "temperature": args.temperature,
                     "top_p": args.top_p,

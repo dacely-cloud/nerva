@@ -597,6 +597,9 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"--max-tokens\""));
     assert!(json.contains("\"--runs\""));
     assert!(json.contains("\"--warmup-runs\""));
+    assert!(json.contains("\"--linear-backend\""));
+    assert!(json.contains("\"--moe-backend\""));
+    assert!(json.contains("\"--attention-backend\""));
     assert!(json
         .contains("same literal prompt text with NERVA --raw and vLLM tokenizer.encode(prompt)"));
     assert!(json.contains("same prompt_token_ids in both JSON artifacts"));
