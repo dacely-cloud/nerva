@@ -6,7 +6,7 @@ use crate::common::json::fields::{
     optional_object_f32, optional_object_json, optional_object_string, optional_string,
     optional_u32_or_first, optional_usize,
 };
-use crate::hf::architecture::{architecture_kind_from_str, HfArchitectureKind};
+use crate::hf::architecture::{HfArchitectureKind, architecture_kind_from_str};
 use crate::hf::metadata::{
     HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata, HfRopeScalingMetadata,
 };

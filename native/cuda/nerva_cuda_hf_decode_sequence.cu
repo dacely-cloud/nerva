@@ -153,6 +153,9 @@ extern "C" int nerva_cuda_hf_decode_sequence_plan_layout(
   out->w_router = layout.w_router;
   out->w_expert_gate_up = layout.w_expert_gate_up;
   out->w_expert_down = layout.w_expert_down;
+  out->w_shared_expert_gate = layout.w_shared_expert_gate;
+  out->w_shared_expert_up = layout.w_shared_expert_up;
+  out->w_shared_expert_down = layout.w_shared_expert_down;
   return 0;
 }
 

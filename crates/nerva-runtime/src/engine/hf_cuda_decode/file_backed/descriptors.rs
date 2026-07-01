@@ -3,22 +3,21 @@ use std::os::unix::ffi::OsStrExt;
 
 use nerva_core::types::error::{NervaError, Result};
 use nerva_cuda::decode::hf_chain::layer::{
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN,
     CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW,
-    CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+    CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
     CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK, CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE, CUDA_HF_MLP_DENSE,
-    CUDA_HF_MLP_SPARSE_MOE,
+    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use nerva_cuda::decode::hf_sequence::weight_plan::{
-    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock,
+    CudaHfDecodeSequenceWeightBlock, hash_weight_blocks,
 };
 use nerva_model::hf::architecture::HfArchitectureKind;
 use nerva_model::hf::deepseek_runtime::{
-    deepseek_layer_execution_plan, DeepSeekAttentionExecutionKind, DeepSeekLayerExecution,
+    DeepSeekAttentionExecutionKind, DeepSeekLayerExecution, deepseek_layer_execution_plan,
 };
 use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 
@@ -452,10 +451,10 @@ mod tests {
         CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER,
         CUDA_HF_DEEPSEEK_FLAG_MOE, CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS,
         CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-        CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
-        CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
-        CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK, CUDA_HF_MLP_DENSE,
-        CUDA_HF_MLP_SPARSE_MOE,
+        CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
+        CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+        CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
+        CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
     };
     use nerva_model::hf::architecture::HfArchitectureKind;
     use nerva_model::hf::metadata::{
@@ -803,9 +802,11 @@ mod tests {
 
         let layers = descriptor_marker_layers(&metadata).unwrap();
 
-        assert!(layers
-            .iter()
-            .all(|layer| layer.deepseek.unwrap().mode == CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER));
+        assert!(
+            layers
+                .iter()
+                .all(|layer| layer.deepseek.unwrap().mode == CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER)
+        );
         assert_eq!(
             layers
                 .iter()

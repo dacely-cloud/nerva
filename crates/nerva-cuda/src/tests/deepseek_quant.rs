@@ -5,7 +5,7 @@ use crate::deepseek_quant::dequant::{
     deepseek_mxfp4_e2m1_e8m0_dequant,
 };
 use crate::deepseek_quant::inv_rope::{
-    deepseek_fused_inv_rope_fp8_quant, CudaDeepSeekFusedInvRopeFp8QuantSummary,
+    CudaDeepSeekFusedInvRopeFp8QuantSummary, deepseek_fused_inv_rope_fp8_quant,
 };
 use crate::deepseek_quant::probe::{deepseek_fused_inv_rope_fp8_quant_smoke, deepseek_quant_smoke};
 use crate::deepseek_quant::summary::CudaDeepSeekQuantSummary;
@@ -322,7 +322,9 @@ fn deepseek_quant_dequant_apis_match_reference_values() {
     assert_eq!(fp8.block_cols, 2);
     assert_eq!(
         fp8.output,
-        [1.0, 2.0, 1.0, -2.0, 128.0, 240.0, 512.0, 896.0, 0.0625, 0.125, 2.0, 4.0]
+        [
+            1.0, 2.0, 1.0, -2.0, 128.0, 240.0, 512.0, 896.0, 0.0625, 0.125, 2.0, 4.0
+        ]
     );
     assert_eq!(fp8.kernel_launches, 1);
     assert_eq!(fp8.sync_calls, 1);

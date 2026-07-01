@@ -558,6 +558,9 @@ typedef struct NervaCudaHfDecodeSequenceLayoutPlanResult {
   uint64_t w_router;
   uint64_t w_expert_gate_up;
   uint64_t w_expert_down;
+  uint64_t w_shared_expert_gate;
+  uint64_t w_shared_expert_up;
+  uint64_t w_shared_expert_down;
   uint64_t deepseek_q_a_scale;
   uint64_t deepseek_q_b;
   uint64_t deepseek_q_b_scale;

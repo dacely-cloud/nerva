@@ -146,8 +146,12 @@ __global__ void hf_deepseek_v3_sparse_moe_shared_down_kernel(
 __global__ void hf_deepseek_ff_encode_kernel(
     SequenceLayerLayout layout, uint32_t dtype, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
-    uint32_t *step_cursor, uint32_t max_steps, float *scratch,
-    uint16_t *projection_input);
+    uint32_t active_intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float *scratch, uint16_t *projection_input);
+__global__ void hf_deepseek_accumulate_residual_down_kernel(
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float *scratch);
 __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t head_dim,

@@ -1,13 +1,13 @@
 use crate::deepseek_quant::ffi::{
-    run_deepseek_quant_fp8_dequant, run_deepseek_quant_fp8_e8m0_scale_encoded_gemm_tokens,
-    run_deepseek_quant_fp8_f32_scale_encoded_gemm_tokens,
-    run_deepseek_quant_fp8_f32_scale_encoded_matvec, run_deepseek_quant_fp8_f32_scale_matvec,
-    run_deepseek_quant_mxfp4_dequant, NervaCudaDeepSeekQuantDequantResult,
-    NervaCudaDeepSeekQuantFp8DequantRequest,
+    NervaCudaDeepSeekQuantDequantResult, NervaCudaDeepSeekQuantFp8DequantRequest,
     NervaCudaDeepSeekQuantFp8E8m0ScaleEncodedGemmTokensRequest,
     NervaCudaDeepSeekQuantFp8F32ScaleEncodedGemmTokensRequest,
     NervaCudaDeepSeekQuantFp8F32ScaleEncodedMatvecRequest,
     NervaCudaDeepSeekQuantFp8F32ScaleMatvecRequest, NervaCudaDeepSeekQuantMxfp4DequantRequest,
+    run_deepseek_quant_fp8_dequant, run_deepseek_quant_fp8_e8m0_scale_encoded_gemm_tokens,
+    run_deepseek_quant_fp8_f32_scale_encoded_gemm_tokens,
+    run_deepseek_quant_fp8_f32_scale_encoded_matvec, run_deepseek_quant_fp8_f32_scale_matvec,
+    run_deepseek_quant_mxfp4_dequant,
 };
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;
 use crate::smoke::status::SmokeStatus;

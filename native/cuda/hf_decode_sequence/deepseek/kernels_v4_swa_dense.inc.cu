@@ -955,7 +955,7 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     }
 
     const uint32_t shared_intermediate = layout.shared_expert_intermediate;
-    if (shared_intermediate != 0) {
+    if (shared_intermediate != 0 && run_mlp != 2u) {
       if (layout.w_shared_expert_gate == kMissingOffset ||
           layout.w_shared_expert_up == kMissingOffset ||
           layout.w_shared_expert_down == kMissingOffset ||

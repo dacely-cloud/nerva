@@ -381,6 +381,10 @@ fn rank3_byte_slots(depth: usize, rows: usize, cols: usize) -> u64 {
     (depth * rows * cols).div_ceil(2) as u64
 }
 
+fn byte_slots(rows: usize, cols: usize) -> u64 {
+    (rows * cols).div_ceil(2) as u64
+}
+
 fn write_arena_mxfp4_rank3_scales(
     storage: &mut [u16],
     arena_offset: u64,
@@ -2863,8 +2867,7 @@ fn deepseek_v32_projection_scales_reach_sparse_decode_outputs() {
     .expect("CUDA device availability should not change between paired runs");
 
     assert_ne!(
-        reference.deepseek_sparse_topk_selection_hash,
-        q_a_zero.deepseek_sparse_topk_selection_hash,
+        reference.deepseek_sparse_topk_selection_hash, q_a_zero.deepseek_sparse_topk_selection_hash,
         "V3.2 q_a projection scale must affect the live sparse-indexer output"
     );
     assert_ne!(
@@ -3473,11 +3476,13 @@ fn fill_tiny_v4_swa_sparse_moe_descriptor(
     plan: &CudaHfDecodeSequenceLayoutPlan,
     hash_router: bool,
     expert_payload: bool,
+    shared_payload: bool,
 ) {
     const HIDDEN: usize = 4;
     const VOCAB_SIZE: usize = 8;
     const NUM_EXPERTS: usize = 2;
     const MOE_INTERMEDIATE: usize = 4;
+    const SHARED_INTERMEDIATE: usize = 2;
     const HALF_HIDDEN: usize = HIDDEN / 2;
     const HALF_INTERMEDIATE: usize = MOE_INTERMEDIATE / 2;
 
@@ -3594,11 +3599,48 @@ fn fill_tiny_v4_swa_sparse_moe_descriptor(
             }
         }
     }
+
+    let shared_gate_scale = plan.w_shared_expert_gate + byte_slots(SHARED_INTERMEDIATE, HIDDEN);
+    let shared_up_scale = plan.w_shared_expert_up + byte_slots(SHARED_INTERMEDIATE, HIDDEN);
+    let shared_down_scale = plan.w_shared_expert_down + byte_slots(HIDDEN, SHARED_INTERMEDIATE);
+    write_arena_byte(storage, shared_gate_scale, 0, scale);
+    write_arena_byte(storage, shared_up_scale, 0, scale);
+    write_arena_byte(storage, shared_down_scale, 0, scale);
+    if shared_payload {
+        let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+        for row in 0..SHARED_INTERMEDIATE {
+            for col in 0..HIDDEN {
+                write_arena_byte(
+                    storage,
+                    plan.w_shared_expert_gate,
+                    row * HIDDEN + col,
+                    one_fp8,
+                );
+                write_arena_byte(
+                    storage,
+                    plan.w_shared_expert_up,
+                    row * HIDDEN + col,
+                    one_fp8,
+                );
+            }
+        }
+        for row in 0..HIDDEN {
+            for col in 0..SHARED_INTERMEDIATE {
+                write_arena_byte(
+                    storage,
+                    plan.w_shared_expert_down,
+                    row * SHARED_INTERMEDIATE + col,
+                    one_fp8,
+                );
+            }
+        }
+    }
 }
 
 fn run_tiny_v4_swa_sparse_moe_descriptor(
     hash_router: bool,
     expert_payload: bool,
+    shared_payload: bool,
 ) -> Option<(CudaHfDecodeSequenceSummary, u64)> {
     let layer = tiny_deepseek_v4_swa_sparse_moe_layer(hash_router);
     let layers = [layer];
@@ -3617,9 +3659,18 @@ fn run_tiny_v4_swa_sparse_moe_descriptor(
     assert_ne!(plan.w_router, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_ne!(plan.w_expert_gate_up, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_ne!(plan.w_expert_down, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.w_shared_expert_gate, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.w_shared_expert_up, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.w_shared_expert_down, CUDA_HF_SEQUENCE_MISSING_OFFSET);
 
     let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
-    fill_tiny_v4_swa_sparse_moe_descriptor(&mut weight_storage, &plan, hash_router, expert_payload);
+    fill_tiny_v4_swa_sparse_moe_descriptor(
+        &mut weight_storage,
+        &plan,
+        hash_router,
+        expert_payload,
+        shared_payload,
+    );
     let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
         host_source: weight_storage.as_ptr(),
         source_file: core::ptr::null(),
@@ -3701,11 +3752,13 @@ fn run_tiny_v4_swa_sparse_moe_descriptor(
 fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
-    let Some((zero_summary, zero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, false)
+    let Some((zero_summary, zero_hash)) =
+        run_tiny_v4_swa_sparse_moe_descriptor(false, false, false)
     else {
         return;
     };
-    let Some((summary, nonzero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, true) else {
+    let Some((summary, nonzero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, true, false)
+    else {
         return;
     };
     assert_eq!(summary.deepseek_v3_grouped_router_selections, 0);
@@ -3729,10 +3782,12 @@ fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
 fn deepseek_v4_swa_hash_moe_session_runs_through_sampling() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
-    let Some((zero_summary, zero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(true, false) else {
+    let Some((zero_summary, zero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(true, false, false)
+    else {
         return;
     };
-    let Some((summary, nonzero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(true, true) else {
+    let Some((summary, nonzero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(true, true, false)
+    else {
         return;
     };
     assert_eq!(summary.deepseek_v3_grouped_router_selections, 0);
@@ -3751,6 +3806,27 @@ fn deepseek_v4_swa_hash_moe_session_runs_through_sampling() {
         "non-zero V4 hash-routed MXFP4 expert weights must change the mHC residual state"
     );
     assert!(summary.graph_nodes > 0);
+}
+
+#[test]
+fn deepseek_v4_swa_sparse_moe_shared_expert_changes_state() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let Some((_, zero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, false, false) else {
+        return;
+    };
+    let Some((summary, shared_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, false, true)
+    else {
+        return;
+    };
+    assert_eq!(
+        summary.deepseek_v4_bias_router_selections,
+        summary.graph_replays
+    );
+    assert_ne!(
+        shared_hash, zero_hash,
+        "non-zero V4 shared expert weights must change the mHC residual state"
+    );
 }
 
 #[test]
