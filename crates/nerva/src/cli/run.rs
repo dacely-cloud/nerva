@@ -1,6 +1,7 @@
 use nerva_core::types::id::token::TokenId;
 use nerva_model::hf::tokenizer::{
-    decode_generated_text, encode_text_prompt, format_prompt_for_model, stop_token_ids,
+    EncodedPrompt, decode_generated_text, encode_text_prompt, format_prompt_for_model,
+    stop_token_ids,
 };
 use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
     HfCudaDeviceGenerateOutput, HfCudaRtDecodeConfig, HfCudaSamplerConfig,
@@ -26,18 +27,38 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
         .model
         .as_deref()
         .ok_or_else(|| "missing -m/--model".to_string())?;
-    let prompt = parsed
-        .prompt
-        .as_deref()
-        .ok_or_else(|| "missing -p/--prompt".to_string())?;
     let model_path = resolve_model_path(model)?;
     let model_path_string = model_path
         .to_str()
         .ok_or_else(|| "model path is not valid UTF-8".to_string())?
         .to_string();
-    let raw_prompt = resolve_prompt_text(prompt)?;
-    let formatted = format_prompt_for_model(&model_path_string, &raw_prompt, parsed.prompt_format)?;
-    let encoded = encode_text_prompt(&model_path_string, &formatted.text)?;
+    let prompt_arg = parsed.prompt.as_deref();
+    let (raw_prompt, prompt_mode, encoded) =
+        if let Some(prompt_token_ids) = parsed.prompt_token_ids.clone() {
+            let raw_prompt = match prompt_arg {
+                Some(prompt) => resolve_prompt_text(prompt)?,
+                None => prompt_token_ids
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            };
+            (
+                raw_prompt,
+                "token_ids",
+                EncodedPrompt {
+                    input_mode: "token_ids",
+                    token_ids: prompt_token_ids,
+                },
+            )
+        } else {
+            let prompt = prompt_arg.ok_or_else(|| "missing -p/--prompt".to_string())?;
+            let raw_prompt = resolve_prompt_text(prompt)?;
+            let formatted =
+                format_prompt_for_model(&model_path_string, &raw_prompt, parsed.prompt_format)?;
+            let encoded = encode_text_prompt(&model_path_string, &formatted.text)?;
+            (raw_prompt, formatted.mode, encoded)
+        };
     let prompt_tokens = encoded
         .token_ids
         .iter()
@@ -106,7 +127,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
     logger.banner();
     logger.configure(
         &model_path,
-        formatted.mode,
+        prompt_mode,
         prompt_tokens.len(),
         context_tokens,
         output_tokens,
@@ -141,7 +162,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
             &model_path_string,
             &raw_prompt,
             encoded.input_mode,
-            formatted.mode,
+            prompt_mode,
             &encoded.token_ids,
             &output,
             sampler,
@@ -153,8 +174,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
             print_stdout: true,
         });
     }
-    let generated_text = decode_generated_text(&model_path_string, output.tokens())?
-        .ok_or_else(|| "model generated tokens but tokenizer decode is unavailable".to_string())?;
+    let generated_text = generated_text_or_tokens(&model_path_string, encoded.input_mode, &output)?;
     logger.finish(&output, start.elapsed());
     logger.generated_text(generated_text.clone());
     Ok(GenerateResult {
@@ -174,9 +194,7 @@ fn generate_json_output(
     elapsed: std::time::Duration,
     include_detailed_profiling: bool,
 ) -> Result<String, String> {
-    let generated_text = decode_generated_text(path, output.tokens())?
-        .map(|text| format!("\"{}\"", json_escape(&text)))
-        .unwrap_or_else(|| "null".to_string());
+    let generated_text = generated_json_text(path, input_mode, output)?;
     let tokens = output
         .tokens()
         .iter()
@@ -394,6 +412,38 @@ fn generate_json_output(
         chunks,
         token_critical_paths_field
     ))
+}
+
+fn generated_json_text(
+    path: &str,
+    input_mode: &str,
+    output: &HfCudaDeviceGenerateOutput,
+) -> Result<String, String> {
+    match decode_generated_text(path, output.tokens()) {
+        Ok(Some(text)) => Ok(format!("\"{}\"", json_escape(&text))),
+        Ok(None) if input_mode == "token_ids" => Ok("null".to_string()),
+        Ok(None) => Ok("null".to_string()),
+        Err(_) if input_mode == "token_ids" => Ok("null".to_string()),
+        Err(err) => Err(err),
+    }
+}
+
+fn generated_text_or_tokens(
+    path: &str,
+    input_mode: &str,
+    output: &HfCudaDeviceGenerateOutput,
+) -> Result<String, String> {
+    match decode_generated_text(path, output.tokens()) {
+        Ok(Some(text)) => Ok(text),
+        Ok(None) | Err(_) if input_mode == "token_ids" => Ok(output
+            .tokens()
+            .iter()
+            .map(|token| token.0.to_string())
+            .collect::<Vec<_>>()
+            .join(" ")),
+        Ok(None) => Err("model generated tokens but tokenizer decode is unavailable".to_string()),
+        Err(err) => Err(err),
+    }
 }
 
 fn percentile_latency_ms(values_ns: &[u64], quantile: f64) -> f64 {

@@ -26,8 +26,8 @@ use crate::weights::manifest::build_hf_tensor_manifest;
 use crate::weights::safetensors::planner::plan_safetensors_shards_for_manifest;
 use crate::weights::safetensors::shard::{SafetensorsShardHeader, SafetensorsShardPlan};
 use crate::weights::tensor::{
-    LoadedSafetensorsTensorF32, LoadedSafetensorsTensorI64, LoadedSafetensorsTensorU16,
-    read_safetensors_tensor_f32_with_hash, read_safetensors_tensor_i64_with_hash,
+    LoadedSafetensorsTensorF32, LoadedSafetensorsTensorI32, LoadedSafetensorsTensorU16,
+    read_safetensors_tensor_f32_with_hash, read_safetensors_tensor_i32_with_hash,
     read_safetensors_tensor_u16_with_hash,
 };
 
@@ -719,7 +719,7 @@ fn load_sparse_moe_layer(
     if plan.entries.iter().any(|entry| {
         entry.role == WeightBlockRole::DeepSeekV4HashRouteTable && entry.layer == Some(layer)
     }) {
-        block = block.with_hash_route_table(load_layer_tensor_usize_from_i64(
+        block = block.with_hash_route_table(load_layer_tensor_usize_from_i32(
             dir,
             plan,
             WeightBlockRole::DeepSeekV4HashRouteTable,
@@ -875,7 +875,7 @@ fn load_layer_tensor_f32(
     Ok(tensor.values)
 }
 
-fn load_layer_tensor_usize_from_i64(
+fn load_layer_tensor_usize_from_i32(
     dir: &Path,
     plan: &SafetensorsShardPlan,
     role: WeightBlockRole,
@@ -883,7 +883,7 @@ fn load_layer_tensor_usize_from_i64(
     options: HfCausalLmLoadOptions,
     accounting: &mut LoadAccounting,
 ) -> Result<Vec<usize>> {
-    let tensor = load_tensor_i64(dir, plan, role, Some(layer), options)?;
+    let tensor = load_tensor_i32(dir, plan, role, Some(layer), options)?;
     accounting.record(tensor.bytes_read, tensor.data_hash);
     tensor
         .values
@@ -968,24 +968,24 @@ fn load_tensor_f32(
     )
 }
 
-fn load_tensor_i64(
+fn load_tensor_i32(
     dir: &Path,
     plan: &SafetensorsShardPlan,
     role: WeightBlockRole,
     layer: Option<u32>,
     options: HfCausalLmLoadOptions,
-) -> Result<LoadedSafetensorsTensorI64> {
+) -> Result<LoadedSafetensorsTensorI32> {
     let entry = plan
         .entries
         .iter()
         .find(|entry| entry.role == role && entry.layer == layer && entry.expert.is_none())
         .ok_or_else(|| NervaError::InvalidArgument {
             reason: format!(
-                "HF causal LM missing i64 tensor role {:?} layer {:?}",
+                "HF causal LM missing i32 tensor role {:?} layer {:?}",
                 role, layer
             ),
         })?;
-    read_safetensors_tensor_i64_with_hash(
+    read_safetensors_tensor_i32_with_hash(
         dir.join(&entry.shard_file),
         entry,
         options.compute_data_hash,

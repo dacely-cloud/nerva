@@ -36,14 +36,6 @@ pub(super) struct ShardBackedWeights {
 
 impl ShardBackedWeights {
     pub fn source_path(&self, entry: &SafetensorsShardPlanEntry) -> Result<PathBuf> {
-        if entry.bytes % 2 != 0 {
-            return Err(NervaError::InvalidArgument {
-                reason: format!(
-                    "safetensors tensor {} byte count is not u16 aligned",
-                    entry.tensor_name
-                ),
-            });
-        }
         let path = self.dir.join(&entry.shard_file);
         let len = std::fs::metadata(&path)
             .map_err(|err| NervaError::InvalidArgument {

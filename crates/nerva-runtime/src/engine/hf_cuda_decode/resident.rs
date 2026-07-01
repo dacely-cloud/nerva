@@ -5,6 +5,7 @@ use nerva_cuda::decode::hf_sequence::weight_plan::{
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::causal_lm::types::HfCausalLmLoaded;
 
+use crate::engine::hf_cuda_decode::contract::cuda_weight_descriptor_totals;
 use crate::engine::hf_cuda_decode::descriptors::cuda_weight_descriptors;
 use crate::engine::hf_cuda_decode::summary::HfCudaResidentWeightSummary;
 use crate::engine::runtime::Runtime;
@@ -34,22 +35,21 @@ pub(super) fn loaded_resident_weight_summary(
         compute_capability,
     )?;
     let run = runtime.execute_resident_weight_execution_plan(&table, &plan)?;
-    let resident_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuResident);
-    let staged_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuStaged);
     let fallback_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::CpuExactFallback);
     let descriptors = cuda_weight_descriptors(loaded, &plan)?;
     let descriptor_hash = hash_weight_blocks(&descriptors);
+    let descriptor_totals = cuda_weight_descriptor_totals(&descriptors);
 
     let summary = HfCudaResidentWeightSummary {
         plan_steps: plan.steps.len() as u64,
-        plan_weight_bytes: plan.total_weight_bytes as u64,
+        plan_weight_bytes: descriptor_totals.weight_bytes,
         plan_descriptor_blocks: descriptors.len() as u64,
         plan_descriptor_hash: descriptor_hash,
         hotset_promoted_blocks: hotset.promoted_blocks as u64,
         hotset_promoted_bytes: hotset.promoted_bytes as u64,
         hotset_kept_dram_blocks: hotset.kept_dram_blocks as u64,
-        plan_gpu_resident_weight_bytes: resident_bytes,
-        plan_gpu_staged_weight_bytes: staged_bytes,
+        plan_gpu_resident_weight_bytes: descriptor_totals.gpu_resident_weight_bytes,
+        plan_gpu_staged_weight_bytes: descriptor_totals.gpu_staged_weight_bytes,
         plan_fallback_weight_bytes: fallback_bytes,
         plan_gpu_resident_steps: plan.gpu_resident_steps,
         plan_gpu_staged_steps: plan.gpu_staged_steps,

@@ -703,6 +703,28 @@ fn deepseek_vllm_kv_plan_matches_v4_sparse_swa_and_indexer_contracts() {
 }
 
 #[test]
+fn deepseek_v4_kv_plan_ignores_extra_trailing_compress_ratio_slots() {
+    let config = deepseek_v4_flash_config().replace(
+        "\"compress_ratios\": [0, 0, 4, 128],",
+        "\"compress_ratios\": [0, 0, 4, 128, 0],",
+    );
+    let metadata = parse_hf_config_metadata(&config).unwrap();
+
+    let plan = plan_deepseek_vllm_kv_cache(&metadata, "fp8_ds_mla").unwrap();
+    assert_eq!(plan.groups.len(), 7);
+
+    let runtime = deepseek_layer_execution_plan(&metadata).unwrap();
+    assert_eq!(
+        runtime
+            .layers
+            .iter()
+            .map(|layer| layer.compress_ratio)
+            .collect::<Vec<_>>(),
+        vec![1, 1, 4, 128]
+    );
+}
+
+#[test]
 fn deepseek_layer_execution_plan_matches_vllm_v3_v32_and_v4_modes() {
     let v3 = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
     let v3_plan = deepseek_layer_execution_plan(&v3).unwrap();
@@ -1106,7 +1128,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4HcHeadBase,
         4,
         1,
-        DType::BF16,
+        DType::F32,
     );
     assert_entry(
         &manifest,
@@ -1114,7 +1136,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4HcHeadFn,
         4,
         16384,
-        DType::BF16,
+        DType::F32,
     );
     assert_entry(
         &manifest,
@@ -1122,7 +1144,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4HcHeadScale,
         1,
         1,
-        DType::BF16,
+        DType::F32,
     );
     assert_entry(
         &manifest,
@@ -1138,7 +1160,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4AttentionSink,
         64,
         1,
-        DType::BF16,
+        DType::F32,
     );
     assert_entry(
         &manifest,
@@ -1146,7 +1168,21 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4WqAScale,
         8,
         32,
+        DType::F8E8M0,
+    );
+    assert_entry(
+        &manifest,
+        "layers.0.attn.wo_a.weight",
+        WeightBlockRole::DeepSeekV4WoAProjection,
+        8192,
+        4096,
         DType::BF16,
+    );
+    assert!(
+        !manifest
+            .entries
+            .iter()
+            .any(|entry| entry.name == "layers.0.attn.wo_a.scale")
     );
     assert_entry(
         &manifest,
@@ -1154,7 +1190,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4CompressorApe,
         4,
         1024,
-        DType::BF16,
+        DType::F32,
     );
     assert_entry(
         &manifest,
@@ -1162,7 +1198,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection,
         256,
         4096,
-        DType::BF16,
+        DType::F32,
     );
     assert_entry(
         &manifest,
@@ -1178,7 +1214,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4CompressorApe,
         128,
         512,
-        DType::BF16,
+        DType::F32,
     );
     assert_entry(
         &manifest,
@@ -1186,7 +1222,7 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
         WeightBlockRole::DeepSeekV4HashRouteTable,
         129280,
         6,
-        DType::I64,
+        DType::I32,
     );
     assert_entry(
         &manifest,
@@ -1198,27 +1234,35 @@ fn deepseek_v4_manifest_covers_mhc_compressors_indexer_hash_and_fp4_experts() {
     );
     assert_entry(
         &manifest,
+        "layers.0.ffn.shared_experts.w1.weight",
+        WeightBlockRole::SharedExpertGateProjection,
+        2048,
+        4096,
+        DType::F8E4M3,
+    );
+    assert_entry(
+        &manifest,
         "layers.0.ffn.shared_experts.w1.scale",
         WeightBlockRole::DeepSeekV4SharedExpertGateScale,
-        2048,
-        256,
-        DType::F8E4M3,
+        16,
+        32,
+        DType::F8E8M0,
     );
     assert_entry(
         &manifest,
         "layers.0.ffn.experts.0.w1.weight",
         WeightBlockRole::ExpertGateProjection,
         2048,
-        2048,
-        DType::U8,
+        4096,
+        DType::F4E2M1,
     );
     assert_entry(
         &manifest,
         "layers.0.ffn.experts.0.w1.scale",
         WeightBlockRole::DeepSeekV4ExpertGateScale,
         2048,
-        256,
-        DType::F8E4M3,
+        128,
+        DType::F8E8M0,
     );
 }
 
@@ -1257,15 +1301,13 @@ fn deepseek_v4_bf16_shared_experts_do_not_require_quant_scales() {
         WeightBlockRole::DeepSeekV4CompressorWkvProjection,
         1024,
         4096,
-        DType::F8E4M3,
+        DType::F32,
     );
-    assert_entry(
-        &manifest,
-        "layers.2.attn.compressor.wkv.scale",
-        WeightBlockRole::DeepSeekV4CompressorWkvScale,
-        8,
-        32,
-        DType::BF16,
+    assert!(
+        !manifest
+            .entries
+            .iter()
+            .any(|entry| entry.name == "layers.2.attn.compressor.wkv.scale")
     );
     assert_entry(
         &manifest,
@@ -1281,7 +1323,7 @@ fn deepseek_v4_bf16_shared_experts_do_not_require_quant_scales() {
         WeightBlockRole::DeepSeekV4IndexerWeightsScale,
         1,
         32,
-        DType::BF16,
+        DType::F8E8M0,
     );
     assert_entry(
         &manifest,

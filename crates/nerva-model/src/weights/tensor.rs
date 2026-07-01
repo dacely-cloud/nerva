@@ -49,6 +49,14 @@ pub struct LoadedSafetensorsTensorI64 {
     pub data_hash: u64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadedSafetensorsTensorI32 {
+    pub name: String,
+    pub values: Vec<i32>,
+    pub bytes_read: usize,
+    pub data_hash: u64,
+}
+
 pub fn read_safetensors_tensor_u16(
     shard_path: impl AsRef<Path>,
     entry: &SafetensorsShardPlanEntry,
@@ -159,6 +167,40 @@ pub fn read_safetensors_tensor_i64_with_hash(
         })
         .collect::<Vec<_>>();
     Ok(LoadedSafetensorsTensorI64 {
+        name: entry.tensor_name.clone(),
+        values,
+        bytes_read: entry.bytes,
+        data_hash: if compute_hash { hash_bytes(&bytes) } else { 0 },
+    })
+}
+
+pub fn read_safetensors_tensor_i32_with_hash(
+    shard_path: impl AsRef<Path>,
+    entry: &SafetensorsShardPlanEntry,
+    compute_hash: bool,
+) -> Result<LoadedSafetensorsTensorI32> {
+    if entry.dtype != DType::I32 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors tensor {} has dtype {:?}; i32 tensor loading supports only I32",
+                entry.tensor_name, entry.dtype
+            ),
+        });
+    }
+    if entry.bytes % 4 != 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "safetensors tensor {} byte count {} is not divisible by 4",
+                entry.tensor_name, entry.bytes
+            ),
+        });
+    }
+    let bytes = read_safetensors_tensor_bytes(shard_path, entry)?;
+    let values = bytes
+        .chunks_exact(4)
+        .map(|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect::<Vec<_>>();
+    Ok(LoadedSafetensorsTensorI32 {
         name: entry.tensor_name.clone(),
         values,
         bytes_read: entry.bytes,

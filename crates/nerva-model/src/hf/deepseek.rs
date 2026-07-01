@@ -1015,16 +1015,16 @@ fn v4_layer_compress_ratios(metadata: &HfModelMetadata) -> Result<Vec<usize>> {
     if metadata.compress_ratios.is_empty() {
         return Ok(vec![1; metadata.num_hidden_layers]);
     }
-    if metadata.compress_ratios.len() != metadata.num_hidden_layers {
+    if metadata.compress_ratios.len() < metadata.num_hidden_layers {
         return Err(NervaError::InvalidArgument {
             reason: format!(
-                "DeepSeek V4 compress_ratios length {} does not match num_hidden_layers {}",
+                "DeepSeek V4 compress_ratios length {} is shorter than num_hidden_layers {}",
                 metadata.compress_ratios.len(),
                 metadata.num_hidden_layers
             ),
         });
     }
-    Ok(metadata.compress_ratios.clone())
+    Ok(metadata.compress_ratios[..metadata.num_hidden_layers].to_vec())
 }
 
 fn vllm_kv_reference_units(architecture: HfArchitectureKind) -> Vec<&'static str> {

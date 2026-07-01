@@ -459,13 +459,8 @@ fn deepseek_v4_attention_elements(
     )?;
     total = checked_add(
         total,
-        fp8_slots(wo_a_rows, wo_a_cols, "DeepSeek V4 wo_a")?,
+        bf16_slots(wo_a_rows, wo_a_cols, "DeepSeek V4 wo_a")?,
         "DeepSeek V4 wo_a",
-    )?;
-    total = checked_add(
-        total,
-        scale_e8m0_slots(wo_a_rows, wo_a_cols, "DeepSeek V4 wo_a scale")?,
-        "DeepSeek V4 wo_a scale",
     )?;
     total = checked_add(
         total,
@@ -523,12 +518,12 @@ fn deepseek_v4_compressor_elements(
     let mut total = f32_slots(compress_ratio, rows, "DeepSeek V4 compressor ape")?;
     total = checked_add(
         total,
-        bf16_slots(rows, hidden, "DeepSeek V4 compressor wkv")?,
+        f32_slots(rows, hidden, "DeepSeek V4 compressor wkv")?,
         "DeepSeek V4 compressor wkv",
     )?;
     total = checked_add(
         total,
-        bf16_slots(rows, hidden, "DeepSeek V4 compressor wgate")?,
+        f32_slots(rows, hidden, "DeepSeek V4 compressor wgate")?,
         "DeepSeek V4 compressor wgate",
     )?;
     checked_add(
@@ -742,7 +737,7 @@ fn deepseek_v4_moe_elements(
     if deepseek.flags & CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER != 0 {
         total = checked_add(
             total,
-            i64_slots(vocab_size, top_k, "DeepSeek V4 hash route table")?,
+            i32_slots(vocab_size, top_k, "DeepSeek V4 hash route table")?,
             "DeepSeek V4 hash route table",
         )?;
     } else {
@@ -1140,8 +1135,8 @@ fn f32_slots(rows: u64, cols: u64, label: &str) -> Result<u64, String> {
     checked_mul(checked_mul(rows, cols, label)?, 2, label)
 }
 
-fn i64_slots(rows: u64, cols: u64, label: &str) -> Result<u64, String> {
-    checked_mul(checked_mul(rows, cols, label)?, 4, label)
+fn i32_slots(rows: u64, cols: u64, label: &str) -> Result<u64, String> {
+    checked_mul(checked_mul(rows, cols, label)?, 2, label)
 }
 
 fn fp8_slots(rows: u64, cols: u64, label: &str) -> Result<u64, String> {

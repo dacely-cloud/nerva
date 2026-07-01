@@ -116,8 +116,8 @@ DeepSeekV4CompressorOffsets push_deepseek_v4_compressor(
   const uint64_t rows = head_dim * coff;
   DeepSeekV4CompressorOffsets offsets{};
   offsets.ape = push(cursor, f32_slots(compress_ratio, rows));
-  offsets.wkv = push(cursor, bf16_slots(rows, hidden));
-  offsets.wgate = push(cursor, bf16_slots(rows, hidden));
+  offsets.wkv = push(cursor, f32_slots(rows, hidden));
+  offsets.wgate = push(cursor, f32_slots(rows, hidden));
   offsets.norm = push(cursor, bf16_slots(head_dim, 1));
   return offsets;
 }
@@ -227,9 +227,8 @@ void pack_deepseek_v4_attention(SequenceLayerLayout &layout, uint64_t &cursor,
   layout.deepseek_kv_a_scale =
       push(cursor, scale_e8m0_slots(head_dim, hidden));
   layout.k_norm = push(cursor, bf16_slots(head_dim, 1));
-  layout.w_o = push(cursor, fp8_slots(wo_a_rows, wo_a_cols));
-  layout.deepseek_o_a_scale =
-      push(cursor, scale_e8m0_slots(wo_a_rows, wo_a_cols));
+  layout.w_o = push(cursor, bf16_slots(wo_a_rows, wo_a_cols));
+  layout.deepseek_o_a_scale = kMissingOffset;
   layout.deepseek_o_b = push(cursor, fp8_slots(hidden, wo_a_rows));
   layout.deepseek_o_b_scale =
       push(cursor, scale_e8m0_slots(hidden, wo_a_rows));
@@ -334,7 +333,7 @@ void pack_deepseek_v4_moe(SequenceLayerLayout &layout, uint64_t &cursor,
   const uint64_t shared_intermediate = layer.shared_expert_intermediate;
   layout.w_router = push(cursor, bf16_slots(num_experts, hidden));
   if ((layer.deepseek_flags & kDeepSeekFlagHashRouter) != 0) {
-    push(cursor, i64_slots(vocab_size, top_k));
+    push(cursor, i32_slots(vocab_size, top_k));
   } else {
     push(cursor, f32_slots(num_experts, 1));
   }

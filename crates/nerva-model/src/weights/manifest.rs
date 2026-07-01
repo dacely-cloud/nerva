@@ -4,7 +4,6 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_core::types::memory::tier::MemoryTier;
 
-use crate::common::dtype::dtype_size_bytes;
 use crate::common::json::format::json_opt_str;
 use crate::hf::architecture::HfArchitectureKind;
 use crate::weights::hash::hash_tensor_manifest;
@@ -69,11 +68,14 @@ impl HfTensorManifestEntry {
                     role.as_str()
                 ),
             })?;
-        let bytes = elements
-            .checked_mul(dtype_size_bytes(dtype)?)
-            .ok_or_else(|| NervaError::AllocationFailed {
-                bytes: elements,
-                reason: format!("HF tensor manifest {} byte count overflow", role.as_str()),
+        let bytes = dtype
+            .packed_storage_bytes(elements)
+            .map_err(|err| match err {
+                NervaError::AllocationFailed { bytes, reason } => NervaError::AllocationFailed {
+                    bytes,
+                    reason: format!("HF tensor manifest {} {reason}", role.as_str()),
+                },
+                other => other,
             })?;
         Ok(Self {
             name,

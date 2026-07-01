@@ -81,6 +81,7 @@ pub(crate) fn safetensors_dtype(dtype: DType) -> Result<&'static str> {
         DType::I64 => Ok("I64"),
         DType::F16 => Ok("F16"),
         DType::BF16 => Ok("BF16"),
+        DType::F4E2M1 => Ok("F4"),
         DType::F8E4M3 => Ok("F8_E4M3"),
         DType::F8E5M2 => Ok("F8_E5M2"),
         DType::F8E8M0 => Ok("F8_E8M0"),
@@ -158,6 +159,7 @@ mod tests {
         for (dtype, header_dtype) in [
             (DType::I8, "I8"),
             (DType::I64, "I64"),
+            (DType::F4E2M1, "F4"),
             (DType::F8E4M3, "F8_E4M3"),
             (DType::F8E5M2, "F8_E5M2"),
             (DType::F8E8M0, "F8_E8M0"),

@@ -14,7 +14,6 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       layout.deepseek_kv_a_scale == kMissingOffset ||
       layout.k_norm == kMissingOffset ||
       layout.w_o == kMissingOffset ||
-      layout.deepseek_o_a_scale == kMissingOffset ||
       layout.deepseek_o_b == kMissingOffset ||
       layout.deepseek_o_b_scale == kMissingOffset) {
     return cudaErrorInvalidValue;
@@ -381,13 +380,17 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
 
   err = deepseek_profile_begin_if(session, profile);
   if (err != cudaSuccess) return err;
-  const uint8_t *wo_a =
-      deepseek_fp8_ptr(session->device_arena, layout.w_o);
-  const uint8_t *wo_a_scale =
-      deepseek_fp8_ptr(session->device_arena, layout.deepseek_o_a_scale);
-  err = launch_deepseek_fp8_e8m0_scale_grouped_matvec(
-      session->stream, wo_a, wo_a_scale, scratch.attn, o_groups, o_lora_rank,
-      wo_a_cols, block_rows, block_cols, scratch.q_gate);
+  if (layout.deepseek_o_a_scale == kMissingOffset) {
+    err = launch_deepseek_bf16_grouped_matvec(
+        session->stream, session->device_arena + layout.w_o, scratch.attn,
+        o_groups, o_lora_rank, wo_a_cols, scratch.q_gate);
+  } else {
+    err = launch_deepseek_fp8_e8m0_scale_grouped_matvec(
+        session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_o),
+        deepseek_fp8_ptr(session->device_arena, layout.deepseek_o_a_scale),
+        scratch.attn, o_groups, o_lora_rank, wo_a_cols, block_rows, block_cols,
+        scratch.q_gate);
+  }
   if (err != cudaSuccess) return err;
   err = launch_deepseek_fp8_e8m0_scale_matvec(
       session->stream,

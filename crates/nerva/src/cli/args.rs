@@ -16,6 +16,7 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1;
 pub(crate) struct GenerateArgs {
     pub model: Option<String>,
     pub prompt: Option<String>,
+    pub prompt_token_ids: Option<Vec<u32>>,
     pub context_tokens: Option<usize>,
     pub output_tokens: Option<usize>,
     pub queue_capacity: Option<usize>,
@@ -42,6 +43,7 @@ impl Default for GenerateArgs {
         Self {
             model: None,
             prompt: None,
+            prompt_token_ids: None,
             context_tokens: None,
             output_tokens: None,
             queue_capacity: None,
@@ -125,6 +127,8 @@ struct ClapGenerateArgs {
     model: Option<String>,
     #[arg(short = 'p', long = "prompt")]
     prompt: Option<String>,
+    #[arg(long = "prompt-ids")]
+    prompt_token_ids: Option<String>,
     #[arg(short = 'c', long = "context", value_parser = parse_token_count)]
     context_tokens: Option<usize>,
     #[arg(
@@ -247,7 +251,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
     let parsed = ClapGenerateArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
     if parsed.help {
         return Err(
-            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling] [--thinking] [--chat|--raw] [--json] [--debug]"
+            "usage: cargo run -p nerva -- -m model -p prompt [--prompt-ids ids] [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling] [--thinking] [--chat|--raw] [--json] [--debug]"
                 .to_string(),
         );
     }
@@ -264,9 +268,15 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
         || parsed.rt_far_pages.is_some()
         || parsed.rt_local_window_tokens.is_some()
         || parsed.rt_sink_tokens.is_some();
+    let prompt_token_ids = parsed
+        .prompt_token_ids
+        .as_deref()
+        .map(parse_prompt_token_ids)
+        .transpose()?;
     Ok(GenerateArgs {
         model: parsed.model,
         prompt: parsed.prompt,
+        prompt_token_ids,
         context_tokens: parsed.context_tokens,
         output_tokens: parsed.output_tokens,
         queue_capacity: parsed.queue_capacity,
@@ -403,9 +413,26 @@ fn parse_top_k_count(value: &str) -> Result<u32, String> {
     u32::try_from(count).map_err(|_| format!("--top-k is too large: {value}"))
 }
 
+fn parse_prompt_token_ids(value: &str) -> Result<Vec<u32>, String> {
+    let ids = value
+        .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.parse::<u32>()
+                .map_err(|_| format!("invalid prompt token id: {part}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if ids.is_empty() {
+        return Err("--prompt-ids requires at least one token id".to_string());
+    }
+    Ok(ids)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PromptFormat, parse_args, parse_serve_args, parse_token_count};
+    use super::{
+        PromptFormat, parse_args, parse_prompt_token_ids, parse_serve_args, parse_token_count,
+    };
 
     #[test]
     fn parses_k_token_counts() {
@@ -458,6 +485,7 @@ mod tests {
         let parsed = parse_args(&args).unwrap();
         assert_eq!(parsed.model.as_deref(), Some("qwen3-8b"));
         assert_eq!(parsed.prompt.as_deref(), Some("hello"));
+        assert_eq!(parsed.prompt_token_ids, None);
         assert_eq!(parsed.context_tokens, Some(32 * 1024));
         assert_eq!(parsed.output_tokens, Some(16 * 1024));
         assert_eq!(parsed.prompt_format, PromptFormat::Raw);
@@ -474,6 +502,26 @@ mod tests {
         assert_eq!(parsed.rt_sink_tokens, Some(0));
         assert!(parsed.debug);
         assert!(!parsed.profiling);
+    }
+
+    #[test]
+    fn parses_prompt_token_ids() {
+        assert_eq!(parse_prompt_token_ids("1, 2 3").unwrap(), vec![1, 2, 3]);
+
+        let args = [
+            "-m",
+            "deepseek-v4-flash",
+            "--prompt-ids",
+            "1,2,3",
+            "-o",
+            "4",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let parsed = parse_args(&args).unwrap();
+        assert_eq!(parsed.prompt, None);
+        assert_eq!(parsed.prompt_token_ids, Some(vec![1, 2, 3]));
     }
 
     #[test]

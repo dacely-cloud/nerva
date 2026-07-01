@@ -67,6 +67,13 @@ __device__ __forceinline__ uint64_t deepseek_u64_from_u16_slots(
          (static_cast<uint64_t>(slots[base + 3u]) << 48u);
 }
 
+__device__ __forceinline__ uint32_t deepseek_u32_from_u16_slots(
+    const uint16_t *slots, uint64_t index) {
+  const uint64_t base = index * 2u;
+  return static_cast<uint32_t>(slots[base]) |
+         (static_cast<uint32_t>(slots[base + 1u]) << 16u);
+}
+
 __device__ __forceinline__ uint32_t deepseek_device_scale_dim(
     uint32_t value) {
   return (value + 127u) / 128u;

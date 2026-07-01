@@ -203,22 +203,33 @@ fn is_cuda_raw_weight_role(role: WeightBlockRole) -> bool {
             | WeightBlockRole::DeepSeekV4HcFfnFn
             | WeightBlockRole::DeepSeekV4HcFfnScale
             | WeightBlockRole::DeepSeekV4AttentionSink
+            | WeightBlockRole::DeepSeekV4WqAProjection
             | WeightBlockRole::DeepSeekV4WqAScale
+            | WeightBlockRole::DeepSeekV4WqBProjection
             | WeightBlockRole::DeepSeekV4WqBScale
             | WeightBlockRole::DeepSeekV4QNorm
+            | WeightBlockRole::DeepSeekV4WkvProjection
             | WeightBlockRole::DeepSeekV4WkvScale
             | WeightBlockRole::DeepSeekV4KvNorm
+            | WeightBlockRole::DeepSeekV4WoAProjection
             | WeightBlockRole::DeepSeekV4WoAScale
+            | WeightBlockRole::DeepSeekV4WoBProjection
             | WeightBlockRole::DeepSeekV4WoBScale
             | WeightBlockRole::DeepSeekV4CompressorApe
+            | WeightBlockRole::DeepSeekV4CompressorWkvProjection
             | WeightBlockRole::DeepSeekV4CompressorWkvScale
+            | WeightBlockRole::DeepSeekV4CompressorWgateProjection
             | WeightBlockRole::DeepSeekV4CompressorWgateScale
             | WeightBlockRole::DeepSeekV4CompressorNorm
+            | WeightBlockRole::DeepSeekV4IndexerWqBProjection
             | WeightBlockRole::DeepSeekV4IndexerWqBScale
             | WeightBlockRole::DeepSeekV4IndexerCompressorApe
+            | WeightBlockRole::DeepSeekV4IndexerCompressorWkvProjection
             | WeightBlockRole::DeepSeekV4IndexerCompressorWkvScale
+            | WeightBlockRole::DeepSeekV4IndexerCompressorWgateProjection
             | WeightBlockRole::DeepSeekV4IndexerCompressorWgateScale
             | WeightBlockRole::DeepSeekV4IndexerCompressorNorm
+            | WeightBlockRole::DeepSeekV4IndexerWeightsProjection
             | WeightBlockRole::DeepSeekV4IndexerWeightsScale
             | WeightBlockRole::DeepSeekV4HashRouteTable
             | WeightBlockRole::DeepSeekV4ExpertGateScale

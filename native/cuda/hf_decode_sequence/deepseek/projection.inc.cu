@@ -747,6 +747,44 @@ __global__ void deepseek_fp8_e8m0_scale_grouped_matvec_kernel(
   }
 }
 
+__global__ void deepseek_bf16_grouped_matvec_kernel(
+    const uint16_t *weights, const float *input, float *output,
+    uint32_t groups, uint32_t rows_per_group, uint32_t cols_per_group) {
+  const uint32_t row_start = blockIdx.x * kDeepSeekFp8ProjectionRowTile;
+  const uint32_t total_rows = groups * rows_per_group;
+  if (row_start >= total_rows) {
+    return;
+  }
+  extern __shared__ float partial[];
+  float sum[kDeepSeekFp8ProjectionRowTile] = {};
+  for (uint32_t col = threadIdx.x; col < cols_per_group; col += blockDim.x) {
+    for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
+         ++row_tile) {
+      const uint32_t row = row_start + row_tile;
+      if (row >= total_rows) {
+        continue;
+      }
+      const uint32_t group = row / rows_per_group;
+      const uint64_t input_base =
+          static_cast<uint64_t>(group) * cols_per_group;
+      const uint64_t row_base = static_cast<uint64_t>(row) * cols_per_group;
+      const float weight = encoded_input_to_f32(weights[row_base + col],
+                                                kDTypeBF16);
+      sum[row_tile] += weight * input[input_base + col];
+    }
+  }
+  deepseek_fp8_projection_reduce_slots(sum, partial);
+  if (threadIdx.x == 0) {
+    for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
+         ++row_tile) {
+      const uint32_t row = row_start + row_tile;
+      if (row < total_rows) {
+        output[row] = partial[row_tile * blockDim.x];
+      }
+    }
+  }
+}
+
 cudaError_t launch_deepseek_fp8_f32_scale_matvec(
     cudaStream_t stream, const uint8_t *weights, const float *scales,
     const float *input, uint32_t rows, uint32_t cols, uint32_t block_rows,
@@ -787,6 +825,28 @@ cudaError_t launch_deepseek_fp8_e8m0_scale_grouped_matvec(
                                                    stream>>>(
       weights, scales, input, output, groups, rows_per_group, cols_per_group,
       block_rows, block_cols);
+  return cudaGetLastError();
+}
+
+cudaError_t launch_deepseek_bf16_grouped_matvec(
+    cudaStream_t stream, const uint16_t *weights, const float *input,
+    uint32_t groups, uint32_t rows_per_group, uint32_t cols_per_group,
+    float *output) {
+  if (weights == nullptr || input == nullptr || output == nullptr ||
+      groups == 0 || rows_per_group == 0 || cols_per_group == 0 ||
+      groups > (0xffffffffu / rows_per_group)) {
+    return cudaErrorInvalidValue;
+  }
+  constexpr uint32_t threads = 256;
+  const uint32_t total_rows = groups * rows_per_group;
+  const size_t shared_bytes =
+      threads * kDeepSeekFp8ProjectionRowTile * sizeof(float);
+  const uint32_t blocks =
+      (total_rows + kDeepSeekFp8ProjectionRowTile - 1) /
+      kDeepSeekFp8ProjectionRowTile;
+  deepseek_bf16_grouped_matvec_kernel<<<blocks, threads, shared_bytes,
+                                        stream>>>(
+      weights, input, output, groups, rows_per_group, cols_per_group);
   return cudaGetLastError();
 }
 

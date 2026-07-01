@@ -1,4 +1,6 @@
 use std::ffi::CString;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::ffi::OsStrExt;
 
 use nerva_core::types::dtype::DType;
@@ -24,7 +26,9 @@ use nerva_model::hf::deepseek_runtime::{
 use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 use nerva_model::weights::layout::entry::WeightBlockRole;
 use nerva_model::weights::manifest::HfTensorManifest;
+use nerva_model::weights::safetensors::shard::SafetensorsShardPlanEntry;
 
+use crate::engine::hf_cuda_decode::contract::cuda_weight_descriptor_totals;
 use crate::engine::hf_cuda_decode::descriptors::cuda_weight_strategy;
 use crate::engine::hf_cuda_decode::file_backed::load::ShardBackedWeights;
 use crate::engine::hf_cuda_decode::resident::{
@@ -42,6 +46,7 @@ pub(super) struct ShardBackedResidentWeights {
     pub summary: HfCudaResidentWeightSummary,
     pub descriptors: Vec<CudaHfDecodeSequenceWeightBlock>,
     pub _source_paths: Vec<CString>,
+    pub _host_buffers: Vec<Vec<u16>>,
 }
 
 #[cfg(test)]
@@ -391,22 +396,22 @@ pub(super) fn shard_backed_resident_weights(
     let DescriptorTable {
         descriptors,
         source_paths,
+        host_buffers,
     } = cuda_weight_descriptors(weights, &plan)?;
     let descriptor_hash = hash_weight_blocks(&descriptors);
-    let resident_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuResident);
-    let staged_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::GpuStaged);
     let fallback_bytes = strategy_bytes(&plan, ResidentWeightExecutionStrategy::CpuExactFallback);
+    let descriptor_totals = cuda_weight_descriptor_totals(&descriptors);
     Ok(ShardBackedResidentWeights {
         summary: HfCudaResidentWeightSummary {
             plan_steps: plan.steps.len() as u64,
-            plan_weight_bytes: plan.total_weight_bytes as u64,
+            plan_weight_bytes: descriptor_totals.weight_bytes,
             plan_descriptor_blocks: descriptors.len() as u64,
             plan_descriptor_hash: descriptor_hash,
             hotset_promoted_blocks: hotset.promoted_blocks as u64,
             hotset_promoted_bytes: hotset.promoted_bytes as u64,
             hotset_kept_dram_blocks: hotset.kept_dram_blocks as u64,
-            plan_gpu_resident_weight_bytes: resident_bytes,
-            plan_gpu_staged_weight_bytes: staged_bytes,
+            plan_gpu_resident_weight_bytes: descriptor_totals.gpu_resident_weight_bytes,
+            plan_gpu_staged_weight_bytes: descriptor_totals.gpu_staged_weight_bytes,
             plan_fallback_weight_bytes: fallback_bytes,
             plan_gpu_resident_steps: plan.gpu_resident_steps,
             plan_gpu_staged_steps: plan.gpu_staged_steps,
@@ -424,12 +429,14 @@ pub(super) fn shard_backed_resident_weights(
         },
         descriptors,
         _source_paths: source_paths,
+        _host_buffers: host_buffers,
     })
 }
 
 struct DescriptorTable {
     descriptors: Vec<CudaHfDecodeSequenceWeightBlock>,
     source_paths: Vec<CString>,
+    host_buffers: Vec<Vec<u16>>,
 }
 
 fn cuda_weight_descriptors(
@@ -446,6 +453,7 @@ fn cuda_weight_descriptors(
     let mut offset_bytes = 0u64;
     let mut descriptors = Vec::with_capacity(plan.steps.len());
     let mut source_paths = Vec::with_capacity(plan.steps.len());
+    let mut host_buffers: Vec<Vec<u16>> = Vec::new();
     for ((step, manifest), shard) in plan
         .steps
         .iter()
@@ -458,38 +466,90 @@ fn cuda_weight_descriptors(
             });
         }
         let source_path = weights.source_path(shard)?;
-        let source_path = CString::new(source_path.as_os_str().as_bytes()).map_err(|_| {
-            NervaError::InvalidArgument {
-                reason: format!(
-                    "safetensors shard path for {} contains a nul byte",
-                    shard.tensor_name
-                ),
-            }
-        })?;
+        let descriptor_bytes = shard.bytes.next_multiple_of(2);
+        let (host_source, source_file, source_file_len, file_offset_begin) = if shard.bytes % 2 == 0
+        {
+            let source_path = CString::new(source_path.as_os_str().as_bytes()).map_err(|_| {
+                NervaError::InvalidArgument {
+                    reason: format!(
+                        "safetensors shard path for {} contains a nul byte",
+                        shard.tensor_name
+                    ),
+                }
+            })?;
+            source_paths.push(source_path);
+            let source_path = source_paths.last().expect("source path was just pushed");
+            (
+                std::ptr::null(),
+                source_path.as_ptr(),
+                source_path.as_bytes().len() as u64,
+                shard.file_offset_begin as u64,
+            )
+        } else {
+            let padded = read_padded_u16_tensor(&source_path, shard)?;
+            host_buffers.push(padded);
+            let host = host_buffers
+                .last()
+                .expect("host buffer was just pushed")
+                .as_ptr();
+            (host, std::ptr::null(), 0, 0)
+        };
         descriptors.push(CudaHfDecodeSequenceWeightBlock {
-            host_source: std::ptr::null(),
-            source_file: source_path.as_ptr(),
-            source_file_len: source_path.as_bytes().len() as u64,
-            file_offset_begin: shard.file_offset_begin as u64,
+            host_source,
+            source_file,
+            source_file_len,
+            file_offset_begin,
             block_id: step.block_id.0,
             block_version: step.block_version,
             offset_bytes,
-            bytes: step.bytes as u64,
+            bytes: descriptor_bytes as u64,
             strategy: cuda_weight_strategy(step.strategy)?,
             reserved: 0,
         });
-        source_paths.push(source_path);
-        offset_bytes = offset_bytes.checked_add(step.bytes as u64).ok_or_else(|| {
-            NervaError::AllocationFailed {
-                bytes: step.bytes,
+        offset_bytes = offset_bytes
+            .checked_add(descriptor_bytes as u64)
+            .ok_or_else(|| NervaError::AllocationFailed {
+                bytes: descriptor_bytes,
                 reason: "CUDA shard-backed descriptor offset overflow".to_string(),
-            }
-        })?;
+            })?;
     }
     Ok(DescriptorTable {
         descriptors,
         source_paths,
+        host_buffers,
     })
+}
+
+fn read_padded_u16_tensor(
+    source_path: &std::path::Path,
+    shard: &SafetensorsShardPlanEntry,
+) -> Result<Vec<u16>> {
+    let mut file = File::open(source_path).map_err(|err| NervaError::InvalidArgument {
+        reason: format!(
+            "failed to open safetensors shard {}: {err}",
+            source_path.display()
+        ),
+    })?;
+    file.seek(SeekFrom::Start(shard.file_offset_begin as u64))
+        .map_err(|err| NervaError::InvalidArgument {
+            reason: format!(
+                "failed to seek safetensors shard {}: {err}",
+                source_path.display()
+            ),
+        })?;
+    let mut bytes = vec![0u8; shard.bytes.next_multiple_of(2)];
+    file.read_exact(&mut bytes[..shard.bytes])
+        .map_err(|err| NervaError::InvalidArgument {
+            reason: format!(
+                "failed to read safetensors tensor {} from {}: {err}",
+                shard.tensor_name,
+                source_path.display()
+            ),
+        })?;
+    Ok(bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect())
 }
 
 #[cfg(test)]

@@ -272,14 +272,13 @@ __global__ void hf_deepseek_v4_sparse_moe_route_kernel(
         for (uint32_t rank = 0; rank < top_k; ++rank) {
           const uint64_t table_index =
               static_cast<uint64_t>(current_token) * top_k + rank;
-          const uint64_t expert64 =
-              deepseek_u64_from_u16_slots(arena + router_metadata_offset,
+          const uint32_t expert =
+              deepseek_u32_from_u16_slots(arena + router_metadata_offset,
                                           table_index);
-          if (expert64 >= num_experts) {
+          if (expert >= num_experts) {
             route_status = -2;
             break;
           }
-          const uint32_t expert = static_cast<uint32_t>(expert64);
           selected_experts[rank] = expert;
           selected_weights[rank] =
               nerva::deepseek::router::sqrtsoftplus_score(s.ff[expert]);

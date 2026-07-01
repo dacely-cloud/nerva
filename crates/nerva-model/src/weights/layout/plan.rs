@@ -449,21 +449,21 @@ fn plan_deepseek_v4_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeight
         WeightBlockRole::DeepSeekV4HcHeadBase,
         hc_mult,
         1,
-        DType::BF16,
+        DType::F32,
     )?;
     push_static_block(
         &mut blocks,
         WeightBlockRole::DeepSeekV4HcHeadFn,
         hc_mult,
         hc_dim,
-        DType::BF16,
+        DType::F32,
     )?;
     push_static_block(
         &mut blocks,
         WeightBlockRole::DeepSeekV4HcHeadScale,
         1,
         1,
-        DType::BF16,
+        DType::F32,
     )?;
 
     for layer in 0..metadata.num_hidden_layers {
@@ -688,7 +688,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4AttentionSink,
             metadata.num_attention_heads,
             1,
-            DType::BF16,
+            DType::F32,
         ),
         (
             WeightBlockRole::DeepSeekV4WqAProjection,
@@ -700,7 +700,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WqAScale,
             scale_dim(q_lora_rank),
             scale_dim(metadata.hidden_size),
-            DType::BF16,
+            DType::F8E8M0,
         ),
         (
             WeightBlockRole::DeepSeekV4WqBProjection,
@@ -712,7 +712,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WqBScale,
             scale_dim(q_rows),
             scale_dim(q_lora_rank),
-            DType::BF16,
+            DType::F8E8M0,
         ),
         (
             WeightBlockRole::DeepSeekV4QNorm,
@@ -730,7 +730,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WkvScale,
             scale_dim(metadata.head_dim),
             scale_dim(metadata.hidden_size),
-            DType::BF16,
+            DType::F8E8M0,
         ),
         (
             WeightBlockRole::DeepSeekV4KvNorm,
@@ -742,12 +742,6 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WoAProjection,
             wo_a_rows,
             wo_a_cols,
-            DType::F8E4M3,
-        ),
-        (
-            WeightBlockRole::DeepSeekV4WoAScale,
-            scale_dim(wo_a_rows),
-            scale_dim(wo_a_cols),
             DType::BF16,
         ),
         (
@@ -760,7 +754,7 @@ fn push_deepseek_v4_attention_blocks(
             WeightBlockRole::DeepSeekV4WoBScale,
             scale_dim(metadata.hidden_size),
             scale_dim(wo_a_rows),
-            DType::BF16,
+            DType::F8E8M0,
         ),
     ] {
         push_block(blocks, role, layer, rows, cols, dtype)?;
@@ -798,7 +792,7 @@ fn push_deepseek_v4_attention_blocks(
             layer,
             scale_dim(index_rows),
             scale_dim(q_lora_rank),
-            DType::BF16,
+            DType::F8E8M0,
         )?;
         push_deepseek_v4_compressor_blocks(
             blocks,
@@ -824,7 +818,7 @@ fn push_deepseek_v4_attention_blocks(
                 layer,
                 scale_dim(index_n_heads),
                 scale_dim(metadata.hidden_size),
-                DType::BF16,
+                DType::F8E8M0,
             )?;
         } else {
             push_block(
@@ -847,7 +841,7 @@ fn push_deepseek_v4_compressor_blocks(
     hidden_size: usize,
     head_dim: usize,
     indexer: bool,
-    quantized_projection: bool,
+    _quantized_projection: bool,
 ) -> Result<()> {
     let coff = if compress_ratio == 4 { 2 } else { 1 };
     let rows = head_dim
@@ -875,30 +869,9 @@ fn push_deepseek_v4_compressor_blocks(
             WeightBlockRole::DeepSeekV4CompressorNorm,
         )
     };
-    push_block(blocks, roles.0, layer, compress_ratio, rows, DType::BF16)?;
-    if quantized_projection {
-        push_block(blocks, roles.1, layer, rows, hidden_size, DType::F8E4M3)?;
-        push_block(
-            blocks,
-            roles.2,
-            layer,
-            scale_dim(rows),
-            scale_dim(hidden_size),
-            DType::BF16,
-        )?;
-        push_block(blocks, roles.3, layer, rows, hidden_size, DType::F8E4M3)?;
-        push_block(
-            blocks,
-            roles.4,
-            layer,
-            scale_dim(rows),
-            scale_dim(hidden_size),
-            DType::BF16,
-        )?;
-    } else {
-        push_block(blocks, roles.1, layer, rows, hidden_size, DType::BF16)?;
-        push_block(blocks, roles.3, layer, rows, hidden_size, DType::BF16)?;
-    }
+    push_block(blocks, roles.0, layer, compress_ratio, rows, DType::F32)?;
+    push_block(blocks, roles.1, layer, rows, hidden_size, DType::F32)?;
+    push_block(blocks, roles.3, layer, rows, hidden_size, DType::F32)?;
     push_block(blocks, roles.5, layer, head_dim, 1, DType::BF16)
 }
 
@@ -928,7 +901,7 @@ fn push_deepseek_v4_moe_blocks(
             layer,
             metadata.vocab_size,
             top_k,
-            DType::I64,
+            DType::I32,
         )?;
     } else {
         push_block(
@@ -964,14 +937,14 @@ fn push_deepseek_v4_moe_blocks(
             if metadata.expert_dtype.as_deref() == Some("bf16") {
                 push_block(blocks, role, layer, rows, cols, DType::BF16)?;
             } else {
-                push_block(blocks, role, layer, rows, cols.div_ceil(2), DType::U8)?;
+                push_block(blocks, role, layer, rows, cols, DType::F8E4M3)?;
                 push_block(
                     blocks,
                     scale_role,
                     layer,
-                    rows,
-                    cols.div_ceil(16),
-                    DType::F8E4M3,
+                    scale_dim(rows),
+                    scale_dim(cols),
+                    DType::F8E8M0,
                 )?;
             }
         }
@@ -1017,23 +990,15 @@ fn push_deepseek_v4_moe_blocks(
                 DType::BF16,
             )?;
         } else {
-            push_expert_block(
-                blocks,
-                role,
-                layer,
-                num_experts,
-                rows,
-                cols.div_ceil(2),
-                DType::U8,
-            )?;
+            push_expert_block(blocks, role, layer, num_experts, rows, cols, DType::F4E2M1)?;
             push_expert_block(
                 blocks,
                 scale_role,
                 layer,
                 num_experts,
                 rows,
-                cols.div_ceil(16),
-                DType::F8E4M3,
+                cols.div_ceil(32),
+                DType::F8E8M0,
             )?;
         }
     }

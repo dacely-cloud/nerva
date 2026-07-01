@@ -60,3 +60,7 @@ cudaError_t launch_deepseek_fp8_e8m0_scale_grouped_matvec(
     const float *input, uint32_t groups, uint32_t rows_per_group,
     uint32_t cols_per_group, uint32_t block_rows, uint32_t block_cols,
     float *output);
+cudaError_t launch_deepseek_bf16_grouped_matvec(
+    cudaStream_t stream, const uint16_t *weights, const float *input,
+    uint32_t groups, uint32_t rows_per_group, uint32_t cols_per_group,
+    float *output);

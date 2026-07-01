@@ -60,6 +60,7 @@ uint64_t rank3_slots(uint64_t depth, uint64_t rows, uint64_t cols,
 
 uint64_t bf16_slots(uint64_t rows, uint64_t cols) { return rows * cols; }
 uint64_t f32_slots(uint64_t rows, uint64_t cols) { return rows * cols * 2u; }
+uint64_t i32_slots(uint64_t rows, uint64_t cols) { return rows * cols * 2u; }
 uint64_t i64_slots(uint64_t rows, uint64_t cols) { return rows * cols * 4u; }
 uint64_t fp8_slots(uint64_t rows, uint64_t cols) {
   return byte_slots(rows, cols, 1);

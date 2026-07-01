@@ -1,6 +1,7 @@
 use nerva_core::types::error::{NervaError, Result};
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use nerva_cuda::decode::hf_sequence::weight_plan::{
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED,
     CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 
@@ -18,6 +19,7 @@ pub(super) fn cuda_weight_plan(
             reason: "CUDA HF weight descriptors do not match resident plan summary".to_string(),
         });
     }
+    let totals = cuda_weight_descriptor_totals(descriptors);
     Ok(CudaHfDecodeSequenceWeightPlan {
         blocks: u32_from_u64("weight plan blocks", summary.plan_steps)?,
         gpu_resident_blocks: u32_from_u64(
@@ -28,11 +30,45 @@ pub(super) fn cuda_weight_plan(
             "resident weight plan GPU-staged blocks",
             summary.plan_gpu_staged_steps,
         )?,
-        weight_bytes: summary.plan_weight_bytes,
-        gpu_resident_weight_bytes: summary.plan_gpu_resident_weight_bytes,
-        gpu_staged_weight_bytes: summary.plan_gpu_staged_weight_bytes,
+        weight_bytes: totals.weight_bytes,
+        gpu_resident_weight_bytes: totals.gpu_resident_weight_bytes,
+        gpu_staged_weight_bytes: totals.gpu_staged_weight_bytes,
         descriptor_hash,
     })
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct CudaWeightDescriptorTotals {
+    pub weight_bytes: u64,
+    pub gpu_resident_weight_bytes: u64,
+    pub gpu_staged_weight_bytes: u64,
+}
+
+pub(super) fn cuda_weight_descriptor_totals(
+    descriptors: &[CudaHfDecodeSequenceWeightBlock],
+) -> CudaWeightDescriptorTotals {
+    let mut totals = CudaWeightDescriptorTotals {
+        weight_bytes: 0,
+        gpu_resident_weight_bytes: 0,
+        gpu_staged_weight_bytes: 0,
+    };
+    for descriptor in descriptors {
+        totals.weight_bytes = totals.weight_bytes.saturating_add(descriptor.bytes);
+        match descriptor.strategy {
+            CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT => {
+                totals.gpu_resident_weight_bytes = totals
+                    .gpu_resident_weight_bytes
+                    .saturating_add(descriptor.bytes);
+            }
+            CUDA_HF_WEIGHT_STRATEGY_GPU_STAGED => {
+                totals.gpu_staged_weight_bytes = totals
+                    .gpu_staged_weight_bytes
+                    .saturating_add(descriptor.bytes);
+            }
+            _ => {}
+        }
+    }
+    totals
 }
 
 pub(super) fn attach_cuda_weight_contract(
