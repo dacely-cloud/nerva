@@ -5,14 +5,16 @@ use serde_json::{Value, json};
 
 use super::{
     ApiError, AppState, BatchRecord, BatchRequestCounts, GenerateOptions, PromptInput,
-    ReasoningMode, authorize, chat_messages_to_prompt, completion_echo_prefix, completion_prompts,
-    empty_text_prompt, generate_text_batch_direct_sync, generate_text_direct_sync,
-    generated_metadata, insert_generated_file, lock_files, prompt_format_for_reasoning,
+    ReasoningMode, append_assistant_instruction, apply_response_format_instruction, authorize,
+    chat_messages_to_prompt, completion_echo_prefix, completion_prompts, empty_text_prompt,
+    generate_text_batch_direct_sync, generate_text_direct_sync, generated_metadata,
+    insert_generated_file, lock_files, previous_response_context, prompt_format_for_reasoning,
     reject_unsupported_generation_options, request_echo, request_f32, request_include_reasoning,
-    request_max_tokens, request_n, request_optional_string, request_reasoning_mode,
-    request_stop_strings, request_suffix, request_u32, request_u64_opt, require_known_model,
-    responses_input_to_prompt, shared_fork_batch_supported, split_generated_reasoning,
-    unix_seconds, usage,
+    request_max_tokens, request_metadata, request_n, request_optional_string,
+    request_reasoning_mode, request_response_format_instruction, request_stop_strings,
+    request_store, request_suffix, request_u32, request_u64_opt, require_known_model,
+    response_input_items, responses_input_to_prompt, shared_fork_batch_supported,
+    split_generated_reasoning, store_response_if_requested, unix_seconds, usage,
 };
 
 pub(crate) async fn create_batch(
@@ -335,6 +337,7 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
     let cache_key = request_optional_string(body, "cache_key")?;
     let echo = request_echo(body)?;
     let suffix = request_suffix(body)?;
+    let response_format_instruction = request_response_format_instruction(body)?;
     let created = unix_seconds();
     let mut choices = Vec::new();
     let mut prompt_tokens = 0usize;
@@ -342,6 +345,8 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
     if n > 1 && prompts.len() == 1 && shared_fork_batch_supported(temperature, top_p, top_k, seed) {
         let prompt = prompts.into_iter().next().unwrap_or_else(empty_text_prompt);
         let output_prefix = completion_echo_prefix(&state.config.model_path, &prompt, echo)?;
+        let prompt =
+            apply_response_format_instruction(prompt, response_format_instruction.as_deref())?;
         let generated = generate_text_batch_direct_sync(
             state,
             GenerateOptions {
@@ -375,6 +380,8 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
     } else {
         for prompt in prompts {
             let output_prefix = completion_echo_prefix(&state.config.model_path, &prompt, echo)?;
+            let prompt =
+                apply_response_format_instruction(prompt, response_format_instruction.as_deref())?;
             for _ in 0..n {
                 let generated = generate_text_direct_sync(
                     state,
@@ -419,6 +426,11 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
 fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError> {
     let n = request_n(body)?;
     let prompt = chat_messages_to_prompt(body)?;
+    let response_format_instruction = request_response_format_instruction(body)?;
+    let prompt = match response_format_instruction.as_deref() {
+        Some(instruction) => append_assistant_instruction(prompt, instruction),
+        None => prompt,
+    };
     let include_reasoning = request_include_reasoning(body)?;
     let reasoning_mode = request_reasoning_mode(state, body)?;
     let max_tokens = request_max_tokens(state, body)?;
@@ -484,7 +496,20 @@ fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result
 }
 
 fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError> {
+    let store = request_store(body)?;
+    let metadata = request_metadata(body)?;
+    let previous_response_id = request_optional_string(body, "previous_response_id")?;
+    let previous_context = previous_response_context(state, previous_response_id.as_deref())?;
+    let input_items = response_input_items(body);
     let prompt = responses_input_to_prompt(body)?;
+    let response_format_instruction = request_response_format_instruction(body)?;
+    let mut prompt = match response_format_instruction.as_deref() {
+        Some(instruction) => append_assistant_instruction(prompt, instruction),
+        None => prompt,
+    };
+    if let Some(previous_context) = previous_context {
+        prompt = format!("{previous_context}{prompt}");
+    }
     let include_reasoning = request_include_reasoning(body)?;
     let reasoning_mode = request_reasoning_mode(state, body)?;
     let generated = generate_text_direct_sync(
@@ -535,7 +560,7 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
             "annotations": []
         }]
     }));
-    Ok(json!({
+    let response_json = json!({
         "id": state.next_response_id("resp"),
         "object": "response",
         "created_at": unix_seconds(),
@@ -543,6 +568,9 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
         "error": null,
         "incomplete_details": null,
         "model": state.config.model_id,
+        "metadata": metadata.clone(),
+        "store": store,
+        "previous_response_id": previous_response_id,
         "output": output,
         "output_text": split.content,
         "nerva": generated_metadata(&generated),
@@ -551,7 +579,8 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
             "output_tokens": completion_tokens,
             "total_tokens": generated.prompt_tokens + completion_tokens
         }
-    }))
+    });
+    store_response_if_requested(state, response_json, input_items, store)
 }
 
 fn update_batch_counts(

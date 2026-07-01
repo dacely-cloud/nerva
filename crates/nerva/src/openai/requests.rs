@@ -150,6 +150,10 @@ pub(crate) fn request_stream(body: &Value) -> bool {
     body.get("stream").and_then(Value::as_bool).unwrap_or(false)
 }
 
+pub(crate) fn request_store(body: &Value) -> Result<bool, ApiError> {
+    request_bool(body, "store", true)
+}
+
 pub(crate) fn request_echo(body: &Value) -> Result<bool, ApiError> {
     request_bool(body, "echo", false)
 }
@@ -529,6 +533,14 @@ pub(crate) fn request_optional_string(
         Some(Value::String(_)) => Err(ApiError::bad_request(format!("{name} must not be empty"))),
         Some(Value::Null) | None => Ok(None),
         Some(_) => Err(ApiError::bad_request(format!("{name} must be a string"))),
+    }
+}
+
+pub(crate) fn request_metadata(body: &Value) -> Result<Value, ApiError> {
+    match body.get("metadata") {
+        Some(Value::Object(_)) => Ok(body.get("metadata").cloned().unwrap_or(Value::Null)),
+        Some(Value::Null) | None => Ok(Value::Null),
+        Some(_) => Err(ApiError::bad_request("metadata must be an object")),
     }
 }
 

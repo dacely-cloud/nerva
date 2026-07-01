@@ -20,6 +20,7 @@ mod files;
 mod generation;
 mod mcp;
 mod requests;
+mod response_store;
 mod sessions;
 mod streaming;
 mod types;
@@ -32,6 +33,7 @@ pub(crate) use files::*;
 pub(crate) use generation::*;
 pub(crate) use mcp::*;
 pub(crate) use requests::*;
+pub(crate) use response_store::*;
 pub(crate) use sessions::*;
 pub(crate) use streaming::*;
 pub(crate) use types::*;
@@ -52,6 +54,7 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
         mcp_servers: Mutex::new(HashMap::new()),
         files: Mutex::new(HashMap::new()),
         batches: Mutex::new(HashMap::new()),
+        responses: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
         request_count: AtomicU64::new(0),
         generated_tokens: AtomicU64::new(0),
@@ -109,6 +112,15 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
                 .route("/v1/completions", web::post().to(completions))
                 .route("/v1/chat/completions", web::post().to(chat_completions))
                 .route("/v1/responses", web::post().to(responses))
+                .route("/v1/responses/{response_id}", web::get().to(get_response))
+                .route(
+                    "/v1/responses/{response_id}",
+                    web::delete().to(delete_response),
+                )
+                .route(
+                    "/v1/responses/{response_id}/input_items",
+                    web::get().to(list_response_input_items),
+                )
                 .route("/v1/embeddings", web::post().to(unsupported_embeddings))
                 .route("/pooling", web::post().to(unsupported_pooling))
                 .route("/classify", web::post().to(unsupported_pooling))

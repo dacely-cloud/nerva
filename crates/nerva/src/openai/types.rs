@@ -63,6 +63,7 @@ pub(crate) struct AppState {
     pub(crate) mcp_servers: Mutex<HashMap<String, McpServerRecord>>,
     pub(crate) files: Mutex<HashMap<String, FileRecord>>,
     pub(crate) batches: Mutex<HashMap<String, BatchRecord>>,
+    pub(crate) responses: Mutex<HashMap<String, StoredResponseRecord>>,
     pub(crate) next_id: AtomicU64,
     pub(crate) request_count: AtomicU64,
     pub(crate) generated_tokens: AtomicU64,
@@ -230,6 +231,12 @@ pub(crate) struct BatchRecord {
     pub(crate) errors: Vec<Value>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct StoredResponseRecord {
+    pub(crate) response: Value,
+    pub(crate) input_items: Vec<Value>,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct BatchRequestCounts {
     pub(crate) total: u64,
@@ -249,6 +256,15 @@ pub(crate) struct StreamMeta {
     pub(crate) id: String,
     pub(crate) created: u64,
     pub(crate) model: String,
+    pub(crate) response: Option<ResponseStreamOptions>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResponseStreamOptions {
+    pub(crate) store: bool,
+    pub(crate) metadata: Value,
+    pub(crate) previous_response_id: Option<String>,
+    pub(crate) input_items: Vec<Value>,
 }
 
 #[derive(Clone, Debug)]

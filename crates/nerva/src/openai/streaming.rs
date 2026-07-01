@@ -192,6 +192,7 @@ pub(crate) fn send_stream_final(
     finish_reason: &str,
     prompt_tokens: usize,
     completion_tokens: usize,
+    completed_response: Option<Value>,
 ) -> bool {
     match kind {
         StreamKind::Completion => send_sse_json(
@@ -228,27 +229,91 @@ pub(crate) fn send_stream_final(
                 "usage": usage(prompt_tokens, completion_tokens)
             }),
         ),
-        StreamKind::Response => send_sse_json(
-            tx,
-            Some("response.completed"),
-            json!({
-                "type": "response.completed",
-                "response": {
+        StreamKind::Response => {
+            let response = completed_response.unwrap_or_else(|| {
+                json!({
                     "id": meta.id,
                     "object": "response",
                     "created_at": meta.created,
                     "status": "completed",
+                    "error": null,
+                    "incomplete_details": null,
                     "model": meta.model,
+                    "metadata": null,
+                    "store": false,
+                    "previous_response_id": null,
                     "output": [],
+                    "output_text": "",
                     "usage": {
                         "input_tokens": prompt_tokens,
                         "output_tokens": completion_tokens,
                         "total_tokens": prompt_tokens + completion_tokens
                     }
-                }
-            }),
-        ),
+                })
+            });
+            send_sse_json(
+                tx,
+                Some("response.completed"),
+                json!({
+                    "type": "response.completed",
+                    "response": response
+                }),
+            )
+        }
     }
+}
+
+pub(crate) fn response_stream_completed_response(
+    meta: &StreamMeta,
+    emitted: &StreamEmissionState,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+) -> Option<Value> {
+    let response_options = meta.response.as_ref()?;
+    let mut output = Vec::new();
+    if !emitted.reasoning.is_empty() {
+        output.push(json!({
+            "id": format!("{}-reasoning", meta.id),
+            "type": "reasoning",
+            "summary": [],
+            "status": "completed",
+            "content": [{
+                "type": "reasoning_text",
+                "text": emitted.reasoning
+            }]
+        }));
+    }
+    output.push(json!({
+        "id": format!("{}-message", meta.id),
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{
+            "id": format!("{}-content", meta.id),
+            "type": "output_text",
+            "text": emitted.content,
+            "annotations": []
+        }]
+    }));
+    Some(json!({
+        "id": meta.id,
+        "object": "response",
+        "created_at": meta.created,
+        "status": "completed",
+        "error": null,
+        "incomplete_details": null,
+        "model": meta.model,
+        "metadata": response_options.metadata.clone(),
+        "store": response_options.store,
+        "previous_response_id": response_options.previous_response_id.clone(),
+        "output": output,
+        "output_text": emitted.content,
+        "usage": {
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens
+        }
+    }))
 }
 
 pub(crate) fn send_stream_error(tx: &mpsc::Sender<web::Bytes>, error: ApiError) {

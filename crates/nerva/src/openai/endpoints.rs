@@ -4,16 +4,19 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use serde_json::{Value, json};
 
 use super::{
-    ApiError, AppState, GenerateOptions, PromptInput, ReasoningMode, StreamKind, StreamMeta,
+    ApiError, AppState, GenerateOptions, PromptInput, ReasoningMode, ResponseStreamOptions,
+    StreamKind, StreamMeta, append_assistant_instruction, apply_response_format_instruction,
     augment_prompt_with_mcp_tool, authorize, chat_messages_to_prompt, completion_echo_prefix,
     completion_prompts, empty_text_prompt, execute_request_mcp_tool, generate_text,
     generate_text_batch, generate_text_stream, generated_metadata, mcp_tool_result_json,
-    prompt_format_for_reasoning, reject_unsupported_generation_options,
+    previous_response_context, prompt_format_for_reasoning, reject_unsupported_generation_options,
     reject_unsupported_generation_options_with_tools, request_echo, request_f32,
-    request_include_reasoning, request_max_tokens, request_n, request_optional_string,
-    request_reasoning_mode, request_stop_strings, request_stream, request_suffix, request_u32,
-    request_u64_opt, require_known_model, responses_input_to_prompt, shared_fork_batch_supported,
-    split_generated_reasoning, unix_seconds, usage,
+    request_include_reasoning, request_max_tokens, request_metadata, request_n,
+    request_optional_string, request_reasoning_mode, request_response_format_instruction,
+    request_stop_strings, request_store, request_stream, request_suffix, request_u32,
+    request_u64_opt, require_known_model, response_input_items, responses_input_to_prompt,
+    shared_fork_batch_supported, split_generated_reasoning, store_response_if_requested,
+    unix_seconds, usage,
 };
 
 pub(crate) async fn completions(
@@ -38,6 +41,7 @@ pub(crate) async fn completions(
         let cache_key = request_optional_string(&body, "cache_key")?;
         let echo = request_echo(&body)?;
         let suffix = request_suffix(&body)?;
+        let response_format_instruction = request_response_format_instruction(&body)?;
         let created = unix_seconds();
         let id = state.next_response_id("cmpl");
         if request_stream(&body) {
@@ -48,6 +52,8 @@ pub(crate) async fn completions(
             }
             let prompt = prompts.into_iter().next().unwrap_or_else(empty_text_prompt);
             let output_prefix = completion_echo_prefix(&state.config.model_path, &prompt, echo)?;
+            let prompt =
+                apply_response_format_instruction(prompt, response_format_instruction.as_deref())?;
             return generate_text_stream(
                 state.clone(),
                 GenerateOptions {
@@ -70,6 +76,7 @@ pub(crate) async fn completions(
                     id: id.clone(),
                     created,
                     model: state.config.model_id.clone(),
+                    response: None,
                 },
             )
             .await;
@@ -83,6 +90,8 @@ pub(crate) async fn completions(
         {
             let prompt = prompts.into_iter().next().unwrap_or_else(empty_text_prompt);
             let output_prefix = completion_echo_prefix(&state.config.model_path, &prompt, echo)?;
+            let prompt =
+                apply_response_format_instruction(prompt, response_format_instruction.as_deref())?;
             let generated = generate_text_batch(
                 state.clone(),
                 GenerateOptions {
@@ -118,6 +127,10 @@ pub(crate) async fn completions(
             for prompt in prompts {
                 let output_prefix =
                     completion_echo_prefix(&state.config.model_path, &prompt, echo)?;
+                let prompt = apply_response_format_instruction(
+                    prompt,
+                    response_format_instruction.as_deref(),
+                )?;
                 for _ in 0..n {
                     let index = choices.len();
                     let generated = generate_text(
@@ -176,11 +189,16 @@ pub(crate) async fn chat_completions(
         reject_unsupported_generation_options_with_tools(&body)?;
         let n = request_n(&body)?;
         let tool_result = execute_request_mcp_tool(state.clone(), &body).await?;
+        let response_format_instruction = request_response_format_instruction(&body)?;
         let prompt = augment_prompt_with_mcp_tool(
             chat_messages_to_prompt(&body)?,
             tool_result.as_ref(),
             &body,
         );
+        let prompt = match response_format_instruction.as_deref() {
+            Some(instruction) => append_assistant_instruction(prompt, instruction),
+            None => prompt,
+        };
         let created = unix_seconds();
         let id = state.next_response_id("chatcmpl");
         let include_reasoning = request_include_reasoning(&body)?;
@@ -218,6 +236,7 @@ pub(crate) async fn chat_completions(
                     id: id.clone(),
                     created,
                     model: state.config.model_id.clone(),
+                    response: None,
                 },
             )
             .await;
@@ -275,12 +294,25 @@ pub(crate) async fn responses(
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
         reject_unsupported_generation_options_with_tools(&body)?;
+        let store = request_store(&body)?;
+        let metadata = request_metadata(&body)?;
+        let previous_response_id = request_optional_string(&body, "previous_response_id")?;
         let tool_result = execute_request_mcp_tool(state.clone(), &body).await?;
+        let response_format_instruction = request_response_format_instruction(&body)?;
+        let previous_context = previous_response_context(&state, previous_response_id.as_deref())?;
+        let input_items = response_input_items(&body);
         let prompt = augment_prompt_with_mcp_tool(
             responses_input_to_prompt(&body)?,
             tool_result.as_ref(),
             &body,
         );
+        let mut prompt = match response_format_instruction.as_deref() {
+            Some(instruction) => append_assistant_instruction(prompt, instruction),
+            None => prompt,
+        };
+        if let Some(previous_context) = previous_context {
+            prompt = format!("{previous_context}{prompt}");
+        }
         let created = unix_seconds();
         let id = state.next_response_id("resp");
         let include_reasoning = request_include_reasoning(&body)?;
@@ -313,6 +345,12 @@ pub(crate) async fn responses(
                     id: id.clone(),
                     created,
                     model: state.config.model_id.clone(),
+                    response: Some(ResponseStreamOptions {
+                        store,
+                        metadata,
+                        previous_response_id,
+                        input_items,
+                    }),
                 },
             )
             .await;
@@ -360,7 +398,7 @@ pub(crate) async fn responses(
                 "annotations": []
             }]
         }));
-        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+        let response_json = json!({
             "id": id,
             "object": "response",
             "created_at": created,
@@ -368,6 +406,9 @@ pub(crate) async fn responses(
             "error": null,
             "incomplete_details": null,
             "model": state.config.model_id,
+            "metadata": metadata.clone(),
+            "store": store,
+            "previous_response_id": previous_response_id,
             "output": output,
             "output_text": split.content,
             "nerva": generated_metadata(&generated),
@@ -376,7 +417,9 @@ pub(crate) async fn responses(
                 "output_tokens": completion_tokens,
                 "total_tokens": generated.prompt_tokens + completion_tokens
             }
-        })))
+        });
+        let response_json = store_response_if_requested(&state, response_json, input_items, store)?;
+        Ok::<_, ApiError>(HttpResponse::Ok().json(response_json))
     }
     .await;
     response.unwrap_or_else(ApiError::into_response)

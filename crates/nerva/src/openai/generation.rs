@@ -23,8 +23,9 @@ use super::{
     ResolvedServeConfig, StreamEmissionState, StreamKind, StreamMeta, StreamRunStats,
     apply_stop_strings, auto_sampler_seed, completion_text, emit_stream_text,
     ensure_session_for_request, finish_reason, record_context_cache_probe,
-    record_session_generation, send_stream_done, send_stream_error, send_stream_final,
-    stochastic_sampling_requested, validate_sampling,
+    record_session_generation, response_stream_completed_response, send_stream_done,
+    send_stream_error, send_stream_final, stochastic_sampling_requested,
+    store_response_if_requested, validate_sampling,
 };
 
 pub(crate) async fn generate_text_stream(
@@ -167,6 +168,22 @@ fn generate_text_stream_sync(
     }
     if !tx_closed {
         let finish_reason = finish_reason(output.stop_reason(), stopped_by_stop_string).to_string();
+        let mut completed_response = response_stream_completed_response(
+            &meta,
+            &emitted,
+            prepared.prompt_tokens.len(),
+            output.tokens().len(),
+        );
+        if let (Some(response_options), Some(response_json)) =
+            (meta.response.as_ref(), completed_response.take())
+        {
+            completed_response = Some(store_response_if_requested(
+                state,
+                response_json,
+                response_options.input_items.clone(),
+                response_options.store,
+            )?);
+        }
         send_stream_final(
             &tx,
             kind,
@@ -174,6 +191,7 @@ fn generate_text_stream_sync(
             &finish_reason,
             prepared.prompt_tokens.len(),
             output.tokens().len(),
+            completed_response,
         );
         send_stream_done(&tx);
     }

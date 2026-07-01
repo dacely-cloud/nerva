@@ -1,14 +1,17 @@
 use serde_json::json;
 
 use super::{
-    GeneratedText, McpToolResult, PromptInput, ReasoningMode, StreamKind, StreamMeta,
-    apply_stop_strings, augment_prompt_with_mcp_tool, chat_messages_to_prompt, completion_prompts,
-    completion_text, decode_chunked_body, finish_reason, first_sse_json_payload,
+    GeneratedText, McpToolResult, PromptInput, ReasoningMode, ResponseStreamOptions,
+    StreamEmissionState, StreamKind, StreamMeta, append_assistant_instruction, apply_stop_strings,
+    augment_prompt_with_mcp_tool, chat_messages_to_prompt, completion_prompts, completion_text,
+    decode_chunked_body, emit_stream_text, finish_reason, first_sse_json_payload,
     generated_metadata, hash_tokens, mcp_tool_invocation_from_request, normalize_batch_endpoint,
     parse_http_endpoint, parse_mcp_http_response, parse_multipart_file_upload,
     percent_decode_query, prompt_format_for_reasoning, reject_unsupported_generation_options,
-    reject_unsupported_generation_options_with_tools, request_n, request_optional_string,
-    request_stop_strings, responses_input_to_prompt, send_stream_reasoning_delta, session_json,
+    reject_unsupported_generation_options_with_tools, request_metadata, request_n,
+    request_optional_string, request_response_format_instruction, request_stop_strings,
+    request_store, response_input_items, response_output_text, response_stream_completed_response,
+    responses_input_to_prompt, send_stream_reasoning_delta, session_json,
     shared_fork_batch_supported, split_generated_reasoning, text_delta,
 };
 use crate::openai::SessionRecord;
@@ -144,6 +147,7 @@ fn streams_chat_reasoning_delta_as_reasoning_field() {
         id: "chatcmpl-test".to_string(),
         created: 7,
         model: "deepseek-test".to_string(),
+        response: None,
     };
     let mut response_reasoning_started = false;
 
@@ -161,6 +165,41 @@ fn streams_chat_reasoning_delta_as_reasoning_field() {
     assert!(frame.contains("\"reasoning\":\"thinking\""));
     assert!(frame.contains("\"reasoning_content\":\"thinking\""));
     assert!(!frame.contains("\"content\":\"thinking\""));
+}
+
+#[test]
+fn builds_streamed_response_completed_payload() {
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let meta = StreamMeta {
+        id: "resp-test".to_string(),
+        created: 7,
+        model: "deepseek-test".to_string(),
+        response: Some(ResponseStreamOptions {
+            store: true,
+            metadata: json!({"trace": "abc"}),
+            previous_response_id: Some("resp-prev".to_string()),
+            input_items: vec![json!({"id": "in-1", "role": "user", "content": "hello"})],
+        }),
+    };
+    let mut emitted = StreamEmissionState::default();
+    assert!(emit_stream_text(
+        &tx,
+        StreamKind::Response,
+        &meta,
+        false,
+        ReasoningMode::None,
+        &mut emitted,
+        "answer",
+    ));
+
+    let response = response_stream_completed_response(&meta, &emitted, 3, 2).unwrap();
+    assert_eq!(response["id"], "resp-test");
+    assert_eq!(response["metadata"], json!({"trace": "abc"}));
+    assert_eq!(response["store"], true);
+    assert_eq!(response["previous_response_id"], "resp-prev");
+    assert_eq!(response["output_text"], "answer");
+    assert_eq!(response["usage"]["total_tokens"], 5);
+    assert_eq!(response["output"][0]["content"][0]["text"], "answer");
 }
 
 #[test]
@@ -187,8 +226,46 @@ fn rejects_unsupported_generation_options() {
     );
     assert!(
         reject_unsupported_generation_options(&json!({"response_format": {"type": "json_object"}}))
+            .is_ok()
+    );
+    assert!(
+        reject_unsupported_generation_options(&json!({"response_format": {"type": "yaml"}}))
             .is_err()
     );
+}
+
+#[test]
+fn parses_response_format_prompt_instructions() {
+    assert!(
+        request_response_format_instruction(&json!({"response_format": {"type": "text"}}))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        request_response_format_instruction(&json!({"response_format": {"type": "json_object"}}))
+            .unwrap()
+            .unwrap()
+            .contains("valid JSON object")
+    );
+    assert!(
+        request_response_format_instruction(&json!({
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer",
+                    "schema": {"type": "object"}
+                }
+            }
+        }))
+        .unwrap()
+        .unwrap()
+        .contains("schema 'answer'")
+    );
+
+    let prompt =
+        append_assistant_instruction("User: reply\nAssistant:".to_string(), "Respond with JSON.");
+    assert!(prompt.contains("System: Respond with JSON."));
+    assert!(prompt.ends_with("Assistant:"));
 }
 
 #[test]
@@ -316,6 +393,42 @@ fn parses_n_and_optional_strings() {
         Some("abc".to_string())
     );
     assert!(request_optional_string(&json!({"session_id": ""}), "session_id").is_err());
+}
+
+#[test]
+fn parses_response_store_controls_and_input_items() {
+    assert!(request_store(&json!({})).unwrap());
+    assert!(!request_store(&json!({"store": false})).unwrap());
+    assert_eq!(
+        request_metadata(&json!({"metadata": {"trace": "abc"}})).unwrap(),
+        json!({"trace": "abc"})
+    );
+    assert!(request_metadata(&json!({"metadata": "bad"})).is_err());
+
+    let items = response_input_items(&json!({"input": "hello"}));
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["role"], "user");
+    assert_eq!(items[0]["content"][0]["text"], "hello");
+
+    let items = response_input_items(&json!({"input": [{"role": "user", "content": "hi"}]}));
+    assert_eq!(items, vec![json!({"role": "user", "content": "hi"})]);
+}
+
+#[test]
+fn extracts_stored_response_output_text() {
+    assert_eq!(
+        response_output_text(&json!({"output_text": "direct"})),
+        "direct"
+    );
+    assert_eq!(
+        response_output_text(&json!({
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "nested"}]
+            }]
+        })),
+        "nested"
+    );
 }
 
 #[test]
