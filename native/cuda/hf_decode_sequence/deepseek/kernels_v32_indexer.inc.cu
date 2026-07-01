@@ -92,8 +92,8 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
           : 0u;
   const uint32_t rope_half = rope_dim / 2u;
   for (uint32_t offset = threadIdx.x; offset < rope_half; offset += blockDim.x) {
-    const uint32_t left = offset;
-    const uint32_t right = offset + rope_half;
+    const uint32_t left = offset * 2u;
+    const uint32_t right = left + 1u;
     const float left_value = values[left];
     const float right_value = values[right];
     values[left] = deepseek_rope_value_serial(
@@ -265,8 +265,8 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_tokens_kernel(
           : 0u;
   const uint32_t rope_half = rope_dim / 2u;
   for (uint32_t offset = threadIdx.x; offset < rope_half; offset += blockDim.x) {
-    const uint32_t left = offset;
-    const uint32_t right = offset + rope_half;
+    const uint32_t left = offset * 2u;
+    const uint32_t right = left + 1u;
     const float left_value = values[left];
     const float right_value = values[right];
     values[left] = deepseek_rope_value_serial(
@@ -525,8 +525,8 @@ __global__ void hf_deepseek_v32_indexer_query_state_kernel(
   const float softmax_scale = rsqrtf(static_cast<float>(index_head_dim));
   const float head_scale = rsqrtf(static_cast<float>(index_heads));
   for (uint32_t offset = threadIdx.x; offset < rope_half; offset += blockDim.x) {
-    const uint32_t left = offset;
-    const uint32_t right = offset + rope_half;
+    const uint32_t left = offset * 2u;
+    const uint32_t right = left + 1u;
     const float left_value = query_head[left];
     const float right_value = query_head[right];
     query_head[left] = deepseek_rope_value_serial(
@@ -618,8 +618,8 @@ __global__ void hf_deepseek_v32_indexer_query_state_projected_kernel(
   const float softmax_scale = rsqrtf(static_cast<float>(index_head_dim));
   const float head_scale = rsqrtf(static_cast<float>(index_heads));
   for (uint32_t offset = threadIdx.x; offset < rope_half; offset += blockDim.x) {
-    const uint32_t left = offset;
-    const uint32_t right = offset + rope_half;
+    const uint32_t left = offset * 2u;
+    const uint32_t right = left + 1u;
     const float left_value = query_head[left];
     const float right_value = query_head[right];
     query_head[left] = deepseek_rope_value_serial(
@@ -727,8 +727,8 @@ __global__ void hf_deepseek_v32_indexer_query_state_tokens_kernel(
   const float softmax_scale = rsqrtf(static_cast<float>(index_head_dim));
   const float head_scale = rsqrtf(static_cast<float>(index_heads));
   for (uint32_t offset = threadIdx.x; offset < rope_half; offset += blockDim.x) {
-    const uint32_t left = offset;
-    const uint32_t right = offset + rope_half;
+    const uint32_t left = offset * 2u;
+    const uint32_t right = left + 1u;
     const float left_value = query_head[left];
     const float right_value = query_head[right];
     query_head[left] = deepseek_rope_value_serial(

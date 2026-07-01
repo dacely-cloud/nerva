@@ -271,8 +271,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
       }
       if (rope_half != 0) {
         for (uint32_t offset = 0; offset < rope_half; ++offset) {
-          const uint32_t left = head_start + qk_nope + offset;
-          const uint32_t right = left + rope_half;
+          const uint32_t left = head_start + qk_nope + offset * 2u;
+          const uint32_t right = left + 1u;
           const float left_value = s.q[left];
           const float right_value = s.q[right];
           s.q[left] = deepseek_rope_value_serial(
@@ -286,8 +286,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     }
     if (rope_half != 0) {
       for (uint32_t offset = 0; offset < rope_half; ++offset) {
-        const uint32_t left = qk_nope + offset;
-        const uint32_t right = left + rope_half;
+        const uint32_t left = qk_nope + offset * 2u;
+        const uint32_t right = left + 1u;
         const float left_value = s.k[left];
         const float right_value = s.k[right];
         s.k[left] = deepseek_rope_value_serial(
@@ -480,8 +480,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     }
     if (rope_half != 0) {
       for (uint32_t offset = 0; offset < rope_half; ++offset) {
-        const uint32_t left = head_start + qk_nope + offset;
-        const uint32_t right = left + rope_half;
+        const uint32_t left = head_start + qk_nope + offset * 2u;
+        const uint32_t right = left + 1u;
         const float angle =
             static_cast<float>(position) *
             deepseek_rope_inv_freq(layout, offset, qk_rope, rope_theta);

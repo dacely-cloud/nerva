@@ -42,14 +42,14 @@ __global__ void hf_deepseek_v3_mla_cache_encode_kernel(
        latent += blockDim.x) {
     kv_keys[write_base + latent] = kv_latent_norm[latent];
   }
-  const uint32_t rope_half = qk_rope / 2u;
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
     float value = kv_a[kv_lora_rank + dim];
-    if (rope_half != 0) {
-      const uint32_t offset = dim % rope_half;
-      value = deepseek_rope_value_serial(
-          kv_a[kv_lora_rank + offset], kv_a[kv_lora_rank + offset + rope_half],
-          offset, qk_rope, position, rope_theta, dim >= rope_half, layout);
+    if ((qk_rope & 1u) == 0u) {
+      const uint32_t even = dim & ~1u;
+      const uint32_t odd = even + 1u;
+      value = deepseek_rope_value_gptj(
+          kv_a[kv_lora_rank + even], kv_a[kv_lora_rank + odd], dim,
+          qk_rope, position, rope_theta, layout);
     }
     kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
   }
@@ -174,14 +174,14 @@ __global__ void hf_deepseek_v3_mla_cache_encode_tokens_kernel(
        latent += blockDim.x) {
     kv_keys[write_base + latent] = kv_latent_norm[latent];
   }
-  const uint32_t rope_half = qk_rope / 2u;
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
     float value = kv_a[kv_lora_rank + dim];
-    if (rope_half != 0) {
-      const uint32_t offset = dim % rope_half;
-      value = deepseek_rope_value_serial(
-          kv_a[kv_lora_rank + offset], kv_a[kv_lora_rank + offset + rope_half],
-          offset, qk_rope, position, rope_theta, dim >= rope_half, layout);
+    if ((qk_rope & 1u) == 0u) {
+      const uint32_t even = dim & ~1u;
+      const uint32_t odd = even + 1u;
+      value = deepseek_rope_value_gptj(
+          kv_a[kv_lora_rank + even], kv_a[kv_lora_rank + odd], dim,
+          qk_rope, position, rope_theta, layout);
     }
     kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
   }
@@ -382,15 +382,15 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     }
     q_nope_latent[latent] = sum;
   }
-  const uint32_t rope_half = qk_rope / 2u;
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
     float q_pe = q[head * qk_head_dim + qk_nope + dim];
-    if (rope_half != 0) {
-      const uint32_t offset = dim % rope_half;
-      q_pe = deepseek_rope_value_serial(
-          q[head * qk_head_dim + qk_nope + offset],
-          q[head * qk_head_dim + qk_nope + offset + rope_half],
-          offset, qk_rope, position, rope_theta, dim >= rope_half, layout);
+    if ((qk_rope & 1u) == 0u) {
+      const uint32_t even = dim & ~1u;
+      const uint32_t odd = even + 1u;
+      q_pe = deepseek_rope_value_gptj(
+          q[head * qk_head_dim + qk_nope + even],
+          q[head * qk_head_dim + qk_nope + odd], dim, qk_rope, position,
+          rope_theta, layout);
     }
     q_rope[dim] = q_pe;
   }
@@ -623,15 +623,15 @@ __global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
        latent += blockDim.x) {
     latent_output[latent] = 0.0f;
   }
-  const uint32_t rope_half = qk_rope / 2u;
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
     float q_pe = q[head * qk_head_dim + qk_nope + dim];
-    if (rope_half != 0) {
-      const uint32_t offset = dim % rope_half;
-      q_pe = deepseek_rope_value_serial(
-          q[head * qk_head_dim + qk_nope + offset],
-          q[head * qk_head_dim + qk_nope + offset + rope_half],
-          offset, qk_rope, position, rope_theta, dim >= rope_half, layout);
+    if ((qk_rope & 1u) == 0u) {
+      const uint32_t even = dim & ~1u;
+      const uint32_t odd = even + 1u;
+      q_pe = deepseek_rope_value_gptj(
+          q[head * qk_head_dim + qk_nope + even],
+          q[head * qk_head_dim + qk_nope + odd], dim, qk_rope, position,
+          rope_theta, layout);
     }
     q_rope[dim] = q_pe;
   }
@@ -912,15 +912,15 @@ __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
     }
     q_nope_latent[latent] = sum;
   }
-  const uint32_t rope_half = qk_rope / 2u;
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
     float q_pe = q[head * qk_head_dim + qk_nope + dim];
-    if (rope_half != 0) {
-      const uint32_t offset = dim % rope_half;
-      q_pe = deepseek_rope_value_serial(
-          q[head * qk_head_dim + qk_nope + offset],
-          q[head * qk_head_dim + qk_nope + offset + rope_half],
-          offset, qk_rope, position, rope_theta, dim >= rope_half, layout);
+    if ((qk_rope & 1u) == 0u) {
+      const uint32_t even = dim & ~1u;
+      const uint32_t odd = even + 1u;
+      q_pe = deepseek_rope_value_gptj(
+          q[head * qk_head_dim + qk_nope + even],
+          q[head * qk_head_dim + qk_nope + odd], dim, qk_rope, position,
+          rope_theta, layout);
     }
     q_rope[dim] = q_pe;
   }

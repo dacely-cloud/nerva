@@ -19,6 +19,11 @@ __device__ float deepseek_rope_value_serial(float left, float right,
                                             uint32_t position, float theta,
                                             bool second,
                                             const SequenceLayerLayout &layout);
+__device__ float deepseek_rope_value_gptj(float even, float odd,
+                                          uint32_t rope_dim_index,
+                                          uint32_t dim, uint32_t position,
+                                          float theta,
+                                          const SequenceLayerLayout &layout);
 __device__ __forceinline__ uint16_t deepseek_session_f32_to_bf16_bits(
     float value);
 __device__ __forceinline__ float deepseek_session_bf16_bits_to_f32(

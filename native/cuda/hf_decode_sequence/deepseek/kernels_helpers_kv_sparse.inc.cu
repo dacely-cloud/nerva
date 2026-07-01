@@ -172,16 +172,15 @@ __device__ bool deepseek_session_write_v32_fp8_ds_mla_kv(
     }
   }
 
-  const uint32_t rope_half = kDeepSeekV32PackedKvRopeValues / 2u;
   for (uint32_t dim = 0; dim < kDeepSeekV32PackedKvRopeValues; ++dim) {
     float value = kv_a[kDeepSeekV32PackedKvNopeBytes + dim];
-    if (rope_half != 0) {
-      const uint32_t offset = dim % rope_half;
-      value = deepseek_rope_value_serial(
-          kv_a[kDeepSeekV32PackedKvNopeBytes + offset],
-          kv_a[kDeepSeekV32PackedKvNopeBytes + offset + rope_half], offset,
-          kDeepSeekV32PackedKvRopeValues, position, rope_theta,
-          dim >= rope_half, layout);
+    if ((kDeepSeekV32PackedKvRopeValues & 1u) == 0u) {
+      const uint32_t even = dim & ~1u;
+      const uint32_t odd = even + 1u;
+      value = deepseek_rope_value_gptj(
+          kv_a[kDeepSeekV32PackedKvNopeBytes + even],
+          kv_a[kDeepSeekV32PackedKvNopeBytes + odd], dim,
+          kDeepSeekV32PackedKvRopeValues, position, rope_theta, layout);
     }
     const uint16_t bits = deepseek_session_f32_to_bf16_bits(value);
     rope_ptr[dim * 2u] = static_cast<uint8_t>(bits & 0xffu);

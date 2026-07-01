@@ -243,6 +243,17 @@ __device__ float deepseek_rope_value_serial(float left, float right,
                  : left * cos_value - right * sin_value);
 }
 
+__device__ float deepseek_rope_value_gptj(float even, float odd,
+                                          uint32_t rope_dim_index,
+                                          uint32_t dim, uint32_t position,
+                                          float theta,
+                                          const SequenceLayerLayout &layout) {
+  const uint32_t pair = rope_dim_index >> 1u;
+  const bool second = (rope_dim_index & 1u) != 0u;
+  return deepseek_rope_value_serial(even, odd, pair, dim, position, theta,
+                                    second, layout);
+}
+
 __device__ __forceinline__ uint16_t deepseek_session_f32_to_bf16_bits(
     float value) {
   const uint32_t bits = __float_as_uint(value);
