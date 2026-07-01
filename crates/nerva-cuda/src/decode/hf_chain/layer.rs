@@ -79,6 +79,7 @@ pub struct CudaHfDeepSeekLayer {
     pub routed_scaling_factor: f32,
     pub hc_eps: f32,
     pub hc_post_alpha: f32,
+    pub compress_rope_theta: Option<f32>,
     pub swiglu_limit: Option<f32>,
 }
 
@@ -303,6 +304,10 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
                 .map_or(1.0, |layer| layer.routed_scaling_factor),
             deepseek_hc_eps: self.deepseek.map_or(0.0, |layer| layer.hc_eps),
             deepseek_hc_post_alpha: self.deepseek.map_or(0.0, |layer| layer.hc_post_alpha),
+            deepseek_compress_rope_theta: self
+                .deepseek
+                .and_then(|layer| layer.compress_rope_theta)
+                .unwrap_or(0.0),
             deepseek_swiglu_limit: self
                 .deepseek
                 .and_then(|layer| layer.swiglu_limit)
@@ -388,6 +393,10 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
                 .map_or(1.0, |layer| layer.routed_scaling_factor),
             deepseek_hc_eps: self.deepseek.map_or(0.0, |layer| layer.hc_eps),
             deepseek_hc_post_alpha: self.deepseek.map_or(0.0, |layer| layer.hc_post_alpha),
+            deepseek_compress_rope_theta: self
+                .deepseek
+                .and_then(|layer| layer.compress_rope_theta)
+                .unwrap_or(0.0),
             deepseek_swiglu_limit: self
                 .deepseek
                 .and_then(|layer| layer.swiglu_limit)

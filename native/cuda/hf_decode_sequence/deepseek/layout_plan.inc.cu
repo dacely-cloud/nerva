@@ -45,6 +45,7 @@ void fill_deepseek_layout_plan_result(
   out->deepseek_hc_sinkhorn_iters = layout.deepseek_hc_sinkhorn_iters;
   out->deepseek_hc_eps = layout.deepseek_hc_eps;
   out->deepseek_hc_post_alpha = layout.deepseek_hc_post_alpha;
+  out->deepseek_compress_rope_theta = layout.deepseek_compress_rope_theta;
   out->deepseek_swiglu_limit = layout.deepseek_swiglu_limit;
   fill_deepseek_v3_mla_shape(source_layer, out);
   out->deepseek_q_a_scale = layout.deepseek_q_a_scale;

@@ -88,6 +88,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         max_position_embeddings,
         sliding_window,
         rope_theta,
+        compress_rope_theta: deepseek_config.compress_rope_theta,
         rms_norm_eps,
         bos_token_id,
         eos_token_id,
@@ -174,6 +175,7 @@ struct ParsedDeepSeekConfig {
     hc_eps: Option<f32>,
     num_nextn_predict_layers: Option<usize>,
     num_hash_layers: Option<usize>,
+    compress_rope_theta: Option<f32>,
     swiglu_limit: Option<f32>,
     expert_dtype: Option<String>,
 }
@@ -628,6 +630,7 @@ fn parse_deepseek_config(
             "num_nextn_predict_layers",
         )?,
         num_hash_layers: optional_model_usize(root_json, decoder_json, "num_hash_layers")?,
+        compress_rope_theta: optional_model_f32(root_json, decoder_json, "compress_rope_theta")?,
         swiglu_limit: optional_model_f32(root_json, decoder_json, "swiglu_limit")?,
         expert_dtype: optional_model_string(root_json, decoder_json, "expert_dtype")?,
     })

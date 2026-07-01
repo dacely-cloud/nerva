@@ -31,6 +31,18 @@ uint64_t deepseek_f32_scale_offset(uint64_t matrix_offset, uint64_t rows,
   return matrix_offset + deepseek_fp8_slots_u64(rows, cols);
 }
 
+float deepseek_v4_layer_rope_theta(float session_rope_theta,
+                                   const SequenceLayerLayout &layout) {
+  if ((layout.deepseek_mode == kDeepSeekModeV4Compressed ||
+       layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer) &&
+      layout.deepseek_compress_ratio > 1 &&
+      isfinite(layout.deepseek_compress_rope_theta) &&
+      layout.deepseek_compress_rope_theta > 0.0f) {
+    return layout.deepseek_compress_rope_theta;
+  }
+  return session_rope_theta;
+}
+
 cudaError_t launch_deepseek_v3_mla_projection_step(
     NervaCudaHfDecodeSequenceSession *session, const SequenceLayerLayout &layout,
     uint32_t layer_index, uint32_t max_steps) {
@@ -284,6 +296,8 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
                          session->intermediate);
   constexpr uint32_t block_rows = 128;
   constexpr uint32_t block_cols = 128;
+  const float layer_rope_theta =
+      deepseek_v4_layer_rope_theta(session->rope_theta, layout);
 
   hf_deepseek_v4_attn_mhc_pre_kernel<<<1, 1, 0, session->stream>>>(
       session->device_arena, layout, session->dtype, session->hidden,
@@ -331,7 +345,7 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
                                                     session->stream>>>(
       session->device_arena, layout, session->dtype, session->hidden,
       session->heads, session->head_dim, session->intermediate,
-      session->device_step, max_steps, session->rms_eps, session->rope_theta,
+      session->device_step, max_steps, session->rms_eps, layer_rope_theta,
       session->device_scratch);
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
@@ -392,7 +406,7 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       session->device_arena, layout, layer_index, session->dtype,
       session->hidden, session->heads, session->head_dim,
       session->intermediate, session->device_step, max_steps,
-      session->rms_eps, session->rope_theta, session->device_scratch,
+      session->rms_eps, layer_rope_theta, session->device_scratch,
       session->device_kv_keys, session->device_kv_values,
       session->kv_block_count, session->device_kv_block_table,
       session->vocab_size, session->device_prompt_tokens, prompt_token_count,

@@ -87,6 +87,7 @@ pub struct CudaHfDecodeSequenceLayoutPlan {
     pub deepseek_hc_ffn_scale: u64,
     pub deepseek_hc_eps: f32,
     pub deepseek_hc_post_alpha: f32,
+    pub deepseek_compress_rope_theta: f32,
     pub deepseek_swiglu_limit: f32,
 }
 
@@ -196,6 +197,7 @@ impl From<NervaCudaHfDecodeSequenceLayoutPlanResult> for CudaHfDecodeSequenceLay
             deepseek_hc_ffn_scale: value.deepseek_hc_ffn_scale,
             deepseek_hc_eps: value.deepseek_hc_eps,
             deepseek_hc_post_alpha: value.deepseek_hc_post_alpha,
+            deepseek_compress_rope_theta: value.deepseek_compress_rope_theta,
             deepseek_swiglu_limit: value.deepseek_swiglu_limit,
         }
     }

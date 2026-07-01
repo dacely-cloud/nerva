@@ -192,6 +192,7 @@ struct SequenceLayerLayout {
   float deepseek_routed_scaling_factor;
   float deepseek_hc_eps;
   float deepseek_hc_post_alpha;
+  float deepseek_compress_rope_theta;
   float deepseek_swiglu_limit;
   uint64_t deepseek_q_a_scale;
   uint64_t deepseek_q_b;

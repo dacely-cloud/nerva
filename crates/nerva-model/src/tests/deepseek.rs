@@ -104,6 +104,7 @@ fn parses_deepseek_v4_flash_metadata() {
     assert_eq!(metadata.hc_sinkhorn_iters, Some(20));
     assert_eq!(metadata.hc_eps, Some(0.000001));
     assert_eq!(metadata.num_hash_layers, Some(3));
+    assert_eq!(metadata.compress_rope_theta, Some(1_000_000.0));
     assert_eq!(metadata.swiglu_limit, Some(10.0));
     assert_eq!(metadata.expert_dtype.as_deref(), Some("fp4"));
     assert!(
@@ -1152,6 +1153,7 @@ fn deepseek_v4_flash_config() -> &'static str {
         "expert_dtype": "fp4",
         "vocab_size": 129280,
         "max_position_embeddings": 1048576,
+        "compress_rope_theta": 1000000.0,
         "rope_parameters": {
             "rope_type": "deepseek_yarn",
             "rope_theta": 10000.0

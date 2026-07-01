@@ -227,6 +227,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceLayoutPlanResult {
     pub(crate) deepseek_hc_ffn_scale: u64,
     pub(crate) deepseek_hc_eps: f32,
     pub(crate) deepseek_hc_post_alpha: f32,
+    pub(crate) deepseek_compress_rope_theta: f32,
     pub(crate) deepseek_swiglu_limit: f32,
 }
 
