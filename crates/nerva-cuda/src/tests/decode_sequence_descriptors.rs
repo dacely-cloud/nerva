@@ -2383,6 +2383,10 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
     assert_eq!(plan.deepseek_indexer_k_norm_bias, 104);
     assert_eq!(plan.deepseek_indexer_weights, 108);
     assert_eq!(plan.rms_mlp, 116);
+    assert_ne!(plan.final_norm, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_ne!(plan.lm_head, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert!(plan.final_norm > plan.rms_mlp);
+    assert!(plan.lm_head > plan.final_norm);
     assert_eq!(plan.deepseek_o_b, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_eq!(
         plan.deepseek_compressor_ape,
@@ -2520,6 +2524,135 @@ fn deepseek_v32_dense_session_runs_through_sampling() {
     assert_eq!(summary.deepseek_v4_bias_router_selections, 0);
     assert_eq!(summary.deepseek_v4_hash_router_selections, 0);
     assert!(summary.graph_nodes > 0);
+}
+
+#[test]
+fn deepseek_v32_decode_output_projection_scale_reaches_logits() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    fn run_with_output_scale(o_scale: f32) -> Option<Vec<u32>> {
+        let hidden = 4usize;
+        let heads = 2usize;
+        let kv_heads = 1usize;
+        let head_dim = 2usize;
+        let intermediate = 4usize;
+        let vocab_size = 8usize;
+        let layer = tiny_deepseek_v32_descriptor_layer();
+        let layers = [layer];
+        let plan = CudaHfDecodeSequenceLayoutPlanRequest {
+            hidden: hidden as u32,
+            heads: heads as u32,
+            kv_heads: kv_heads as u32,
+            head_dim: head_dim as u32,
+            intermediate: intermediate as u32,
+            vocab_size: vocab_size as u32,
+            layers: &layers,
+            layer_index: 0,
+        }
+        .plan()
+        .expect("native layout planner should accept tiny V3.2 descriptor layer");
+        assert_ne!(plan.final_norm, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+        assert_ne!(plan.lm_head, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+        assert_ne!(plan.deepseek_o_a_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+
+        let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+        weight_storage[1] = f32_to_bf16_bits(1.0);
+
+        for dim in 0..hidden {
+            write_arena_f32(&mut weight_storage, plan.rms_attn + (dim * 2) as u64, 1.0);
+            write_arena_f32(&mut weight_storage, plan.rms_mlp + (dim * 2) as u64, 1.0);
+            write_arena_f32(&mut weight_storage, plan.final_norm + (dim * 2) as u64, 1.0);
+        }
+        for dim in 0..2usize {
+            write_arena_f32(&mut weight_storage, plan.q_norm + (dim * 2) as u64, 1.0);
+            write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
+        }
+
+        let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+        write_arena_f32(&mut weight_storage, plan.deepseek_q_a_scale, 1.0);
+        write_arena_f32(&mut weight_storage, plan.deepseek_q_b_scale, 1.0);
+        write_arena_f32(&mut weight_storage, plan.deepseek_kv_a_scale, 1.0);
+        write_arena_f32(&mut weight_storage, plan.deepseek_kv_b_scale, 1.0);
+        write_arena_f32(&mut weight_storage, plan.deepseek_o_a_scale, o_scale);
+
+        write_arena_byte(&mut weight_storage, plan.w_k, 1, one_fp8);
+        write_arena_byte(&mut weight_storage, plan.w_k, hidden + 1, one_fp8);
+        write_arena_byte(&mut weight_storage, plan.w_v, 2, one_fp8);
+        write_arena_byte(&mut weight_storage, plan.w_o, 0, one_fp8);
+
+        weight_storage[plan.lm_head as usize + hidden] = f32_to_bf16_bits(1.0);
+        weight_storage[plan.lm_head as usize + 2 * hidden] = f32_to_bf16_bits(-1.0);
+
+        let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
+            host_source: weight_storage.as_ptr(),
+            source_file: core::ptr::null(),
+            source_file_len: 0,
+            file_offset_begin: 0,
+            block_id: 1,
+            block_version: 1,
+            offset_bytes: 0,
+            bytes: plan.resident_weight_bytes,
+            strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+            reserved: 0,
+        }];
+        let config = CudaHfDecodeSequenceSessionConfig {
+            dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+            hidden,
+            heads,
+            kv_heads,
+            head_dim,
+            intermediate,
+            vocab_size,
+            max_context_tokens: 4,
+            rms_eps: 1e-5,
+            rope_theta: Some(10_000.0),
+            embeddings: &[],
+            layers: &layers,
+            final_norm_weight: &[],
+            lm_head: &[],
+            weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
+                blocks: 1,
+                gpu_resident_blocks: 1,
+                gpu_staged_blocks: 0,
+                weight_bytes: plan.resident_weight_bytes,
+                gpu_resident_weight_bytes: plan.resident_weight_bytes,
+                gpu_staged_weight_bytes: 0,
+                descriptor_hash: hash_weight_blocks(&weight_blocks),
+            }),
+            weight_blocks: &weight_blocks,
+            detailed_profile: false,
+            experimental_rt: Default::default(),
+        };
+        let created = config.create();
+        if created.summary.status == SmokeStatus::Unavailable {
+            return None;
+        }
+        assert_eq!(
+            created.summary.status,
+            SmokeStatus::Ok,
+            "V3.2 projection-scale session should create: {:?}",
+            created.summary.error
+        );
+        let mut session = created
+            .session
+            .expect("V3.2 projection-scale session handle should exist");
+        let summary = session.run(&[0], 1, None);
+        assert_eq!(
+            summary.status,
+            SmokeStatus::Ok,
+            "V3.2 projection-scale decode should complete: {:?}",
+            summary.error
+        );
+        Some(summary.tokens)
+    }
+
+    let Some(positive_tokens) = run_with_output_scale(1.0) else {
+        return;
+    };
+    let zero_tokens = run_with_output_scale(0.0)
+        .expect("CUDA device availability should not change between paired runs");
+    assert_eq!(positive_tokens, vec![1]);
+    assert_eq!(zero_tokens, vec![0]);
 }
 
 #[test]

@@ -181,6 +181,8 @@ pub(crate) struct NervaCudaHfDecodeSequenceLayoutPlanResult {
     pub(crate) deepseek_value_rows: u32,
     pub(crate) resident_weight_bytes: u64,
     pub(crate) layout_bytes: u64,
+    pub(crate) final_norm: u64,
+    pub(crate) lm_head: u64,
     pub(crate) rms_attn: u64,
     pub(crate) rms_mlp: u64,
     pub(crate) w_q: u64,

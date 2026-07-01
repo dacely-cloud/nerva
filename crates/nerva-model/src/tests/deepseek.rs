@@ -307,8 +307,9 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
 }
 
 #[test]
-fn deepseek_v32_projection_coverage_tracks_live_kv_b_scale_runtime() {
+fn deepseek_v32_projection_coverage_tracks_live_scale_runtime() {
     let metadata = parse_hf_config_metadata(deepseek_v32_config()).unwrap();
+    let primitives = deepseek_implemented_primitives(&metadata);
     let coverage = deepseek_execution_unit_coverage(&metadata);
     let unit = coverage
         .iter()
@@ -316,12 +317,21 @@ fn deepseek_v32_projection_coverage_tracks_live_kv_b_scale_runtime() {
         .expect("DeepSeek V3.2 should report projection GEMM coverage");
 
     assert_eq!(unit.status, "partial");
-    assert!(
-        unit.validated_primitives
-            .iter()
-            .any(|item| item == "cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime"),
-        "V3.2 projection coverage must include the live CUDA KV-B scale regression"
-    );
+    for primitive in [
+        "cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime",
+        "cuda_hf_sequence_deepseek_v32_output_projection_scale_logits_runtime",
+    ] {
+        assert!(
+            primitives.iter().any(|item| item == primitive),
+            "V3.2 implemented primitive list must include {primitive}"
+        );
+        assert!(
+            unit.validated_primitives
+                .iter()
+                .any(|item| item == primitive),
+            "V3.2 projection coverage must include {primitive}"
+        );
+    }
     assert!(
         unit.remaining_gaps
             .iter()
@@ -331,7 +341,7 @@ fn deepseek_v32_projection_coverage_tracks_live_kv_b_scale_runtime() {
     assert!(
         unit.remaining_gaps
             .iter()
-            .any(|gap| gap.contains("q_a/kv_a/q_b/o projection scale offsets")),
+            .any(|gap| gap.contains("q_a/kv_a/q_b projection scale offsets")),
         "remaining projection-scale work should stay explicit until full-output decode coverage exists"
     );
 }

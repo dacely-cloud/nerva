@@ -545,6 +545,8 @@ typedef struct NervaCudaHfDecodeSequenceLayoutPlanResult {
   uint32_t deepseek_value_rows;
   uint64_t resident_weight_bytes;
   uint64_t layout_bytes;
+  uint64_t final_norm;
+  uint64_t lm_head;
   uint64_t rms_attn;
   uint64_t rms_mlp;
   uint64_t w_q;

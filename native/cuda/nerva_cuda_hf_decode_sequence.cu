@@ -140,6 +140,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_plan_layout(
   out->resident_weight_bytes = elements * sizeof(uint16_t) -
                                hidden * 2u * sizeof(uint16_t);
   out->layout_bytes = layouts.size() * sizeof(SequenceLayerLayout);
+  out->final_norm = arena_layout.final_norm;
+  out->lm_head = arena_layout.lm_head;
   out->rms_attn = layout.rms_attn;
   out->rms_mlp = layout.rms_mlp;
   out->w_q = layout.w_q;
