@@ -227,9 +227,28 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
 
+  const bool has_v32_sparse_attention =
+      layout.attention_kind == kAttentionKindDeepSeekMla &&
+      layout.deepseek_mode == kDeepSeekModeV32MlaIndexer &&
+      (layout.deepseek_flags & kDeepSeekFlagSparseIndexer) != 0 &&
+      layout.deepseek_index_topk != 0 &&
+      session->device_deepseek_indexer_state != nullptr &&
+      session->device_deepseek_indexer_kv != nullptr &&
+      layout.deepseek_q_lora_rank != 0 &&
+      layout.deepseek_index_n_heads != 0 &&
+      layout.deepseek_index_head_dim != 0 &&
+      layout.deepseek_indexer_q != kMissingOffset &&
+      layout.deepseek_indexer_q_scale != kMissingOffset &&
+      layout.deepseek_indexer_weights != kMissingOffset &&
+      deepseek_v32_indexer_kv_block_count(session, layout) != 0;
+  const size_t mla_attention_shared_bytes =
+      (static_cast<size_t>(kv_lora_rank) * 2u + qk_rope) * sizeof(float) +
+      (has_v32_sparse_attention
+           ? static_cast<size_t>(kDeepSeekSparseTopKSlotCapacity) *
+                 (sizeof(int32_t) + sizeof(float))
+           : 0u);
   hf_deepseek_v3_mla_attention_encode_kernel<<<
-      session->heads, kDecodeThreads,
-      static_cast<size_t>(kv_lora_rank) * 2u * sizeof(float),
+      session->heads, kDecodeThreads, mla_attention_shared_bytes,
       session->stream>>>(
       session->device_arena, layout, layer_index, session->dtype,
       session->heads, session->device_step, max_steps, session->rope_theta,
