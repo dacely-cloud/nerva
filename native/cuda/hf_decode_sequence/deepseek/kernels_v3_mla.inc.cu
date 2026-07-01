@@ -498,7 +498,9 @@ __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
     uint32_t chunk_start, uint32_t chunk_tokens, const float *q_tokens,
     uint32_t q_stride, uint16_t *kv_keys, uint32_t kv_block_count,
     const uint32_t *kv_block_table, uint16_t *attn_out,
-    uint32_t attn_stride, uint64_t *deepseek_runtime_counters) {
+    uint32_t attn_stride, const int32_t *sparse_topk_slots,
+    uint32_t sparse_topk_stride, const uint32_t *sparse_topk_count,
+    uint64_t *deepseek_runtime_counters) {
   const uint32_t local_token = blockIdx.x;
   const uint32_t head = blockIdx.y;
   if (local_token >= chunk_tokens || head >= heads || q_tokens == nullptr ||
@@ -587,7 +589,27 @@ __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
   const float softmax_scale = deepseek_mla_attention_scale(layout, qk_head_dim);
   float local_m = -INFINITY;
   float local_l = 0.0f;
-  for (uint32_t token = 0; token <= position; ++token) {
+  const bool use_sparse_attention =
+      sparse_topk_slots != nullptr && sparse_topk_count != nullptr &&
+      sparse_topk_stride != 0 && sparse_topk_count[local_token] != 0;
+  const uint32_t attention_tokens =
+      use_sparse_attention
+          ? min(sparse_topk_count[local_token], sparse_topk_stride)
+          : position + 1u;
+  const int32_t *token_sparse_slots =
+      use_sparse_attention
+          ? sparse_topk_slots +
+                static_cast<uint64_t>(local_token) * sparse_topk_stride
+          : nullptr;
+  for (uint32_t attention_index = 0; attention_index < attention_tokens;
+       ++attention_index) {
+    const uint32_t token =
+        use_sparse_attention
+            ? static_cast<uint32_t>(token_sparse_slots[attention_index])
+            : attention_index;
+    if (token > position) {
+      continue;
+    }
     const uint64_t token_base =
         kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
                             token, kv_cache_width, 0);
@@ -656,6 +678,6 @@ __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
         reinterpret_cast<unsigned long long *>(
             deepseek_runtime_counters +
             kDeepSeekRuntimeCounterRawAttentionTokensScanned),
-        static_cast<unsigned long long>(position + 1u));
+        static_cast<unsigned long long>(attention_tokens));
   }
 }

@@ -37,6 +37,7 @@ __global__ void hf_prefill_embed_range_kernel(
 
 __global__ void hf_prefill_attn_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t norm_weight_dtype,
     uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
     float rms_eps, const uint16_t *hidden_in, uint16_t *norm_out) {
   const uint32_t local_token = blockIdx.x;
@@ -56,7 +57,8 @@ __global__ void hf_prefill_attn_norm_kernel(
       rsqrtf(mean_square / static_cast<float>(hidden) + rms_eps);
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
     const float value = encoded_to_f32(input[index], dtype) * scale *
-                        encoded_to_f32(arena[layout.rms_attn + index], dtype);
+                        norm_weight_to_f32(arena + layout.rms_attn, index,
+                                           norm_weight_dtype);
     out[index] = f32_to_encoded(value, dtype);
   }
 }
@@ -233,6 +235,7 @@ __global__ void hf_prefill_attention_kernel(
 
 __global__ void hf_prefill_mlp_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t norm_weight_dtype,
     uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
     float rms_eps, const uint16_t *hidden_in, float *attn_projection,
     uint16_t *norm_out) {
@@ -259,7 +262,8 @@ __global__ void hf_prefill_mlp_norm_kernel(
       rsqrtf(mean_square / static_cast<float>(hidden) + rms_eps);
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
     out[index] = f32_to_encoded(
-        residual[index] * scale * encoded_to_f32(arena[layout.rms_mlp + index], dtype),
+        residual[index] * scale *
+            norm_weight_to_f32(arena + layout.rms_mlp, index, norm_weight_dtype),
         dtype);
   }
 }

@@ -1961,7 +1961,7 @@ fn deepseek_v3_mla_batched_prefill_writes_prompt_cache_rows() {
         prefill.error
     );
     assert_eq!(prefill.kv_tokens, 2);
-    assert_eq!(prefill.graph_replays, 1);
+    assert_eq!(prefill.graph_replays, 0);
 
     let snapshot = session.deepseek_v3_mla_kv_snapshot(0, 96);
     assert_eq!(
@@ -2014,7 +2014,7 @@ fn deepseek_v32_mla_batched_prefill_uses_f32_norm_cache_rows() {
         prefill.error
     );
     assert_eq!(prefill.kv_tokens, 2);
-    assert_eq!(prefill.graph_replays, 1);
+    assert_eq!(prefill.graph_replays, 0);
 
     let snapshot = session.deepseek_v3_mla_kv_snapshot(0, 96);
     assert_eq!(
@@ -2071,12 +2071,33 @@ fn deepseek_v32_sparse_indexer_batched_prefill_populates_prefix_state() {
         prefill.error
     );
     assert_eq!(prefill.kv_tokens, 3);
-    assert_eq!(prefill.graph_replays, 1);
+    assert_eq!(prefill.graph_replays, 0);
     assert_eq!(prefill.deepseek_indexer_state_writes, 3);
     assert_eq!(prefill.deepseek_indexer_kv_writes, 3);
-    assert_eq!(prefill.deepseek_sparse_topk_selections, 1);
-    assert_eq!(prefill.deepseek_sparse_topk_slots_selected, 1);
-    assert_eq!(prefill.deepseek_sparse_topk_candidates_scored, 3);
+    assert_eq!(prefill.deepseek_sparse_topk_selections, 3);
+    assert_eq!(prefill.deepseek_sparse_topk_slots_selected, 3);
+    assert_eq!(prefill.deepseek_sparse_topk_candidates_scored, 5);
+
+    let snapshot = session.deepseek_v3_mla_kv_snapshot(0, 96);
+    assert_eq!(
+        snapshot.status,
+        SmokeStatus::Ok,
+        "V3.2 sparse-indexer batched prefill should write MLA KV rows: {:?}",
+        snapshot.error
+    );
+    let one = f32_to_bf16_bits(1.0).to_le_bytes();
+    let mut expected = vec![0u8; 96];
+    for token in 0..3usize {
+        let row = token * 6;
+        expected[row..row + 2].copy_from_slice(&one);
+        expected[row + 2..row + 4].copy_from_slice(&one);
+        expected[row + 4..row + 6].copy_from_slice(&one);
+    }
+    assert_page_bytes_eq(
+        &snapshot.bytes,
+        &expected,
+        "V3.2 sparse-indexer batched prefill must commit prompt rows",
+    );
 }
 
 #[test]

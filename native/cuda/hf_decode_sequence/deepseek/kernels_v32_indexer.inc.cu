@@ -1004,6 +1004,69 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
         static_cast<unsigned long long>(candidates_scored));
     atomicAdd(
         reinterpret_cast<unsigned long long *>(
+          deepseek_runtime_counters +
+          kDeepSeekRuntimeCounterSparseTopkSelectionHash),
+      selection_hash);
+  }
+}
+
+__global__ void hf_deepseek_v32_sparse_topk_select_tokens_kernel(
+    SequenceLayerLayout layout, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, const uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    const uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    int32_t *sparse_topk_slots, uint32_t sparse_topk_stride,
+    uint32_t *sparse_topk_count, uint64_t *deepseek_runtime_counters) {
+  const uint32_t local_token = blockIdx.x;
+  if (local_token >= chunk_tokens || threadIdx.x != 0 ||
+      sparse_topk_slots == nullptr || sparse_topk_count == nullptr ||
+      sparse_topk_stride == 0) {
+    return;
+  }
+  sparse_topk_count[local_token] = 0;
+  const uint32_t position = chunk_start + local_token;
+  if (position >= max_steps) {
+    return;
+  }
+  int32_t topk_slots[kDeepSeekSessionMaxSparseTopK];
+  float topk_scores[kDeepSeekSessionMaxSparseTopK];
+  uint32_t candidates_scored = 0;
+  unsigned long long selection_hash = 0ull;
+  uint32_t cursor = position;
+  const uint32_t selected = deepseek_session_select_v32_sparse_slots(
+      layout, &cursor, max_steps, deepseek_indexer_state,
+      deepseek_indexer_state_offset_bytes, deepseek_indexer_kv,
+      deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
+      kv_block_count, kv_block_table, topk_slots, topk_scores,
+      &candidates_scored, &selection_hash);
+  const uint32_t stored = min(selected, sparse_topk_stride);
+  sparse_topk_count[local_token] = stored;
+  int32_t *token_slots =
+      sparse_topk_slots + static_cast<uint64_t>(local_token) * sparse_topk_stride;
+  for (uint32_t rank = 0; rank < stored; ++rank) {
+    token_slots[rank] = topk_slots[rank];
+  }
+  if (deepseek_runtime_counters != nullptr && stored != 0) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelections),
+        1ull);
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
+        static_cast<unsigned long long>(stored));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
+        static_cast<unsigned long long>(candidates_scored));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
             deepseek_runtime_counters +
             kDeepSeekRuntimeCounterSparseTopkSelectionHash),
         selection_hash);

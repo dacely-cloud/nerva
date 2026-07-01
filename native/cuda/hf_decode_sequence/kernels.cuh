@@ -163,6 +163,7 @@ __global__ void hf_prefill_embed_range_kernel(
     uint16_t *hidden_out);
 __global__ void hf_prefill_attn_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t norm_weight_dtype,
     uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
     float rms_eps, const uint16_t *hidden_in, uint16_t *norm_out);
 __global__ void hf_prefill_qkv_publish_kernel(
@@ -181,6 +182,7 @@ __global__ void hf_prefill_attention_kernel(
     uint32_t local_window_tokens);
 __global__ void hf_prefill_mlp_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t norm_weight_dtype,
     uint32_t hidden, uint32_t chunk_start, uint32_t chunk_tokens,
     float rms_eps, const uint16_t *hidden_in, float *attn_projection,
     uint16_t *norm_out);
