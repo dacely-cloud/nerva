@@ -13,8 +13,9 @@ __global__ void hf_deepseek_ff_encode_kernel(
   const uint32_t limit =
       active_intermediate < intermediate ? active_intermediate : intermediate;
   for (uint32_t index = start; index < limit; index += stride) {
-    const float value =
-        deepseek_swiglu(s.gate[index], s.up[index], layout.deepseek_swiglu_limit);
+    const float value = deepseek_swiglu(
+        f32_to_model_dtype(s.gate[index], dtype),
+        f32_to_model_dtype(s.up[index], dtype), layout.deepseek_swiglu_limit);
     s.ff[index] = value;
     projection_input[index] = f32_to_encoded(value, dtype);
   }
@@ -30,9 +31,9 @@ __global__ void hf_deepseek_prefill_ff_split_kernel(
   for (uint64_t cursor = index; cursor < total; cursor += stride) {
     const uint64_t token = cursor / intermediate;
     const uint64_t offset = cursor - token * intermediate;
-    const float value =
-        deepseek_swiglu(gate[cursor], up[cursor],
-                        layout.deepseek_swiglu_limit);
+    const float value = deepseek_swiglu(
+        f32_to_model_dtype(gate[cursor], dtype),
+        f32_to_model_dtype(up[cursor], dtype), layout.deepseek_swiglu_limit);
     ff_out[token * intermediate + offset] = f32_to_encoded(value, dtype);
   }
 }

@@ -321,7 +321,7 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
   if (use_chunked_mla_attention) {
     hf_deepseek_v3_mla_query_latent_kernel<<<
         session->heads, kDecodeThreads, 0, session->stream>>>(
-        session->device_arena, layout, session->heads, scratch.q,
+        session->device_arena, layout, session->dtype, session->heads, scratch.q,
         scratch.attn);
     err = cudaGetLastError();
     if (err != cudaSuccess) return err;

@@ -136,7 +136,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     const int32_t *sparse_topk_slots, const uint32_t *sparse_topk_count,
     uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v3_mla_query_latent_kernel(
-    uint16_t *arena, SequenceLayerLayout layout, uint32_t heads,
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype, uint32_t heads,
     const float *q, float *q_nope_latent);
 __global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,

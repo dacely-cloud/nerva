@@ -43,13 +43,14 @@ __global__ void hf_deepseek_v3_mla_cache_encode_kernel(
     kv_keys[write_base + latent] = kv_latent_norm[latent];
   }
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
-    float value = kv_a[kv_lora_rank + dim];
+    float value = f32_to_model_dtype(kv_a[kv_lora_rank + dim], dtype);
     if ((qk_rope & 1u) == 0u) {
       const uint32_t even = dim & ~1u;
       const uint32_t odd = even + 1u;
       value = deepseek_rope_value_gptj(
-          kv_a[kv_lora_rank + even], kv_a[kv_lora_rank + odd], dim,
-          qk_rope, position, rope_theta, layout);
+          f32_to_model_dtype(kv_a[kv_lora_rank + even], dtype),
+          f32_to_model_dtype(kv_a[kv_lora_rank + odd], dtype), dim, qk_rope,
+          position, rope_theta, layout);
     }
     kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
   }
@@ -117,7 +118,7 @@ __global__ void hf_deepseek_rms_norm_f32_tokens_kernel(
   const uint16_t *weight = arena + weight_offset;
   float mean_square = 0.0f;
   for (uint32_t row = threadIdx.x; row < rows; row += blockDim.x) {
-    const float value = token_input[row];
+    const float value = f32_to_model_dtype(token_input[row], output_dtype);
     mean_square += value * value;
   }
   mean_square = block_sum(mean_square);
@@ -128,8 +129,9 @@ __global__ void hf_deepseek_rms_norm_f32_tokens_kernel(
         weight_dtype == kDTypeF32
             ? f32_weight_to_f32_unaligned(weight, row)
             : encoded_to_f32(weight[row], weight_dtype);
-    token_output[row] =
-        f32_to_encoded(token_input[row] * scale * norm_weight, output_dtype);
+    token_output[row] = f32_to_encoded(
+        f32_to_model_dtype(token_input[row], output_dtype) * scale * norm_weight,
+        output_dtype);
   }
 }
 
@@ -175,13 +177,14 @@ __global__ void hf_deepseek_v3_mla_cache_encode_tokens_kernel(
     kv_keys[write_base + latent] = kv_latent_norm[latent];
   }
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
-    float value = kv_a[kv_lora_rank + dim];
+    float value = f32_to_model_dtype(kv_a[kv_lora_rank + dim], dtype);
     if ((qk_rope & 1u) == 0u) {
       const uint32_t even = dim & ~1u;
       const uint32_t odd = even + 1u;
       value = deepseek_rope_value_gptj(
-          kv_a[kv_lora_rank + even], kv_a[kv_lora_rank + odd], dim,
-          qk_rope, position, rope_theta, layout);
+          f32_to_model_dtype(kv_a[kv_lora_rank + even], dtype),
+          f32_to_model_dtype(kv_a[kv_lora_rank + odd], dtype), dim, qk_rope,
+          position, rope_theta, layout);
     }
     kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
   }
@@ -378,19 +381,20 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
                     kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols +
                                 latent]) *
                     active_scale;
-      sum += q[head * qk_head_dim + nope] * weight;
+      sum += f32_to_model_dtype(q[head * qk_head_dim + nope], dtype) * weight;
     }
     q_nope_latent[latent] = sum;
   }
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
-    float q_pe = q[head * qk_head_dim + qk_nope + dim];
+    float q_pe =
+        f32_to_model_dtype(q[head * qk_head_dim + qk_nope + dim], dtype);
     if ((qk_rope & 1u) == 0u) {
       const uint32_t even = dim & ~1u;
       const uint32_t odd = even + 1u;
       q_pe = deepseek_rope_value_gptj(
-          q[head * qk_head_dim + qk_nope + even],
-          q[head * qk_head_dim + qk_nope + odd], dim, qk_rope, position,
-          rope_theta, layout);
+          f32_to_model_dtype(q[head * qk_head_dim + qk_nope + even], dtype),
+          f32_to_model_dtype(q[head * qk_head_dim + qk_nope + odd], dtype),
+          dim, qk_rope, position, rope_theta, layout);
     }
     q_rope[dim] = q_pe;
   }
@@ -493,7 +497,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
 }
 
 __global__ void hf_deepseek_v3_mla_query_latent_kernel(
-    uint16_t *arena, SequenceLayerLayout layout, uint32_t heads,
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype, uint32_t heads,
     const float *q, float *q_nope_latent) {
   const uint32_t head = blockIdx.x;
   if (head >= heads || q == nullptr || q_nope_latent == nullptr ||
@@ -544,7 +548,7 @@ __global__ void hf_deepseek_v3_mla_query_latent_kernel(
                     kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols +
                                 latent]) *
                     active_scale;
-      sum += q[head * qk_head_dim + nope] * weight;
+      sum += f32_to_model_dtype(q[head * qk_head_dim + nope], dtype) * weight;
     }
     head_latent[latent] = sum;
   }
@@ -624,14 +628,15 @@ __global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
     latent_output[latent] = 0.0f;
   }
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
-    float q_pe = q[head * qk_head_dim + qk_nope + dim];
+    float q_pe =
+        f32_to_model_dtype(q[head * qk_head_dim + qk_nope + dim], dtype);
     if ((qk_rope & 1u) == 0u) {
       const uint32_t even = dim & ~1u;
       const uint32_t odd = even + 1u;
       q_pe = deepseek_rope_value_gptj(
-          q[head * qk_head_dim + qk_nope + even],
-          q[head * qk_head_dim + qk_nope + odd], dim, qk_rope, position,
-          rope_theta, layout);
+          f32_to_model_dtype(q[head * qk_head_dim + qk_nope + even], dtype),
+          f32_to_model_dtype(q[head * qk_head_dim + qk_nope + odd], dtype),
+          dim, qk_rope, position, rope_theta, layout);
     }
     q_rope[dim] = q_pe;
   }
@@ -908,19 +913,20 @@ __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
                     kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols +
                                 latent]) *
                     active_scale;
-      sum += q[head * qk_head_dim + nope] * weight;
+      sum += f32_to_model_dtype(q[head * qk_head_dim + nope], dtype) * weight;
     }
     q_nope_latent[latent] = sum;
   }
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
-    float q_pe = q[head * qk_head_dim + qk_nope + dim];
+    float q_pe =
+        f32_to_model_dtype(q[head * qk_head_dim + qk_nope + dim], dtype);
     if ((qk_rope & 1u) == 0u) {
       const uint32_t even = dim & ~1u;
       const uint32_t odd = even + 1u;
       q_pe = deepseek_rope_value_gptj(
-          q[head * qk_head_dim + qk_nope + even],
-          q[head * qk_head_dim + qk_nope + odd], dim, qk_rope, position,
-          rope_theta, layout);
+          f32_to_model_dtype(q[head * qk_head_dim + qk_nope + even], dtype),
+          f32_to_model_dtype(q[head * qk_head_dim + qk_nope + odd], dtype),
+          dim, qk_rope, position, rope_theta, layout);
     }
     q_rope[dim] = q_pe;
   }

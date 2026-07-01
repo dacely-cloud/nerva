@@ -10,7 +10,8 @@ __global__ void hf_deepseek_residual_mlp_norm_encode_kernel(
   LayerScratch s =
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
-    s.residual[index] += s.input[index];
+    s.residual[index] =
+        f32_to_model_dtype(s.residual[index], dtype) + s.input[index];
   }
   __syncthreads();
   rms_norm_to_encoded_with_weight_dtype(s.residual, arena + layout.rms_mlp,

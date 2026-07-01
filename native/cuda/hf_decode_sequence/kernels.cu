@@ -159,9 +159,22 @@ __global__ void hf_decode_rms_norm_f32_to_encoded_kernel(
       weight_offset == kMissingOffset) {
     return;
   }
-  rms_norm_to_encoded_with_weight_dtype(input, arena + weight_offset, hidden,
-                                        weight_dtype, output_dtype, rms_eps,
-                                        projection_input);
+  const uint16_t *weight = arena + weight_offset;
+  float mean_square = 0.0f;
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    const float value = f32_to_model_dtype(input[index], output_dtype);
+    mean_square += value * value;
+  }
+  mean_square = block_sum(mean_square);
+  const float scale =
+      rsqrtf(mean_square / static_cast<float>(hidden) + rms_eps);
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    const float norm_weight =
+        norm_weight_to_f32(weight, index, weight_dtype);
+    projection_input[index] = f32_to_encoded(
+        f32_to_model_dtype(input[index], output_dtype) * scale * norm_weight,
+        output_dtype);
+  }
 }
 
 #include "deepseek/kernels_v32_indexer.inc.cu"

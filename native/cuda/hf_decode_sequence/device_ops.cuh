@@ -30,6 +30,13 @@ static __device__ __forceinline__ uint16_t f32_to_encoded(float value, uint32_t 
   return __half_as_ushort(__float2half_rn(value));
 }
 
+static __device__ __forceinline__ float f32_to_model_dtype(float value, uint32_t dtype) {
+  if (dtype == kDTypeBF16 || dtype == kDTypeF16) {
+    return encoded_to_f32(f32_to_encoded(value, dtype), dtype);
+  }
+  return value;
+}
+
 static __device__ __forceinline__ float f32_weight_to_f32_unaligned(
     const uint16_t *weight, uint32_t index) {
   const uint32_t lo = static_cast<uint32_t>(weight[index * 2u]);
