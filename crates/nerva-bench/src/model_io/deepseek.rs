@@ -466,6 +466,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
     let nerva_artifact = artifact_dir.join("nerva.json");
     let compare_artifact = artifact_dir.join("compare.json");
 
+    let mut vllm_options = DeepSeekVllmCommandOptions::default();
     let mut vllm_command = deepseek_vllm_generate_command(
         &repo_root,
         &vllm_root,
@@ -482,19 +483,21 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
     );
 
     let mut vllm_run = run_json_command(&vllm_command, &repo_root)?;
-    if vllm_deepgemm_scale_failure(&vllm_run) {
-        let fallback_command = deepseek_vllm_generate_command_with_backends(
+    for fallback_options in deepseek_vllm_fallback_options() {
+        if !vllm_deepseek_reference_retryable_failure(&vllm_run) {
+            break;
+        }
+        let fallback_command = deepseek_vllm_generate_command_with_options(
             &repo_root,
             &vllm_root,
             &checkpoint_dir,
             &prompt_spec,
             max_context_tokens,
             max_new_tokens,
-            "triton",
-            "triton",
-            "auto",
+            fallback_options,
         );
         let fallback_run = run_json_command(&fallback_command, &repo_root)?;
+        vllm_options = fallback_options;
         vllm_command = fallback_command;
         vllm_run = fallback_run;
     }
@@ -526,6 +529,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
             &vllm_command,
             &nerva_command,
             &vllm_run,
+            vllm_options,
             Some(&nerva_run),
             None,
         ));
@@ -544,6 +548,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
             &vllm_command,
             &nerva_command,
             &vllm_run,
+            vllm_options,
             Some(&nerva_run),
             None,
         ));
@@ -581,6 +586,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
         &vllm_command,
         &nerva_command,
         &vllm_run,
+        vllm_options,
         Some(&nerva_run),
         Some(&compare_json),
     ))
@@ -2520,7 +2526,64 @@ fn deepseek_cuda_primitive_bench_samples_json(
 struct DeepSeekCommandRun {
     status: i32,
     json: String,
+    stdout_tail: String,
     stderr_tail: String,
+}
+
+const COMMAND_OUTPUT_TAIL_CHARS: usize = 65_536;
+
+#[derive(Clone, Copy)]
+struct DeepSeekVllmCommandOptions {
+    linear_backend: &'static str,
+    moe_backend: &'static str,
+    attention_backend: &'static str,
+    enforce_eager: bool,
+    disable_flashinfer_autotune: bool,
+    deep_gemm_warmup: Option<&'static str>,
+    runs: usize,
+    warmup_runs: usize,
+}
+
+impl Default for DeepSeekVllmCommandOptions {
+    fn default() -> Self {
+        Self {
+            linear_backend: "auto",
+            moe_backend: "auto",
+            attention_backend: "auto",
+            enforce_eager: false,
+            disable_flashinfer_autotune: false,
+            deep_gemm_warmup: None,
+            runs: 3,
+            warmup_runs: 1,
+        }
+    }
+}
+
+fn deepseek_vllm_fallback_options() -> [DeepSeekVllmCommandOptions; 3] {
+    [
+        DeepSeekVllmCommandOptions {
+            linear_backend: "triton",
+            moe_backend: "triton",
+            attention_backend: "auto",
+            ..DeepSeekVllmCommandOptions::default()
+        },
+        DeepSeekVllmCommandOptions {
+            linear_backend: "triton",
+            moe_backend: "triton",
+            attention_backend: "FLASHINFER_MLA_SPARSE_SM120",
+            ..DeepSeekVllmCommandOptions::default()
+        },
+        DeepSeekVllmCommandOptions {
+            linear_backend: "triton",
+            moe_backend: "triton",
+            attention_backend: "FLASHINFER_MLA_SPARSE_SM120",
+            enforce_eager: true,
+            disable_flashinfer_autotune: true,
+            deep_gemm_warmup: Some("skip"),
+            runs: 1,
+            warmup_runs: 0,
+        },
+    ]
 }
 
 fn repo_root() -> PathBuf {
@@ -2550,30 +2613,25 @@ fn deepseek_vllm_generate_command(
     max_context_tokens: usize,
     max_new_tokens: usize,
 ) -> Vec<String> {
-    deepseek_vllm_generate_command_with_backends(
+    deepseek_vllm_generate_command_with_options(
         repo_root,
         vllm_root,
         checkpoint_dir,
         prompt_spec,
         max_context_tokens,
         max_new_tokens,
-        "auto",
-        "auto",
-        "auto",
+        DeepSeekVllmCommandOptions::default(),
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn deepseek_vllm_generate_command_with_backends(
+fn deepseek_vllm_generate_command_with_options(
     repo_root: &Path,
     vllm_root: &Path,
     checkpoint_dir: &str,
     prompt_spec: &str,
     max_context_tokens: usize,
     max_new_tokens: usize,
-    linear_backend: &str,
-    moe_backend: &str,
-    attention_backend: &str,
+    options: DeepSeekVllmCommandOptions,
 ) -> Vec<String> {
     let venv_python = vllm_root.join(".venv/bin/python");
     let python = if venv_python.is_file() {
@@ -2581,7 +2639,7 @@ fn deepseek_vllm_generate_command_with_backends(
     } else {
         "python3".to_string()
     };
-    vec![
+    let mut command = vec![
         python,
         repo_root
             .join("tools/deepseek_vllm_generate.py")
@@ -2608,16 +2666,27 @@ fn deepseek_vllm_generate_command_with_backends(
         "--dtype".to_string(),
         "bfloat16".to_string(),
         "--linear-backend".to_string(),
-        linear_backend.to_string(),
+        options.linear_backend.to_string(),
         "--moe-backend".to_string(),
-        moe_backend.to_string(),
+        options.moe_backend.to_string(),
         "--attention-backend".to_string(),
-        attention_backend.to_string(),
+        options.attention_backend.to_string(),
         "--runs".to_string(),
-        "3".to_string(),
+        options.runs.to_string(),
         "--warmup-runs".to_string(),
-        "1".to_string(),
-    ]
+        options.warmup_runs.to_string(),
+    ];
+    if options.enforce_eager {
+        command.push("--enforce-eager".to_string());
+    }
+    if options.disable_flashinfer_autotune {
+        command.push("--disable-flashinfer-autotune".to_string());
+    }
+    if let Some(deep_gemm_warmup) = options.deep_gemm_warmup {
+        command.push("--deep-gemm-warmup".to_string());
+        command.push(deep_gemm_warmup.to_string());
+    }
+    command
 }
 
 fn deepseek_nerva_generate_command(
@@ -2665,18 +2734,43 @@ fn run_json_command(command: &[String], cwd: &Path) -> Result<DeepSeekCommandRun
         .map_err(|err| format!("failed to run {}: {err}", command.join(" ")))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let json = extract_json_payload(&stdout).unwrap_or_else(|_| {
+    let stdout_tail = tail_chars(&stdout, COMMAND_OUTPUT_TAIL_CHARS);
+    let stderr_tail = tail_chars(&stderr, COMMAND_OUTPUT_TAIL_CHARS);
+    let mut json = extract_json_payload(&stdout).unwrap_or_else(|_| {
         format!(
             "{{\"status\":\"command_failed\",\"stdout_tail\":\"{}\",\"stderr_tail\":\"{}\"}}",
             json_escape(&tail_chars(&stdout, 4096)),
-            json_escape(&tail_chars(&stderr, 4096))
+            json_escape(&stderr_tail)
         )
     });
+    let status = output.status.code().unwrap_or(-1);
+    if status != 0 {
+        json = add_command_output_tails(&json, &stdout_tail, &stderr_tail);
+    }
     Ok(DeepSeekCommandRun {
-        status: output.status.code().unwrap_or(-1),
+        status,
         json,
-        stderr_tail: tail_chars(&stderr, 4096),
+        stdout_tail,
+        stderr_tail,
     })
+}
+
+fn add_command_output_tails(json: &str, stdout_tail: &str, stderr_tail: &str) -> String {
+    let trimmed = json.trim();
+    if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+        return json.to_string();
+    }
+    let body = &trimmed[..trimmed.len() - 1];
+    let separator = if body == "{" { "" } else { "," };
+    let evidence = format!("{stdout_tail} {stderr_tail}");
+    format!(
+        "{}{}\"launcher_stdout_tail\":\"{}\",\"launcher_stderr_tail\":\"{}\",\"launcher_failure_diagnosis\":{}}}",
+        body,
+        separator,
+        json_escape(stdout_tail),
+        json_escape(stderr_tail),
+        json_opt_string(deepseek_vllm_failure_diagnosis(&evidence))
+    )
 }
 
 fn extract_json_payload(stdout: &str) -> Result<String, String> {
@@ -2731,10 +2825,22 @@ fn command_run_json(run: Option<&DeepSeekCommandRun>) -> String {
     }
 }
 
-fn vllm_deepgemm_scale_failure(run: &DeepSeekCommandRun) -> bool {
+fn vllm_deepseek_reference_retryable_failure(run: &DeepSeekCommandRun) -> bool {
     if run.status == 0 {
         return false;
     }
+    let evidence = command_failure_evidence(run);
+    evidence.contains("Unknown SF transformation")
+        || (evidence.contains("deep_gemm")
+            && evidence.contains("transform_sf_into_required_layout"))
+        || (evidence.contains("get_paged_mqa_logits_metadata")
+            && evidence.contains("Unsupported architecture"))
+        || (evidence.contains("fp8_fp4_mqa_logits")
+            && evidence.contains("Unsupported architecture"))
+        || (evidence.contains("deepgemm_fp8_gemm_nt_warmup") && evidence.contains("Unknown recipe"))
+}
+
+fn command_failure_evidence(run: &DeepSeekCommandRun) -> String {
     let error = find_first_json_string_field(&run.json, "error")
         .ok()
         .flatten()
@@ -2743,10 +2849,50 @@ fn vllm_deepgemm_scale_failure(run: &DeepSeekCommandRun) -> bool {
         .ok()
         .flatten()
         .unwrap_or_default();
-    let evidence = format!("{} {} {}", error, traceback, run.stderr_tail);
-    evidence.contains("Unknown SF transformation")
-        || (evidence.contains("deep_gemm")
-            && evidence.contains("transform_sf_into_required_layout"))
+    format!(
+        "{} {} {} {} {}",
+        error, traceback, run.json, run.stdout_tail, run.stderr_tail
+    )
+}
+
+fn vllm_options_json(options: DeepSeekVllmCommandOptions) -> String {
+    format!(
+        "{{\"linear_backend\":\"{}\",\"moe_backend\":\"{}\",\"attention_backend\":\"{}\",\"enforce_eager\":{},\"disable_flashinfer_autotune\":{},\"deep_gemm_warmup\":{},\"runs\":{},\"warmup_runs\":{}}}",
+        json_escape(options.linear_backend),
+        json_escape(options.moe_backend),
+        json_escape(options.attention_backend),
+        options.enforce_eager,
+        options.disable_flashinfer_autotune,
+        json_opt_string(options.deep_gemm_warmup),
+        options.runs,
+        options.warmup_runs,
+    )
+}
+
+fn command_failure_diagnosis(engine: &str, run: &DeepSeekCommandRun) -> Option<&'static str> {
+    if engine != "vllm" {
+        return None;
+    }
+    let evidence = command_failure_evidence(run);
+    deepseek_vllm_failure_diagnosis(&evidence)
+}
+
+fn deepseek_vllm_failure_diagnosis(evidence: &str) -> Option<&'static str> {
+    if evidence.contains("fp8_fp4_mqa_logits") && evidence.contains("Unsupported architecture") {
+        return Some("vllm_deepgemm_sparse_indexer_attention_unsupported_architecture");
+    }
+    if evidence.contains("get_paged_mqa_logits_metadata")
+        && evidence.contains("Unsupported architecture")
+    {
+        return Some("vllm_deepgemm_sparse_indexer_metadata_unsupported_architecture");
+    }
+    if evidence.contains("Unknown SF transformation") {
+        return Some("vllm_deepgemm_scale_transform_unsupported");
+    }
+    if evidence.contains("deepgemm_fp8_gemm_nt_warmup") && evidence.contains("Unknown recipe") {
+        return Some("vllm_deepgemm_warmup_unknown_recipe");
+    }
+    None
 }
 
 fn command_failure_json(engine: &str, run: &DeepSeekCommandRun) -> String {
@@ -2760,12 +2906,13 @@ fn command_failure_json(engine: &str, run: &DeepSeekCommandRun) -> String {
         .ok()
         .flatten();
     format!(
-        "{{\"engine\":\"{}\",\"exit_status\":{},\"json_status\":{},\"error_type\":{},\"error\":{}}}",
+        "{{\"engine\":\"{}\",\"exit_status\":{},\"json_status\":{},\"error_type\":{},\"error\":{},\"diagnosis\":{}}}",
         json_escape(engine),
         run.status,
         json_opt_string(json_status.as_deref()),
         json_opt_string(error_type.as_deref()),
         json_opt_string(error.as_deref()),
+        json_opt_string(command_failure_diagnosis(engine, run)),
     )
 }
 
@@ -2783,6 +2930,7 @@ fn deepseek_benchmark_run_json(
     vllm_command: &[String],
     nerva_command: &[String],
     vllm_run: &DeepSeekCommandRun,
+    vllm_options: DeepSeekVllmCommandOptions,
     nerva_run: Option<&DeepSeekCommandRun>,
     compare_json: Option<&str>,
 ) -> String {
@@ -2795,12 +2943,13 @@ fn deepseek_benchmark_run_json(
         _ => "null".to_string(),
     };
     format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-run-v1\",\"checkpoint_dir\":\"{}\",\"prompt_spec\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"artifact_dir\":\"{}\",\"artifacts\":{{\"vllm\":\"{}\",\"nerva\":\"{}\",\"compare\":\"{}\"}},\"commands\":{{\"vllm_generate\":{},\"nerva_generate\":{}}},\"runs\":{{\"vllm\":{},\"nerva\":{}}},\"compare\":{},\"failure\":{},\"claim_allowed\":{}}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-run-v1\",\"checkpoint_dir\":\"{}\",\"prompt_spec\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_options\":{},\"artifact_dir\":\"{}\",\"artifacts\":{{\"vllm\":\"{}\",\"nerva\":\"{}\",\"compare\":\"{}\"}},\"commands\":{{\"vllm_generate\":{},\"nerva_generate\":{}}},\"runs\":{{\"vllm\":{},\"nerva\":{}}},\"compare\":{},\"failure\":{},\"claim_allowed\":{}}}",
         status,
         json_escape(checkpoint_dir),
         json_escape(prompt_spec),
         max_context_tokens,
         max_new_tokens,
+        vllm_options_json(vllm_options),
         json_escape(&artifact_dir.display().to_string()),
         json_escape(&vllm_artifact.display().to_string()),
         json_escape(&nerva_artifact.display().to_string()),

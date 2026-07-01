@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trust-remote-code", action="store_true", default=True)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--disable-flashinfer-autotune", action="store_true")
+    parser.add_argument(
+        "--deep-gemm-warmup",
+        choices=["default", "skip", "relax", "full"],
+        default="default",
+    )
     parser.add_argument("--disable-log-stats", action="store_true", default=True)
     return parser.parse_args()
 
@@ -92,10 +97,12 @@ def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[s
                 "dtype": args.dtype,
                 "enable_prefix_caching": args.enable_prefix_caching,
                 "enable_flashinfer_autotune": not args.disable_flashinfer_autotune,
+                "enforce_eager": args.enforce_eager,
                 "kernel": {
                     "linear_backend": args.linear_backend,
                     "moe_backend": args.moe_backend,
                     "attention_backend": args.attention_backend,
+                    "deep_gemm_warmup": args.deep_gemm_warmup,
                     "VLLM_USE_DEEP_GEMM": os.environ.get("VLLM_USE_DEEP_GEMM"),
                     "VLLM_MOE_USE_DEEP_GEMM": os.environ.get(
                         "VLLM_MOE_USE_DEEP_GEMM"
@@ -129,6 +136,8 @@ def run_generation(args: argparse.Namespace) -> None:
     if not vllm_root.is_dir():
         raise FileNotFoundError(f"vLLM root does not exist: {vllm_root}")
     sys.path.insert(0, str(vllm_root))
+    if args.deep_gemm_warmup != "default":
+        os.environ["VLLM_DEEP_GEMM_WARMUP"] = args.deep_gemm_warmup
 
     from vllm import LLM, SamplingParams
 
@@ -216,10 +225,12 @@ def run_generation(args: argparse.Namespace) -> None:
                 "warmup_runs": args.warmup_runs,
                 "enable_prefix_caching": args.enable_prefix_caching,
                 "enable_flashinfer_autotune": not args.disable_flashinfer_autotune,
+                "enforce_eager": args.enforce_eager,
                 "kernel": {
                     "linear_backend": args.linear_backend,
                     "moe_backend": args.moe_backend,
                     "attention_backend": args.attention_backend,
+                    "deep_gemm_warmup": args.deep_gemm_warmup,
                     "VLLM_USE_DEEP_GEMM": os.environ.get("VLLM_USE_DEEP_GEMM"),
                     "VLLM_MOE_USE_DEEP_GEMM": os.environ.get(
                         "VLLM_MOE_USE_DEEP_GEMM"
