@@ -266,11 +266,20 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       &session->deepseek_mhc_post_mix_bytes,
       &session->deepseek_mhc_comb_mix_bytes);
   bool has_deepseek_layout = false;
+  bool has_deepseek_sparse_topk_layout = false;
   for (const SequenceLayerLayout &layout : layouts) {
     if (layout.deepseek_mode != 0) {
       has_deepseek_layout = true;
-      break;
     }
+    if (layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer) {
+      has_deepseek_sparse_topk_layout = true;
+    }
+  }
+  if (has_deepseek_sparse_topk_layout) {
+    session->deepseek_sparse_topk_slots_bytes =
+        static_cast<uint64_t>(kDeepSeekSparseTopKSlotCapacity) *
+        sizeof(int32_t);
+    session->deepseek_sparse_topk_count_bytes = sizeof(uint32_t);
   }
   if (has_deepseek_layout || session->deepseek_compressor_state_bytes != 0 ||
       session->deepseek_v32_mla_kv_bytes != 0 ||

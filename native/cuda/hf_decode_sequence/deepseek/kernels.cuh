@@ -213,7 +213,22 @@ __global__ void hf_deepseek_v4_compressed_attention_kernel(
     uint8_t *deepseek_compressed_kv,
     uint64_t deepseek_compressed_kv_offset_bytes,
     uint32_t deepseek_compressed_kv_block_count,
+    const int32_t *sparse_topk_slots, const uint32_t *sparse_topk_count,
     uint64_t *deepseek_runtime_counters, uint32_t local_window_tokens);
+__global__ void hf_deepseek_v4_compressed_indexer_sparse_topk_select_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t heads, uint32_t head_dim,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float rope_theta, float *scratch, const uint16_t *projection_input,
+    uint8_t *deepseek_compressed_kv,
+    uint64_t deepseek_compressed_kv_offset_bytes,
+    uint32_t deepseek_compressed_kv_block_count,
+    uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    int32_t *sparse_topk_slots, uint32_t *sparse_topk_count,
+    uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v4_q_a_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
     uint32_t heads, uint32_t head_dim, uint32_t intermediate,

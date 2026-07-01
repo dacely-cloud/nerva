@@ -532,49 +532,6 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     }
   }
 
-  const uint32_t compressed_attention_tokens =
-      deepseek_session_compressed_attention_count(
-          deepseek_compressed_kv, layout, deepseek_compressed_kv_block_count,
-          position);
-  int32_t sparse_compressed_slots[kDeepSeekSessionMaxSparseTopK];
-  float sparse_compressed_scores[kDeepSeekSessionMaxSparseTopK];
-  float sparse_indexer_query[kDeepSeekSessionMaxIndexerQueryValues];
-  uint32_t sparse_compressed_candidates_scored = 0;
-  unsigned long long sparse_compressed_selection_hash = 0ull;
-  const uint32_t sparse_compressed_attention_tokens =
-      deepseek_session_select_v4_c4_sparse_slots(
-          arena, layout, s.q_gate, projection_input, dtype, hidden, q_lora_rank,
-          position, rope_theta, deepseek_indexer_kv,
-          deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
-          kv_block_count, kv_block_table, compressed_attention_tokens,
-          sparse_compressed_slots, sparse_compressed_scores, sparse_indexer_query,
-          &sparse_compressed_candidates_scored,
-          &sparse_compressed_selection_hash);
-  if (sparse_compressed_attention_tokens != 0 &&
-      deepseek_runtime_counters != nullptr) {
-    atomicAdd(
-        reinterpret_cast<unsigned long long *>(
-            deepseek_runtime_counters +
-            kDeepSeekRuntimeCounterSparseTopkSelections),
-        1ull);
-    atomicAdd(
-        reinterpret_cast<unsigned long long *>(
-            deepseek_runtime_counters +
-            kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
-        static_cast<unsigned long long>(sparse_compressed_attention_tokens));
-    atomicAdd(
-        reinterpret_cast<unsigned long long *>(
-            deepseek_runtime_counters +
-            kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
-        static_cast<unsigned long long>(
-            sparse_compressed_candidates_scored));
-    atomicAdd(
-        reinterpret_cast<unsigned long long *>(
-            deepseek_runtime_counters +
-            kDeepSeekRuntimeCounterSparseTopkSelectionHash),
-        sparse_compressed_selection_hash);
-  }
-
   const uint32_t rope_half = qk_rope / 2u;
   if (preprojected_qk < 2u) {
     for (uint32_t row = 0; row < attention_hidden; ++row) {
@@ -659,6 +616,49 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
   }
   if (skip_attention != 0) {
     return;
+  }
+
+  const uint32_t compressed_attention_tokens =
+      deepseek_session_compressed_attention_count(
+          deepseek_compressed_kv, layout, deepseek_compressed_kv_block_count,
+          position);
+  int32_t sparse_compressed_slots[kDeepSeekSessionMaxSparseTopK];
+  float sparse_compressed_scores[kDeepSeekSessionMaxSparseTopK];
+  float sparse_indexer_query[kDeepSeekSessionMaxIndexerQueryValues];
+  uint32_t sparse_compressed_candidates_scored = 0;
+  unsigned long long sparse_compressed_selection_hash = 0ull;
+  const uint32_t sparse_compressed_attention_tokens =
+      deepseek_session_select_v4_c4_sparse_slots(
+          arena, layout, s.q_gate, projection_input, dtype, hidden, q_lora_rank,
+          position, rope_theta, deepseek_indexer_kv,
+          deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
+          kv_block_count, kv_block_table, compressed_attention_tokens,
+          sparse_compressed_slots, sparse_compressed_scores, sparse_indexer_query,
+          &sparse_compressed_candidates_scored,
+          &sparse_compressed_selection_hash);
+  if (sparse_compressed_attention_tokens != 0 &&
+      deepseek_runtime_counters != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelections),
+        1ull);
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
+        static_cast<unsigned long long>(sparse_compressed_attention_tokens));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
+        static_cast<unsigned long long>(
+            sparse_compressed_candidates_scored));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelectionHash),
+        sparse_compressed_selection_hash);
   }
 
   const float attn_scale = rsqrtf(static_cast<float>(head_dim));
@@ -930,6 +930,82 @@ __global__ void hf_deepseek_v4_swa_attention_kernel(
   }
 }
 
+__global__ void hf_deepseek_v4_compressed_indexer_sparse_topk_select_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t heads, uint32_t head_dim,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float rope_theta, float *scratch, const uint16_t *projection_input,
+    uint8_t *deepseek_compressed_kv,
+    uint64_t deepseek_compressed_kv_offset_bytes,
+    uint32_t deepseek_compressed_kv_block_count,
+    uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    int32_t *sparse_topk_slots, uint32_t *sparse_topk_count,
+    uint64_t *deepseek_runtime_counters) {
+  if (blockIdx.x != 0 || threadIdx.x != 0 ||
+      (step_cursor != nullptr && *step_cursor >= max_steps)) {
+    return;
+  }
+  if (sparse_topk_count != nullptr) {
+    *sparse_topk_count = 0;
+  }
+  if (arena == nullptr || scratch == nullptr || projection_input == nullptr ||
+      sparse_topk_slots == nullptr || sparse_topk_count == nullptr ||
+      hidden == 0 || heads == 0 || head_dim == 0 ||
+      layout.deepseek_mode != kDeepSeekModeV4CompressedIndexer ||
+      layout.deepseek_q_lora_rank == 0 ||
+      layout.deepseek_q_lora_rank > heads * head_dim) {
+    return;
+  }
+  const uint32_t position = step_cursor == nullptr ? 0 : *step_cursor;
+  const uint32_t compressed_attention_tokens =
+      deepseek_session_compressed_attention_count(
+          deepseek_compressed_kv, layout, deepseek_compressed_kv_block_count,
+          position);
+  int32_t topk_slots[kDeepSeekSessionMaxSparseTopK];
+  float topk_scores[kDeepSeekSessionMaxSparseTopK];
+  float indexer_query[kDeepSeekSessionMaxIndexerQueryValues];
+  uint32_t candidates_scored = 0;
+  unsigned long long selection_hash = 0ull;
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, heads * head_dim, head_dim,
+                         intermediate);
+  const uint32_t selected = deepseek_session_select_v4_c4_sparse_slots(
+      arena, layout, s.q_gate, projection_input, dtype, hidden,
+      layout.deepseek_q_lora_rank, position, rope_theta, deepseek_indexer_kv,
+      deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
+      kv_block_count, kv_block_table, compressed_attention_tokens, topk_slots,
+      topk_scores, indexer_query, &candidates_scored, &selection_hash);
+  *sparse_topk_count = selected;
+  for (uint32_t rank = 0; rank < selected; ++rank) {
+    sparse_topk_slots[rank] = topk_slots[rank];
+  }
+  if (selected != 0 && deepseek_runtime_counters != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelections),
+        1ull);
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
+        static_cast<unsigned long long>(selected));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
+        static_cast<unsigned long long>(candidates_scored));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelectionHash),
+        selection_hash);
+  }
+}
+
 __global__ void hf_deepseek_v4_compressed_attention_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t head_dim,
@@ -942,11 +1018,13 @@ __global__ void hf_deepseek_v4_compressed_attention_kernel(
     uint8_t *deepseek_compressed_kv,
     uint64_t deepseek_compressed_kv_offset_bytes,
     uint32_t deepseek_compressed_kv_block_count,
+    const int32_t *sparse_topk_slots, const uint32_t *sparse_topk_count,
     uint64_t *deepseek_runtime_counters, uint32_t local_window_tokens) {
   if (blockIdx.x >= heads ||
       (step_cursor != nullptr && *step_cursor >= max_steps) ||
       arena == nullptr || scratch == nullptr || head_dim == 0 ||
-      layout.deepseek_mode != kDeepSeekModeV4Compressed ||
+      (layout.deepseek_mode != kDeepSeekModeV4Compressed &&
+       layout.deepseek_mode != kDeepSeekModeV4CompressedIndexer) ||
       layout.deepseek_qk_nope_head_dim + layout.deepseek_qk_rope_head_dim !=
           head_dim) {
     return;
@@ -964,6 +1042,15 @@ __global__ void hf_deepseek_v4_compressed_attention_kernel(
       deepseek_session_compressed_attention_count(
           deepseek_compressed_kv, layout, deepseek_compressed_kv_block_count,
           position);
+  uint32_t sparse_attention_tokens = 0;
+  if (layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer &&
+      sparse_topk_slots != nullptr && sparse_topk_count != nullptr) {
+    sparse_attention_tokens = min(*sparse_topk_count,
+                                  compressed_attention_tokens);
+  }
+  const uint32_t compressed_attention_loop_tokens =
+      sparse_attention_tokens == 0 ? compressed_attention_tokens
+                                   : sparse_attention_tokens;
   const uint32_t window_raw_start =
       local_window_tokens == 0 || position + 1u <= local_window_tokens
           ? 0u
@@ -990,7 +1077,7 @@ __global__ void hf_deepseek_v4_compressed_attention_kernel(
           reinterpret_cast<unsigned long long *>(
               deepseek_runtime_counters +
               kDeepSeekRuntimeCounterCompressedKvAttentionSlotsScanned),
-          static_cast<unsigned long long>(compressed_attention_tokens));
+          static_cast<unsigned long long>(compressed_attention_loop_tokens));
     }
   }
 
@@ -1017,8 +1104,16 @@ __global__ void hf_deepseek_v4_compressed_attention_kernel(
                       : f32_from_u16_slots(arena + layout.deepseek_attention_sink,
                                            head);
   float local_l = isfinite(local_m) ? 1.0f : 0.0f;
-  for (uint32_t compressed_slot = 0;
-       compressed_slot < compressed_attention_tokens; ++compressed_slot) {
+  for (uint32_t compressed_index = 0;
+       compressed_index < compressed_attention_loop_tokens; ++compressed_index) {
+    const int32_t selected_slot =
+        sparse_attention_tokens == 0
+            ? static_cast<int32_t>(compressed_index)
+            : sparse_topk_slots[compressed_index];
+    if (selected_slot < 0) {
+      continue;
+    }
+    const uint32_t compressed_slot = static_cast<uint32_t>(selected_slot);
     float score_part = 0.0f;
     for (uint32_t dim = threadIdx.x; dim < head_dim; dim += blockDim.x) {
       score_part +=

@@ -16,6 +16,10 @@ void copy_deepseek_session_byte_fields(
       source->deepseek_mhc_post_mix_bytes;
   session->deepseek_mhc_comb_mix_bytes =
       source->deepseek_mhc_comb_mix_bytes;
+  session->deepseek_sparse_topk_slots_bytes =
+      source->deepseek_sparse_topk_slots_bytes;
+  session->deepseek_sparse_topk_count_bytes =
+      source->deepseek_sparse_topk_count_bytes;
   session->deepseek_runtime_counters_bytes =
       source->deepseek_runtime_counters_bytes;
 }
@@ -94,6 +98,22 @@ cudaError_t allocate_deepseek_session_device_state(
         reinterpret_cast<void **>(&session->device_deepseek_mhc_comb_mix),
         session->deepseek_mhc_comb_mix_bytes);
   }
+  if (err == cudaSuccess && session->deepseek_sparse_topk_slots_bytes != 0) {
+    if (failure_stage != nullptr) {
+      *failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    }
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_sparse_topk_slots),
+        session->deepseek_sparse_topk_slots_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_sparse_topk_count_bytes != 0) {
+    if (failure_stage != nullptr) {
+      *failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    }
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_sparse_topk_count),
+        session->deepseek_sparse_topk_count_bytes);
+  }
   if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
     if (failure_stage != nullptr) {
       *failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
@@ -150,6 +170,16 @@ cudaError_t reset_deepseek_session_device_state(
   if (err == cudaSuccess && session->deepseek_mhc_comb_mix_bytes != 0) {
     err = cudaMemsetAsync(session->device_deepseek_mhc_comb_mix, 0,
                           session->deepseek_mhc_comb_mix_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_sparse_topk_slots_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_sparse_topk_slots, 0,
+                          session->deepseek_sparse_topk_slots_bytes,
+                          session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_sparse_topk_count_bytes != 0) {
+    err = cudaMemsetAsync(session->device_deepseek_sparse_topk_count, 0,
+                          session->deepseek_sparse_topk_count_bytes,
                           session->stream);
   }
   if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
@@ -226,6 +256,18 @@ cudaError_t clone_deepseek_session_device_state(
     err = cudaMemcpyAsync(session->device_deepseek_mhc_comb_mix,
                           source->device_deepseek_mhc_comb_mix,
                           session->deepseek_mhc_comb_mix_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_sparse_topk_slots_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_sparse_topk_slots,
+                          source->device_deepseek_sparse_topk_slots,
+                          session->deepseek_sparse_topk_slots_bytes,
+                          cudaMemcpyDeviceToDevice, session->stream);
+  }
+  if (err == cudaSuccess && session->deepseek_sparse_topk_count_bytes != 0) {
+    err = cudaMemcpyAsync(session->device_deepseek_sparse_topk_count,
+                          source->device_deepseek_sparse_topk_count,
+                          session->deepseek_sparse_topk_count_bytes,
                           cudaMemcpyDeviceToDevice, session->stream);
   }
   if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {

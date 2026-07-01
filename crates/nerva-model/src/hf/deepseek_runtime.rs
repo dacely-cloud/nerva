@@ -910,6 +910,9 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
             .push("cuda_hf_sequence_deepseek_v4_c128_parallel_head_attention_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_selection_hash".to_string());
+        primitives.push(
+            "cuda_hf_sequence_deepseek_v4_c4_sparse_parallel_head_attention_runtime".to_string(),
+        );
         primitives.push("cuda_hf_sequence_deepseek_v4_sparse_attention_swa_plus_topk".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources".to_string());
@@ -1276,15 +1279,13 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v4_compressed_scan_metrics",
                 "cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime",
                 "cuda_hf_sequence_deepseek_v4_c4_sparse_topk_selection_hash",
+                "cuda_hf_sequence_deepseek_v4_c4_sparse_parallel_head_attention_runtime",
                 "cuda_hf_sequence_deepseek_v4_sparse_attention_swa_plus_topk",
                 "cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
             ],
-            &[
-                "run full-size V4 C4 sparse top-k differential against vLLM runtime",
-                "integrate split paged-logits/top-k sparse scorer into full decode runtime for partial-cover cases",
-            ],
+            &["run full-size V4 C4 sparse top-k differential against vLLM runtime"],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_parallel_attention_gemm_streams") => (
             "partial",

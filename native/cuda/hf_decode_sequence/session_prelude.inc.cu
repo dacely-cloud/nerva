@@ -70,6 +70,7 @@ constexpr uint32_t kProjectionBatchKindLmHead = 5;
 constexpr uint32_t kExperimentalRtModeAuto = 1;
 constexpr uint32_t kExperimentalRtModeShadow = 2;
 constexpr uint32_t kExperimentalRtModeSparse = 3;
+constexpr uint32_t kDeepSeekSparseTopKSlotCapacity = 2048;
 
 
 
