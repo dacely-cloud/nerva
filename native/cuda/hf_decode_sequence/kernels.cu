@@ -708,6 +708,13 @@ __global__ void hf_decode_set_step_kernel(uint32_t *step_cursor,
   }
 }
 
+__global__ void hf_decode_advance_step_kernel(uint32_t *step_cursor,
+                                              uint32_t max_steps) {
+  if (threadIdx.x == 0 && step_cursor != nullptr && *step_cursor < max_steps) {
+    *step_cursor += 1u;
+  }
+}
+
 __global__ void hf_init_identity_kv_block_table_kernel(uint32_t *block_table,
                                                        uint32_t block_count) {
   for (uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;

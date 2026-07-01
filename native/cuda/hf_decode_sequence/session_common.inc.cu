@@ -126,6 +126,7 @@ void reset_session_graph(NervaCudaHfDecodeSequenceSession *session) {
   session->cached_has_eos_token = 0;
   session->cached_eos_token = 0;
   session->cached_attention_chunks = 0;
+  session->cached_sample_final_head = 0;
   session->cached_experimental_rt_sparse_attention_active = 0;
   session->experimental_rt_selector_cache_valid = 0;
   session->cached_sampler = default_hf_decode_sampler_config();
@@ -928,6 +929,7 @@ bool session_graph_matches(const NervaCudaHfDecodeSequenceSession *session,
                            uint32_t has_eos_token,
                            uint32_t eos_token,
                            uint32_t attention_chunks,
+                           uint32_t sample_final_head,
                            NervaCudaHfDecodeSamplerConfig sampler) {
   return session->cached_graph_exec != nullptr &&
          session->cached_context_steps == context_steps &&
@@ -935,6 +937,7 @@ bool session_graph_matches(const NervaCudaHfDecodeSequenceSession *session,
          session->cached_has_eos_token == has_eos_token &&
          session->cached_eos_token == eos_token &&
          session->cached_attention_chunks == attention_chunks &&
+         session->cached_sample_final_head == sample_final_head &&
          session->cached_experimental_rt_sparse_attention_active ==
              session->experimental_rt_sparse_attention_active &&
          hf_decode_sampler_config_matches(session->cached_sampler, sampler);

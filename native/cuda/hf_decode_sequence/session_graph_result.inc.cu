@@ -90,6 +90,7 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
                                  uint32_t has_eos_token,
                                  uint32_t eos_token,
                                  uint32_t attention_chunks,
+                                 uint32_t sample_final_head,
                                  uint32_t profile_cursor,
                                  NervaCudaHfDecodeSequenceResult *out) {
   uint32_t cache_attention_chunks = attention_chunks;
@@ -101,7 +102,7 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
 #endif
   if (session_graph_matches(session, max_steps, prompt_token_count,
                             has_eos_token, eos_token, cache_attention_chunks,
-                            session->active_sampler)) {
+                            sample_final_head, session->active_sampler)) {
     out->graph_nodes = session->cached_graph_nodes;
     out->graph_cache_hits = 1;
     copy_cached_profile(session, out);
@@ -134,10 +135,10 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
       err = use_layer_decode_path(session)
                 ? launch_cublas_layer_session_step(
                       session, max_steps, prompt_token_count, has_eos_token,
-                      eos_token, attention_chunks)
+                      eos_token, attention_chunks, sample_final_head)
                 : launch_monolithic_session_step(
                       session, max_steps, prompt_token_count, has_eos_token,
-                      eos_token);
+                      eos_token, sample_final_head);
     }
     if (capture_started) {
       cudaError_t end_err = cudaStreamEndCapture(session->stream, &graph);
@@ -166,6 +167,7 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
       session->cached_attention_chunks = captured_cudnn_decode_sdpa
                                              ? 1
                                              : attention_chunks;
+      session->cached_sample_final_head = sample_final_head;
       session->cached_experimental_rt_sparse_attention_active =
           session->experimental_rt_sparse_attention_active;
       session->cached_sampler = session->active_sampler;
@@ -192,11 +194,11 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
 #endif
     break;
   }
-  if (err == cudaSuccess && use_cublas_layer_path(session) &&
+  if (err == cudaSuccess && use_layer_decode_path(session) &&
       session->detailed_profile != 0) {
     err = profile_cublas_layer_session_step(
         session, max_steps, prompt_token_count, has_eos_token, eos_token,
-        attention_chunks, profile_cursor);
+        attention_chunks, profile_cursor, sample_final_head);
     if (err == cudaSuccess) {
       copy_cached_profile(session, out);
     }

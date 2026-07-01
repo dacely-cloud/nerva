@@ -155,6 +155,8 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_deepseek_router_route_api"));
     assert!(json.contains("cuda_deepseek_v3_grouped_sigmoid_router_smoke"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v3_grouped_router_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v3_mla_parallel_head_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v3_split_fp8_moe_runtime"));
     assert!(json.contains("deepseek_compressed_slot_mapping_reference"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
     assert!(json.contains("cuda_hf_sequence_deepseek_packed_kv_footprint_accounting"));
@@ -170,6 +172,9 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_sparse_attention_output_hash"));
     assert!(
         json.contains("cuda_hf_sequence_deepseek_v32_sparse_attention_topk2_output_differential")
+    );
+    assert!(
+        json.contains("run same-checkpoint routed plus shared MoE output differential against /root/vllm")
     );
     assert!(
         json.contains("run full-size V3.2 sparse MLA attention differential against vLLM runtime")

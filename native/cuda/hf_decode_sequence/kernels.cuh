@@ -214,6 +214,8 @@ __global__ void hf_prefill_final_norm_range_kernel(
 
 __global__ void hf_decode_set_step_kernel(uint32_t *step_cursor,
                                           uint32_t value);
+__global__ void hf_decode_advance_step_kernel(uint32_t *step_cursor,
+                                              uint32_t max_steps);
 __global__ void hf_init_identity_kv_block_table_kernel(uint32_t *block_table,
                                                        uint32_t block_count);
 

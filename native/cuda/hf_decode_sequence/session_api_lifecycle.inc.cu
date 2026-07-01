@@ -780,6 +780,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
                                                request->prompt_token_count,
                                                request->has_eos_token,
                                                request->eos_token, 0,
+                                               1,
                                                normalize_hf_decode_sampler_config(request->sampler));
   if (graph_hit) {
     out->graph_nodes = session->cached_graph_nodes;
@@ -796,10 +797,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
       err = use_layer_decode_path(session)
                 ? launch_cublas_layer_session_step(
                       session, context_steps, request->prompt_token_count,
-                      request->has_eos_token, request->eos_token, 0)
+                      request->has_eos_token, request->eos_token, 0, 1)
                 : launch_monolithic_session_step(
                       session, context_steps, request->prompt_token_count,
-                      request->has_eos_token, request->eos_token);
+                      request->has_eos_token, request->eos_token, 1);
     }
     if (capture_started) {
       cudaError_t end_err = cudaStreamEndCapture(session->stream, &graph);
@@ -824,6 +825,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_run(
       session->cached_has_eos_token = request->has_eos_token;
       session->cached_eos_token = request->eos_token;
       session->cached_attention_chunks = 0;
+      session->cached_sample_final_head = 1;
       session->cached_experimental_rt_sparse_attention_active = 0;
       session->cached_sampler = session->active_sampler;
       session->cached_graph_nodes = out->graph_nodes;
@@ -1085,7 +1087,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
       err = ensure_session_graph(session, session->max_context_tokens, prompt_count,
                                  session->active_has_eos_token,
                                  session->active_eos_token, attention_chunks,
-                                 session->active_cursor, out);
+                                 1, session->active_cursor, out);
     }
   }
   if (err == cudaSuccess && run_count != 0)

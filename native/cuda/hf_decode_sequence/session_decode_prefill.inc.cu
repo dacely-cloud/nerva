@@ -32,7 +32,8 @@ cudaError_t pack_session_weight_replicas(
 
 cudaError_t launch_monolithic_session_step(
     NervaCudaHfDecodeSequenceSession *session, uint32_t max_steps,
-    uint32_t prompt_token_count, uint32_t has_eos_token, uint32_t eos_token) {
+    uint32_t prompt_token_count, uint32_t has_eos_token, uint32_t eos_token,
+    uint32_t sample_final_head) {
   hf_decode_sequence_kernel<<<1, kDecodeThreads, 0, session->stream>>>(
       session->device_arena, session->arena_layout, session->device_layouts,
       session->layer_count, session->dtype,
@@ -47,18 +48,23 @@ cudaError_t launch_monolithic_session_step(
       session->device_slots, session->device_linear_gdn_conv_state,
       session->device_linear_gdn_recurrent_state);
   cudaError_t err = cudaGetLastError();
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && sample_final_head != 0) {
     float *device_logits = session->device_scratch + session->hidden * 2;
     err = final_head_gemv(session->cublas, session->device_arena,
                           session->arena_layout, session->dtype,
                           session->hidden, session->vocab_size, device_logits);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && sample_final_head != 0) {
     float *device_logits = session->device_scratch + session->hidden * 2;
     err = launch_hf_decode_final_head_sampler(
         session->stream, session->device_step, max_steps, has_eos_token,
         eos_token, device_logits, session->vocab_size, session->device_slots,
         session->active_sampler);
+  }
+  if (err == cudaSuccess && sample_final_head == 0) {
+    hf_decode_advance_step_kernel<<<1, 1, 0, session->stream>>>(
+        session->device_step, max_steps);
+    err = cudaGetLastError();
   }
   return err;
 }
@@ -68,7 +74,7 @@ cudaError_t launch_monolithic_session_step(
 cudaError_t launch_cublas_layer_session_step(
     NervaCudaHfDecodeSequenceSession *session, uint32_t max_steps,
     uint32_t prompt_token_count, uint32_t has_eos_token, uint32_t eos_token,
-    uint32_t attention_chunks) {
+    uint32_t attention_chunks, uint32_t sample_final_head) {
   const uint32_t attention_hidden = session->heads * session->head_dim;
   const uint32_t kv_hidden = session->kv_heads * session->head_dim;
   const uint32_t decode_head_threads = decode_head_threads_for_session(session);
@@ -342,7 +348,7 @@ cudaError_t launch_cublas_layer_session_step(
     output_offset = input_offset;
     input_offset = next_input;
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && sample_final_head != 0) {
     float *device_logits = session->device_scratch + session->hidden * 2;
     err = project_encoded_rows(
         session, &session->lm_head_plan,
@@ -350,12 +356,17 @@ cudaError_t launch_cublas_layer_session_step(
         session->device_projection_input, session->vocab_size, session->hidden,
         1, session->dtype, 0.0f, device_logits);
   }
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && sample_final_head != 0) {
     float *device_logits = session->device_scratch + session->hidden * 2;
     err = launch_hf_decode_final_head_sampler(
         session->stream, session->device_step, max_steps, has_eos_token,
         eos_token, device_logits, session->vocab_size, session->device_slots,
         session->active_sampler);
+  }
+  if (err == cudaSuccess && sample_final_head == 0) {
+    hf_decode_advance_step_kernel<<<1, 1, 0, session->stream>>>(
+        session->device_step, max_steps);
+    err = cudaGetLastError();
   }
   return err;
 }
@@ -363,7 +374,7 @@ cudaError_t launch_cublas_layer_session_step(
 cudaError_t profile_cublas_layer_session_step(
     NervaCudaHfDecodeSequenceSession *session, uint32_t max_steps,
     uint32_t prompt_token_count, uint32_t has_eos_token, uint32_t eos_token,
-    uint32_t attention_chunks, uint32_t cursor) {
+    uint32_t attention_chunks, uint32_t cursor, uint32_t sample_final_head) {
   uint64_t projection_ns = 0;
   uint64_t qkv_projection_ns = 0;
   uint64_t attention_output_projection_ns = 0;
@@ -389,12 +400,16 @@ cudaError_t profile_cublas_layer_session_step(
   if (err == cudaSuccess) err = profile_begin(session);
   if (err == cudaSuccess && session->layer_count > 0) {
     const SequenceLayerLayout first_layout = session->host_layouts[0];
+    const uint32_t first_attention_hidden = static_cast<uint32_t>(
+        layer_attention_workspace_rows(first_layout, attention_hidden));
+    const uint32_t first_kv_hidden = static_cast<uint32_t>(
+        layout_deepseek_kv_cache_width(first_layout, kv_hidden));
     hf_decode_prepare_first_attn_norm_encode_kernel<<<
         1, kDecodeNormThreads, 0, session->stream>>>(
         session->device_arena, session->arena_layout, first_layout,
         session->dtype, session->hidden,
-        layer_norm_weight_dtype(first_layout, session->dtype), attention_hidden,
-        kv_hidden, session->intermediate,
+        layer_norm_weight_dtype(first_layout, session->dtype),
+        first_attention_hidden, first_kv_hidden, session->intermediate,
         session->device_step, max_steps, session->device_prompt_tokens,
         prompt_token_count, session->device_slots, session->rms_eps,
         session->device_scratch,
@@ -422,15 +437,22 @@ cudaError_t profile_cublas_layer_session_step(
     const uint32_t layer_kv_hidden = static_cast<uint32_t>(
         layout_deepseek_kv_cache_width(layout, kv_hidden));
     if (is_deepseek_v3 || is_deepseek_v4_native) {
-      if (err == cudaSuccess) err = profile_begin(session);
+      DeepseekDecodeProfileBuckets deepseek_profile{
+          &qkv_projection_ns,
+          &attention_output_projection_ns,
+          &gate_up_projection_ns,
+          &down_projection_ns,
+          &attention_ns,
+          &mlp_ns,
+          &norm_ns};
       if (err == cudaSuccess && is_deepseek_v3) {
         err = launch_deepseek_v3_mla_projection_step(
-            session, layout, layer_index, max_steps);
+            session, layout, layer_index, max_steps, &deepseek_profile);
       } else if (err == cudaSuccess) {
         err = launch_deepseek_v4_swa_dense_projection_step(
-            session, layout, layer_index, max_steps, prompt_token_count);
+            session, layout, layer_index, max_steps, prompt_token_count,
+            &deepseek_profile);
       }
-      if (err == cudaSuccess) err = profile_end(session, &attention_ns);
 
       if (err == cudaSuccess) err = profile_begin(session);
       if (err == cudaSuccess && layer_index + 1 < session->layer_count) {
@@ -731,8 +753,8 @@ cudaError_t profile_cublas_layer_session_step(
     input_offset = next_input;
   }
 
-  if (err == cudaSuccess) err = profile_begin(session);
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && sample_final_head != 0) err = profile_begin(session);
+  if (err == cudaSuccess && sample_final_head != 0) {
     float *device_logits = session->device_scratch + session->hidden * 2;
     err = project_encoded_rows(
         session, &session->lm_head_plan,
@@ -740,19 +762,27 @@ cudaError_t profile_cublas_layer_session_step(
         session->device_projection_input, session->vocab_size, session->hidden,
         1, session->dtype, 0.0f, device_logits);
   }
-  if (err == cudaSuccess) err = profile_end(session, &lm_head_projection_ns);
+  if (err == cudaSuccess && sample_final_head != 0) {
+    err = profile_end(session, &lm_head_projection_ns);
+  }
 
-  if (err == cudaSuccess) err = profile_begin(session);
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && sample_final_head != 0) err = profile_begin(session);
+  if (err == cudaSuccess && sample_final_head != 0) {
     float *device_logits = session->device_scratch + session->hidden * 2;
     err = launch_hf_decode_final_head_sampler(
         session->stream, session->device_step, max_steps, has_eos_token,
         eos_token, device_logits, session->vocab_size, session->device_slots,
         session->active_sampler);
   }
-  if (err == cudaSuccess) err = profile_end(session, &sampling_ns);
+  if (err == cudaSuccess && sample_final_head != 0) {
+    err = profile_end(session, &sampling_ns);
+  }
 
-  if (err == cudaSuccess) {
+  if (err == cudaSuccess && sample_final_head == 0) {
+    hf_decode_set_step_kernel<<<1, 1, 0, session->stream>>>(
+        session->device_step, cursor + 1u);
+    err = cudaGetLastError();
+  } else if (err == cudaSuccess) {
     hf_decode_set_step_kernel<<<1, 1, 0, session->stream>>>(
         session->device_step, cursor);
     err = cudaGetLastError();
@@ -783,6 +813,7 @@ cudaError_t ensure_session_graph(NervaCudaHfDecodeSequenceSession *session,
                                  uint32_t has_eos_token,
                                  uint32_t eos_token,
                                  uint32_t attention_chunks,
+                                 uint32_t sample_final_head,
                                  uint32_t profile_cursor,
                                  NervaCudaHfDecodeSequenceResult *out);
 
@@ -1165,13 +1196,30 @@ cudaError_t launch_serial_session_prefill(
     NervaCudaHfDecodeSequenceSession *session, uint32_t prompt_token_count,
     uint32_t has_eos_token, uint32_t eos_token,
     NervaCudaHfDecodeSequenceResult *out) {
-  cudaError_t err =
-      ensure_session_graph(session, session->max_context_tokens, prompt_token_count,
-                           has_eos_token, eos_token, 0, 0, out);
+  cudaError_t err = cudaSuccess;
   if (err == cudaSuccess) {
     err = cudaEventRecord(session->device_start, session->stream);
   }
-  for (uint32_t step = 0; err == cudaSuccess && step < prompt_token_count; ++step) {
+  if (prompt_token_count > 1) {
+    err = ensure_session_graph(session, session->max_context_tokens,
+                               prompt_token_count, has_eos_token, eos_token, 0,
+                               0, 0, out);
+  }
+  for (uint32_t step = 0;
+       err == cudaSuccess && step + 1u < prompt_token_count; ++step) {
+    err = cudaGraphLaunch(session->cached_graph_exec, session->stream);
+    if (err == cudaSuccess) {
+      out->graph_replays += 1;
+      out->graph_launches += 1;
+      out->kernel_launches += out->graph_nodes == 0 ? 1 : out->graph_nodes;
+    }
+  }
+  if (err == cudaSuccess) {
+    err = ensure_session_graph(session, session->max_context_tokens,
+                               prompt_token_count, has_eos_token, eos_token, 0,
+                               1, prompt_token_count - 1u, out);
+  }
+  if (err == cudaSuccess) {
     err = cudaGraphLaunch(session->cached_graph_exec, session->stream);
     if (err == cudaSuccess) {
       out->graph_replays += 1;

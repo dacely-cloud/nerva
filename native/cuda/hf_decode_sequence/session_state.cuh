@@ -175,6 +175,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint32_t cached_has_eos_token = 0;
   uint32_t cached_eos_token = 0;
   uint32_t cached_attention_chunks = 0;
+  uint32_t cached_sample_final_head = 0;
   uint32_t cached_experimental_rt_sparse_attention_active = 0;
   NervaCudaHfDecodeSamplerConfig cached_sampler = {};
   uint32_t projection_batch_peer_streams_synchronized = 0;

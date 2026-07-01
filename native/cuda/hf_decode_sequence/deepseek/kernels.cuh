@@ -33,7 +33,7 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
     uint64_t *deepseek_runtime_counters);
-__global__ void hf_deepseek_v3_mla_attention_encode_kernel(
+__global__ void hf_deepseek_v3_mla_cache_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t heads, uint32_t *step_cursor,
     uint32_t max_steps, float rope_theta, const float *q,
@@ -49,18 +49,50 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v3_mla_attention_encode_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t heads, uint32_t *step_cursor,
+    uint32_t max_steps, float rope_theta, const float *q,
+    uint16_t *kv_keys, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint16_t *projection_input,
+    const uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    const uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_residual_mlp_norm_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t norm_weight_dtype, uint32_t hidden, uint32_t attention_hidden,
     uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
     uint32_t max_steps, float rms_eps, float *scratch,
     uint16_t *projection_input);
-__global__ void hf_deepseek_v3_sparse_moe_encode_kernel(
+__global__ void hf_deepseek_v3_sparse_moe_route_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float *scratch, uint16_t *projection_input,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v3_sparse_moe_expert_gate_up_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t rank, uint32_t *step_cursor,
+    uint32_t max_steps, float *scratch);
+__global__ void hf_deepseek_v3_sparse_moe_expert_down_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t rank, uint32_t *step_cursor,
+    uint32_t max_steps, float *scratch);
+__global__ void hf_deepseek_v3_sparse_moe_shared_gate_up_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float *scratch);
+__global__ void hf_deepseek_v3_sparse_moe_shared_down_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float *scratch);
 __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t head_dim,

@@ -762,6 +762,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v3_mla_kv_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v3_mla_fullsize_kv_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v3_mla_serial_prefill_cache_rows".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v3_mla_parallel_head_runtime".to_string());
+        primitives.push("cuda_hf_sequence_deepseek_v3_split_fp8_moe_runtime".to_string());
     }
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
         primitives.push("deepseek_v4_mhc_compressor_indexer_manifest".to_string());
@@ -964,6 +966,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v3_mla_kv_page_contents",
                 "cuda_hf_sequence_deepseek_v3_mla_fullsize_kv_page_contents",
                 "cuda_hf_sequence_deepseek_v3_mla_serial_prefill_cache_rows",
+                "cuda_hf_sequence_deepseek_v3_mla_parallel_head_runtime",
             ],
             &[
                 "replace serial CUDA MLA prefill with token-batched vLLM-equivalent MLA prefill",
@@ -1050,10 +1053,10 @@ fn coverage_for_unit(
                 "cuda_fp8_e4m3fn_e8m0_dequant_api",
                 "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
+                "cuda_hf_sequence_deepseek_v3_split_fp8_moe_runtime",
             ],
             &[
-                "run routed expert gate/up/down GEMMs with checkpoint FP8 scales",
-                "wire full routed plus shared MoE accumulation into CUDA decode",
+                "run same-checkpoint routed plus shared MoE output differential against /root/vllm",
                 "benchmark fused MoE against vLLM FusedMoE",
             ],
         ),
