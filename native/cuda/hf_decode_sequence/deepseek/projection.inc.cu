@@ -32,6 +32,102 @@ __device__ __forceinline__ float deepseek_fp8_projection_f32_scale_slot(
   return __uint_as_float(lo | (hi << 16u));
 }
 
+struct DeepSeekFp8F32ScaleReader {
+  const float *scales;
+  __device__ __forceinline__ float get(uint32_t index) const {
+    return scales[index];
+  }
+};
+
+struct DeepSeekFp8E8M0ScaleReader {
+  const uint8_t *scales;
+  __device__ __forceinline__ float get(uint32_t index) const {
+    return nerva::deepseek::e8m0_exponent_bits_to_f32(scales[index]);
+  }
+};
+
+template <typename ScaleReader>
+__device__ __forceinline__ void deepseek_fp8_dual_encoded_matvec_body(
+    const uint8_t *weights_a,
+    ScaleReader scales_a,
+    const uint8_t *weights_b,
+    ScaleReader scales_b,
+    const uint16_t *input,
+    uint32_t input_dtype,
+    float *output_a,
+    float *output_b,
+    uint32_t rows,
+    uint32_t cols,
+    uint32_t block_rows,
+    uint32_t block_cols) {
+  const uint32_t row_start = blockIdx.x * kDeepSeekFp8ProjectionRowTile;
+  if (row_start >= rows) {
+    return;
+  }
+  extern __shared__ float partial[];
+  float sum_a[kDeepSeekFp8ProjectionRowTile] = {};
+  float sum_b[kDeepSeekFp8ProjectionRowTile] = {};
+  const uint32_t scale_cols =
+      deepseek_fp8_projection_scale_cols(cols, block_cols);
+  for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
+    const float input_value = encoded_input_to_f32(input[col], input_dtype);
+    for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
+         ++row_tile) {
+      const uint32_t row = row_start + row_tile;
+      if (row >= rows) {
+        continue;
+      }
+      const uint32_t scale_idx =
+          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
+                                            block_cols);
+      const uint64_t row_base = static_cast<uint64_t>(row) * cols;
+      const float weight_a =
+          nerva::deepseek::f8_e4m3fn_bits_to_f32(weights_a[row_base + col]) *
+          scales_a.get(scale_idx);
+      const float weight_b =
+          nerva::deepseek::f8_e4m3fn_bits_to_f32(weights_b[row_base + col]) *
+          scales_b.get(scale_idx);
+      sum_a[row_tile] += weight_a * input_value;
+      sum_b[row_tile] += weight_b * input_value;
+    }
+  }
+  for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
+       ++row_tile) {
+    const uint32_t a_offset = row_tile * blockDim.x;
+    const uint32_t b_offset =
+        (kDeepSeekFp8ProjectionRowTile + row_tile) * blockDim.x;
+    partial[a_offset + threadIdx.x] = sum_a[row_tile];
+    partial[b_offset + threadIdx.x] = sum_b[row_tile];
+  }
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
+           ++row_tile) {
+        const uint32_t a_offset = row_tile * blockDim.x;
+        const uint32_t b_offset =
+            (kDeepSeekFp8ProjectionRowTile + row_tile) * blockDim.x;
+        partial[a_offset + threadIdx.x] +=
+            partial[a_offset + threadIdx.x + stride];
+        partial[b_offset + threadIdx.x] +=
+            partial[b_offset + threadIdx.x + stride];
+      }
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
+         ++row_tile) {
+      const uint32_t row = row_start + row_tile;
+      if (row < rows) {
+        output_a[row] = partial[row_tile * blockDim.x];
+        output_b[row] =
+            partial[(kDeepSeekFp8ProjectionRowTile + row_tile) * blockDim.x];
+      }
+    }
+  }
+}
+
 __global__ void deepseek_fp8_f32_scale_matvec_kernel(
     const uint8_t *weights,
     const float *scales,
@@ -133,6 +229,25 @@ __global__ void deepseek_fp8_f32_scale_encoded_matvec_kernel(
       }
     }
   }
+}
+
+__global__ void deepseek_fp8_f32_scale_dual_encoded_matvec_kernel(
+    const uint8_t *weights_a,
+    const float *scales_a,
+    const uint8_t *weights_b,
+    const float *scales_b,
+    const uint16_t *input,
+    uint32_t input_dtype,
+    float *output_a,
+    float *output_b,
+    uint32_t rows,
+    uint32_t cols,
+    uint32_t block_rows,
+    uint32_t block_cols) {
+  deepseek_fp8_dual_encoded_matvec_body(
+      weights_a, DeepSeekFp8F32ScaleReader{scales_a}, weights_b,
+      DeepSeekFp8F32ScaleReader{scales_b}, input, input_dtype, output_a,
+      output_b, rows, cols, block_rows, block_cols);
 }
 
 __global__ void deepseek_fp8_f32_scale_slots_encoded_matvec_kernel(
@@ -353,6 +468,25 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_matvec_kernel(
       }
     }
   }
+}
+
+__global__ void deepseek_fp8_e8m0_scale_dual_encoded_matvec_kernel(
+    const uint8_t *weights_a,
+    const uint8_t *scales_a,
+    const uint8_t *weights_b,
+    const uint8_t *scales_b,
+    const uint16_t *input,
+    uint32_t input_dtype,
+    float *output_a,
+    float *output_b,
+    uint32_t rows,
+    uint32_t cols,
+    uint32_t block_rows,
+    uint32_t block_cols) {
+  deepseek_fp8_dual_encoded_matvec_body(
+      weights_a, DeepSeekFp8E8M0ScaleReader{scales_a}, weights_b,
+      DeepSeekFp8E8M0ScaleReader{scales_b}, input, input_dtype, output_a,
+      output_b, rows, cols, block_rows, block_cols);
 }
 
 __global__ void deepseek_fp8_e8m0_scale_encoded_gemm_tokens_kernel(
@@ -644,6 +778,32 @@ cudaError_t launch_deepseek_fp8_f32_scale_encoded_matvec(
   return cudaGetLastError();
 }
 
+cudaError_t launch_deepseek_fp8_f32_scale_dual_encoded_matvec(
+    cudaStream_t stream, const uint8_t *weights_a, const float *scales_a,
+    const uint8_t *weights_b, const float *scales_b, const uint16_t *input,
+    uint32_t input_dtype, uint32_t rows, uint32_t cols, uint32_t block_rows,
+    uint32_t block_cols, float *output_a, float *output_b) {
+  if (weights_a == nullptr || scales_a == nullptr || weights_b == nullptr ||
+      scales_b == nullptr || input == nullptr || output_a == nullptr ||
+      output_b == nullptr || rows == 0 || cols == 0 || block_rows == 0 ||
+      block_cols == 0 || input_dtype > kDTypeBF16) {
+    return cudaErrorInvalidValue;
+  }
+  constexpr uint32_t threads = 256;
+  const size_t shared_bytes =
+      threads * kDeepSeekFp8ProjectionRowTile * 2u * sizeof(float);
+  const uint32_t blocks =
+      (rows + kDeepSeekFp8ProjectionRowTile - 1) /
+      kDeepSeekFp8ProjectionRowTile;
+  deepseek_fp8_f32_scale_dual_encoded_matvec_kernel<<<blocks,
+                                                      threads,
+                                                      shared_bytes,
+                                                      stream>>>(
+      weights_a, scales_a, weights_b, scales_b, input, input_dtype, output_a,
+      output_b, rows, cols, block_rows, block_cols);
+  return cudaGetLastError();
+}
+
 cudaError_t launch_deepseek_fp8_f32_scale_slots_encoded_matvec(
     cudaStream_t stream, const uint8_t *weights, const uint16_t *scale_slots,
     const uint16_t *input, uint32_t input_dtype, uint32_t rows, uint32_t cols,
@@ -717,6 +877,32 @@ cudaError_t launch_deepseek_fp8_e8m0_scale_encoded_matvec(
                                                    stream>>>(
       weights, scales, input, input_dtype, output, rows, cols, block_rows,
       block_cols);
+  return cudaGetLastError();
+}
+
+cudaError_t launch_deepseek_fp8_e8m0_scale_dual_encoded_matvec(
+    cudaStream_t stream, const uint8_t *weights_a, const uint8_t *scales_a,
+    const uint8_t *weights_b, const uint8_t *scales_b, const uint16_t *input,
+    uint32_t input_dtype, uint32_t rows, uint32_t cols, uint32_t block_rows,
+    uint32_t block_cols, float *output_a, float *output_b) {
+  if (weights_a == nullptr || scales_a == nullptr || weights_b == nullptr ||
+      scales_b == nullptr || input == nullptr || output_a == nullptr ||
+      output_b == nullptr || rows == 0 || cols == 0 || block_rows == 0 ||
+      block_cols == 0 || input_dtype > kDTypeBF16) {
+    return cudaErrorInvalidValue;
+  }
+  constexpr uint32_t threads = 256;
+  const size_t shared_bytes =
+      threads * kDeepSeekFp8ProjectionRowTile * 2u * sizeof(float);
+  const uint32_t blocks =
+      (rows + kDeepSeekFp8ProjectionRowTile - 1) /
+      kDeepSeekFp8ProjectionRowTile;
+  deepseek_fp8_e8m0_scale_dual_encoded_matvec_kernel<<<blocks,
+                                                       threads,
+                                                       shared_bytes,
+                                                       stream>>>(
+      weights_a, scales_a, weights_b, scales_b, input, input_dtype, output_a,
+      output_b, rows, cols, block_rows, block_cols);
   return cudaGetLastError();
 }
 

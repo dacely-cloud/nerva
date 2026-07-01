@@ -38,6 +38,33 @@ cudaError_t launch_deepseek_fp8_f32_scale_encoded_matvec_from_arena(
       input, input_dtype, rows, cols, block_rows, block_cols, output);
 }
 
+cudaError_t launch_deepseek_fp8_f32_scale_dual_encoded_matvec_from_arena(
+    cudaStream_t stream, uint16_t *arena, uint64_t weight_a_offset,
+    uint64_t scale_a_offset, uint64_t weight_b_offset, uint64_t scale_b_offset,
+    const uint16_t *input, uint32_t input_dtype, uint32_t rows, uint32_t cols,
+    uint32_t block_rows, uint32_t block_cols, float *output_a,
+    float *output_b) {
+  const bool a_float_scale = (scale_a_offset & 1ull) == 0ull;
+  const bool b_float_scale = (scale_b_offset & 1ull) == 0ull;
+  if (a_float_scale && b_float_scale) {
+    return launch_deepseek_fp8_f32_scale_dual_encoded_matvec(
+        stream, deepseek_fp8_ptr(arena, weight_a_offset),
+        deepseek_scale_ptr(arena, scale_a_offset),
+        deepseek_fp8_ptr(arena, weight_b_offset),
+        deepseek_scale_ptr(arena, scale_b_offset), input, input_dtype, rows,
+        cols, block_rows, block_cols, output_a, output_b);
+  }
+  cudaError_t err = launch_deepseek_fp8_f32_scale_encoded_matvec_from_arena(
+      stream, arena, weight_a_offset, scale_a_offset, input, input_dtype, rows,
+      cols, block_rows, block_cols, output_a);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  return launch_deepseek_fp8_f32_scale_encoded_matvec_from_arena(
+      stream, arena, weight_b_offset, scale_b_offset, input, input_dtype, rows,
+      cols, block_rows, block_cols, output_b);
+}
+
 uint64_t deepseek_fp8_slots_u64(uint64_t rows, uint64_t cols) {
   return (rows * cols + 1u) / 2u;
 }
@@ -568,17 +595,11 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
                                 session->intermediate);
   err = deepseek_profile_begin_if(session, profile);
   if (err != cudaSuccess) return err;
-  err = launch_deepseek_fp8_f32_scale_encoded_matvec_from_arena(
+  err = launch_deepseek_fp8_f32_scale_dual_encoded_matvec_from_arena(
       session->stream, session->device_arena, layout.w_gate, gate_scale,
-      session->device_projection_input, session->dtype,
+      layout.w_up, up_scale, session->device_projection_input, session->dtype,
       session->intermediate, session->hidden, block_rows, block_cols,
-      scratch.gate);
-  if (err != cudaSuccess) return err;
-  err = launch_deepseek_fp8_f32_scale_encoded_matvec_from_arena(
-      session->stream, session->device_arena, layout.w_up, up_scale,
-      session->device_projection_input, session->dtype,
-      session->intermediate, session->hidden, block_rows, block_cols,
-      scratch.up);
+      scratch.gate, scratch.up);
   if (err != cudaSuccess) return err;
   err = deepseek_profile_end_if(session, profile, profile == nullptr
                                                     ? nullptr
@@ -1102,19 +1123,14 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
 
     err = deepseek_profile_begin_if(session, profile);
     if (err != cudaSuccess) return err;
-    err = launch_deepseek_fp8_e8m0_scale_encoded_matvec(
+    err = launch_deepseek_fp8_e8m0_scale_dual_encoded_matvec(
         session->stream,
         deepseek_fp8_ptr(session->device_arena, layout.w_shared_expert_gate),
         deepseek_fp8_ptr(session->device_arena, shared_gate_scale),
-        session->device_projection_input, session->dtype, shared_intermediate,
-        session->hidden, block_rows, block_cols, scratch.gate);
-    if (err != cudaSuccess) return err;
-    err = launch_deepseek_fp8_e8m0_scale_encoded_matvec(
-        session->stream,
         deepseek_fp8_ptr(session->device_arena, layout.w_shared_expert_up),
         deepseek_fp8_ptr(session->device_arena, shared_up_scale),
         session->device_projection_input, session->dtype, shared_intermediate,
-        session->hidden, block_rows, block_cols, scratch.up);
+        session->hidden, block_rows, block_cols, scratch.gate, scratch.up);
     if (err != cudaSuccess) return err;
     err = deepseek_profile_end_if(session, profile, profile == nullptr
                                                       ? nullptr
@@ -1172,17 +1188,11 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
 
   err = deepseek_profile_begin_if(session, profile);
   if (err != cudaSuccess) return err;
-  err = launch_deepseek_fp8_f32_scale_encoded_matvec_from_arena(
+  err = launch_deepseek_fp8_f32_scale_dual_encoded_matvec_from_arena(
       session->stream, session->device_arena, layout.w_gate, gate_scale,
-      session->device_projection_input, session->dtype,
+      layout.w_up, up_scale, session->device_projection_input, session->dtype,
       session->intermediate, session->hidden, block_rows, block_cols,
-      scratch.gate);
-  if (err != cudaSuccess) return err;
-  err = launch_deepseek_fp8_f32_scale_encoded_matvec_from_arena(
-      session->stream, session->device_arena, layout.w_up, up_scale,
-      session->device_projection_input, session->dtype,
-      session->intermediate, session->hidden, block_rows, block_cols,
-      scratch.up);
+      scratch.gate, scratch.up);
   if (err != cudaSuccess) return err;
   err = deepseek_profile_end_if(session, profile, profile == nullptr
                                                     ? nullptr
