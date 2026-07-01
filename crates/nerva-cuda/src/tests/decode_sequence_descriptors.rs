@@ -4474,6 +4474,45 @@ fn deepseek_v4_compressed_indexer_writes_realistic_indexer_cache_width() {
 }
 
 #[test]
+fn deepseek_v4_compressed_indexer_writes_multi_scale_indexer_cache_width() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let mut layer = tiny_deepseek_v4_descriptor_layer();
+    layer.deepseek = layer.deepseek.map(|mut deepseek| {
+        deepseek.index_head_dim = 132;
+        deepseek
+    });
+    with_tiny_deepseek_v4_descriptor_session(layer, 8, |created| {
+        if created.summary.status == SmokeStatus::Unavailable {
+            return;
+        }
+        assert_eq!(
+            created.summary.status,
+            SmokeStatus::Ok,
+            "V4 compressed-indexer multi-scale cache width should create: {:?}",
+            created.summary.error
+        );
+        let mut session = created
+            .session
+            .expect("V4 compressed-indexer session handle should exist");
+
+        let summary = session.run(&[0], 4, None);
+        assert_eq!(
+            summary.status,
+            SmokeStatus::Ok,
+            "indexer head wider than one fp8 scale tile should write the first compressed cache boundary: {:?}",
+            summary.error
+        );
+        assert_eq!(summary.steps, 4);
+        assert_eq!(summary.kv_tokens, 4);
+        assert_eq!(summary.deepseek_compressed_kv_writes, 1);
+        assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
+        assert_eq!(summary.deepseek_indexer_kv_writes, 1);
+        assert_eq!(summary.deepseek_sparse_topk_selections, 1);
+    });
+}
+
+#[test]
 fn deepseek_v4_compressed_indexer_runs_past_first_boundary_with_compressed_attention() {
     let _guard = super::cuda_lock::cuda_test_lock();
 

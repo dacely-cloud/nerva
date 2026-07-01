@@ -741,6 +741,25 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
                                                         ? nullptr
                                                         : profile->attention_ns);
       if (err != cudaSuccess) return err;
+      err = deepseek_profile_begin_if(session, profile);
+      if (err != cudaSuccess) return err;
+      hf_deepseek_v4_indexer_kv_write_kernel<<<1, kDecodeThreads, 0,
+                                                session->stream>>>(
+          session->device_arena, layout, session->device_step, max_steps,
+          session->rms_eps, layer_rope_theta,
+          session->device_deepseek_indexer_state,
+          deepseek_v4_indexer_state_layer_offset_bytes(session, layer_index),
+          session->device_deepseek_indexer_kv,
+          deepseek_v4_indexer_kv_layer_offset_bytes(session, layer_index),
+          deepseek_v4_compressed_kv_block_count(session, layout),
+          session->kv_block_count, session->device_kv_block_table,
+          session->device_deepseek_runtime_counters);
+      err = cudaGetLastError();
+      if (err != cudaSuccess) return err;
+      err = deepseek_profile_end_if(session, profile, profile == nullptr
+                                                        ? nullptr
+                                                        : profile->attention_ns);
+      if (err != cudaSuccess) return err;
       precomputed_indexer_state = 1;
     }
   }

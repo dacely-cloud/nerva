@@ -518,26 +518,35 @@ __device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
                             ? layout.deepseek_qk_rope_head_dim
                             : 0u;
   const uint32_t compressed_pos = compressed_slot * compress_ratio;
-  float absmax = 0.0f;
-  for (uint32_t dim = 0; dim < head_dim; ++dim) {
-    const float rotated = deepseek_session_rotated_compressed_value(
-        compressed, arena + layout.deepseek_indexer_compressor_norm, head_dim,
-        rope, dim, compressed_pos, rms_eps, rope_theta, layout);
-    const float quant_input = deepseek_session_bf16_bits_to_f32(
-        deepseek_session_f32_to_bf16_bits(rotated));
-    absmax = fmaxf(absmax, fabsf(quant_input));
-  }
-  const float raw = fmaxf(absmax, 1.0e-4f) / 448.0f;
-  const float scale = exp2f(ceilf(log2f(raw)));
-  *reinterpret_cast<float *>(scale_ptr) = scale;
-  for (uint32_t dim = 0; dim < head_dim; ++dim) {
-    const float rotated = deepseek_session_rotated_compressed_value(
-        compressed, arena + layout.deepseek_indexer_compressor_norm, head_dim,
-        rope, dim, compressed_pos, rms_eps, rope_theta, layout);
-    const float quant_input = deepseek_session_bf16_bits_to_f32(
-        deepseek_session_f32_to_bf16_bits(rotated));
-    const float scaled = fminf(fmaxf(quant_input / scale, -448.0f), 448.0f);
-    data_ptr[dim] = deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
+  const uint32_t quant_block = 128u;
+  float *scales = reinterpret_cast<float *>(scale_ptr);
+  for (uint32_t scale_index = 0;
+       scale_index < scale_dim / sizeof(float); ++scale_index) {
+    const uint32_t start_dim = scale_index * quant_block;
+    const uint32_t end_dim =
+        start_dim + quant_block < head_dim ? start_dim + quant_block
+                                           : head_dim;
+    float absmax = 0.0f;
+    for (uint32_t dim = start_dim; dim < end_dim; ++dim) {
+      const float rotated = deepseek_session_rotated_compressed_value(
+          compressed, arena + layout.deepseek_indexer_compressor_norm, head_dim,
+          rope, dim, compressed_pos, rms_eps, rope_theta, layout);
+      const float quant_input = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(rotated));
+      absmax = fmaxf(absmax, fabsf(quant_input));
+    }
+    const float raw = fmaxf(absmax, 1.0e-4f) / 448.0f;
+    const float scale = exp2f(ceilf(log2f(raw)));
+    scales[scale_index] = scale;
+    for (uint32_t dim = start_dim; dim < end_dim; ++dim) {
+      const float rotated = deepseek_session_rotated_compressed_value(
+          compressed, arena + layout.deepseek_indexer_compressor_norm, head_dim,
+          rope, dim, compressed_pos, rms_eps, rope_theta, layout);
+      const float quant_input = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(rotated));
+      const float scaled = fminf(fmaxf(quant_input / scale, -448.0f), 448.0f);
+      data_ptr[dim] = deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
+    }
   }
   return true;
 }
