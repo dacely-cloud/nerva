@@ -12,7 +12,6 @@ constexpr uint32_t kV3NumExperts = 8;
 constexpr uint32_t kV3NumGroups = 2;
 constexpr uint32_t kV3TopKGroups = 1;
 constexpr uint32_t kV3TopK = 2;
-constexpr uint32_t kV3ExpertsPerGroup = kV3NumExperts / kV3NumGroups;
 
 constexpr uint32_t kV4NumExperts = 4;
 constexpr uint32_t kV4TopK = 2;
@@ -42,147 +41,34 @@ struct DeviceRouterOutput {
   float v4_hash_weights[kV4HashTopK];
 };
 
-__device__ __host__ float sigmoid_score(float value) {
-  return 1.0f / (1.0f + expf(-value));
-}
-
-__device__ __host__ float softplus_score(float value) {
-  if (value > 20.0f) {
-    return value;
-  }
-  if (value < -20.0f) {
-    return expf(value);
-  }
-  return log1pf(expf(value));
-}
-
-__device__ __host__ float sqrtsoftplus_score(float value) {
-  return sqrtf(softplus_score(value));
-}
-
-__device__ bool better_score(float lhs_score,
-                             uint32_t lhs_id,
-                             float rhs_score,
-                             uint32_t rhs_id) {
-  return lhs_score > rhs_score ||
-         (lhs_score == rhs_score && lhs_id < rhs_id);
-}
-
-__device__ void insert_topk(float score,
-                            uint32_t id,
-                            float *top_scores,
-                            uint32_t *top_ids,
-                            uint32_t k) {
-  for (uint32_t slot = 0; slot < k; ++slot) {
-    if (better_score(score, id, top_scores[slot], top_ids[slot])) {
-      for (uint32_t shift = k - 1; shift > slot; --shift) {
-        top_scores[shift] = top_scores[shift - 1];
-        top_ids[shift] = top_ids[shift - 1];
-      }
-      top_scores[slot] = score;
-      top_ids[slot] = id;
-      return;
-    }
-  }
-}
-
-__device__ float top2_sum_group(const float *scores, uint32_t start) {
-  float first = -INFINITY;
-  float second = -INFINITY;
-  for (uint32_t i = 0; i < kV3ExpertsPerGroup; ++i) {
-    const float value = scores[start + i];
-    if (value > first) {
-      second = first;
-      first = value;
-    } else if (value > second) {
-      second = value;
-    }
-  }
-  return first + second;
-}
-
 __device__ void run_v3_grouped_route(DeviceRouterOutput *out) {
+  namespace dsr = nerva::deepseek::router;
   const float logits[kV3NumExperts] = {
       -2.0f, 0.0f, 1.0f, -1.0f, 0.5f, -0.5f, 2.0f, -3.0f,
   };
   const float bias[kV3NumExperts] = {
       0.0f, 0.0f, 0.0f, 4.0f, 0.0f, 0.0f, -4.0f, 0.0f,
   };
-  float raw_scores[kV3NumExperts];
-  float choice_scores[kV3NumExperts];
-  for (uint32_t i = 0; i < kV3NumExperts; ++i) {
-    raw_scores[i] = sigmoid_score(logits[i]);
-    choice_scores[i] = raw_scores[i] + bias[i];
-  }
-
-  float group_scores[kV3NumGroups];
-  for (uint32_t group = 0; group < kV3NumGroups; ++group) {
-    group_scores[group] = top2_sum_group(choice_scores, group * kV3ExpertsPerGroup);
-  }
-
-  uint32_t selected_group = 0;
-  float selected_group_score = group_scores[0];
-  for (uint32_t group = 1; group < kV3NumGroups; ++group) {
-    if (better_score(group_scores[group], group, selected_group_score, selected_group)) {
-      selected_group = group;
-      selected_group_score = group_scores[group];
-    }
-  }
-
-  float top_scores[kV3TopK] = {-INFINITY, -INFINITY};
-  uint32_t top_ids[kV3TopK] = {0, 1};
-  const uint32_t start = selected_group * kV3ExpertsPerGroup;
-  for (uint32_t i = 0; i < kV3ExpertsPerGroup; ++i) {
-    const uint32_t expert = start + i;
-    insert_topk(choice_scores[expert], expert, top_scores, top_ids, kV3TopK);
-  }
-
-  float weight_sum = 0.0f;
-  for (uint32_t i = 0; i < kV3TopK; ++i) {
-    weight_sum += raw_scores[top_ids[i]];
-  }
-  const float scale = 2.5f / weight_sum;
-  for (uint32_t i = 0; i < kV3TopK; ++i) {
-    out->v3_ids[i] = top_ids[i];
-    out->v3_weights[i] = raw_scores[top_ids[i]] * scale;
-  }
+  dsr::route_v3_grouped_sigmoid(logits, bias, kV3NumExperts, kV3NumGroups,
+                                kV3TopKGroups, kV3TopK, 1u, 2.5f,
+                                out->v3_ids, out->v3_weights);
 }
 
 __device__ void run_v4_route(DeviceRouterOutput *out) {
+  namespace dsr = nerva::deepseek::router;
   const float logits[kV4NumExperts] = {-2.0f, 0.0f, 1.0f, 3.0f};
   const float bias[kV4NumExperts] = {0.0f, 3.0f, 0.0f, -3.0f};
-  float raw_scores[kV4NumExperts];
-  float top_scores[kV4TopK] = {-INFINITY, -INFINITY};
-  uint32_t top_ids[kV4TopK] = {0, 1};
-  for (uint32_t i = 0; i < kV4NumExperts; ++i) {
-    raw_scores[i] = sqrtsoftplus_score(logits[i]);
-    insert_topk(raw_scores[i] + bias[i], i, top_scores, top_ids, kV4TopK);
-  }
-
-  float weight_sum = 0.0f;
-  for (uint32_t i = 0; i < kV4TopK; ++i) {
-    weight_sum += raw_scores[top_ids[i]];
-  }
-  const float scale = 1.5f / weight_sum;
-  for (uint32_t i = 0; i < kV4TopK; ++i) {
-    out->v4_ids[i] = top_ids[i];
-    out->v4_weights[i] = raw_scores[top_ids[i]] * scale;
-  }
+  dsr::route_v4_sqrtsoftplus(logits, bias, kV4NumExperts, kV4TopK, 1u,
+                             1.5f, out->v4_ids, out->v4_weights);
 }
 
 __device__ void run_v4_hash_route(DeviceRouterOutput *out) {
+  namespace dsr = nerva::deepseek::router;
   const float logits[kV4NumExperts] = {4.0f, -1.0f, 0.0f, 2.0f};
   const uint32_t hash_ids[kV4HashTopK] = {2, 1, 3};
-  float weight_sum = 0.0f;
-  for (uint32_t i = 0; i < kV4HashTopK; ++i) {
-    const uint32_t expert = hash_ids[i];
-    out->v4_hash_ids[i] = expert;
-    out->v4_hash_weights[i] = sqrtsoftplus_score(logits[expert]);
-    weight_sum += out->v4_hash_weights[i];
-  }
-  for (uint32_t i = 0; i < kV4HashTopK; ++i) {
-    out->v4_hash_weights[i] /= weight_sum;
-  }
+  dsr::route_v4_hash(logits, hash_ids, kV4HashTopK, 0u, kV4NumExperts,
+                     kV4HashTopK, 1u, 1.0f, out->v4_hash_ids,
+                     out->v4_hash_weights);
 }
 
 __global__ void deepseek_router_smoke_kernel(DeviceRouterOutput *out) {
@@ -274,25 +160,28 @@ uint64_t hash_route(const uint32_t *ids, const float *weights, uint32_t len) {
 }
 
 void expected_v3(float *weights) {
-  const float raw3 = sigmoid_score(kV3Logits[3]);
-  const float raw2 = sigmoid_score(kV3Logits[2]);
+  namespace dsr = nerva::deepseek::router;
+  const float raw3 = dsr::sigmoid_score(kV3Logits[3]);
+  const float raw2 = dsr::sigmoid_score(kV3Logits[2]);
   const float scale = 2.5f / (raw3 + raw2);
   weights[0] = raw3 * scale;
   weights[1] = raw2 * scale;
 }
 
 void expected_v4(float *weights) {
-  const float raw1 = sqrtsoftplus_score(kV4Logits[1]);
-  const float raw2 = sqrtsoftplus_score(kV4Logits[2]);
+  namespace dsr = nerva::deepseek::router;
+  const float raw1 = dsr::sqrtsoftplus_score(kV4Logits[1]);
+  const float raw2 = dsr::sqrtsoftplus_score(kV4Logits[2]);
   const float scale = 1.5f / (raw1 + raw2);
   weights[0] = raw1 * scale;
   weights[1] = raw2 * scale;
 }
 
 void expected_v4_hash(float *weights) {
+  namespace dsr = nerva::deepseek::router;
   float sum = 0.0f;
   for (uint32_t i = 0; i < kV4HashTopK; ++i) {
-    weights[i] = sqrtsoftplus_score(kV4HashLogits[kV4HashExpectedIds[i]]);
+    weights[i] = dsr::sqrtsoftplus_score(kV4HashLogits[kV4HashExpectedIds[i]]);
     sum += weights[i];
   }
   for (uint32_t i = 0; i < kV4HashTopK; ++i) {

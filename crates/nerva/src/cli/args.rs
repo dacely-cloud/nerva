@@ -8,6 +8,9 @@ pub(crate) const DEFAULT_TEMPERATURE: f32 = 1.0;
 pub(crate) const DEFAULT_TOP_P: f32 = 0.95;
 pub(crate) const DEFAULT_TOP_K: u32 = 0;
 pub(crate) const DEFAULT_SEED: u64 = 0;
+pub(crate) const DEFAULT_SERVE_HOST: &str = "127.0.0.1";
+pub(crate) const DEFAULT_SERVE_PORT: u16 = 8000;
+pub(crate) const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1;
 
 #[derive(Debug)]
 pub(crate) struct GenerateArgs {
@@ -58,6 +61,55 @@ impl Default for GenerateArgs {
             profiling: false,
             json: false,
             debug: false,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ServeArgs {
+    pub model: Option<String>,
+    pub host: String,
+    pub port: u16,
+    pub context_tokens: Option<usize>,
+    pub output_tokens: Option<usize>,
+    pub queue_capacity: Option<usize>,
+    pub compute_capability: Option<u32>,
+    pub max_concurrent_requests: usize,
+    pub workers: Option<usize>,
+    pub max_blocking_threads: Option<usize>,
+    pub api_key: Option<String>,
+    pub rt: bool,
+    pub rt_mode: String,
+    pub rt_page_tokens: Option<usize>,
+    pub rt_pages: Option<usize>,
+    pub rt_far_pages: Option<usize>,
+    pub rt_local_window_tokens: Option<usize>,
+    pub rt_sink_tokens: Option<usize>,
+    pub profiling: bool,
+}
+
+impl Default for ServeArgs {
+    fn default() -> Self {
+        Self {
+            model: None,
+            host: DEFAULT_SERVE_HOST.to_string(),
+            port: DEFAULT_SERVE_PORT,
+            context_tokens: None,
+            output_tokens: None,
+            queue_capacity: None,
+            compute_capability: None,
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
+            workers: None,
+            max_blocking_threads: None,
+            api_key: None,
+            rt: false,
+            rt_mode: "auto".to_string(),
+            rt_page_tokens: None,
+            rt_pages: None,
+            rt_far_pages: None,
+            rt_local_window_tokens: None,
+            rt_sink_tokens: None,
+            profiling: false,
         }
     }
 }
@@ -118,6 +170,64 @@ struct ClapGenerateArgs {
     raw: bool,
     #[arg(long = "chat")]
     chat: bool,
+    #[arg(short = 'h', long = "help")]
+    help: bool,
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "nerva serve",
+    disable_help_flag = true,
+    about = "Serve an OpenAI-compatible HTTP API through NERVA"
+)]
+struct ClapServeArgs {
+    #[arg(short = 'm', long = "model")]
+    model: Option<String>,
+    #[arg(long = "host", default_value = DEFAULT_SERVE_HOST)]
+    host: String,
+    #[arg(long = "port", default_value_t = DEFAULT_SERVE_PORT)]
+    port: u16,
+    #[arg(short = 'c', long = "context", value_parser = parse_token_count)]
+    context_tokens: Option<usize>,
+    #[arg(
+        short = 'o',
+        long = "output",
+        alias = "max-new-tokens",
+        value_parser = parse_token_count
+    )]
+    output_tokens: Option<usize>,
+    #[arg(short = 'q', long = "queue", value_parser = parse_token_count)]
+    queue_capacity: Option<usize>,
+    #[arg(long = "compute-cap", alias = "compute-capability")]
+    compute_capability: Option<u32>,
+    #[arg(
+        long = "max-concurrent-requests",
+        default_value_t = DEFAULT_MAX_CONCURRENT_REQUESTS,
+        value_parser = parse_token_count
+    )]
+    max_concurrent_requests: usize,
+    #[arg(long = "workers", value_parser = parse_token_count)]
+    workers: Option<usize>,
+    #[arg(long = "max-blocking-threads", value_parser = parse_token_count)]
+    max_blocking_threads: Option<usize>,
+    #[arg(long = "api-key", env = "NERVA_OPENAI_API_KEY")]
+    api_key: Option<String>,
+    #[arg(long = "profiling")]
+    profiling: bool,
+    #[arg(long = "rt")]
+    rt: bool,
+    #[arg(long = "rt-mode", value_parser = ["auto", "shadow", "sparse"])]
+    rt_mode: Option<String>,
+    #[arg(long = "rt-page-tokens", value_parser = parse_token_count)]
+    rt_page_tokens: Option<usize>,
+    #[arg(long = "rt-pages", value_parser = parse_token_count)]
+    rt_pages: Option<usize>,
+    #[arg(long = "rt-far-pages", value_parser = parse_token_count)]
+    rt_far_pages: Option<usize>,
+    #[arg(long = "rt-local-window", value_parser = parse_token_count)]
+    rt_local_window_tokens: Option<usize>,
+    #[arg(long = "rt-sink-tokens", value_parser = parse_token_count)]
+    rt_sink_tokens: Option<usize>,
     #[arg(short = 'h', long = "help")]
     help: bool,
 }
@@ -183,6 +293,61 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
     })
 }
 
+pub(crate) fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
+    let argv = std::iter::once("nerva serve".to_string())
+        .chain(args.iter().map(|arg| {
+            if arg == "-rt" {
+                "--rt".to_string()
+            } else {
+                arg.clone()
+            }
+        }))
+        .collect::<Vec<_>>();
+    let parsed = ClapServeArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
+    if parsed.help {
+        return Err(
+            "usage: cargo run -p nerva -- serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [--max-concurrent-requests count] [--workers count] [--max-blocking-threads count] [--api-key key] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling]"
+                .to_string(),
+        );
+    }
+    validate_positive_count("--max-concurrent-requests", Some(parsed.max_concurrent_requests))?;
+    validate_positive_count("--workers", parsed.workers)?;
+    validate_positive_count("--max-blocking-threads", parsed.max_blocking_threads)?;
+    validate_positive_count("--rt-page-tokens", parsed.rt_page_tokens)?;
+    validate_positive_count("--rt-pages", parsed.rt_pages)?;
+    validate_positive_count("--rt-far-pages", parsed.rt_far_pages)?;
+    if parsed.rt_pages.is_some() && parsed.rt_far_pages.is_some() {
+        return Err("--rt-pages and --rt-far-pages are mutually exclusive".to_string());
+    }
+    let rt_mode = parsed.rt_mode.unwrap_or_else(|| "auto".to_string());
+    let rt_knobs_requested = parsed.rt_page_tokens.is_some()
+        || parsed.rt_pages.is_some()
+        || parsed.rt_far_pages.is_some()
+        || parsed.rt_local_window_tokens.is_some()
+        || parsed.rt_sink_tokens.is_some();
+    Ok(ServeArgs {
+        model: parsed.model,
+        host: parsed.host,
+        port: parsed.port,
+        context_tokens: parsed.context_tokens,
+        output_tokens: parsed.output_tokens,
+        queue_capacity: parsed.queue_capacity,
+        compute_capability: parsed.compute_capability,
+        max_concurrent_requests: parsed.max_concurrent_requests,
+        workers: parsed.workers,
+        max_blocking_threads: parsed.max_blocking_threads,
+        api_key: parsed.api_key,
+        rt: parsed.rt || rt_mode != "auto" || rt_knobs_requested,
+        rt_mode,
+        rt_page_tokens: parsed.rt_page_tokens,
+        rt_pages: parsed.rt_pages,
+        rt_far_pages: parsed.rt_far_pages,
+        rt_local_window_tokens: parsed.rt_local_window_tokens,
+        rt_sink_tokens: parsed.rt_sink_tokens,
+        profiling: parsed.profiling,
+    })
+}
+
 fn validate_sampling(temperature: f32, top_p: f32) -> Result<(), String> {
     if !temperature.is_finite() || temperature < 0.0 {
         return Err("--temperature must be finite and >= 0".to_string());
@@ -233,7 +398,7 @@ fn parse_top_k_count(value: &str) -> Result<u32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, parse_token_count, PromptFormat};
+    use super::{parse_args, parse_serve_args, parse_token_count, PromptFormat};
 
     #[test]
     fn parses_k_token_counts() {
@@ -389,5 +554,60 @@ mod tests {
         assert_eq!(parsed.top_p, 0.95);
         assert_eq!(parsed.top_k, 0);
         assert_eq!(parsed.seed, None);
+    }
+
+    #[test]
+    fn parses_serve_flags() {
+        let args = [
+            "-m",
+            "qwen3-8b",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9000",
+            "-c",
+            "32k",
+            "-o",
+            "512",
+            "--max-concurrent-requests",
+            "2",
+            "--workers",
+            "4",
+            "--max-blocking-threads",
+            "8",
+            "--api-key",
+            "secret",
+            "--rt-mode",
+            "sparse",
+            "--rt-far-pages",
+            "16",
+            "--profiling",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let parsed = parse_serve_args(&args).unwrap();
+        assert_eq!(parsed.model.as_deref(), Some("qwen3-8b"));
+        assert_eq!(parsed.host, "0.0.0.0");
+        assert_eq!(parsed.port, 9000);
+        assert_eq!(parsed.context_tokens, Some(32 * 1024));
+        assert_eq!(parsed.output_tokens, Some(512));
+        assert_eq!(parsed.max_concurrent_requests, 2);
+        assert_eq!(parsed.workers, Some(4));
+        assert_eq!(parsed.max_blocking_threads, Some(8));
+        assert_eq!(parsed.api_key.as_deref(), Some("secret"));
+        assert!(parsed.rt);
+        assert_eq!(parsed.rt_mode, "sparse");
+        assert_eq!(parsed.rt_far_pages, Some(16));
+        assert!(parsed.profiling);
+    }
+
+    #[test]
+    fn rejects_zero_serve_concurrency() {
+        let args = ["-m", "qwen3-8b", "--max-concurrent-requests", "0"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(parse_serve_args(&args).is_err());
     }
 }
