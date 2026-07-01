@@ -347,6 +347,13 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
             .any(|item| item == "cuda_hf_sequence_deepseek_v4_parallel_indexer_kv_pack_runtime"),
         "DeepSeek V4 parallel indexer KV pack primitive must be reported"
     );
+    assert!(
+        compressor
+            .validated_primitives
+            .iter()
+            .any(|item| item == "cuda_hf_sequence_deepseek_v4_c4_indexer_kv_page_contents"),
+        "DeepSeek V4 C4 indexer KV page contents primitive must be reported"
+    );
     let sparse_indexer = coverage
         .iter()
         .find(|unit| unit.unit == "deepseek_v4_sparse_indexer")

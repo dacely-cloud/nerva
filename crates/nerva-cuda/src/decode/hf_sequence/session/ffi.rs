@@ -474,6 +474,10 @@ unsafe extern "C" {
         request: *const NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest,
         out: *mut NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult,
     ) -> c_int;
+    fn nerva_cuda_hf_decode_sequence_deepseek_v4_indexer_kv_snapshot(
+        request: *const NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest,
+        out: *mut NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult,
+    ) -> c_int;
     fn nerva_cuda_hf_decode_sequence_deepseek_v4_mhc_snapshot(
         request: *const NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotRequest,
         out: *mut NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotResult,
@@ -574,6 +578,13 @@ pub(crate) fn snapshot_deepseek_v4_compressed_kv(
     out: &mut NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult,
 ) -> c_int {
     unsafe { nerva_cuda_hf_decode_sequence_deepseek_v4_compressed_kv_snapshot(request, out) }
+}
+
+pub(crate) fn snapshot_deepseek_v4_indexer_kv(
+    request: &NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest,
+    out: &mut NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult,
+) -> c_int {
+    unsafe { nerva_cuda_hf_decode_sequence_deepseek_v4_indexer_kv_snapshot(request, out) }
 }
 
 pub(crate) fn snapshot_deepseek_v4_mhc(

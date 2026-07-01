@@ -273,6 +273,43 @@ fn expected_zero_deepseek_v4_swa_fp8_ds_mla_page(
     )
 }
 
+fn expected_deepseek_v4_indexer_fp8_page(
+    token_kv: &[Vec<f32>],
+    head_dim: usize,
+    page_bytes: usize,
+) -> Vec<u8> {
+    let block_tokens = 64usize;
+    let scale_count = head_dim.div_ceil(128);
+    let scale_dim = scale_count * core::mem::size_of::<f32>();
+    let scale_base = block_tokens * head_dim;
+    let mut expected = vec![0u8; page_bytes];
+    for (token, kv) in token_kv.iter().enumerate() {
+        assert!(token < block_tokens);
+        assert_eq!(kv.len(), head_dim);
+        let data_base = token * head_dim;
+        for scale_index in 0..scale_count {
+            let start = scale_index * 128;
+            let end = (start + 128).min(head_dim);
+            let mut absmax = 0.0f32;
+            for value in kv.iter().take(end).skip(start) {
+                let quant_input = bf16_to_f32(f32_to_bf16_bits(*value));
+                absmax = absmax.max(quant_input.abs());
+            }
+            let scale = (absmax.max(1.0e-4) / 448.0).log2().ceil().exp2();
+            let scale_offset =
+                scale_base + token * scale_dim + scale_index * core::mem::size_of::<f32>();
+            expected[scale_offset..scale_offset + core::mem::size_of::<f32>()]
+                .copy_from_slice(&scale.to_le_bytes());
+            for (dim, value) in kv.iter().enumerate().take(end).skip(start) {
+                let quant_input = bf16_to_f32(f32_to_bf16_bits(*value));
+                let scaled = (quant_input / scale).clamp(-448.0, 448.0);
+                expected[data_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+            }
+        }
+    }
+    expected
+}
+
 fn descriptor_source_element(arena_offset: u64, hidden: usize, vocab_size: usize) -> usize {
     let offset = arena_offset as usize;
     let embedding_elements = hidden * vocab_size;
@@ -4028,6 +4065,26 @@ fn deepseek_v4_compressed_indexer_writes_first_boundary_cache() {
             deepseek_sparse_topk_selection_hash(&[(3, &[0])]),
             "V4 C4 sparse indexer should select the first compressed slot at the first compression boundary"
         );
+
+        let snapshot = session.deepseek_v4_indexer_kv_snapshot(0, 576);
+        assert_eq!(
+            snapshot.status,
+            SmokeStatus::Ok,
+            "V4 compressed-indexer KV snapshot should copy device cache: {:?}",
+            snapshot.error
+        );
+        assert_eq!(snapshot.block_count, 1);
+        assert_eq!(snapshot.layer_offset_bytes, 0);
+        assert_eq!(snapshot.layer_bytes, 576);
+        assert_eq!(snapshot.page_bytes, 576);
+        assert_eq!(snapshot.copied_bytes, 576);
+        let expected = expected_deepseek_v4_indexer_fp8_page(&[vec![0.0; 2]], 2, 576);
+        assert_page_bytes_eq(
+            &snapshot.bytes,
+            &expected,
+            "V4 C4 indexer KV page must match vLLM packed fp8+f32-scale offsets",
+        );
+        assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
     });
 }
 
@@ -4509,6 +4566,26 @@ fn deepseek_v4_compressed_indexer_writes_multi_scale_indexer_cache_width() {
         assert_eq!(summary.deepseek_indexer_state_writes, summary.graph_replays);
         assert_eq!(summary.deepseek_indexer_kv_writes, 1);
         assert_eq!(summary.deepseek_sparse_topk_selections, 1);
+
+        let snapshot = session.deepseek_v4_indexer_kv_snapshot(0, 9216);
+        assert_eq!(
+            snapshot.status,
+            SmokeStatus::Ok,
+            "V4 compressed-indexer multi-scale KV snapshot should copy device cache: {:?}",
+            snapshot.error
+        );
+        assert_eq!(snapshot.block_count, 1);
+        assert_eq!(snapshot.layer_offset_bytes, 0);
+        assert_eq!(snapshot.layer_bytes, 9216);
+        assert_eq!(snapshot.page_bytes, 9216);
+        assert_eq!(snapshot.copied_bytes, 9216);
+        let expected = expected_deepseek_v4_indexer_fp8_page(&[vec![0.0; 132]], 132, 9216);
+        assert_page_bytes_eq(
+            &snapshot.bytes,
+            &expected,
+            "V4 C4 indexer KV page must write both f32 scale tiles in vLLM packed layout",
+        );
+        assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
     });
 }
 

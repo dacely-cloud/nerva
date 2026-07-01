@@ -403,6 +403,70 @@ nerva_cuda_hf_decode_sequence_deepseek_v4_compressed_kv_snapshot(
   return 0;
 }
 
+extern "C" int
+nerva_cuda_hf_decode_sequence_deepseek_v4_indexer_kv_snapshot(
+    const NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest
+        *request,
+    NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult *out) {
+  if (out == nullptr) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+  out->status = -1;
+  if (request == nullptr || request->session == nullptr ||
+      request->output_bytes == nullptr || request->output_byte_capacity == 0) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorInvalidValue);
+    return -1;
+  }
+  NervaCudaHfDecodeSequenceSession *session = request->session;
+  out->layer_index = request->layer_index;
+  if (request->layer_index >= session->host_layouts.size() ||
+      session->device_deepseek_indexer_kv == nullptr ||
+      session->deepseek_indexer_kv_bytes == 0) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorInvalidValue);
+    return -1;
+  }
+  const SequenceLayerLayout &layout =
+      session->host_layouts[request->layer_index];
+  const uint64_t layer_offset =
+      deepseek_v4_indexer_kv_layer_offset_bytes(session, request->layer_index);
+  const uint64_t layer_bytes =
+      deepseek_v4_indexer_kv_layer_bytes(layout, session->max_context_tokens);
+  const uint32_t block_count =
+      deepseek_v4_compressed_kv_block_count(session, layout);
+  const uint64_t page_bytes = deepseek_v4_indexer_kv_page_bytes(layout);
+  if (layer_bytes == 0 || block_count == 0 ||
+      layer_offset > session->deepseek_indexer_kv_bytes ||
+      layer_bytes > session->deepseek_indexer_kv_bytes - layer_offset) {
+    out->cuda_error = static_cast<int32_t>(cudaErrorInvalidValue);
+    return -1;
+  }
+  const uint64_t copy_bytes =
+      std::min(layer_bytes, request->output_byte_capacity);
+  cudaError_t err =
+      cudaMemcpy(request->output_bytes,
+                 session->device_deepseek_indexer_kv + layer_offset,
+                 copy_bytes, cudaMemcpyDeviceToHost);
+  if (err != cudaSuccess) {
+    out->cuda_error = static_cast<int32_t>(err);
+    return -1;
+  }
+  uint64_t hash = kFnvOffset;
+  for (uint64_t index = 0; index < copy_bytes; ++index) {
+    hash ^= static_cast<uint64_t>(request->output_bytes[index]);
+    hash *= kFnvPrime;
+  }
+  out->status = 0;
+  out->layer_index = request->layer_index;
+  out->block_count = block_count;
+  out->layer_offset_bytes = layer_offset;
+  out->layer_bytes = layer_bytes;
+  out->page_bytes = page_bytes;
+  out->copied_bytes = copy_bytes;
+  out->output_hash = hash;
+  return 0;
+}
+
 extern "C" int nerva_cuda_hf_decode_sequence_deepseek_v4_mhc_snapshot(
     const NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotRequest *request,
     NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotResult *out) {
