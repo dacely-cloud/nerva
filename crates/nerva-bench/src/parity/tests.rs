@@ -1,5 +1,6 @@
 use crate::parity::run::{compare_token_identity_artifacts, compare_vllm_token_identity};
 use crate::parity::summary::TokenIdentityParityStatus;
+use nerva_core::types::id::token::TokenId;
 
 #[test]
 fn accepts_vllm_nested_token_ids_for_exact_identity() {
@@ -40,6 +41,19 @@ fn reports_missing_and_extra_tokens() {
     assert_eq!(extra.missing_tokens, 0);
     assert_eq!(extra.extra_tokens, 1);
     assert_eq!(extra.first_mismatch_index, Some(4));
+}
+
+#[test]
+fn token_parser_skips_matching_string_values() {
+    let summary = compare_token_identity_artifacts(
+        r#"{"prompt_mode":"token_ids","prompt_token_ids":[10,11],"tokens":[1,2]}"#,
+        r#"{"tokens":[1,2],"hot_path_allocations":0}"#,
+    )
+    .unwrap();
+
+    assert!(summary.passed());
+    assert_eq!(summary.source_format, "tokens");
+    assert_eq!(summary.vllm_tokens, vec![TokenId(1), TokenId(2)]);
 }
 
 #[test]

@@ -21,7 +21,8 @@ from typing import Any
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
-    parser.add_argument("--prompt", required=True)
+    parser.add_argument("--prompt")
+    parser.add_argument("--prompt-token-ids-json")
     parser.add_argument("--max-model-len", type=int, required=True)
     parser.add_argument("--max-tokens", type=int, required=True)
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -68,6 +69,23 @@ def resolve_prompt(prompt_spec: str) -> tuple[str, str]:
     return path.read_text(), "file"
 
 
+def parse_prompt_token_ids(source: str) -> list[int]:
+    try:
+        value = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise ValueError("--prompt-token-ids-json must be a JSON integer array") from exc
+    if not isinstance(value, list):
+        raise ValueError("--prompt-token-ids-json must be a JSON integer array")
+    token_ids: list[int] = []
+    for index, token in enumerate(value):
+        if not isinstance(token, int) or token < 0:
+            raise ValueError(
+                f"--prompt-token-ids-json entry {index} must be a non-negative integer"
+            )
+        token_ids.append(int(token))
+    return token_ids
+
+
 def token_ids_from_output(output: Any) -> list[int]:
     token_ids = getattr(output, "token_ids", None)
     if token_ids is None:
@@ -100,7 +118,13 @@ def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[s
             {
                 "vllm_root": str(Path(args.vllm_root).resolve()),
                 "model": args.model,
-                "prompt_mode": "file" if args.prompt.startswith("@") else "literal",
+                "prompt_mode": (
+                    "token_ids"
+                    if args.prompt_token_ids_json is not None
+                    else "file"
+                    if args.prompt is not None and args.prompt.startswith("@")
+                    else "literal"
+                ),
                 "max_model_len": args.max_model_len,
                 "max_tokens": args.max_tokens,
                 "runs": args.runs,
@@ -143,7 +167,18 @@ def run_generation(args: argparse.Namespace) -> None:
         raise ValueError("--runs must be positive")
     if args.warmup_runs < 0:
         raise ValueError("--warmup-runs must be zero or positive")
-    prompt, prompt_mode = resolve_prompt(args.prompt)
+    if args.prompt is None and args.prompt_token_ids_json is None:
+        raise ValueError("--prompt or --prompt-token-ids-json is required")
+    if args.prompt is not None and args.prompt_token_ids_json is not None:
+        raise ValueError("--prompt and --prompt-token-ids-json are mutually exclusive")
+    prompt: str | None = None
+    prompt_mode = "token_ids"
+    prompt_token_ids: list[int]
+    if args.prompt_token_ids_json is not None:
+        prompt_token_ids = parse_prompt_token_ids(args.prompt_token_ids_json)
+    else:
+        assert args.prompt is not None
+        prompt, prompt_mode = resolve_prompt(args.prompt)
 
     vllm_root = Path(args.vllm_root).resolve()
     if not vllm_root.is_dir():
@@ -187,7 +222,8 @@ def run_generation(args: argparse.Namespace) -> None:
     )
 
     tokenizer = llm.get_tokenizer()
-    prompt_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
+    if prompt is not None:
+        prompt_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
     outputs = None
     warmup_elapsed_ns: list[int] = []
     for _ in range(args.warmup_runs):

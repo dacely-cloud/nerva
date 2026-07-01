@@ -44,7 +44,7 @@ fn find_json_array_for_key(source: &str, key: &str) -> Result<Option<usize>, Str
         }
         let colon = skip_ws(bytes, after_field);
         if bytes.get(colon) != Some(&b':') {
-            return Err(format!("JSON key {key} is missing ':'"));
+            continue;
         }
         let value_start = skip_ws(bytes, colon + 1);
         if bytes.get(value_start) == Some(&b'[') {

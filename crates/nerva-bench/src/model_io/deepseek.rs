@@ -4,6 +4,7 @@ use std::{
     time::Instant,
 };
 
+use nerva_core::types::id::token::TokenId;
 use nerva_cuda::deepseek_kv::c4_indexer_topk::deepseek_c4_indexer_topk;
 use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
@@ -465,6 +466,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
     let vllm_artifact = artifact_dir.join("vllm.json");
     let nerva_artifact = artifact_dir.join("nerva.json");
     let compare_artifact = artifact_dir.join("compare.json");
+    let vllm_prefix_artifact = artifact_dir.join("vllm_prefix.json");
 
     let mut vllm_options = DeepSeekVllmCommandOptions::default();
     let mut vllm_command = deepseek_vllm_generate_command(
@@ -532,6 +534,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
             vllm_options,
             Some(&nerva_run),
             None,
+            None,
         ));
     }
     if vllm_run.status != 0 {
@@ -552,6 +555,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
             vllm_options,
             Some(&nerva_run),
             None,
+            None,
         ));
     }
 
@@ -569,6 +573,20 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
     })?;
     let compare_status = find_first_json_string_field(&compare_json, "status")?
         .unwrap_or_else(|| "unknown".to_string());
+    let prefix_probe = if compare_status == "mismatch" {
+        run_deepseek_vllm_prefix_probe(
+            &repo_root,
+            &vllm_root,
+            &checkpoint_dir,
+            max_context_tokens,
+            vllm_options,
+            &vllm_prefix_artifact,
+            &vllm_run.json,
+            &nerva_run.json,
+        )?
+    } else {
+        None
+    };
     let status = if compare_status == "ok" {
         "ok"
     } else {
@@ -590,6 +608,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
         vllm_options,
         Some(&nerva_run),
         Some(&compare_json),
+        prefix_probe.as_ref(),
     ))
 }
 
@@ -2531,6 +2550,13 @@ struct DeepSeekCommandRun {
     stderr_tail: String,
 }
 
+struct DeepSeekVllmPrefixProbe {
+    artifact: PathBuf,
+    command: Vec<String>,
+    run: DeepSeekCommandRun,
+    summary_json: String,
+}
+
 const COMMAND_OUTPUT_TAIL_CHARS: usize = 65_536;
 
 #[derive(Clone, Copy)]
@@ -2724,6 +2750,78 @@ fn deepseek_vllm_generate_command_with_options(
     command
 }
 
+fn deepseek_vllm_generate_token_ids_command_with_options(
+    repo_root: &Path,
+    vllm_root: &Path,
+    checkpoint_dir: &str,
+    prompt_token_ids: &[TokenId],
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    options: DeepSeekVllmCommandOptions,
+) -> Vec<String> {
+    let venv_python = vllm_root.join(".venv/bin/python");
+    let python = if venv_python.is_file() {
+        venv_python.display().to_string()
+    } else {
+        "python3".to_string()
+    };
+    let mut command = vec![
+        python,
+        repo_root
+            .join("tools/deepseek_vllm_generate.py")
+            .display()
+            .to_string(),
+        "--vllm-root".to_string(),
+        vllm_root.display().to_string(),
+        "--model".to_string(),
+        checkpoint_dir.to_string(),
+        "--prompt-token-ids-json".to_string(),
+        token_ids_to_json(prompt_token_ids),
+        "--max-model-len".to_string(),
+        max_context_tokens.to_string(),
+        "--max-tokens".to_string(),
+        max_new_tokens.to_string(),
+        "--temperature".to_string(),
+        "0".to_string(),
+        "--top-p".to_string(),
+        "1".to_string(),
+        "--top-k".to_string(),
+        "0".to_string(),
+        "--seed".to_string(),
+        "0".to_string(),
+        "--dtype".to_string(),
+        "bfloat16".to_string(),
+        "--gpu-memory-utilization".to_string(),
+        options.gpu_memory_utilization.to_string(),
+        "--linear-backend".to_string(),
+        options.linear_backend.to_string(),
+        "--moe-backend".to_string(),
+        options.moe_backend.to_string(),
+        "--attention-backend".to_string(),
+        options.attention_backend.to_string(),
+        "--runs".to_string(),
+        "1".to_string(),
+        "--warmup-runs".to_string(),
+        "0".to_string(),
+    ];
+    command.push(if options.trust_remote_code {
+        "--trust-remote-code".to_string()
+    } else {
+        "--no-trust-remote-code".to_string()
+    });
+    if options.enforce_eager {
+        command.push("--enforce-eager".to_string());
+    }
+    if options.disable_flashinfer_autotune {
+        command.push("--disable-flashinfer-autotune".to_string());
+    }
+    if let Some(deep_gemm_warmup) = options.deep_gemm_warmup {
+        command.push("--deep-gemm-warmup".to_string());
+        command.push(deep_gemm_warmup.to_string());
+    }
+    command
+}
+
 fn deepseek_nerva_generate_command(
     checkpoint_dir: &str,
     prompt_spec: &str,
@@ -2756,6 +2854,105 @@ fn deepseek_nerva_generate_command(
         "--seed".to_string(),
         "0".to_string(),
     ]
+}
+
+fn run_deepseek_vllm_prefix_probe(
+    repo_root: &Path,
+    vllm_root: &Path,
+    checkpoint_dir: &str,
+    max_context_tokens: usize,
+    vllm_options: DeepSeekVllmCommandOptions,
+    artifact: &Path,
+    vllm_json: &str,
+    nerva_json: &str,
+) -> Result<Option<DeepSeekVllmPrefixProbe>, String> {
+    let (_, vllm_tokens) = parse_vllm_token_ids(vllm_json)?;
+    let (_, nerva_tokens) = parse_vllm_token_ids(nerva_json)?;
+    let comparison = compare_token_slices(&vllm_tokens, &nerva_tokens);
+    let Some(first_mismatch_index) = comparison.first_mismatch_index else {
+        return Ok(None);
+    };
+    let Some(prompt_tokens) = parse_token_ids_for_key(vllm_json, "prompt_token_ids")? else {
+        return Ok(None);
+    };
+    let Some(vllm_sequential_token) = vllm_tokens.get(first_mismatch_index).copied() else {
+        return Ok(None);
+    };
+    let Some(nerva_token) = nerva_tokens.get(first_mismatch_index).copied() else {
+        return Ok(None);
+    };
+
+    let mut prefix_tokens = prompt_tokens.clone();
+    prefix_tokens.extend(vllm_tokens.iter().take(first_mismatch_index).copied());
+    let command = deepseek_vllm_generate_token_ids_command_with_options(
+        repo_root,
+        vllm_root,
+        checkpoint_dir,
+        &prefix_tokens,
+        max_context_tokens,
+        1,
+        vllm_options,
+    );
+    let run = run_json_command(&command, repo_root)?;
+    std::fs::write(artifact, &run.json).map_err(|err| {
+        format!(
+            "failed to write vLLM prefix artifact {}: {err}",
+            artifact.display()
+        )
+    })?;
+    let vllm_prefix_token = if run.status == 0 {
+        parse_vllm_token_ids(&run.json)
+            .ok()
+            .and_then(|(_, tokens)| tokens.first().copied())
+    } else {
+        None
+    };
+    let status = deepseek_vllm_self_consistency_status(
+        run.status,
+        vllm_prefix_token,
+        Some(vllm_sequential_token),
+        Some(nerva_token),
+    );
+    let summary_json = format!(
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-self-consistency-v1\",\"first_mismatch_index\":{},\"matched_tokens\":{},\"prefix_prompt_tokens\":{},\"prefix_generated_tokens\":{},\"prefix_total_tokens\":{},\"vllm_sequential_token\":{},\"nerva_token\":{},\"vllm_prefix_token\":{},\"vllm_prefix_matches_sequential\":{},\"vllm_prefix_matches_nerva\":{},\"probe_exit_status\":{},\"artifact\":\"{}\"}}",
+        status,
+        first_mismatch_index,
+        comparison.matched_tokens,
+        prompt_tokens.len(),
+        first_mismatch_index,
+        prefix_tokens.len(),
+        json_opt_token_id(Some(vllm_sequential_token)),
+        json_opt_token_id(Some(nerva_token)),
+        json_opt_token_id(vllm_prefix_token),
+        vllm_prefix_token == Some(vllm_sequential_token),
+        vllm_prefix_token == Some(nerva_token),
+        run.status,
+        json_escape(&artifact.display().to_string()),
+    );
+    Ok(Some(DeepSeekVllmPrefixProbe {
+        artifact: artifact.to_path_buf(),
+        command,
+        run,
+        summary_json,
+    }))
+}
+
+fn deepseek_vllm_self_consistency_status(
+    probe_exit_status: i32,
+    vllm_prefix_token: Option<TokenId>,
+    vllm_sequential_token: Option<TokenId>,
+    nerva_token: Option<TokenId>,
+) -> &'static str {
+    if probe_exit_status != 0 {
+        return "probe_failed";
+    }
+    match (vllm_prefix_token, vllm_sequential_token, nerva_token) {
+        (None, _, _) => "probe_no_token",
+        (Some(prefix), Some(sequential), _) if prefix == sequential => "vllm_sequential_consistent",
+        (Some(prefix), _, Some(nerva)) if prefix == nerva => "vllm_prefill_matches_nerva",
+        (Some(_), Some(_), Some(_)) => "vllm_prefill_third_token",
+        (Some(_), _, _) => "not_comparable",
+    }
 }
 
 fn run_json_command(command: &[String], cwd: &Path) -> Result<DeepSeekCommandRun, String> {
@@ -2980,6 +3177,7 @@ fn deepseek_benchmark_run_json(
     vllm_options: DeepSeekVllmCommandOptions,
     nerva_run: Option<&DeepSeekCommandRun>,
     compare_json: Option<&str>,
+    prefix_probe: Option<&DeepSeekVllmPrefixProbe>,
 ) -> String {
     let claim_allowed = compare_json
         .and_then(|json| find_first_json_string_field(json, "status").ok().flatten())
@@ -2990,7 +3188,7 @@ fn deepseek_benchmark_run_json(
         _ => "null".to_string(),
     };
     format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-run-v1\",\"checkpoint_dir\":\"{}\",\"prompt_spec\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_options\":{},\"artifact_dir\":\"{}\",\"artifacts\":{{\"vllm\":\"{}\",\"nerva\":\"{}\",\"compare\":\"{}\"}},\"commands\":{{\"vllm_generate\":{},\"nerva_generate\":{}}},\"runs\":{{\"vllm\":{},\"nerva\":{}}},\"compare\":{},\"failure\":{},\"claim_allowed\":{}}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-run-v1\",\"checkpoint_dir\":\"{}\",\"prompt_spec\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"vllm_options\":{},\"artifact_dir\":\"{}\",\"artifacts\":{{\"vllm\":\"{}\",\"nerva\":\"{}\",\"compare\":\"{}\",\"vllm_prefix\":{}}},\"commands\":{{\"vllm_generate\":{},\"nerva_generate\":{},\"vllm_prefix_generate\":{}}},\"runs\":{{\"vllm\":{},\"nerva\":{},\"vllm_prefix\":{}}},\"compare\":{},\"vllm_self_consistency\":{},\"failure\":{},\"claim_allowed\":{}}}",
         status,
         json_escape(checkpoint_dir),
         json_escape(prompt_spec),
@@ -3001,11 +3199,19 @@ fn deepseek_benchmark_run_json(
         json_escape(&vllm_artifact.display().to_string()),
         json_escape(&nerva_artifact.display().to_string()),
         json_escape(&compare_artifact.display().to_string()),
+        json_opt_string(
+            prefix_probe
+                .map(|probe| probe.artifact.display().to_string())
+                .as_deref()
+        ),
         json_string_array(vllm_command),
         json_string_array(nerva_command),
+        json_opt_string_array(prefix_probe.map(|probe| probe.command.as_slice())),
         command_run_json(Some(vllm_run)),
         command_run_json(nerva_run),
+        command_run_json(prefix_probe.map(|probe| &probe.run)),
         compare_json.unwrap_or("null"),
+        prefix_probe.map_or("null", |probe| probe.summary_json.as_str()),
         failure_json,
         claim_allowed,
     )
@@ -3022,8 +3228,28 @@ fn json_opt_string(value: Option<&str>) -> String {
     )
 }
 
+fn json_opt_string_array(value: Option<&[String]>) -> String {
+    value.map_or_else(|| "null".to_string(), json_string_array)
+}
+
+fn token_ids_to_json(tokens: &[TokenId]) -> String {
+    let mut out = String::from("[");
+    for (index, token) in tokens.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&token.0.to_string());
+    }
+    out.push(']');
+    out
+}
+
 fn json_opt_usize(value: Option<usize>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
+fn json_opt_token_id(value: Option<TokenId>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.0.to_string())
 }
 
 fn json_opt_u64(value: Option<u64>) -> String {
@@ -3326,9 +3552,12 @@ fn skip_json_ws(bytes: &[u8], mut index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use nerva_core::types::id::token::TokenId;
+
     use super::{
-        DeepSeekCommandRun, command_failure_diagnosis, find_first_json_string_field,
-        vllm_benchmark_failure_status, vllm_deepseek_reference_retryable_failure,
+        DeepSeekCommandRun, command_failure_diagnosis, deepseek_vllm_self_consistency_status,
+        find_first_json_string_field, vllm_benchmark_failure_status,
+        vllm_deepseek_reference_retryable_failure,
     };
 
     #[test]
@@ -3381,6 +3610,32 @@ mod tests {
                 .to_string(),
         };
         assert!(vllm_deepseek_reference_retryable_failure(&oom));
+    }
+
+    #[test]
+    fn deepseek_vllm_self_consistency_classifies_prefix_result() {
+        assert_eq!(
+            deepseek_vllm_self_consistency_status(
+                0,
+                Some(TokenId(117138)),
+                Some(TokenId(81280)),
+                Some(TokenId(117138)),
+            ),
+            "vllm_prefill_matches_nerva"
+        );
+        assert_eq!(
+            deepseek_vllm_self_consistency_status(
+                0,
+                Some(TokenId(81280)),
+                Some(TokenId(81280)),
+                Some(TokenId(117138)),
+            ),
+            "vllm_sequential_consistent"
+        );
+        assert_eq!(
+            deepseek_vllm_self_consistency_status(1, None, Some(TokenId(1)), Some(TokenId(2))),
+            "probe_failed"
+        );
     }
 }
 
