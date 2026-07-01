@@ -85,7 +85,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     float *deepseek_mhc_residual, float *deepseek_mhc_post_mix,
     float *deepseek_mhc_comb_mix,
     uint64_t *deepseek_runtime_counters, uint32_t local_window_tokens,
-    uint32_t preprojected_qk);
+    uint32_t preprojected_qk, uint32_t precomputed_compressor_state,
+    uint32_t precomputed_indexer_state);
 __global__ void hf_deepseek_v4_q_a_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
     uint32_t heads, uint32_t head_dim, uint32_t intermediate,
@@ -96,6 +97,21 @@ __global__ void hf_deepseek_v4_finalize_preprojected_qk_kernel(
     uint32_t hidden, uint32_t heads, uint32_t head_dim,
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float rms_eps, float rope_theta, float *scratch);
+__global__ void hf_deepseek_v4_compressor_state_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t head_dim, uint32_t *step_cursor,
+    uint32_t max_steps, const uint16_t *projection_input,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    float *deepseek_compressor_state,
+    uint64_t deepseek_compressor_state_offset_bytes,
+    uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v4_indexer_state_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
+    const uint16_t *projection_input, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, float *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v4_attn_mhc_pre_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t heads, uint32_t head_dim,

@@ -120,6 +120,155 @@ __global__ void hf_deepseek_v4_finalize_preprojected_qk_kernel(
   }
 }
 
+__global__ void hf_deepseek_v4_compressor_state_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t head_dim, uint32_t *step_cursor,
+    uint32_t max_steps, const uint16_t *projection_input,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    float *deepseek_compressor_state,
+    uint64_t deepseek_compressor_state_offset_bytes,
+    uint64_t *deepseek_runtime_counters) {
+  if ((step_cursor != nullptr && *step_cursor >= max_steps) ||
+      arena == nullptr || projection_input == nullptr ||
+      deepseek_compressor_state == nullptr || hidden == 0 ||
+      head_dim == 0 || dtype > kDTypeBF16 ||
+      layout.deepseek_compress_ratio <= 1 ||
+      layout.deepseek_compressor_wkv == kMissingOffset ||
+      layout.deepseek_compressor_wgate == kMissingOffset ||
+      layout.deepseek_compressor_ape == kMissingOffset ||
+      (layout.deepseek_mode != kDeepSeekModeV4Compressed &&
+       layout.deepseek_mode != kDeepSeekModeV4CompressedIndexer)) {
+    return;
+  }
+  const uint32_t coff = layout.deepseek_compress_ratio == 4 ? 2u : 1u;
+  const uint32_t state_width = coff * head_dim;
+  const uint32_t row = blockIdx.x;
+  if (row >= state_width || state_width == 0) {
+    return;
+  }
+  const uint32_t position = step_cursor == nullptr ? 0 : *step_cursor;
+  const uint32_t logical_block = position / kKvCacheBlockTokens;
+  if (logical_block >= kv_block_count) {
+    return;
+  }
+  const uint32_t physical_block =
+      kv_block_table == nullptr ? logical_block : kv_block_table[logical_block];
+  const uint32_t pos_in_block = position % kKvCacheBlockTokens;
+  const uint64_t token_index =
+      static_cast<uint64_t>(physical_block) * kKvCacheBlockTokens +
+      pos_in_block;
+  const uint64_t state_base =
+      deepseek_compressor_state_offset_bytes / sizeof(float) +
+      token_index * static_cast<uint64_t>(state_width) * 2u;
+  float kv_sum = 0.0f;
+  float score_sum = 0.0f;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    const float input_value = encoded_to_f32(projection_input[col], dtype);
+    kv_sum += encoded_to_f32(
+                  arena[layout.deepseek_compressor_wkv +
+                        static_cast<uint64_t>(row) * hidden + col],
+                  kDTypeBF16) *
+              input_value;
+    score_sum += encoded_to_f32(
+                     arena[layout.deepseek_compressor_wgate +
+                           static_cast<uint64_t>(row) * hidden + col],
+                     kDTypeBF16) *
+                 input_value;
+  }
+  kv_sum = block_sum(kv_sum);
+  score_sum = block_sum(score_sum);
+  if (threadIdx.x == 0) {
+    const uint32_t ape_row = position % layout.deepseek_compress_ratio;
+    const float ape =
+        f32_from_u16_slots(arena + layout.deepseek_compressor_ape,
+                           ape_row * state_width + row);
+    deepseek_compressor_state[state_base + row] = kv_sum;
+    deepseek_compressor_state[state_base + state_width + row] =
+        score_sum + ape;
+    if (row == 0 && deepseek_runtime_counters != nullptr) {
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterCompressorStateWrites),
+          1ull);
+    }
+  }
+}
+
+__global__ void hf_deepseek_v4_indexer_state_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
+    const uint16_t *projection_input, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, float *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    uint64_t *deepseek_runtime_counters) {
+  if ((step_cursor != nullptr && *step_cursor >= max_steps) ||
+      arena == nullptr || projection_input == nullptr ||
+      deepseek_indexer_state == nullptr || hidden == 0 ||
+      dtype > kDTypeBF16 ||
+      layout.deepseek_mode != kDeepSeekModeV4CompressedIndexer ||
+      layout.deepseek_compress_ratio <= 1 ||
+      layout.deepseek_index_head_dim == 0 ||
+      layout.deepseek_indexer_compressor_wkv == kMissingOffset ||
+      layout.deepseek_indexer_compressor_wgate == kMissingOffset ||
+      layout.deepseek_indexer_compressor_ape == kMissingOffset) {
+    return;
+  }
+  const uint32_t coff = layout.deepseek_compress_ratio == 4 ? 2u : 1u;
+  const uint32_t state_width = coff * layout.deepseek_index_head_dim;
+  const uint32_t row = blockIdx.x;
+  if (row >= state_width || state_width == 0) {
+    return;
+  }
+  const uint32_t position = step_cursor == nullptr ? 0 : *step_cursor;
+  const uint32_t logical_block = position / kKvCacheBlockTokens;
+  if (logical_block >= kv_block_count) {
+    return;
+  }
+  const uint32_t physical_block =
+      kv_block_table == nullptr ? logical_block : kv_block_table[logical_block];
+  const uint32_t pos_in_block = position % kKvCacheBlockTokens;
+  const uint64_t token_index =
+      static_cast<uint64_t>(physical_block) * kKvCacheBlockTokens +
+      pos_in_block;
+  const uint64_t state_base =
+      deepseek_indexer_state_offset_bytes / sizeof(float) +
+      token_index * static_cast<uint64_t>(state_width) * 2u;
+  float kv_sum = 0.0f;
+  float score_sum = 0.0f;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    const float input_value = encoded_to_f32(projection_input[col], dtype);
+    kv_sum += encoded_to_f32(
+                  arena[layout.deepseek_indexer_compressor_wkv +
+                        static_cast<uint64_t>(row) * hidden + col],
+                  kDTypeBF16) *
+              input_value;
+    score_sum += encoded_to_f32(
+                     arena[layout.deepseek_indexer_compressor_wgate +
+                           static_cast<uint64_t>(row) * hidden + col],
+                     kDTypeBF16) *
+                 input_value;
+  }
+  kv_sum = block_sum(kv_sum);
+  score_sum = block_sum(score_sum);
+  if (threadIdx.x == 0) {
+    const uint32_t ape_row = position % layout.deepseek_compress_ratio;
+    const float ape =
+        f32_from_u16_slots(arena + layout.deepseek_indexer_compressor_ape,
+                           ape_row * state_width + row);
+    deepseek_indexer_state[state_base + row] = kv_sum;
+    deepseek_indexer_state[state_base + state_width + row] =
+        score_sum + ape;
+    if (row == 0 && deepseek_runtime_counters != nullptr) {
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterIndexerStateWrites),
+          1ull);
+    }
+  }
+}
+
 __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t hidden, uint32_t heads, uint32_t head_dim,
@@ -144,7 +293,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     float *deepseek_mhc_residual, float *deepseek_mhc_post_mix,
     float *deepseek_mhc_comb_mix,
     uint64_t *deepseek_runtime_counters, uint32_t local_window_tokens,
-    uint32_t preprojected_qk) {
+    uint32_t preprojected_qk, uint32_t precomputed_compressor_state,
+    uint32_t precomputed_indexer_state) {
   if (threadIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
     return;
@@ -204,7 +354,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     }
   }
 
-  if ((layout.deepseek_mode == kDeepSeekModeV4Compressed ||
+  if (precomputed_compressor_state == 0 &&
+      (layout.deepseek_mode == kDeepSeekModeV4Compressed ||
        layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer) &&
       layout.deepseek_compress_ratio > 1 &&
       deepseek_compressor_state != nullptr &&
@@ -258,7 +409,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
       }
     }
   }
-  if (layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer &&
+  if (precomputed_indexer_state == 0 &&
+      layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer &&
       layout.deepseek_compress_ratio > 1 &&
       layout.deepseek_index_head_dim > 0 &&
       deepseek_indexer_state != nullptr &&

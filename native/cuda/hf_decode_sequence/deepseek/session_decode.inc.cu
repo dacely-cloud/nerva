@@ -328,6 +328,58 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
 
+  uint32_t precomputed_compressor_state = 0;
+  uint32_t precomputed_indexer_state = 0;
+  if ((layout.deepseek_mode == kDeepSeekModeV4Compressed ||
+       layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer) &&
+      layout.deepseek_compress_ratio > 1 &&
+      session->device_deepseek_compressor_state != nullptr &&
+      layout.deepseek_compressor_wkv != kMissingOffset &&
+      layout.deepseek_compressor_wgate != kMissingOffset &&
+      layout.deepseek_compressor_ape != kMissingOffset) {
+    const uint32_t coff =
+        layout.deepseek_compress_ratio == 4 ? 2u : 1u;
+    const uint32_t state_width = coff * session->head_dim;
+    if (state_width != 0) {
+      hf_deepseek_v4_compressor_state_kernel<<<state_width, kDecodeThreads, 0,
+                                                session->stream>>>(
+          session->device_arena, layout, session->dtype, session->hidden,
+          session->head_dim, session->device_step, max_steps,
+          session->device_projection_input, session->kv_block_count,
+          session->device_kv_block_table,
+          session->device_deepseek_compressor_state,
+          deepseek_v4_compressor_state_layer_offset_bytes(session, layer_index),
+          session->device_deepseek_runtime_counters);
+      err = cudaGetLastError();
+      if (err != cudaSuccess) return err;
+      precomputed_compressor_state = 1;
+    }
+  }
+  if (layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer &&
+      layout.deepseek_compress_ratio > 1 &&
+      layout.deepseek_index_head_dim > 0 &&
+      session->device_deepseek_indexer_state != nullptr &&
+      layout.deepseek_indexer_compressor_wkv != kMissingOffset &&
+      layout.deepseek_indexer_compressor_wgate != kMissingOffset &&
+      layout.deepseek_indexer_compressor_ape != kMissingOffset) {
+    const uint32_t coff =
+        layout.deepseek_compress_ratio == 4 ? 2u : 1u;
+    const uint32_t state_width = coff * layout.deepseek_index_head_dim;
+    if (state_width != 0) {
+      hf_deepseek_v4_indexer_state_kernel<<<state_width, kDecodeThreads, 0,
+                                             session->stream>>>(
+          session->device_arena, layout, session->dtype, session->hidden,
+          session->device_step, max_steps, session->device_projection_input,
+          session->kv_block_count, session->device_kv_block_table,
+          session->device_deepseek_indexer_state,
+          deepseek_v4_indexer_state_layer_offset_bytes(session, layer_index),
+          session->device_deepseek_runtime_counters);
+      err = cudaGetLastError();
+      if (err != cudaSuccess) return err;
+      precomputed_indexer_state = 1;
+    }
+  }
+
   hf_deepseek_v4_swa_dense_layer_kernel<<<1, 1, 0, session->stream>>>(
       session->device_arena, layout, layer_index, session->dtype,
       session->hidden, session->heads, session->head_dim,
@@ -354,6 +406,7 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       session->device_deepseek_mhc_post_mix,
       session->device_deepseek_mhc_comb_mix,
       session->device_deepseek_runtime_counters,
-      session->experimental_rt_local_window_tokens, 2u);
+      session->experimental_rt_local_window_tokens, 2u,
+      precomputed_compressor_state, precomputed_indexer_state);
   return cudaGetLastError();
 }
