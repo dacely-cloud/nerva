@@ -113,6 +113,13 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     uint32_t deepseek_indexer_kv_block_count,
     const int32_t *sparse_topk_slots, const uint32_t *sparse_topk_count,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t heads, uint32_t max_steps, float rope_theta,
+    uint32_t chunk_start, uint32_t chunk_tokens, const float *q_tokens,
+    uint32_t q_stride, uint16_t *kv_keys, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint16_t *attn_out,
+    uint32_t attn_stride, uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_residual_mlp_norm_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t norm_weight_dtype, uint32_t hidden, uint32_t attention_hidden,
@@ -173,11 +180,20 @@ __global__ void hf_deepseek_sparse_moe_reduce_down_kernel(
     SequenceLayerLayout layout, uint32_t hidden, uint32_t attention_hidden,
     uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
     uint32_t max_steps, float *scratch);
+__global__ void hf_deepseek_prefill_sparse_moe_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
+    const uint16_t *norm_in, float *gate_up_tmp, float *down_out,
+    uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_ff_encode_kernel(
     SequenceLayerLayout layout, uint32_t dtype, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
     uint32_t active_intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float *scratch, uint16_t *projection_input);
+__global__ void hf_deepseek_prefill_ff_split_kernel(
+    SequenceLayerLayout layout, uint32_t dtype, uint32_t intermediate,
+    uint32_t chunk_tokens, const float *gate, const float *up,
+    uint16_t *ff_out);
 __global__ void hf_deepseek_accumulate_residual_down_kernel(
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,

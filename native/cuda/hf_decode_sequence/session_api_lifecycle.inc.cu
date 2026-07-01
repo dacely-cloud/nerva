@@ -1009,6 +1009,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
       err = launch_cublas_session_prefill(
           session, request->prompt_token_count, request->has_eos_token,
           request->eos_token, out);
+    } else if (use_deepseek_v3_prefill_path(session,
+                                            request->prompt_token_count)) {
+      err = launch_deepseek_v3_session_prefill(
+          session, request->prompt_token_count, request->has_eos_token,
+          request->eos_token, out);
     } else if (use_deepseek_v3_single_layer_prefill_cache_path(
                    session, request->prompt_token_count)) {
       err = launch_deepseek_v3_single_layer_prefill_cache_path(
