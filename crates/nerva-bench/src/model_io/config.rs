@@ -58,7 +58,7 @@ pub(crate) fn run_manifest_coverage_probe(
         .map_err(|err| format!("failed to read {config_path}: {err}"))?;
     let index = std::fs::read_to_string(&index_path)
         .map_err(|err| format!("failed to read {index_path}: {err}"))?;
-    let manifest = load_manifest_from_config(&config)?;
+    let manifest = load_manifest_from_config_and_index(&config, &index)?;
     let shards =
         nerva_model::weights::safetensors::planner::required_safetensors_shards_for_manifest(
             &index, &manifest,
@@ -96,6 +96,20 @@ pub(crate) fn load_manifest_from_config(
         .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
     let plan = nerva_model::weights::layout::plan::plan_hf_weight_layout(&metadata)
         .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
+    nerva_model::weights::manifest::build_hf_tensor_manifest(&plan)
+        .map_err(|err| format!("HF tensor manifest failed: {err:?}"))
+}
+
+fn load_manifest_from_config_and_index(
+    config: &str,
+    index: &str,
+) -> Result<nerva_model::weights::manifest::HfTensorManifest, String> {
+    let metadata = nerva_model::hf::parser::parse_hf_config_metadata(config)
+        .map_err(|err| format!("HF metadata parse failed: {err:?}"))?;
+    let plan = nerva_model::weights::layout::plan::plan_hf_weight_layout_for_safetensors_index(
+        &metadata, index,
+    )
+    .map_err(|err| format!("HF weight layout failed: {err:?}"))?;
     nerva_model::weights::manifest::build_hf_tensor_manifest(&plan)
         .map_err(|err| format!("HF tensor manifest failed: {err:?}"))
 }

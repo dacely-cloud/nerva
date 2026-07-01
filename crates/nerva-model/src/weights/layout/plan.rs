@@ -8,6 +8,7 @@ use crate::hf::metadata::{HfMlpLayerKind, HfModelMetadata};
 use crate::hf::validate::validate_hf_metadata;
 use crate::weights::layout::entry::{WeightBlockRole, WeightBlockSpec};
 use crate::weights::layout::plan::layer_blocks::{push_layer_weight_blocks, sum_weight_bytes};
+use crate::weights::safetensors::planner::safetensors_index_has_tensor;
 
 mod layer_blocks;
 
@@ -54,7 +55,10 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
         metadata.architecture,
         HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32
     ) {
-        return plan_deepseek_v3_weight_layout(metadata);
+        return plan_deepseek_v3_weight_layout_with_storage(
+            metadata,
+            DeepSeekV3ProjectionStorage::Fp8Scaled,
+        );
     }
     if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
         return plan_deepseek_v4_weight_layout(metadata);
@@ -155,7 +159,47 @@ pub fn plan_hf_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayou
     })
 }
 
-fn plan_deepseek_v3_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeightLayoutPlan> {
+pub fn plan_hf_weight_layout_for_safetensors_index(
+    metadata: &HfModelMetadata,
+    index_json: &str,
+) -> Result<HfWeightLayoutPlan> {
+    validate_weight_layout_contract(metadata)?;
+    if matches!(
+        metadata.architecture,
+        HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32
+    ) {
+        return plan_deepseek_v3_weight_layout_with_storage(
+            metadata,
+            deepseek_v3_storage_from_safetensors_index(index_json)?,
+        );
+    }
+    plan_hf_weight_layout(metadata)
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum DeepSeekV3ProjectionStorage {
+    Fp8Scaled,
+    Bf16,
+}
+
+fn deepseek_v3_storage_from_safetensors_index(
+    index_json: &str,
+) -> Result<DeepSeekV3ProjectionStorage> {
+    let q_a_weight = "model.layers.0.self_attn.q_a_proj.weight";
+    let q_a_scale = "model.layers.0.self_attn.q_a_proj.weight_scale_inv";
+    if safetensors_index_has_tensor(index_json, q_a_scale)? {
+        return Ok(DeepSeekV3ProjectionStorage::Fp8Scaled);
+    }
+    if safetensors_index_has_tensor(index_json, q_a_weight)? {
+        return Ok(DeepSeekV3ProjectionStorage::Bf16);
+    }
+    Ok(DeepSeekV3ProjectionStorage::Fp8Scaled)
+}
+
+fn plan_deepseek_v3_weight_layout_with_storage(
+    metadata: &HfModelMetadata,
+    projection_storage: DeepSeekV3ProjectionStorage,
+) -> Result<HfWeightLayoutPlan> {
     let dtype = metadata
         .torch_dtype
         .ok_or_else(|| NervaError::InvalidArgument {
@@ -244,6 +288,7 @@ fn plan_deepseek_v3_weight_layout(metadata: &HfModelMetadata) -> Result<HfWeight
             metadata,
             layer,
             norm_dtype,
+            projection_storage,
             q_lora_rank,
             kv_lora_rank,
             q_rows,
@@ -500,6 +545,7 @@ fn push_deepseek_v3_layer_blocks(
     metadata: &HfModelMetadata,
     layer: u32,
     norm_dtype: DType,
+    projection_storage: DeepSeekV3ProjectionStorage,
     q_lora_rank: usize,
     kv_lora_rank: usize,
     q_rows: usize,
@@ -523,6 +569,7 @@ fn push_deepseek_v3_layer_blocks(
         metadata,
         layer,
         norm_dtype,
+        projection_storage,
         q_lora_rank,
         kv_lora_rank,
         q_rows,
@@ -544,11 +591,12 @@ fn push_deepseek_v3_layer_blocks(
             blocks,
             metadata,
             layer,
+            projection_storage,
             moe_intermediate,
             shared_intermediate,
             num_experts,
         ),
-        _ => push_deepseek_v3_dense_mlp_blocks(blocks, metadata, layer),
+        _ => push_deepseek_v3_dense_mlp_blocks(blocks, metadata, layer, projection_storage),
     }
 }
 
@@ -998,6 +1046,7 @@ fn push_deepseek_v3_attention_blocks(
     metadata: &HfModelMetadata,
     layer: u32,
     norm_dtype: DType,
+    projection_storage: DeepSeekV3ProjectionStorage,
     q_lora_rank: usize,
     kv_lora_rank: usize,
     q_rows: usize,
@@ -1005,16 +1054,18 @@ fn push_deepseek_v3_attention_blocks(
     kv_b_rows: usize,
     value_hidden: usize,
 ) -> Result<()> {
+    let projection_dtype = deepseek_v3_projection_dtype(projection_storage);
     push_block(
         blocks,
         WeightBlockRole::DeepSeekQALoraProjection,
         layer,
         q_lora_rank,
         metadata.hidden_size,
-        DType::F8E4M3,
+        projection_dtype,
     )?;
-    push_scale_block(
+    push_deepseek_v3_scale_block(
         blocks,
+        projection_storage,
         WeightBlockRole::DeepSeekQALoraScaleInv,
         layer,
         q_lora_rank,
@@ -1034,10 +1085,11 @@ fn push_deepseek_v3_attention_blocks(
         layer,
         q_rows,
         q_lora_rank,
-        DType::F8E4M3,
+        projection_dtype,
     )?;
-    push_scale_block(
+    push_deepseek_v3_scale_block(
         blocks,
+        projection_storage,
         WeightBlockRole::DeepSeekQBScaleInv,
         layer,
         q_rows,
@@ -1049,10 +1101,11 @@ fn push_deepseek_v3_attention_blocks(
         layer,
         kv_a_rows,
         metadata.hidden_size,
-        DType::F8E4M3,
+        projection_dtype,
     )?;
-    push_scale_block(
+    push_deepseek_v3_scale_block(
         blocks,
+        projection_storage,
         WeightBlockRole::DeepSeekKvAScaleInv,
         layer,
         kv_a_rows,
@@ -1072,10 +1125,11 @@ fn push_deepseek_v3_attention_blocks(
         layer,
         kv_b_rows,
         kv_lora_rank,
-        DType::F8E4M3,
+        projection_dtype,
     )?;
-    push_scale_block(
+    push_deepseek_v3_scale_block(
         blocks,
+        projection_storage,
         WeightBlockRole::DeepSeekKvBScaleInv,
         layer,
         kv_b_rows,
@@ -1087,10 +1141,11 @@ fn push_deepseek_v3_attention_blocks(
         layer,
         metadata.hidden_size,
         value_hidden,
-        DType::F8E4M3,
+        projection_dtype,
     )?;
-    push_scale_block(
+    push_deepseek_v3_scale_block(
         blocks,
+        projection_storage,
         WeightBlockRole::DeepSeekOutputScaleInv,
         layer,
         metadata.hidden_size,
@@ -1176,7 +1231,9 @@ fn push_deepseek_v3_dense_mlp_blocks(
     blocks: &mut Vec<WeightBlockSpec>,
     metadata: &HfModelMetadata,
     layer: u32,
+    projection_storage: DeepSeekV3ProjectionStorage,
 ) -> Result<()> {
+    let projection_dtype = deepseek_v3_projection_dtype(projection_storage);
     for (role, scale_role, rows, cols) in [
         (
             WeightBlockRole::GateProjection,
@@ -1197,8 +1254,8 @@ fn push_deepseek_v3_dense_mlp_blocks(
             metadata.intermediate_size,
         ),
     ] {
-        push_block(blocks, role, layer, rows, cols, DType::F8E4M3)?;
-        push_scale_block(blocks, scale_role, layer, rows, cols)?;
+        push_block(blocks, role, layer, rows, cols, projection_dtype)?;
+        push_deepseek_v3_scale_block(blocks, projection_storage, scale_role, layer, rows, cols)?;
     }
     Ok(())
 }
@@ -1207,10 +1264,12 @@ fn push_deepseek_v3_moe_blocks(
     blocks: &mut Vec<WeightBlockSpec>,
     metadata: &HfModelMetadata,
     layer: u32,
+    projection_storage: DeepSeekV3ProjectionStorage,
     moe_intermediate: usize,
     shared_intermediate: usize,
     num_experts: usize,
 ) -> Result<()> {
+    let projection_dtype = deepseek_v3_projection_dtype(projection_storage);
     push_block(
         blocks,
         WeightBlockRole::RouterProjection,
@@ -1250,8 +1309,15 @@ fn push_deepseek_v3_moe_blocks(
         ),
     ] {
         if rows > 0 {
-            push_block(blocks, role, layer, rows, cols, DType::F8E4M3)?;
-            push_scale_block(blocks, scale_role, layer, rows, cols)?;
+            push_block(blocks, role, layer, rows, cols, projection_dtype)?;
+            push_deepseek_v3_scale_block(
+                blocks,
+                projection_storage,
+                scale_role,
+                layer,
+                rows,
+                cols,
+            )?;
         }
     }
     for (role, scale_role, rows, cols) in [
@@ -1274,16 +1340,47 @@ fn push_deepseek_v3_moe_blocks(
             moe_intermediate,
         ),
     ] {
-        push_expert_block(blocks, role, layer, num_experts, rows, cols, DType::F8E4M3)?;
         push_expert_block(
             blocks,
-            scale_role,
+            role,
             layer,
             num_experts,
-            scale_dim(rows),
-            scale_dim(cols),
-            DType::F32,
+            rows,
+            cols,
+            projection_dtype,
         )?;
+        if projection_storage == DeepSeekV3ProjectionStorage::Fp8Scaled {
+            push_expert_block(
+                blocks,
+                scale_role,
+                layer,
+                num_experts,
+                scale_dim(rows),
+                scale_dim(cols),
+                DType::F32,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn deepseek_v3_projection_dtype(storage: DeepSeekV3ProjectionStorage) -> DType {
+    match storage {
+        DeepSeekV3ProjectionStorage::Fp8Scaled => DType::F8E4M3,
+        DeepSeekV3ProjectionStorage::Bf16 => DType::BF16,
+    }
+}
+
+fn push_deepseek_v3_scale_block(
+    blocks: &mut Vec<WeightBlockSpec>,
+    storage: DeepSeekV3ProjectionStorage,
+    role: WeightBlockRole,
+    layer: u32,
+    rows: usize,
+    cols: usize,
+) -> Result<()> {
+    if storage == DeepSeekV3ProjectionStorage::Fp8Scaled {
+        push_scale_block(blocks, role, layer, rows, cols)?;
     }
     Ok(())
 }

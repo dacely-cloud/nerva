@@ -10,7 +10,9 @@ use nerva_model::hf::contract::{validate_exact_runtime_contract, validate_weight
 use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::parser::parse_hf_config_metadata;
 use nerva_model::weights::file::read_safetensors_header_file;
-use nerva_model::weights::layout::plan::plan_hf_weight_layout;
+use nerva_model::weights::layout::plan::{
+    plan_hf_weight_layout, plan_hf_weight_layout_for_safetensors_index,
+};
 use nerva_model::weights::manifest::{HfTensorManifest, build_hf_tensor_manifest};
 use nerva_model::weights::safetensors::planner::{
     plan_safetensors_shards_for_manifest, required_safetensors_shards_for_manifest,
@@ -89,9 +91,11 @@ pub(super) fn load_shard_backed_weights(dir: &Path) -> Result<ShardBackedWeights
         .ok_or_else(|| NervaError::InvalidArgument {
             reason: "HF CUDA descriptor load requires torch_dtype".to_string(),
         })?;
-    let layout = plan_hf_weight_layout(&metadata)?;
+    let default_layout = plan_hf_weight_layout(&metadata)?;
+    let default_manifest = build_hf_tensor_manifest(&default_layout)?;
+    let index_json = load_or_synthesize_index(dir, &default_manifest)?;
+    let layout = plan_hf_weight_layout_for_safetensors_index(&metadata, &index_json)?;
     let manifest = build_hf_tensor_manifest(&layout)?;
-    let index_json = load_or_synthesize_index(dir, &manifest)?;
     let header_store = read_required_headers(dir, &index_json, &manifest)?;
     let shard_headers = header_store
         .iter()

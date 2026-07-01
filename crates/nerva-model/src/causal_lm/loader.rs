@@ -19,7 +19,9 @@ use crate::precision::block::moe::{
     PrecisionMoeConfig, PrecisionMoeRouterKind, PrecisionMoeTransformerBlock,
 };
 use crate::weights::layout::entry::WeightBlockRole;
-use crate::weights::layout::plan::plan_hf_weight_layout;
+use crate::weights::layout::plan::{
+    plan_hf_weight_layout, plan_hf_weight_layout_for_safetensors_index,
+};
 use crate::weights::manifest::build_hf_tensor_manifest;
 use crate::weights::safetensors::planner::plan_safetensors_shards_for_manifest;
 use crate::weights::safetensors::shard::{SafetensorsShardHeader, SafetensorsShardPlan};
@@ -58,10 +60,12 @@ fn load_from_hf_dir(dir: &Path, options: HfCausalLmLoadOptions) -> Result<HfCaus
         .ok_or_else(|| NervaError::InvalidArgument {
             reason: "HF causal LM requires torch_dtype".to_string(),
         })?;
-    let layout = plan_hf_weight_layout(&metadata)?;
-    let manifest = build_hf_tensor_manifest(&layout)?;
+    let default_layout = plan_hf_weight_layout(&metadata)?;
+    let default_manifest = build_hf_tensor_manifest(&default_layout)?;
     validate_weight_layout_contract(&metadata)?;
-    let index_json = load_or_synthesize_index(dir, &manifest)?;
+    let index_json = load_or_synthesize_index(dir, &default_manifest)?;
+    let layout = plan_hf_weight_layout_for_safetensors_index(&metadata, &index_json)?;
+    let manifest = build_hf_tensor_manifest(&layout)?;
     let shard_headers_owned = read_required_headers(dir, &index_json, &manifest)?;
     let shard_headers = shard_headers_owned
         .iter()

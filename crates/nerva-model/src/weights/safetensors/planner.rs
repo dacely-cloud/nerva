@@ -175,6 +175,12 @@ pub fn plan_safetensors_shards_for_manifest(
     Ok(plan)
 }
 
+pub fn safetensors_index_has_tensor(index_json: &str, tensor_name: &str) -> Result<bool> {
+    Ok(parse_safetensors_weight_map(index_json)?
+        .tensor_to_shard
+        .contains_key(tensor_name))
+}
+
 fn resolve_index_tensor(
     architecture: HfArchitectureKind,
     entry: &HfTensorManifestEntry,

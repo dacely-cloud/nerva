@@ -14,7 +14,9 @@ use crate::hf::deepseek_runtime::{
 use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind};
 use crate::hf::parser::parse_hf_config_metadata;
 use crate::weights::layout::entry::WeightBlockRole;
-use crate::weights::layout::plan::plan_hf_weight_layout;
+use crate::weights::layout::plan::{
+    plan_hf_weight_layout, plan_hf_weight_layout_for_safetensors_index,
+};
 use crate::weights::manifest::build_hf_tensor_manifest;
 use nerva_core::types::dtype::DType;
 use nerva_core::types::error::NervaError;
@@ -1000,6 +1002,48 @@ fn deepseek_v3_manifest_uses_mla_fp8_scale_and_split_expert_names() {
         7168,
         2048,
         DType::F8E4M3,
+    );
+}
+
+#[test]
+fn deepseek_v3_bf16_index_manifest_does_not_invent_fp8_scales() {
+    let metadata = parse_hf_config_metadata(deepseek_v3_config()).unwrap();
+    let index = r#"{"metadata":{"total_size":1},"weight_map":{"model.layers.0.self_attn.q_a_proj.weight":"model-00001-of-00001.safetensors"}}"#;
+    let manifest = build_hf_tensor_manifest(
+        &plan_hf_weight_layout_for_safetensors_index(&metadata, index).unwrap(),
+    )
+    .unwrap();
+
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .all(|entry| !entry.name.ends_with("weight_scale_inv")),
+        "BF16 V3 index should not require FP8 scale tensors"
+    );
+    assert_entry(
+        &manifest,
+        "model.layers.0.self_attn.q_a_proj.weight",
+        WeightBlockRole::DeepSeekQALoraProjection,
+        1536,
+        7168,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
+        "model.layers.3.mlp.experts.0.gate_proj.weight",
+        WeightBlockRole::ExpertGateProjection,
+        2048,
+        7168,
+        DType::BF16,
+    );
+    assert_entry(
+        &manifest,
+        "model.layers.3.mlp.shared_experts.down_proj.weight",
+        WeightBlockRole::SharedExpertDownProjection,
+        7168,
+        2048,
+        DType::BF16,
     );
 }
 
