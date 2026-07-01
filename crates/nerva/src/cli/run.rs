@@ -146,6 +146,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
             &output,
             sampler,
             start.elapsed(),
+            parsed.profiling,
         )
         .map(|output| GenerateResult {
             output,
@@ -171,6 +172,7 @@ fn generate_json_output(
     output: &HfCudaDeviceGenerateOutput,
     sampler: HfCudaSamplerConfig,
     elapsed: std::time::Duration,
+    include_detailed_profiling: bool,
 ) -> Result<String, String> {
     let generated_text = decode_generated_text(path, output.tokens())?
         .map(|text| format!("\"{}\"", json_escape(&text)))
@@ -204,6 +206,15 @@ fn generate_json_output(
         .map(|path| path.to_json())
         .collect::<Vec<_>>()
         .join(",");
+    let wall_latencies_ns = critical_paths
+        .iter()
+        .map(|path| path.wall_latency_ns)
+        .collect::<Vec<_>>();
+    let token_p50_ms = percentile_latency_ms(&wall_latencies_ns, 0.50);
+    let token_p95_ms = percentile_latency_ms(&wall_latencies_ns, 0.95);
+    let token_p99_ms = percentile_latency_ms(&wall_latencies_ns, 0.99);
+    let token_critical_paths_field =
+        token_critical_paths_json_field(include_detailed_profiling, &token_critical_paths);
     let chunks = output
         .stream
         .chunks
@@ -301,7 +312,7 @@ fn generate_json_output(
     let experimental_prefill_local_window_tokens =
         experimental_prefill_local_window_tokens_from_env();
     Ok(format!(
-        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"selector_policy\":\"{}\",\"rt_core_page_selector\":{},\"semantic_page_selection\":{},\"semantic_rt_retrieval\":{},\"kv_page_descriptor_selector\":{},\"live_query_descriptor_selector\":{},\"query_key_aware_selector\":{},\"query_key_fused_selector\":{},\"page_tokens\":{},\"pages\":{},\"selected_pages\":{},\"local_pages\":{},\"sink_pages\":{},\"far_pages\":{},\"selected_tokens\":{},\"local_page_tokens\":{},\"sink_page_tokens\":{},\"far_tokens\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"experimental_prefill_local_window_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}],\"token_critical_paths\":[{}]}}",
+        "{{\"status\":\"ok\",\"backend\":\"{}\",\"mode\":\"generate\",\"nerva_version\":\"{}\",\"path\":\"{}\",\"input_mode\":\"{}\",\"prompt_mode\":\"{}\",\"sampler\":{{\"temperature\":{},\"top_p\":{},\"top_k\":{},\"seed\":{}}},\"profiling\":{},\"experimental_rt_decode\":{{\"requested\":{},\"enabled\":{},\"mode\":\"{}\",\"selector_policy\":\"{}\",\"rt_core_page_selector\":{},\"semantic_page_selection\":{},\"semantic_rt_retrieval\":{},\"kv_page_descriptor_selector\":{},\"live_query_descriptor_selector\":{},\"query_key_aware_selector\":{},\"query_key_fused_selector\":{},\"page_tokens\":{},\"pages\":{},\"selected_pages\":{},\"local_pages\":{},\"sink_pages\":{},\"far_pages\":{},\"selected_tokens\":{},\"local_page_tokens\":{},\"sink_page_tokens\":{},\"far_tokens\":{},\"local_window_tokens\":{},\"sink_tokens\":{}}},\"prefill_chunk_tokens\":{},\"experimental_prefill_local_window_tokens\":{},\"head_threads\":{},\"prompt\":\"{}\",\"prompt_token_ids\":[{}],\"prompt_tokens\":{},\"max_new_tokens\":{},\"generated_tokens\":{},\"elapsed_wall_ns\":{},\"load_wall_ns\":{},\"prefill_wall_ns\":{},\"prefill_device_elapsed_ns\":{},\"prefill_projection_ns\":{},\"prefill_qkv_projection_ns\":{},\"prefill_attention_output_projection_ns\":{},\"prefill_gate_up_projection_ns\":{},\"prefill_down_projection_ns\":{},\"prefill_lm_head_projection_ns\":{},\"prefill_attention_ns\":{},\"prefill_mlp_ns\":{},\"prefill_norm_ns\":{},\"prefill_sampling_ns\":{},\"decode_wall_ns\":{},\"post_load_wall_ns\":{},\"end_to_end_tokens_per_second\":{},\"post_load_tokens_per_second\":{},\"critical_path_wall_ns\":{},\"critical_path_device_ns\":{},\"critical_path_tokens_per_second\":{},\"token_p50_ms\":{},\"token_p95_ms\":{},\"token_p99_ms\":{},\"tokens\":[{}],\"generated_text\":{},\"stop_reason\":\"{}\",\"hot_path_allocations\":{},\"chunks\":[{}]{}}}",
         json_escape(output.backend),
         env!("CARGO_PKG_VERSION"),
         json_escape(path),
@@ -311,6 +322,7 @@ fn generate_json_output(
         sampler.top_p,
         sampler.top_k,
         sampler.seed,
+        include_detailed_profiling,
         output.stream.create.experimental_rt_decode_requested,
         rt_decode_effective_enabled,
         rt_mode_name(output.stream.create.experimental_rt_mode),
@@ -367,6 +379,9 @@ fn generate_json_output(
         critical_path_wall_ns,
         critical_path_device_ns,
         tokens_per_second(critical_paths.len(), critical_path_wall_ns as u128),
+        token_p50_ms,
+        token_p95_ms,
+        token_p99_ms,
         tokens,
         generated_text,
         output.stop_reason().as_str(),
@@ -377,8 +392,27 @@ fn generate_json_output(
             .map(|summary| summary.hot_path_allocations)
             .sum::<u64>(),
         chunks,
-        token_critical_paths
+        token_critical_paths_field
     ))
+}
+
+fn percentile_latency_ms(values_ns: &[u64], quantile: f64) -> f64 {
+    if values_ns.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values_ns.to_vec();
+    sorted.sort_unstable();
+    let rank = ((sorted.len() as f64) * quantile).ceil().max(1.0) as usize;
+    let index = rank.saturating_sub(1).min(sorted.len() - 1);
+    sorted[index] as f64 / 1_000_000.0
+}
+
+fn token_critical_paths_json_field(include: bool, token_critical_paths: &str) -> String {
+    if include {
+        format!(",\"token_critical_paths\":[{token_critical_paths}]")
+    } else {
+        String::new()
+    }
 }
 
 fn resolve_sampler_seed(parsed: &crate::cli::args::GenerateArgs) -> u64 {
@@ -503,7 +537,10 @@ fn tokens_per_second(tokens: usize, elapsed_ns: u128) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_sampler_seed, rt_selector_policy, stochastic_sampling_requested};
+    use super::{
+        percentile_latency_ms, resolve_sampler_seed, rt_selector_policy,
+        stochastic_sampling_requested, token_critical_paths_json_field,
+    };
     use crate::cli::args::{DEFAULT_SEED, GenerateArgs};
 
     #[test]
@@ -539,5 +576,26 @@ mod tests {
             rt_selector_policy(true, true, 3, true, true, false, false),
             "optix_kv_page_descriptor_approx_selector"
         );
+    }
+
+    #[test]
+    fn json_omits_token_critical_paths_without_profiling() {
+        assert_eq!(
+            token_critical_paths_json_field(false, r#"{"wall_latency_ns":1}"#),
+            ""
+        );
+        assert_eq!(
+            token_critical_paths_json_field(true, r#"{"wall_latency_ns":1}"#),
+            r#","token_critical_paths":[{"wall_latency_ns":1}]"#
+        );
+    }
+
+    #[test]
+    fn latency_percentiles_report_milliseconds() {
+        let values = [3_000_000, 1_000_000, 9_000_000, 7_000_000];
+        assert_eq!(percentile_latency_ms(&values, 0.50), 3.0);
+        assert_eq!(percentile_latency_ms(&values, 0.95), 9.0);
+        assert_eq!(percentile_latency_ms(&values, 0.99), 9.0);
+        assert_eq!(percentile_latency_ms(&[], 0.99), 0.0);
     }
 }
