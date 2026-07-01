@@ -4,7 +4,8 @@ use crate::decode::hf_chain::layer::{
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
     CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
     CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
-    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
+    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
+    CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
     CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
@@ -536,6 +537,15 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
         routed_scaling_factor: 1.0,
         hc_eps: 1.0e-6,
         hc_post_alpha: 2.0,
+        rope_scaling_type: CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
+        rope_original_max_position: 4096,
+        rope_scaling_factor: 40.0,
+        rope_extrapolation_factor: 1.0,
+        rope_attn_factor: 1.0,
+        rope_beta_fast: 32.0,
+        rope_beta_slow: 1.0,
+        rope_mscale: 1.0,
+        rope_mscale_all_dim: 0.0,
         compress_rope_theta: Some(1_000_000.0),
         swiglu_limit: Some(10.0),
     };
@@ -616,6 +626,16 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     );
     assert_eq!(ffi.deepseek_hc_eps, deepseek.hc_eps);
     assert_eq!(ffi.deepseek_hc_post_alpha, deepseek.hc_post_alpha);
+    assert_eq!(ffi.deepseek_rope_scaling_type, deepseek.rope_scaling_type);
+    assert_eq!(
+        ffi.deepseek_rope_original_max_position,
+        deepseek.rope_original_max_position as u32
+    );
+    assert_eq!(
+        ffi.deepseek_rope_scaling_factor,
+        deepseek.rope_scaling_factor
+    );
+    assert_eq!(ffi.deepseek_rope_mscale, deepseek.rope_mscale);
     assert_eq!(
         ffi.deepseek_compress_rope_theta,
         deepseek.compress_rope_theta.unwrap_or(0.0)
@@ -640,6 +660,19 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     );
     assert_eq!(descriptor.deepseek_hc_eps, deepseek.hc_eps);
     assert_eq!(descriptor.deepseek_hc_post_alpha, deepseek.hc_post_alpha);
+    assert_eq!(
+        descriptor.deepseek_rope_scaling_type,
+        deepseek.rope_scaling_type
+    );
+    assert_eq!(
+        descriptor.deepseek_rope_original_max_position,
+        deepseek.rope_original_max_position as u32
+    );
+    assert_eq!(
+        descriptor.deepseek_rope_scaling_factor,
+        deepseek.rope_scaling_factor
+    );
+    assert_eq!(descriptor.deepseek_rope_mscale, deepseek.rope_mscale);
     assert_eq!(
         descriptor.deepseek_compress_rope_theta,
         deepseek.compress_rope_theta.unwrap_or(0.0)
@@ -673,6 +706,15 @@ fn deepseek_v3_mla_shape_matches_vllm_contract() {
         routed_scaling_factor: 2.5,
         hc_eps: 0.0,
         hc_post_alpha: 0.0,
+        rope_scaling_type: CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE,
+        rope_original_max_position: 0,
+        rope_scaling_factor: 0.0,
+        rope_extrapolation_factor: 1.0,
+        rope_attn_factor: 1.0,
+        rope_beta_fast: 32.0,
+        rope_beta_slow: 1.0,
+        rope_mscale: 1.0,
+        rope_mscale_all_dim: 0.0,
         compress_rope_theta: None,
         swiglu_limit: None,
     };
@@ -2307,7 +2349,7 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
         plan.deepseek_compressor_ape,
         CUDA_HF_SEQUENCE_MISSING_OFFSET
     );
-    assert_eq!(plan.layout_bytes, 648);
+    assert_eq!(plan.layout_bytes, 688);
     assert!(plan.resident_weight_bytes > 0);
 
     let request = CudaHfDecodeSequenceRequest {
@@ -4501,7 +4543,7 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     assert_eq!(plan.rms_mlp, 558);
     assert_eq!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_eq!(plan.deepseek_kv_b_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
-    assert_eq!(plan.layout_bytes, 648);
+    assert_eq!(plan.layout_bytes, 688);
 }
 
 fn with_tiny_deepseek_v4_descriptor_session(
@@ -4638,6 +4680,15 @@ fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             routed_scaling_factor: 1.0,
             hc_eps: 0.0,
             hc_post_alpha: 0.0,
+            rope_scaling_type: CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE,
+            rope_original_max_position: 0,
+            rope_scaling_factor: 0.0,
+            rope_extrapolation_factor: 1.0,
+            rope_attn_factor: 1.0,
+            rope_beta_fast: 32.0,
+            rope_beta_slow: 1.0,
+            rope_mscale: 1.0,
+            rope_mscale_all_dim: 0.0,
             compress_rope_theta: None,
             swiglu_limit: None,
         }),
@@ -4698,6 +4749,15 @@ fn tiny_deepseek_v3_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             routed_scaling_factor: 1.0,
             hc_eps: 0.0,
             hc_post_alpha: 0.0,
+            rope_scaling_type: CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE,
+            rope_original_max_position: 0,
+            rope_scaling_factor: 0.0,
+            rope_extrapolation_factor: 1.0,
+            rope_attn_factor: 1.0,
+            rope_beta_fast: 32.0,
+            rope_beta_slow: 1.0,
+            rope_mscale: 1.0,
+            rope_mscale_all_dim: 0.0,
             compress_rope_theta: None,
             swiglu_limit: None,
         }),
@@ -4861,6 +4921,15 @@ fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             routed_scaling_factor: 1.0,
             hc_eps: 1.0e-6,
             hc_post_alpha: 2.0,
+            rope_scaling_type: CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
+            rope_original_max_position: 4096,
+            rope_scaling_factor: 40.0,
+            rope_extrapolation_factor: 1.0,
+            rope_attn_factor: 1.0,
+            rope_beta_fast: 32.0,
+            rope_beta_slow: 1.0,
+            rope_mscale: 1.0,
+            rope_mscale_all_dim: 0.0,
             compress_rope_theta: Some(1_000_000.0),
             swiglu_limit: Some(10.0),
         }),
@@ -4921,6 +4990,15 @@ fn tiny_deepseek_v4_swa_dense_descriptor_layer() -> CudaHfDecodeChainLayer<'stat
             routed_scaling_factor: 1.0,
             hc_eps: 1.0e-6,
             hc_post_alpha: 2.0,
+            rope_scaling_type: CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE,
+            rope_original_max_position: 0,
+            rope_scaling_factor: 0.0,
+            rope_extrapolation_factor: 1.0,
+            rope_attn_factor: 1.0,
+            rope_beta_fast: 32.0,
+            rope_beta_slow: 1.0,
+            rope_mscale: 1.0,
+            rope_mscale_all_dim: 0.0,
             compress_rope_theta: None,
             swiglu_limit: Some(10.0),
         }),

@@ -44,6 +44,10 @@ fn parses_deepseek_v3_mla_and_grouped_moe_metadata() {
     assert_eq!(metadata.topk_method.as_deref(), Some("noaux_tc"));
     assert_eq!(metadata.scoring_func.as_deref(), Some("sigmoid"));
     assert_eq!(metadata.routed_scaling_factor, Some(2.5));
+    let rope_scaling = metadata.rope_scaling.as_ref().unwrap();
+    assert_eq!(rope_scaling.rope_type, "deepseek_yarn");
+    assert_eq!(rope_scaling.factor, Some(40.0));
+    assert_eq!(rope_scaling.original_max_position_embeddings, Some(4096));
     assert_eq!(metadata.num_nextn_predict_layers, Some(1));
     assert_eq!(
         metadata.mlp_layer_types,
@@ -105,6 +109,8 @@ fn parses_deepseek_v4_flash_metadata() {
     assert_eq!(metadata.hc_eps, Some(0.000001));
     assert_eq!(metadata.num_hash_layers, Some(3));
     assert_eq!(metadata.compress_rope_theta, Some(1_000_000.0));
+    let rope_scaling = metadata.rope_scaling.as_ref().unwrap();
+    assert_eq!(rope_scaling.rope_type, "deepseek_yarn");
     assert_eq!(metadata.swiglu_limit, Some(10.0));
     assert_eq!(metadata.expert_dtype.as_deref(), Some("fp4"));
     assert!(

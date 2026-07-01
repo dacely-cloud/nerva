@@ -105,21 +105,107 @@ __device__ float deepseek_mxfp4_rank3_scaled_weight(
          nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
 }
 
+__device__ float deepseek_yarn_get_mscale(float scale, float mscale) {
+  if (scale <= 1.0f) {
+    return 1.0f;
+  }
+  return 0.1f * mscale * logf(scale) + 1.0f;
+}
+
+__device__ float deepseek_linear_ramp_mask(float low, float high,
+                                           float offset) {
+  if (low == high) {
+    high += 0.001f;
+  }
+  return fminf(fmaxf((offset - low) / (high - low), 0.0f), 1.0f);
+}
+
+__device__ float deepseek_rope_magnitude(const SequenceLayerLayout &layout) {
+  if (layout.deepseek_rope_scaling_type != kDeepSeekRopeScalingDeepSeek ||
+      !(layout.deepseek_rope_scaling_factor > 0.0f) ||
+      !isfinite(layout.deepseek_rope_scaling_factor)) {
+    return 1.0f;
+  }
+  const float numerator = deepseek_yarn_get_mscale(
+      layout.deepseek_rope_scaling_factor, layout.deepseek_rope_mscale);
+  const float denominator = deepseek_yarn_get_mscale(
+      layout.deepseek_rope_scaling_factor, layout.deepseek_rope_mscale_all_dim);
+  const float attn_factor =
+      isfinite(layout.deepseek_rope_attn_factor) &&
+              layout.deepseek_rope_attn_factor > 0.0f
+          ? layout.deepseek_rope_attn_factor
+          : 1.0f;
+  return denominator == 0.0f ? attn_factor : numerator / denominator * attn_factor;
+}
+
+__device__ float deepseek_rope_inv_freq(const SequenceLayerLayout &layout,
+                                        uint32_t offset, uint32_t dim,
+                                        float theta) {
+  const float exponent =
+      static_cast<float>(2u * offset) / static_cast<float>(dim);
+  const float pos_freq = powf(theta, exponent);
+  if (layout.deepseek_rope_scaling_type != kDeepSeekRopeScalingDeepSeek ||
+      !(layout.deepseek_rope_scaling_factor > 0.0f) ||
+      !isfinite(layout.deepseek_rope_scaling_factor) ||
+      layout.deepseek_rope_original_max_position == 0 ||
+      !(theta > 0.0f)) {
+    return 1.0f / pos_freq;
+  }
+
+  constexpr float two_pi = 6.2831853071795864769f;
+  const float beta_fast =
+      isfinite(layout.deepseek_rope_beta_fast) &&
+              layout.deepseek_rope_beta_fast > 0.0f
+          ? layout.deepseek_rope_beta_fast
+          : 32.0f;
+  const float beta_slow =
+      isfinite(layout.deepseek_rope_beta_slow) &&
+              layout.deepseek_rope_beta_slow > 0.0f
+          ? layout.deepseek_rope_beta_slow
+          : 1.0f;
+  const float original =
+      static_cast<float>(layout.deepseek_rope_original_max_position);
+  const float denom = 2.0f * logf(theta);
+  float low = floorf(static_cast<float>(dim) *
+                     logf(original / (beta_fast * two_pi)) / denom);
+  float high = ceilf(static_cast<float>(dim) *
+                     logf(original / (beta_slow * two_pi)) / denom);
+  low = fminf(fmaxf(low, 0.0f), static_cast<float>(dim - 1u));
+  high = fminf(fmaxf(high, 0.0f), static_cast<float>(dim - 1u));
+
+  const float ramp =
+      deepseek_linear_ramp_mask(low, high, static_cast<float>(offset));
+  const float extrapolation_factor =
+      isfinite(layout.deepseek_rope_extrapolation_factor) &&
+              layout.deepseek_rope_extrapolation_factor > 0.0f
+          ? layout.deepseek_rope_extrapolation_factor
+          : 1.0f;
+  const float inv_freq_mask = (1.0f - ramp) * extrapolation_factor;
+  const float inv_freq_extrapolation = 1.0f / pos_freq;
+  const float inv_freq_interpolation =
+      1.0f / (layout.deepseek_rope_scaling_factor * pos_freq);
+  return inv_freq_interpolation * (1.0f - inv_freq_mask) +
+         inv_freq_extrapolation * inv_freq_mask;
+}
+
 __device__ float deepseek_rope_value_serial(float left, float right,
                                             uint32_t offset, uint32_t dim,
                                             uint32_t position, float theta,
-                                            bool second) {
+                                            bool second,
+                                            const SequenceLayerLayout &layout) {
   if (theta <= 0.0f || dim < 2) {
     return second ? right : left;
   }
-  const float exponent =
-      static_cast<float>(2u * offset) / static_cast<float>(dim);
-  const float angle = static_cast<float>(position) / powf(theta, exponent);
+  const float angle =
+      static_cast<float>(position) *
+      deepseek_rope_inv_freq(layout, offset, dim, theta);
   float sin_value = 0.0f;
   float cos_value = 0.0f;
   sincosf(angle, &sin_value, &cos_value);
-  return second ? right * cos_value + left * sin_value
-                : left * cos_value - right * sin_value;
+  const float magnitude = deepseek_rope_magnitude(layout);
+  return magnitude *
+         (second ? right * cos_value + left * sin_value
+                 : left * cos_value - right * sin_value);
 }
 
 __device__ __forceinline__ uint16_t deepseek_session_f32_to_bf16_bits(
@@ -260,7 +346,7 @@ __device__ float deepseek_session_normed_compressed_value(
 __device__ float deepseek_session_rotated_compressed_value(
     const float *compressed, const uint16_t *norm_weight, uint32_t head_dim,
     uint32_t rope_head_dim, uint32_t dim, uint32_t position, float rms_eps,
-    float rope_theta) {
+    float rope_theta, const SequenceLayerLayout &layout) {
   const uint32_t nope_head_dim = head_dim - rope_head_dim;
   const float value = deepseek_session_normed_compressed_value(
       compressed, norm_weight, head_dim, dim, rms_eps);
@@ -278,15 +364,16 @@ __device__ float deepseek_session_rotated_compressed_value(
       compressed, norm_weight, head_dim, even_dim, rms_eps);
   const float odd = deepseek_session_normed_compressed_value(
       compressed, norm_weight, head_dim, odd_dim, rms_eps);
-  const float exponent =
-      static_cast<float>(2u * pair) / static_cast<float>(rope_head_dim);
   const float angle =
-      static_cast<float>(position) / powf(rope_theta, exponent);
+      static_cast<float>(position) *
+      deepseek_rope_inv_freq(layout, pair, rope_head_dim, rope_theta);
   float sin_value = 0.0f;
   float cos_value = 0.0f;
   sincosf(angle, &sin_value, &cos_value);
-  return (rope_local & 1u) == 0u ? even * cos_value - odd * sin_value
-                                 : odd * cos_value + even * sin_value;
+  const float magnitude = deepseek_rope_magnitude(layout);
+  return magnitude *
+         ((rope_local & 1u) == 0u ? even * cos_value - odd * sin_value
+                                  : odd * cos_value + even * sin_value);
 }
 
 __device__ bool deepseek_session_write_fp8_ds_mla_compressed_kv(
@@ -367,7 +454,7 @@ __device__ bool deepseek_session_write_fp8_ds_mla_compressed_kv(
   for (uint32_t dim = nope; dim < head_dim; ++dim) {
     const float rotated = deepseek_session_rotated_compressed_value(
         compressed, arena + layout.deepseek_compressor_norm, head_dim, rope,
-        dim, compressed_pos, rms_eps, rope_theta);
+        dim, compressed_pos, rms_eps, rope_theta, layout);
     const uint16_t bits = deepseek_session_f32_to_bf16_bits(rotated);
     const uint32_t rope_local = dim - nope;
     data_ptr[nope + rope_local * 2u] = static_cast<uint8_t>(bits & 0xffu);
@@ -427,7 +514,7 @@ __device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
   for (uint32_t dim = 0; dim < head_dim; ++dim) {
     const float rotated = deepseek_session_rotated_compressed_value(
         compressed, arena + layout.deepseek_indexer_compressor_norm, head_dim,
-        rope, dim, compressed_pos, rms_eps, rope_theta);
+        rope, dim, compressed_pos, rms_eps, rope_theta, layout);
     const float quant_input = deepseek_session_bf16_bits_to_f32(
         deepseek_session_f32_to_bf16_bits(rotated));
     absmax = fmaxf(absmax, fabsf(quant_input));
@@ -438,7 +525,7 @@ __device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
   for (uint32_t dim = 0; dim < head_dim; ++dim) {
     const float rotated = deepseek_session_rotated_compressed_value(
         compressed, arena + layout.deepseek_indexer_compressor_norm, head_dim,
-        rope, dim, compressed_pos, rms_eps, rope_theta);
+        rope, dim, compressed_pos, rms_eps, rope_theta, layout);
     const float quant_input = deepseek_session_bf16_bits_to_f32(
         deepseek_session_f32_to_bf16_bits(rotated));
     const float scaled = fminf(fmaxf(quant_input / scale, -448.0f), 448.0f);
@@ -616,7 +703,7 @@ __device__ bool deepseek_session_write_v32_fp8_ds_mla_kv(
           kv_a[kDeepSeekV32PackedKvNopeBytes + offset],
           kv_a[kDeepSeekV32PackedKvNopeBytes + offset + rope_half], offset,
           kDeepSeekV32PackedKvRopeValues, position, rope_theta,
-          dim >= rope_half);
+          dim >= rope_half, layout);
     }
     const uint16_t bits = deepseek_session_f32_to_bf16_bits(value);
     rope_ptr[dim * 2u] = static_cast<uint8_t>(bits & 0xffu);
@@ -706,7 +793,8 @@ __device__ float deepseek_session_read_indexer_fp8_compressed_kv(
 
 __device__ float deepseek_session_indexer_query_rope_value(
     const float *query_head, uint32_t head_dim, uint32_t rope_head_dim,
-    uint32_t dim, uint32_t position, float rope_theta) {
+    uint32_t dim, uint32_t position, float rope_theta,
+    const SequenceLayerLayout &layout) {
   if (rope_theta <= 0.0f || rope_head_dim < 2 || rope_head_dim > head_dim) {
     return query_head[dim];
   }
@@ -723,15 +811,16 @@ __device__ float deepseek_session_indexer_query_rope_value(
   }
   const float even = query_head[even_dim];
   const float odd = query_head[odd_dim];
-  const float exponent =
-      static_cast<float>(2u * pair) / static_cast<float>(rope_head_dim);
   const float angle =
-      static_cast<float>(position) / powf(rope_theta, exponent);
+      static_cast<float>(position) *
+      deepseek_rope_inv_freq(layout, pair, rope_head_dim, rope_theta);
   float sin_value = 0.0f;
   float cos_value = 0.0f;
   sincosf(angle, &sin_value, &cos_value);
-  return (rope_local & 1u) == 0u ? even * cos_value - odd * sin_value
-                                 : odd * cos_value + even * sin_value;
+  const float magnitude = deepseek_rope_magnitude(layout);
+  return magnitude *
+         ((rope_local & 1u) == 0u ? even * cos_value - odd * sin_value
+                                  : odd * cos_value + even * sin_value);
 }
 
 __device__ bool deepseek_session_sparse_score_is_better(
@@ -833,7 +922,7 @@ __device__ uint32_t deepseek_session_select_v4_c4_sparse_slots(
       for (uint32_t dim = 0; dim < index_head_dim; ++dim) {
         float value = deepseek_session_indexer_query_rope_value(
             query_head, index_head_dim, rope_head_dim, dim, position,
-            rope_theta);
+            rope_theta, layout);
         if (dim >= index_head_dim - rope_head_dim) {
           value = deepseek_session_bf16_bits_to_f32(
               deepseek_session_f32_to_bf16_bits(value));

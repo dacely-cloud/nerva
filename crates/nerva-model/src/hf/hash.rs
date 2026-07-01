@@ -52,6 +52,7 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         metadata.num_nextn_predict_layers.unwrap_or_default() as u64,
         metadata.num_hash_layers.unwrap_or_default() as u64,
         metadata.swiglu_limit.unwrap_or_default().to_bits() as u64,
+        metadata.compress_rope_theta.unwrap_or_default().to_bits() as u64,
     ] {
         for byte in value.to_le_bytes() {
             hash ^= u64::from(byte);
@@ -72,6 +73,32 @@ pub(crate) fn hash_metadata(metadata: &HfModelMetadata) -> u64 {
         for byte in dtype.name().as_bytes() {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    if let Some(rope_scaling) = metadata.rope_scaling.as_ref() {
+        for byte in rope_scaling.rope_type.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        for value in [
+            rope_scaling.factor.unwrap_or_default().to_bits() as u64,
+            rope_scaling
+                .original_max_position_embeddings
+                .unwrap_or_default() as u64,
+            rope_scaling
+                .extrapolation_factor
+                .unwrap_or_default()
+                .to_bits() as u64,
+            rope_scaling.attn_factor.unwrap_or_default().to_bits() as u64,
+            rope_scaling.beta_fast.unwrap_or_default().to_bits() as u64,
+            rope_scaling.beta_slow.unwrap_or_default().to_bits() as u64,
+            rope_scaling.mscale.unwrap_or_default().to_bits() as u64,
+            rope_scaling.mscale_all_dim.unwrap_or_default().to_bits() as u64,
+        ] {
+            for byte in value.to_le_bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
         }
     }
     for value in &metadata.compress_ratios {

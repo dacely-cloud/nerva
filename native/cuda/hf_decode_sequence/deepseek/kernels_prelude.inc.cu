@@ -17,7 +17,8 @@ __device__ float deepseek_fp8_scaled_weight(const uint16_t *arena,
 __device__ float deepseek_rope_value_serial(float left, float right,
                                             uint32_t offset, uint32_t dim,
                                             uint32_t position, float theta,
-                                            bool second);
+                                            bool second,
+                                            const SequenceLayerLayout &layout);
 __device__ __forceinline__ uint16_t deepseek_session_f32_to_bf16_bits(
     float value);
 __device__ __forceinline__ float deepseek_session_bf16_bits_to_f32(

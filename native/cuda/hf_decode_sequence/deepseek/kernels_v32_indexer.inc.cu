@@ -94,10 +94,10 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
     const float right_value = values[right];
     values[left] = deepseek_rope_value_serial(
         left_value, right_value, offset, rope_dim, position, rope_theta,
-        false);
+        false, layout);
     values[right] = deepseek_rope_value_serial(
         left_value, right_value, offset, rope_dim, position, rope_theta,
-        true);
+        true, layout);
   }
   __syncthreads();
 
@@ -309,10 +309,10 @@ __global__ void hf_deepseek_v32_indexer_query_state_kernel(
     const float right_value = query_head[right];
     query_head[left] = deepseek_rope_value_serial(
         left_value, right_value, offset, rope_dim, position, rope_theta,
-        false);
+        false, layout);
     query_head[right] = deepseek_rope_value_serial(
         left_value, right_value, offset, rope_dim, position, rope_theta,
-        true);
+        true, layout);
   }
   __syncthreads();
 

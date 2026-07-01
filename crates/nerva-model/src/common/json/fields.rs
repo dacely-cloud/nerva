@@ -53,6 +53,26 @@ pub(crate) fn optional_f32(config_json: &str, key: &'static str) -> Result<Optio
     Ok(Some(parsed))
 }
 
+pub(crate) fn optional_nonnegative_f32(
+    config_json: &str,
+    key: &'static str,
+) -> Result<Option<f32>> {
+    let Some(value) = find_top_level_json_value(config_json, key)? else {
+        return Ok(None);
+    };
+    let parsed = value
+        .parse::<f32>()
+        .map_err(|_| NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be a number"),
+        })?;
+    if !parsed.is_finite() || parsed < 0.0 {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be nonnegative and finite"),
+        });
+    }
+    Ok(Some(parsed))
+}
+
 pub(crate) fn optional_object_f32(
     config_json: &str,
     object_key: &'static str,

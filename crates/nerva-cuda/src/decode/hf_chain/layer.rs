@@ -20,6 +20,8 @@ pub const CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER: u32 = 1 << 2;
 pub const CUDA_HF_DEEPSEEK_FLAG_MOE: u32 = 1 << 3;
 pub const CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW: u32 = 1 << 4;
 pub const CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS: u32 = 1 << 5;
+pub const CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE: u32 = 0;
+pub const CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK: u32 = 1;
 
 #[derive(Clone, Debug)]
 pub struct CudaHfDecodeChainLayer<'a> {
@@ -79,6 +81,15 @@ pub struct CudaHfDeepSeekLayer {
     pub routed_scaling_factor: f32,
     pub hc_eps: f32,
     pub hc_post_alpha: f32,
+    pub rope_scaling_type: u32,
+    pub rope_original_max_position: usize,
+    pub rope_scaling_factor: f32,
+    pub rope_extrapolation_factor: f32,
+    pub rope_attn_factor: f32,
+    pub rope_beta_fast: f32,
+    pub rope_beta_slow: f32,
+    pub rope_mscale: f32,
+    pub rope_mscale_all_dim: f32,
     pub compress_rope_theta: Option<f32>,
     pub swiglu_limit: Option<f32>,
 }
@@ -304,6 +315,23 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
                 .map_or(1.0, |layer| layer.routed_scaling_factor),
             deepseek_hc_eps: self.deepseek.map_or(0.0, |layer| layer.hc_eps),
             deepseek_hc_post_alpha: self.deepseek.map_or(0.0, |layer| layer.hc_post_alpha),
+            deepseek_rope_scaling_type: self.deepseek.map_or(0, |layer| layer.rope_scaling_type),
+            deepseek_rope_original_max_position: self
+                .deepseek
+                .map_or(0, |layer| layer.rope_original_max_position as u32),
+            deepseek_rope_scaling_factor: self
+                .deepseek
+                .map_or(0.0, |layer| layer.rope_scaling_factor),
+            deepseek_rope_extrapolation_factor: self
+                .deepseek
+                .map_or(1.0, |layer| layer.rope_extrapolation_factor),
+            deepseek_rope_attn_factor: self.deepseek.map_or(1.0, |layer| layer.rope_attn_factor),
+            deepseek_rope_beta_fast: self.deepseek.map_or(32.0, |layer| layer.rope_beta_fast),
+            deepseek_rope_beta_slow: self.deepseek.map_or(1.0, |layer| layer.rope_beta_slow),
+            deepseek_rope_mscale: self.deepseek.map_or(1.0, |layer| layer.rope_mscale),
+            deepseek_rope_mscale_all_dim: self
+                .deepseek
+                .map_or(0.0, |layer| layer.rope_mscale_all_dim),
             deepseek_compress_rope_theta: self
                 .deepseek
                 .and_then(|layer| layer.compress_rope_theta)
@@ -393,6 +421,23 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
                 .map_or(1.0, |layer| layer.routed_scaling_factor),
             deepseek_hc_eps: self.deepseek.map_or(0.0, |layer| layer.hc_eps),
             deepseek_hc_post_alpha: self.deepseek.map_or(0.0, |layer| layer.hc_post_alpha),
+            deepseek_rope_scaling_type: self.deepseek.map_or(0, |layer| layer.rope_scaling_type),
+            deepseek_rope_original_max_position: self
+                .deepseek
+                .map_or(0, |layer| layer.rope_original_max_position as u32),
+            deepseek_rope_scaling_factor: self
+                .deepseek
+                .map_or(0.0, |layer| layer.rope_scaling_factor),
+            deepseek_rope_extrapolation_factor: self
+                .deepseek
+                .map_or(1.0, |layer| layer.rope_extrapolation_factor),
+            deepseek_rope_attn_factor: self.deepseek.map_or(1.0, |layer| layer.rope_attn_factor),
+            deepseek_rope_beta_fast: self.deepseek.map_or(32.0, |layer| layer.rope_beta_fast),
+            deepseek_rope_beta_slow: self.deepseek.map_or(1.0, |layer| layer.rope_beta_slow),
+            deepseek_rope_mscale: self.deepseek.map_or(1.0, |layer| layer.rope_mscale),
+            deepseek_rope_mscale_all_dim: self
+                .deepseek
+                .map_or(0.0, |layer| layer.rope_mscale_all_dim),
             deepseek_compress_rope_theta: self
                 .deepseek
                 .and_then(|layer| layer.compress_rope_theta)
@@ -606,6 +651,27 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
                     );
                 }
                 if let Some(layer) = self.deepseek {
+                    if layer.rope_scaling_type != CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE
+                        && (layer.rope_scaling_type != CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK
+                            || layer.rope_original_max_position == 0
+                            || !layer.rope_scaling_factor.is_finite()
+                            || layer.rope_scaling_factor <= 0.0
+                            || !layer.rope_extrapolation_factor.is_finite()
+                            || layer.rope_extrapolation_factor <= 0.0
+                            || !layer.rope_attn_factor.is_finite()
+                            || layer.rope_attn_factor <= 0.0
+                            || !layer.rope_beta_fast.is_finite()
+                            || layer.rope_beta_fast <= 0.0
+                            || !layer.rope_beta_slow.is_finite()
+                            || layer.rope_beta_slow <= 0.0
+                            || !layer.rope_mscale.is_finite()
+                            || !layer.rope_mscale_all_dim.is_finite())
+                    {
+                        return Some(
+                            "CUDA HF decode chain DeepSeek scaled RoPE requires valid vLLM metadata"
+                                .to_string(),
+                        );
+                    }
                     if layer.is_v3_mla()
                         && (layer.router_num_groups == 0
                             || layer.router_topk_groups == 0

@@ -48,7 +48,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
       const uint32_t pair = dim < rope_half ? dim + rope_half : dim - rope_half;
       value = deepseek_rope_value_serial(
           kv_a[kv_lora_rank + offset], kv_a[kv_lora_rank + offset + rope_half],
-          offset, qk_rope, position, rope_theta, dim >= rope_half);
+          offset, qk_rope, position, rope_theta, dim >= rope_half, layout);
       (void)pair;
     }
     kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
@@ -144,7 +144,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
           const uint32_t offset = dim % rope_half;
           q_pe = deepseek_rope_value_serial(
               q[q_pe_base + offset], q[q_pe_base + offset + rope_half],
-              offset, qk_rope, position, rope_theta, dim >= rope_half);
+              offset, qk_rope, position, rope_theta, dim >= rope_half, layout);
         }
         score += q_pe *
                  encoded_to_f32(kv_keys[token_base + kv_lora_rank + dim],

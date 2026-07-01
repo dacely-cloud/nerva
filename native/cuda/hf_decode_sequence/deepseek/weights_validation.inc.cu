@@ -31,6 +31,24 @@ bool deepseek_dims_valid(const NervaCudaHfDecodeChainLayer &layer) {
        layer.deepseek_index_head_dim == 0)) {
     return false;
   }
+  if (layer.deepseek_rope_scaling_type != kDeepSeekRopeScalingNone) {
+    if (layer.deepseek_rope_scaling_type != kDeepSeekRopeScalingDeepSeek ||
+        layer.deepseek_rope_original_max_position == 0 ||
+        !(layer.deepseek_rope_scaling_factor > 0.0f) ||
+        !isfinite(layer.deepseek_rope_scaling_factor) ||
+        !(layer.deepseek_rope_extrapolation_factor > 0.0f) ||
+        !isfinite(layer.deepseek_rope_extrapolation_factor) ||
+        !(layer.deepseek_rope_attn_factor > 0.0f) ||
+        !isfinite(layer.deepseek_rope_attn_factor) ||
+        !(layer.deepseek_rope_beta_fast > 0.0f) ||
+        !isfinite(layer.deepseek_rope_beta_fast) ||
+        !(layer.deepseek_rope_beta_slow > 0.0f) ||
+        !isfinite(layer.deepseek_rope_beta_slow) ||
+        !isfinite(layer.deepseek_rope_mscale) ||
+        !isfinite(layer.deepseek_rope_mscale_all_dim)) {
+      return false;
+    }
+  }
   return true;
 }
 

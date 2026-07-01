@@ -35,6 +35,17 @@ void initialize_deepseek_layout_metadata(
       layer.deepseek_routed_scaling_factor;
   layout.deepseek_hc_eps = layer.deepseek_hc_eps;
   layout.deepseek_hc_post_alpha = layer.deepseek_hc_post_alpha;
+  layout.deepseek_rope_scaling_type = layer.deepseek_rope_scaling_type;
+  layout.deepseek_rope_original_max_position =
+      layer.deepseek_rope_original_max_position;
+  layout.deepseek_rope_scaling_factor = layer.deepseek_rope_scaling_factor;
+  layout.deepseek_rope_extrapolation_factor =
+      layer.deepseek_rope_extrapolation_factor;
+  layout.deepseek_rope_attn_factor = layer.deepseek_rope_attn_factor;
+  layout.deepseek_rope_beta_fast = layer.deepseek_rope_beta_fast;
+  layout.deepseek_rope_beta_slow = layer.deepseek_rope_beta_slow;
+  layout.deepseek_rope_mscale = layer.deepseek_rope_mscale;
+  layout.deepseek_rope_mscale_all_dim = layer.deepseek_rope_mscale_all_dim;
   layout.deepseek_compress_rope_theta = layer.deepseek_compress_rope_theta;
   layout.deepseek_swiglu_limit = layer.deepseek_swiglu_limit;
 }

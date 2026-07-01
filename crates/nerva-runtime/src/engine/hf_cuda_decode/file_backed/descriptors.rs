@@ -8,7 +8,8 @@ use nerva_cuda::decode::hf_chain::layer::{
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW,
     CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
     CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_DENSE,
+    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
+    CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK, CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE, CUDA_HF_MLP_DENSE,
     CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use nerva_cuda::decode::hf_sequence::weight_plan::{
@@ -176,6 +177,17 @@ fn deepseek_marker(
     {
         flags |= CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS;
     }
+    let (
+        rope_scaling_type,
+        rope_original_max_position,
+        rope_scaling_factor,
+        rope_extrapolation_factor,
+        rope_attn_factor,
+        rope_beta_fast,
+        rope_beta_slow,
+        rope_mscale,
+        rope_mscale_all_dim,
+    ) = deepseek_rope_scaling_fields(metadata)?;
 
     Ok(CudaHfDeepSeekLayer {
         mode,
@@ -207,9 +219,72 @@ fn deepseek_marker(
         } else {
             0.0
         },
+        rope_scaling_type,
+        rope_original_max_position,
+        rope_scaling_factor,
+        rope_extrapolation_factor,
+        rope_attn_factor,
+        rope_beta_fast,
+        rope_beta_slow,
+        rope_mscale,
+        rope_mscale_all_dim,
         compress_rope_theta: metadata.compress_rope_theta,
         swiglu_limit: metadata.swiglu_limit,
     })
+}
+
+fn deepseek_rope_scaling_fields(
+    metadata: &HfModelMetadata,
+) -> Result<(u32, usize, f32, f32, f32, f32, f32, f32, f32)> {
+    let Some(rope_scaling) = metadata.rope_scaling.as_ref() else {
+        return Ok((
+            CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE,
+            0,
+            0.0,
+            1.0,
+            1.0,
+            32.0,
+            1.0,
+            1.0,
+            0.0,
+        ));
+    };
+    if rope_scaling.rope_type != "deepseek_yarn"
+        && rope_scaling.rope_type != "deepseek_llama_scaling"
+    {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "DeepSeek CUDA descriptor unsupported rope scaling type {}",
+                rope_scaling.rope_type
+            ),
+        });
+    }
+    let factor = rope_scaling
+        .factor
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "DeepSeek scaled RoPE is missing factor".to_string(),
+        })?;
+    let original_max = rope_scaling
+        .original_max_position_embeddings
+        .ok_or_else(|| NervaError::InvalidArgument {
+            reason: "DeepSeek scaled RoPE is missing original_max_position_embeddings".to_string(),
+        })?;
+    let default_mscale = if metadata.architecture == HfArchitectureKind::DeepSeekV4 {
+        0.0
+    } else {
+        1.0
+    };
+    Ok((
+        CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
+        original_max,
+        factor,
+        rope_scaling.extrapolation_factor.unwrap_or(1.0),
+        rope_scaling.attn_factor.unwrap_or(1.0),
+        rope_scaling.beta_fast.unwrap_or(32.0),
+        rope_scaling.beta_slow.unwrap_or(1.0),
+        rope_scaling.mscale.unwrap_or(default_mscale),
+        rope_scaling.mscale_all_dim.unwrap_or(0.0),
+    ))
 }
 
 fn required_deepseek_usize(value: Option<usize>, name: &'static str) -> Result<usize> {
@@ -378,10 +453,12 @@ mod tests {
         CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
         CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
         CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
-        CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
+        CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
     };
     use nerva_model::hf::architecture::HfArchitectureKind;
-    use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
+    use nerva_model::hf::metadata::{
+        HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata, HfRopeScalingMetadata,
+    };
 
     use super::descriptor_marker_layers;
 
@@ -399,6 +476,7 @@ mod tests {
             max_position_embeddings: None,
             sliding_window: None,
             rope_theta: None,
+            rope_scaling: None,
             compress_rope_theta: None,
             rms_norm_eps: Some(1e-5),
             bos_token_id: None,
@@ -481,6 +559,7 @@ mod tests {
             max_position_embeddings: None,
             sliding_window: None,
             rope_theta: None,
+            rope_scaling: None,
             compress_rope_theta: None,
             rms_norm_eps: Some(1e-5),
             bos_token_id: None,
@@ -617,6 +696,17 @@ mod tests {
         metadata.num_hash_layers = Some(3);
         metadata.topk_method = Some("noaux_tc".to_string());
         metadata.scoring_func = Some("sqrtsoftplus".to_string());
+        metadata.rope_scaling = Some(HfRopeScalingMetadata {
+            rope_type: "deepseek_yarn".to_string(),
+            factor: Some(40.0),
+            original_max_position_embeddings: Some(4096),
+            extrapolation_factor: None,
+            attn_factor: None,
+            beta_fast: None,
+            beta_slow: None,
+            mscale: None,
+            mscale_all_dim: None,
+        });
         metadata.compress_rope_theta = Some(1_000_000.0);
         metadata.swiglu_limit = Some(10.0);
         metadata.expert_dtype = Some("fp4".to_string());
@@ -670,6 +760,12 @@ mod tests {
             Some(1_000_000.0)
         );
         assert_eq!(
+            layers[2].deepseek.unwrap().rope_scaling_type,
+            CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK
+        );
+        assert_eq!(layers[2].deepseek.unwrap().rope_scaling_factor, 40.0);
+        assert_eq!(layers[2].deepseek.unwrap().rope_mscale, 0.0);
+        assert_eq!(
             layers[3].deepseek.unwrap().compress_rope_theta,
             Some(1_000_000.0)
         );
@@ -690,6 +786,7 @@ mod tests {
             max_position_embeddings: None,
             sliding_window: None,
             rope_theta: None,
+            rope_scaling: None,
             compress_rope_theta: None,
             rms_norm_eps: Some(1e-5),
             bos_token_id: None,

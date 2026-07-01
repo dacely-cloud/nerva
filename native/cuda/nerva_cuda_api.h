@@ -317,6 +317,15 @@ typedef struct NervaCudaHfDecodeChainLayer {
   float deepseek_routed_scaling_factor;
   float deepseek_hc_eps;
   float deepseek_hc_post_alpha;
+  uint32_t deepseek_rope_scaling_type;
+  uint32_t deepseek_rope_original_max_position;
+  float deepseek_rope_scaling_factor;
+  float deepseek_rope_extrapolation_factor;
+  float deepseek_rope_attn_factor;
+  float deepseek_rope_beta_fast;
+  float deepseek_rope_beta_slow;
+  float deepseek_rope_mscale;
+  float deepseek_rope_mscale_all_dim;
   float deepseek_compress_rope_theta;
   float deepseek_swiglu_limit;
 } NervaCudaHfDecodeChainLayer;

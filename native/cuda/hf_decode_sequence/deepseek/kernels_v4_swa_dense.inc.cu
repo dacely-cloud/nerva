@@ -77,10 +77,10 @@ __global__ void hf_deepseek_v4_finalize_preprojected_qk_kernel(
         const float right_value = s.k[right];
         s.k[left] = deepseek_rope_value_serial(
             left_value, right_value, offset, qk_rope, position, rope_theta,
-            false);
+            false, layout);
         s.k[right] = deepseek_rope_value_serial(
             left_value, right_value, offset, qk_rope, position, rope_theta,
-            true);
+            true, layout);
       }
     }
     return;
@@ -112,10 +112,10 @@ __global__ void hf_deepseek_v4_finalize_preprojected_qk_kernel(
       const float right_value = s.q[right];
       s.q[left] = deepseek_rope_value_serial(
           left_value, right_value, offset, qk_rope, position, rope_theta,
-          false);
+          false, layout);
       s.q[right] = deepseek_rope_value_serial(
           left_value, right_value, offset, qk_rope, position, rope_theta,
-          true);
+          true, layout);
     }
   }
 }
@@ -597,10 +597,10 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
           const float right_value = s.q[right];
           s.q[left] = deepseek_rope_value_serial(
               left_value, right_value, offset, qk_rope, position, rope_theta,
-              false);
+              false, layout);
           s.q[right] = deepseek_rope_value_serial(
               left_value, right_value, offset, qk_rope, position, rope_theta,
-              true);
+              true, layout);
         }
       }
     }
@@ -612,10 +612,10 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
         const float right_value = s.k[right];
         s.k[left] = deepseek_rope_value_serial(
             left_value, right_value, offset, qk_rope, position, rope_theta,
-            false);
+            false, layout);
         s.k[right] = deepseek_rope_value_serial(
             left_value, right_value, offset, qk_rope, position, rope_theta,
-            true);
+            true, layout);
       }
     }
   }
@@ -753,17 +753,19 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
       for (uint32_t offset = 0; offset < rope_half; ++offset) {
         const uint32_t left = head_start + qk_nope + offset;
         const uint32_t right = left + rope_half;
-        const float exponent =
-            static_cast<float>(2u * offset) / static_cast<float>(qk_rope);
         const float angle =
-            static_cast<float>(position) / powf(rope_theta, exponent);
+            static_cast<float>(position) *
+            deepseek_rope_inv_freq(layout, offset, qk_rope, rope_theta);
         float sin_value = 0.0f;
         float cos_value = 0.0f;
         sincosf(angle, &sin_value, &cos_value);
+        const float magnitude = deepseek_rope_magnitude(layout);
         const float left_value = s.attn[left];
         const float right_value = s.attn[right];
-        s.attn[left] = left_value * cos_value + right_value * sin_value;
-        s.attn[right] = right_value * cos_value - left_value * sin_value;
+        s.attn[left] =
+            magnitude * (left_value * cos_value + right_value * sin_value);
+        s.attn[right] =
+            magnitude * (right_value * cos_value - left_value * sin_value);
       }
     }
   }

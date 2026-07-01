@@ -2,11 +2,14 @@ use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 
 use crate::common::json::fields::{
-    optional_bool, optional_f32, optional_first_string, optional_object_f32, optional_object_json,
-    optional_object_string, optional_string, optional_u32_or_first, optional_usize,
+    optional_bool, optional_f32, optional_first_string, optional_nonnegative_f32,
+    optional_object_f32, optional_object_json, optional_object_string, optional_string,
+    optional_u32_or_first, optional_usize,
 };
 use crate::hf::architecture::{HfArchitectureKind, architecture_kind_from_str};
-use crate::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
+use crate::hf::metadata::{
+    HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata, HfRopeScalingMetadata,
+};
 use crate::hf::validate::validate_hf_metadata;
 
 pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
@@ -34,6 +37,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         optional_model_usize(config_json, decoder_config_json, "max_position_embeddings")?;
     let sliding_window = optional_model_usize(config_json, decoder_config_json, "sliding_window")?;
     let rope_theta = parse_rope_theta(config_json, decoder_config_json)?;
+    let rope_scaling = parse_rope_scaling(config_json, decoder_config_json, architecture)?;
     let rms_norm_eps = parse_rms_norm_eps(config_json, decoder_config_json)?;
     let bos_token_id =
         optional_model_u32_or_first(config_json, decoder_config_json, "bos_token_id")?;
@@ -88,6 +92,7 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         max_position_embeddings,
         sliding_window,
         rope_theta,
+        rope_scaling,
         compress_rope_theta: deepseek_config.compress_rope_theta,
         rms_norm_eps,
         bos_token_id,
@@ -340,6 +345,80 @@ fn parse_rope_theta(root_json: &str, decoder_json: &str) -> Result<Option<f32>> 
             return Ok(Some(theta));
         }
         return optional_object_f32(root_json, "rope_scaling", "rope_theta");
+    }
+    Ok(None)
+}
+
+fn parse_rope_scaling(
+    root_json: &str,
+    decoder_json: &str,
+    architecture: HfArchitectureKind,
+) -> Result<Option<HfRopeScalingMetadata>> {
+    let Some((object_json, object_key)) = rope_config_object(root_json, decoder_json)? else {
+        return Ok(None);
+    };
+    let modern = optional_string(object_json, "rope_type")?;
+    let legacy = optional_string(object_json, "type")?;
+    let Some(raw_type) = modern.or(legacy) else {
+        return Ok(None);
+    };
+    if raw_type == "default" {
+        return Ok(None);
+    }
+    if !architecture.is_deepseek() {
+        return Err(NervaError::InvalidArgument {
+            reason: format!(
+                "unsupported HF {object_key} rope_type {raw_type} for exact runtime path"
+            ),
+        });
+    }
+
+    let apply_yarn_scaling = optional_bool(object_json, "apply_yarn_scaling")?.unwrap_or(true);
+    let rope_type = match raw_type.as_str() {
+        "yarn" | "deepseek_yarn" if apply_yarn_scaling => "deepseek_yarn",
+        "yarn" | "deepseek_yarn" | "deepseek_llama_scaling" => "deepseek_llama_scaling",
+        unsupported => {
+            return Err(NervaError::InvalidArgument {
+                reason: format!(
+                    "unsupported DeepSeek {object_key} rope_type {unsupported} for exact runtime path"
+                ),
+            });
+        }
+    };
+
+    Ok(Some(HfRopeScalingMetadata {
+        rope_type: rope_type.to_string(),
+        factor: optional_f32(object_json, "factor")?,
+        original_max_position_embeddings: optional_usize(
+            object_json,
+            "original_max_position_embeddings",
+        )?,
+        extrapolation_factor: optional_f32(object_json, "extrapolation_factor")?,
+        attn_factor: optional_f32(object_json, "attn_factor")?,
+        beta_fast: optional_f32(object_json, "beta_fast")?,
+        beta_slow: optional_f32(object_json, "beta_slow")?,
+        mscale: optional_nonnegative_f32(object_json, "mscale")?,
+        mscale_all_dim: optional_nonnegative_f32(object_json, "mscale_all_dim")?,
+    }))
+}
+
+fn rope_config_object<'a>(
+    root_json: &'a str,
+    decoder_json: &'a str,
+) -> Result<Option<(&'a str, &'static str)>> {
+    if let Some(object_json) = optional_object_json(decoder_json, "rope_parameters")? {
+        return Ok(Some((object_json, "rope_parameters")));
+    }
+    if let Some(object_json) = optional_object_json(decoder_json, "rope_scaling")? {
+        return Ok(Some((object_json, "rope_scaling")));
+    }
+    if !std::ptr::eq(root_json, decoder_json) {
+        if let Some(object_json) = optional_object_json(root_json, "rope_parameters")? {
+            return Ok(Some((object_json, "rope_parameters")));
+        }
+        if let Some(object_json) = optional_object_json(root_json, "rope_scaling")? {
+            return Ok(Some((object_json, "rope_scaling")));
+        }
     }
     Ok(None)
 }
