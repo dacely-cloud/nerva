@@ -1006,46 +1006,10 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       deepseek_fp8_ptr(session->device_arena, layout.w_o);
   const uint8_t *wo_a_scale =
       deepseek_fp8_ptr(session->device_arena, layout.deepseek_o_a_scale);
-  auto launch_output_group = [&](cudaStream_t stream,
-                                 uint32_t group) -> cudaError_t {
-    const uint32_t row_offset = group * o_lora_rank;
-    const uint64_t weight_offset =
-        static_cast<uint64_t>(row_offset) * wo_a_cols;
-    return launch_deepseek_fp8_e8m0_scale_matvec_row_offset(
-        stream, wo_a + weight_offset, wo_a_scale,
-        scratch.attn + static_cast<uint64_t>(group) * wo_a_cols,
-        o_lora_rank, wo_a_cols, row_offset, block_rows, block_cols,
-        scratch.q_gate + row_offset);
-  };
-  uint32_t max_aux_groups =
-      session->deepseek_v4_attention_aux_stream_count <
-              kDeepSeekV4AttentionAuxStreamCount
-          ? session->deepseek_v4_attention_aux_stream_count
-          : kDeepSeekV4AttentionAuxStreamCount;
-  if (o_groups > 1u && max_aux_groups != 0 &&
-      deepseek_v4_aux_ready(session, max_aux_groups, max_aux_groups + 1u)) {
-    for (uint32_t group_base = 0; group_base < o_groups;) {
-      uint32_t wave = o_groups - group_base;
-      if (wave > max_aux_groups) {
-        wave = max_aux_groups;
-      }
-      err = deepseek_v4_aux_fanout(session, wave);
-      if (err != cudaSuccess) return err;
-      for (uint32_t lane = 0; lane < wave; ++lane) {
-        err = launch_output_group(session->deepseek_v4_attention_aux_streams[lane],
-                                  group_base + lane);
-        if (err != cudaSuccess) return err;
-      }
-      err = deepseek_v4_aux_join(session, wave);
-      if (err != cudaSuccess) return err;
-      group_base += wave;
-    }
-  } else {
-    for (uint32_t group = 0; group < o_groups; ++group) {
-      err = launch_output_group(session->stream, group);
-      if (err != cudaSuccess) return err;
-    }
-  }
+  err = launch_deepseek_fp8_e8m0_scale_grouped_matvec(
+      session->stream, wo_a, wo_a_scale, scratch.attn, o_groups, o_lora_rank,
+      wo_a_cols, block_rows, block_cols, scratch.q_gate);
+  if (err != cudaSuccess) return err;
   err = launch_deepseek_fp8_e8m0_scale_matvec(
       session->stream,
       deepseek_fp8_ptr(session->device_arena, layout.deepseek_o_b),
