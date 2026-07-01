@@ -516,6 +516,16 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
   if (layout.mlp_kind == kMlpKindSparseMoe) {
     err = deepseek_profile_begin_if(session, profile);
     if (err != cudaSuccess) return err;
+    const uint32_t router_blocks =
+        layout.num_experts == 0 ? 1u : layout.num_experts;
+    hf_deepseek_v3_sparse_moe_router_logits_kernel<<<
+        router_blocks, kDecodeThreads, 0, session->stream>>>(
+        session->device_arena, layout, session->dtype, session->hidden,
+        attention_rows, kv_cache_width, session->intermediate,
+        session->device_step, max_steps, session->device_scratch,
+        session->device_projection_input);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
     hf_deepseek_v3_sparse_moe_route_kernel<<<1, kDecodeThreads, 0,
                                              session->stream>>>(
         session->device_arena, layout, session->dtype, session->hidden,
@@ -1069,6 +1079,15 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
 
   if (sparse_moe_mlp) {
     err = deepseek_profile_begin_if(session, profile);
+    if (err != cudaSuccess) return err;
+    const uint32_t router_blocks =
+        layout.num_experts == 0 ? 1u : layout.num_experts;
+    hf_deepseek_v4_sparse_moe_router_logits_kernel<<<
+        router_blocks, kDecodeThreads, 0, session->stream>>>(
+        session->device_arena, layout, session->hidden, attention_hidden,
+        session->head_dim, session->intermediate, session->device_step,
+        max_steps, session->device_scratch);
+    err = cudaGetLastError();
     if (err != cudaSuccess) return err;
     hf_deepseek_v4_sparse_moe_route_kernel<<<1, kDecodeThreads, 0,
                                              session->stream>>>(

@@ -8,6 +8,36 @@ __device__ __forceinline__ float *deepseek_moe_route_weights(
   return s.up;
 }
 
+__global__ void hf_deepseek_v3_sparse_moe_router_logits_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float *scratch, const uint16_t *projection_input) {
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return;
+  }
+  const uint32_t expert = blockIdx.x;
+  const uint32_t num_experts = layout.num_experts;
+  if (layout.w_router == kMissingOffset || projection_input == nullptr ||
+      num_experts == 0 || num_experts > kSparseMoeExpertsMax ||
+      expert >= num_experts || num_experts > intermediate) {
+    return;
+  }
+
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const uint64_t row = layout.w_router + static_cast<uint64_t>(expert) * hidden;
+  float sum = 0.0f;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    sum += encoded_to_f32(arena[row + col], kDTypeBF16) *
+           encoded_to_f32(projection_input[col], dtype);
+  }
+  sum = block_sum(sum);
+  if (threadIdx.x == 0) {
+    s.ff[expert] = sum;
+  }
+}
+
 __global__ void hf_deepseek_v3_sparse_moe_route_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
@@ -17,7 +47,6 @@ __global__ void hf_deepseek_v3_sparse_moe_route_kernel(
   if (step_cursor != nullptr && *step_cursor >= max_steps) {
     return;
   }
-  __shared__ float router_logits[kSparseMoeExpertsMax];
   __shared__ float correction_bias[kSparseMoeExpertsMax];
   __shared__ uint32_t selected_experts[kSparseMoeTopKMax];
   __shared__ float selected_weights[kSparseMoeTopKMax];
@@ -45,20 +74,10 @@ __global__ void hf_deepseek_v3_sparse_moe_route_kernel(
       num_experts == 0 || num_experts > kSparseMoeExpertsMax ||
       top_k == 0 || top_k > kSparseMoeTopKMax || top_k > num_experts ||
       moe_intermediate == 0 || moe_intermediate > intermediate ||
-      top_k + 1u > intermediate) {
+      top_k + 1u > intermediate || num_experts > intermediate) {
     return;
   }
 
-  for (uint32_t expert = threadIdx.x; expert < num_experts;
-       expert += blockDim.x) {
-    float sum = 0.0f;
-    const uint64_t row = layout.w_router +
-                         static_cast<uint64_t>(expert) * hidden;
-    for (uint32_t col = 0; col < hidden; ++col) {
-      sum += encoded_to_f32(arena[row + col], kDTypeBF16) * s.mlp_norm[col];
-    }
-    router_logits[expert] = sum;
-  }
   const bool has_router_bias =
       (layout.deepseek_flags & kDeepSeekFlagRouterBias) != 0;
   const uint64_t router_bias_offset =
@@ -85,7 +104,7 @@ __global__ void hf_deepseek_v3_sparse_moe_route_kernel(
             ? layout.deepseek_routed_scaling_factor
             : 1.0f;
     route_status = nerva::deepseek::router::route_v3_grouped_sigmoid(
-        router_logits, has_router_bias ? correction_bias : nullptr,
+        s.ff, has_router_bias ? correction_bias : nullptr,
         num_experts, router_groups, router_topk_groups, top_k,
         layout.norm_topk_prob, routed_scale, selected_experts,
         selected_weights);
@@ -108,6 +127,34 @@ __global__ void hf_deepseek_v3_sparse_moe_route_kernel(
   }
 }
 
+__global__ void hf_deepseek_v4_sparse_moe_router_logits_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, float *scratch) {
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return;
+  }
+  const uint32_t expert = blockIdx.x;
+  const uint32_t num_experts = layout.num_experts;
+  if (layout.w_router == kMissingOffset || num_experts == 0 ||
+      num_experts > kSparseMoeExpertsMax || expert >= num_experts ||
+      num_experts > intermediate) {
+    return;
+  }
+
+  LayerScratch s =
+      layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
+  const uint64_t row = layout.w_router + static_cast<uint64_t>(expert) * hidden;
+  float sum = 0.0f;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    sum += encoded_to_f32(arena[row + col], kDTypeBF16) * s.mlp_norm[col];
+  }
+  sum = block_sum(sum);
+  if (threadIdx.x == 0) {
+    s.ff[expert] = sum;
+  }
+}
+
 __global__ void hf_deepseek_v4_sparse_moe_route_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
@@ -118,7 +165,6 @@ __global__ void hf_deepseek_v4_sparse_moe_route_kernel(
   if (step_cursor != nullptr && *step_cursor >= max_steps) {
     return;
   }
-  __shared__ float router_logits[kSparseMoeExpertsMax];
   __shared__ float correction_bias[kSparseMoeExpertsMax];
   __shared__ uint32_t selected_experts[kSparseMoeTopKMax];
   __shared__ float selected_weights[kSparseMoeTopKMax];
@@ -146,7 +192,8 @@ __global__ void hf_deepseek_v4_sparse_moe_route_kernel(
       num_experts == 0 || num_experts > kSparseMoeExpertsMax ||
       top_k == 0 || top_k > kSparseMoeTopKMax || top_k > num_experts ||
       moe_intermediate == 0 || moe_intermediate > intermediate ||
-      (hidden & 1u) != 0 || (moe_intermediate & 1u) != 0) {
+      num_experts > intermediate || (hidden & 1u) != 0 ||
+      (moe_intermediate & 1u) != 0) {
     return;
   }
 
@@ -156,13 +203,6 @@ __global__ void hf_deepseek_v4_sparse_moe_route_kernel(
       (layout.deepseek_flags & kDeepSeekFlagHashRouter) != 0;
   for (uint32_t expert = threadIdx.x; expert < num_experts;
        expert += blockDim.x) {
-    float sum = 0.0f;
-    const uint64_t row = layout.w_router +
-                         static_cast<uint64_t>(expert) * hidden;
-    for (uint32_t col = 0; col < hidden; ++col) {
-      sum += encoded_to_f32(arena[row + col], kDTypeBF16) * s.mlp_norm[col];
-    }
-    router_logits[expert] = sum;
     correction_bias[expert] =
         hash_router ? 0.0f
                     : f32_from_u16_slots(arena + router_metadata_offset,
@@ -200,7 +240,7 @@ __global__ void hf_deepseek_v4_sparse_moe_route_kernel(
           const uint32_t expert = static_cast<uint32_t>(expert64);
           selected_experts[rank] = expert;
           selected_weights[rank] =
-              nerva::deepseek::router::sqrtsoftplus_score(router_logits[expert]);
+              nerva::deepseek::router::sqrtsoftplus_score(s.ff[expert]);
           weight_sum += selected_weights[rank];
         }
         if (route_status == 0) {
@@ -215,7 +255,7 @@ __global__ void hf_deepseek_v4_sparse_moe_route_kernel(
       }
     } else {
       route_status = nerva::deepseek::router::route_v4_sqrtsoftplus(
-          router_logits, correction_bias, num_experts, top_k,
+          s.ff, correction_bias, num_experts, top_k,
           layout.norm_topk_prob, routed_scale, selected_experts,
           selected_weights);
     }

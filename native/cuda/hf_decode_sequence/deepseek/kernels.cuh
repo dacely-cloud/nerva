@@ -123,6 +123,11 @@ __global__ void hf_deepseek_v3_sparse_moe_route_kernel(
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float *scratch, uint16_t *projection_input,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v3_sparse_moe_router_logits_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float *scratch, const uint16_t *projection_input);
 __global__ void hf_deepseek_v4_sparse_moe_route_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
@@ -130,6 +135,10 @@ __global__ void hf_deepseek_v4_sparse_moe_route_kernel(
     const uint32_t *prompt_tokens, uint32_t prompt_token_count,
     const NervaCudaSyntheticTokenSlot *slots, float *scratch,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v4_sparse_moe_router_logits_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, float *scratch);
 __global__ void hf_deepseek_v3_sparse_moe_expert_gate_up_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
