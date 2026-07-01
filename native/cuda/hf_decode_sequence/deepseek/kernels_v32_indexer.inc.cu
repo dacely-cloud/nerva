@@ -955,12 +955,18 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
     uint32_t kv_block_count, const uint32_t *kv_block_table,
+    int32_t *sparse_topk_slots, uint32_t *sparse_topk_count,
     uint64_t *deepseek_runtime_counters) {
-  if (blockIdx.x != 0 || threadIdx.x != 0 ||
-      (step_cursor != nullptr && *step_cursor >= max_steps)) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) {
     return;
   }
-  if (deepseek_runtime_counters == nullptr) {
+  if (sparse_topk_count != nullptr) {
+    *sparse_topk_count = 0;
+  }
+  if (step_cursor != nullptr && *step_cursor >= max_steps) {
+    return;
+  }
+  if (sparse_topk_slots == nullptr || sparse_topk_count == nullptr) {
     return;
   }
   int32_t topk_slots[kDeepSeekSessionMaxSparseTopK];
@@ -976,24 +982,30 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
   if (selected == 0) {
     return;
   }
-  atomicAdd(
-      reinterpret_cast<unsigned long long *>(
-          deepseek_runtime_counters +
-          kDeepSeekRuntimeCounterSparseTopkSelections),
-      1ull);
-  atomicAdd(
-      reinterpret_cast<unsigned long long *>(
-          deepseek_runtime_counters +
-          kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
-      static_cast<unsigned long long>(selected));
-  atomicAdd(
-      reinterpret_cast<unsigned long long *>(
-          deepseek_runtime_counters +
-          kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
-      static_cast<unsigned long long>(candidates_scored));
-  atomicAdd(
-      reinterpret_cast<unsigned long long *>(
-          deepseek_runtime_counters +
-          kDeepSeekRuntimeCounterSparseTopkSelectionHash),
-      selection_hash);
+  *sparse_topk_count = selected;
+  for (uint32_t rank = 0; rank < selected; ++rank) {
+    sparse_topk_slots[rank] = topk_slots[rank];
+  }
+  if (deepseek_runtime_counters != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelections),
+        1ull);
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
+        static_cast<unsigned long long>(selected));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
+        static_cast<unsigned long long>(candidates_scored));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelectionHash),
+        selection_hash);
+  }
 }

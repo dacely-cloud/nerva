@@ -271,7 +271,10 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     if (layout.deepseek_mode != 0) {
       has_deepseek_layout = true;
     }
-    if (layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer) {
+    if (layout.deepseek_mode == kDeepSeekModeV4CompressedIndexer ||
+        (layout.deepseek_mode == kDeepSeekModeV32MlaIndexer &&
+         (layout.deepseek_flags & kDeepSeekFlagSparseIndexer) != 0 &&
+         layout.deepseek_index_topk != 0)) {
       has_deepseek_sparse_topk_layout = true;
     }
   }

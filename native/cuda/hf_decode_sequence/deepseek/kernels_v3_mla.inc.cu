@@ -205,6 +205,8 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     const uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
+    const int32_t *sparse_topk_slots,
+    const uint32_t *sparse_topk_count,
     uint64_t *deepseek_runtime_counters) {
   if (blockIdx.x >= heads ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
@@ -232,9 +234,9 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   float *latent_output = shared;
   float *q_nope_latent = shared + kv_lora_rank;
   float *q_rope = q_nope_latent + kv_lora_rank;
-  int32_t *sparse_slots = reinterpret_cast<int32_t *>(q_rope + qk_rope);
+  int32_t *local_sparse_slots = reinterpret_cast<int32_t *>(q_rope + qk_rope);
   float *sparse_scores =
-      reinterpret_cast<float *>(sparse_slots + kDeepSeekSessionMaxSparseTopK);
+      reinterpret_cast<float *>(local_sparse_slots + kDeepSeekSessionMaxSparseTopK);
   __shared__ uint32_t sparse_attention_tokens_shared;
   __shared__ uint32_t sparse_candidates_scored_shared;
   __shared__ unsigned long long sparse_selection_hash_shared;
@@ -259,6 +261,8 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   const bool sparse_full_prefix =
       sparse_candidate_tokens != 0 &&
       sparse_topk_limit >= sparse_candidate_tokens;
+  const bool has_precomputed_sparse =
+      sparse_topk_slots != nullptr && sparse_topk_count != nullptr;
   uint32_t sparse_attention_tokens = 0;
   bool use_sparse_attention = false;
   if (threadIdx.x == 0) {
@@ -268,7 +272,14 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     use_sparse_attention_shared = 0u;
   }
   __syncthreads();
-  if (sparse_full_prefix) {
+  if (has_precomputed_sparse) {
+    if (threadIdx.x == 0) {
+      sparse_attention_tokens = min(*sparse_topk_count,
+                                    kDeepSeekSessionMaxSparseTopK);
+      sparse_attention_tokens_shared = sparse_attention_tokens;
+      use_sparse_attention_shared = sparse_attention_tokens != 0 ? 1u : 0u;
+    }
+  } else if (sparse_full_prefix) {
     sparse_attention_tokens = sparse_candidate_tokens;
     if (threadIdx.x == 0) {
       for (uint32_t rank = 0; rank < sparse_attention_tokens; ++rank) {
@@ -289,7 +300,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
             deepseek_indexer_state_offset_bytes, deepseek_indexer_kv,
             deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
             kv_block_count, kv_block_table,
-            sparse_slots, sparse_scores, &sparse_candidates_scored,
+            local_sparse_slots, sparse_scores, &sparse_candidates_scored,
             &sparse_selection_hash);
       sparse_attention_tokens_shared = sparse_attention_tokens;
       sparse_candidates_scored_shared = sparse_candidates_scored;
@@ -303,6 +314,8 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   sparse_selection_hash = sparse_selection_hash_shared;
   use_sparse_attention = use_sparse_attention_shared != 0u;
   const bool record_sparse_attention = sparse_full_prefix || use_sparse_attention;
+  const bool record_sparse_selection_metrics =
+      record_sparse_attention && !has_precomputed_sparse;
   const uint32_t attention_tokens =
       record_sparse_attention ? sparse_attention_tokens : position + 1u;
   if (threadIdx.x == 0 && head == 0 && deepseek_runtime_counters != nullptr) {
@@ -311,7 +324,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
             deepseek_runtime_counters +
             kDeepSeekRuntimeCounterRawAttentionTokensScanned),
         static_cast<unsigned long long>(attention_tokens));
-    if (record_sparse_attention) {
+    if (record_sparse_selection_metrics) {
       atomicAdd(
           reinterpret_cast<unsigned long long *>(
               deepseek_runtime_counters +
@@ -390,7 +403,10 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
        ++attention_index) {
     const uint32_t token =
         use_sparse_attention
-            ? static_cast<uint32_t>(sparse_slots[attention_index])
+            ? static_cast<uint32_t>(
+                  has_precomputed_sparse
+                      ? sparse_topk_slots[attention_index]
+                      : local_sparse_slots[attention_index])
             : attention_index;
     if (token > position) {
       continue;
