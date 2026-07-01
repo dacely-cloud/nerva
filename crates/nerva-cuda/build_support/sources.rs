@@ -128,7 +128,11 @@ pub(crate) fn print_env_rerun_directives() {
         "CMAKE_CUDA_ARCHITECTURES",
         "NERVA_CUDA_ARCH",
         "CUDA_ARCH",
+        "NERVA_CUDA_BUILD",
+        "CXX",
+        "AR",
         "NERVA_OPTIX_SDK_ROOT",
+        "NERVA_CUDNN_FRONTEND_ROOT",
     ] {
         println!("cargo:rerun-if-env-changed={var}");
     }

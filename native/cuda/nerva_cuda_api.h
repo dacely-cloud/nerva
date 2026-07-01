@@ -2190,6 +2190,9 @@ int nerva_cuda_hf_decode_sequence_deepseek_v32_indexer_query_state_snapshot(
 int nerva_cuda_hf_decode_sequence_deepseek_v4_compressed_kv_snapshot(
     const NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest *request,
     NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult *out);
+int nerva_cuda_hf_decode_sequence_deepseek_v4_indexer_kv_snapshot(
+    const NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotRequest *request,
+    NervaCudaHfDecodeSequenceDeepSeekV4CompressedKvSnapshotResult *out);
 int nerva_cuda_hf_decode_sequence_deepseek_v4_mhc_snapshot(
     const NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotRequest *request,
     NervaCudaHfDecodeSequenceDeepSeekV4MhcSnapshotResult *out);

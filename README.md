@@ -674,7 +674,7 @@ This repository is in the runtime foundation stage, so it is not a production mo
 
 ### Requirements
 
-NERVA currently builds on Linux only, and the first host targets are Ubuntu on `x86_64` and `aarch64`.
+NERVA currently builds on Linux only, and the first host targets are Ubuntu on `x86_64` and `aarch64`. The Rust/core/model/server crates and CLI binary build for `aarch64-unknown-linux-gnu`; when the active CUDA toolkit does not provide an ARM target directory, the CUDA crate links target-native stubs and reports CUDA unavailable at runtime. Full CUDA-backed ARM binaries require an ARM Linux host, or a cross environment with ARM CUDA/cuDNN libraries and a CUDA target directory such as `aarch64-linux` or `sbsa-linux`. Set `NERVA_CUDA_BUILD=native` to require real CUDA instead of the automatic stub fallback.
 
 The CUDA backend supports **CUDA 12.x and CUDA 13.x only.** Older CUDA stacks are not supported, and newer CUDA major versions should be treated as unsupported until the loader and smoke checks are updated to match. The CUDA loader is written to probe platform-specific driver and runtime library names, but the runtime crates stay gated to Linux while the M0 runtime contracts are being built.
 

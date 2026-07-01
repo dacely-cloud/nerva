@@ -20,5 +20,8 @@ pub mod projection;
 pub mod sampler;
 pub mod smoke;
 
+#[cfg(nerva_cuda_native_stubs)]
+mod native_stubs;
+
 #[cfg(test)]
 mod tests;
