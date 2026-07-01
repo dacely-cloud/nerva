@@ -466,7 +466,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
     let nerva_artifact = artifact_dir.join("nerva.json");
     let compare_artifact = artifact_dir.join("compare.json");
 
-    let vllm_command = deepseek_vllm_generate_command(
+    let mut vllm_command = deepseek_vllm_generate_command(
         &repo_root,
         &vllm_root,
         &checkpoint_dir,
@@ -481,7 +481,23 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
         max_new_tokens,
     );
 
-    let vllm_run = run_json_command(&vllm_command, &repo_root)?;
+    let mut vllm_run = run_json_command(&vllm_command, &repo_root)?;
+    if vllm_deepgemm_scale_failure(&vllm_run) {
+        let fallback_command = deepseek_vllm_generate_command_with_backends(
+            &repo_root,
+            &vllm_root,
+            &checkpoint_dir,
+            &prompt_spec,
+            max_context_tokens,
+            max_new_tokens,
+            "triton",
+            "triton",
+            "auto",
+        );
+        let fallback_run = run_json_command(&fallback_command, &repo_root)?;
+        vllm_command = fallback_command;
+        vllm_run = fallback_run;
+    }
     std::fs::write(&vllm_artifact, &vllm_run.json).map_err(|err| {
         format!(
             "failed to write vLLM artifact {}: {err}",
@@ -2534,6 +2550,31 @@ fn deepseek_vllm_generate_command(
     max_context_tokens: usize,
     max_new_tokens: usize,
 ) -> Vec<String> {
+    deepseek_vllm_generate_command_with_backends(
+        repo_root,
+        vllm_root,
+        checkpoint_dir,
+        prompt_spec,
+        max_context_tokens,
+        max_new_tokens,
+        "auto",
+        "auto",
+        "auto",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn deepseek_vllm_generate_command_with_backends(
+    repo_root: &Path,
+    vllm_root: &Path,
+    checkpoint_dir: &str,
+    prompt_spec: &str,
+    max_context_tokens: usize,
+    max_new_tokens: usize,
+    linear_backend: &str,
+    moe_backend: &str,
+    attention_backend: &str,
+) -> Vec<String> {
     let venv_python = vllm_root.join(".venv/bin/python");
     let python = if venv_python.is_file() {
         venv_python.display().to_string()
@@ -2567,11 +2608,11 @@ fn deepseek_vllm_generate_command(
         "--dtype".to_string(),
         "bfloat16".to_string(),
         "--linear-backend".to_string(),
-        "auto".to_string(),
+        linear_backend.to_string(),
         "--moe-backend".to_string(),
-        "auto".to_string(),
+        moe_backend.to_string(),
         "--attention-backend".to_string(),
-        "auto".to_string(),
+        attention_backend.to_string(),
         "--runs".to_string(),
         "3".to_string(),
         "--warmup-runs".to_string(),
@@ -2688,6 +2729,24 @@ fn command_run_json(run: Option<&DeepSeekCommandRun>) -> String {
         }
         None => "null".to_string(),
     }
+}
+
+fn vllm_deepgemm_scale_failure(run: &DeepSeekCommandRun) -> bool {
+    if run.status == 0 {
+        return false;
+    }
+    let error = find_first_json_string_field(&run.json, "error")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let traceback = find_first_json_string_field(&run.json, "traceback_tail")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let evidence = format!("{} {} {}", error, traceback, run.stderr_tail);
+    evidence.contains("Unknown SF transformation")
+        || (evidence.contains("deep_gemm")
+            && evidence.contains("transform_sf_into_required_layout"))
 }
 
 fn command_failure_json(engine: &str, run: &DeepSeekCommandRun) -> String {
