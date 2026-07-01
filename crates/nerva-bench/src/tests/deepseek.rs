@@ -161,6 +161,7 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v3_split_fp8_moe_runtime"));
     assert!(json.contains("deepseek_compressed_slot_mapping_reference"));
     assert!(json.contains("cuda_deepseek_compressed_slot_mapping_api"));
+    assert!(json.contains("deepseek_v32_vllm_index_topk_skip_schedule"));
     assert!(json.contains("cuda_hf_sequence_deepseek_packed_kv_footprint_accounting"));
     assert!(json.contains("cuda_hf_sequence_deepseek_native_layout_pack"));
     assert!(json.contains("\"unit\":\"deepseek_v32_sparse_attention_indexer\""));

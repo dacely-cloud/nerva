@@ -118,6 +118,9 @@ pub struct HfModelMetadata {
     pub qk_rope_head_dim: Option<usize>,
     pub v_head_dim: Option<usize>,
     pub index_topk: Option<usize>,
+    pub index_topk_freq: Option<usize>,
+    pub index_skip_topk_offset: Option<usize>,
+    pub index_topk_pattern: Vec<String>,
     pub index_n_heads: Option<usize>,
     pub index_head_dim: Option<usize>,
     pub compress_ratios: Vec<usize>,
@@ -187,12 +190,13 @@ impl HfModelMetadata {
             .count();
         let dense_mlp_layers = self.mlp_layer_types.len().saturating_sub(moe_layers);
         let compress_ratios = json_usize_array(&self.compress_ratios);
+        let index_topk_pattern = json_string_array(&self.index_topk_pattern);
         let rope_scaling = self
             .rope_scaling
             .as_ref()
             .map_or_else(|| "null".to_string(), HfRopeScalingMetadata::to_json);
         format!(
-            "{{\"architecture\":\"{}\",\"hidden_size\":{},\"num_hidden_layers\":{},\"num_attention_heads\":{},\"num_key_value_heads\":{},\"head_dim\":{},\"attention_hidden_size\":{},\"kv_hidden_size\":{},\"kv_groups\":{},\"intermediate_size\":{},\"moe_intermediate_size\":{},\"shared_expert_intermediate_size\":{},\"num_experts\":{},\"num_experts_per_tok\":{},\"decoder_sparse_step\":{},\"norm_topk_prob\":{},\"moe_first_k_dense_replace\":{},\"moe_layer_freq\":{},\"num_expert_groups\":{},\"topk_group\":{},\"topk_method\":{},\"scoring_func\":{},\"routed_scaling_factor\":{},\"q_lora_rank\":{},\"kv_lora_rank\":{},\"o_lora_rank\":{},\"o_groups\":{},\"qk_nope_head_dim\":{},\"qk_rope_head_dim\":{},\"v_head_dim\":{},\"index_topk\":{},\"index_n_heads\":{},\"index_head_dim\":{},\"compress_ratios\":{},\"hc_mult\":{},\"hc_sinkhorn_iters\":{},\"hc_eps\":{},\"num_nextn_predict_layers\":{},\"num_hash_layers\":{},\"swiglu_limit\":{},\"expert_dtype\":{},\"vocab_size\":{},\"max_position_embeddings\":{},\"sliding_window\":{},\"rope_theta\":{},\"rope_scaling\":{},\"compress_rope_theta\":{},\"rms_norm_eps\":{},\"bos_token_id\":{},\"eos_token_id\":{},\"tie_word_embeddings\":{},\"hidden_act\":{},\"attention_bias\":{},\"attention_qkv_bias\":{},\"attention_output_bias\":{},\"qk_norm\":{},\"mlp_bias\":{},\"linear_conv_kernel_dim\":{},\"linear_key_head_dim\":{},\"linear_value_head_dim\":{},\"linear_num_key_heads\":{},\"linear_num_value_heads\":{},\"attention_full_layers\":{},\"attention_linear_layers\":{},\"mlp_dense_layers\":{},\"mlp_moe_layers\":{},\"torch_dtype\":{}}}",
+            "{{\"architecture\":\"{}\",\"hidden_size\":{},\"num_hidden_layers\":{},\"num_attention_heads\":{},\"num_key_value_heads\":{},\"head_dim\":{},\"attention_hidden_size\":{},\"kv_hidden_size\":{},\"kv_groups\":{},\"intermediate_size\":{},\"moe_intermediate_size\":{},\"shared_expert_intermediate_size\":{},\"num_experts\":{},\"num_experts_per_tok\":{},\"decoder_sparse_step\":{},\"norm_topk_prob\":{},\"moe_first_k_dense_replace\":{},\"moe_layer_freq\":{},\"num_expert_groups\":{},\"topk_group\":{},\"topk_method\":{},\"scoring_func\":{},\"routed_scaling_factor\":{},\"q_lora_rank\":{},\"kv_lora_rank\":{},\"o_lora_rank\":{},\"o_groups\":{},\"qk_nope_head_dim\":{},\"qk_rope_head_dim\":{},\"v_head_dim\":{},\"index_topk\":{},\"index_topk_freq\":{},\"index_skip_topk_offset\":{},\"index_topk_pattern\":{},\"index_n_heads\":{},\"index_head_dim\":{},\"compress_ratios\":{},\"hc_mult\":{},\"hc_sinkhorn_iters\":{},\"hc_eps\":{},\"num_nextn_predict_layers\":{},\"num_hash_layers\":{},\"swiglu_limit\":{},\"expert_dtype\":{},\"vocab_size\":{},\"max_position_embeddings\":{},\"sliding_window\":{},\"rope_theta\":{},\"rope_scaling\":{},\"compress_rope_theta\":{},\"rms_norm_eps\":{},\"bos_token_id\":{},\"eos_token_id\":{},\"tie_word_embeddings\":{},\"hidden_act\":{},\"attention_bias\":{},\"attention_qkv_bias\":{},\"attention_output_bias\":{},\"qk_norm\":{},\"mlp_bias\":{},\"linear_conv_kernel_dim\":{},\"linear_key_head_dim\":{},\"linear_value_head_dim\":{},\"linear_num_key_heads\":{},\"linear_num_value_heads\":{},\"attention_full_layers\":{},\"attention_linear_layers\":{},\"mlp_dense_layers\":{},\"mlp_moe_layers\":{},\"torch_dtype\":{}}}",
             self.architecture.as_str(),
             self.hidden_size,
             self.num_hidden_layers,
@@ -224,6 +228,9 @@ impl HfModelMetadata {
             json_opt_usize(self.qk_rope_head_dim),
             json_opt_usize(self.v_head_dim),
             json_opt_usize(self.index_topk),
+            json_opt_usize(self.index_topk_freq),
+            json_opt_usize(self.index_skip_topk_offset),
+            index_topk_pattern,
             json_opt_usize(self.index_n_heads),
             json_opt_usize(self.index_head_dim),
             compress_ratios,
@@ -271,6 +278,29 @@ fn json_usize_array(values: &[usize]) -> String {
             out.push(',');
         }
         out.push_str(&value.to_string());
+    }
+    out.push(']');
+    out
+}
+
+fn json_string_array(values: &[String]) -> String {
+    let mut out = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        for ch in value.chars() {
+            match ch {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                ch => out.push(ch),
+            }
+        }
+        out.push('"');
     }
     out.push(']');
     out

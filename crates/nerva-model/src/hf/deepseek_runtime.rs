@@ -143,19 +143,22 @@ pub fn deepseek_layer_execution_plan(
         HfArchitectureKind::DeepSeekV32 => (0..metadata.num_hidden_layers)
             .map(|layer| {
                 require_kv_group(&kv_plan, "v3_2_main_mla")?;
-                require_kv_group(&kv_plan, "v3_2_sparse_indexer")?;
+                let uses_sparse_indexer = deepseek_v32_layer_uses_sparse_indexer(metadata, layer)?;
+                if uses_sparse_indexer {
+                    require_kv_group(&kv_plan, "v3_2_sparse_indexer")?;
+                }
                 Ok(layer_execution(
                     metadata,
                     layer,
                     DeepSeekAttentionExecutionKind::V32MlaWithIndexer,
                     1,
                     "v3_2_main_mla",
-                    Some("v3_2_sparse_indexer"),
+                    uses_sparse_indexer.then_some("v3_2_sparse_indexer"),
                     None,
                     None,
                     false,
-                    true,
-                    true,
+                    uses_sparse_indexer,
+                    uses_sparse_indexer,
                     false,
                 ))
             })
@@ -237,6 +240,27 @@ pub fn deepseek_layer_execution_plan(
         default_block_size: kv_plan.default_block_size,
         layers,
     })
+}
+
+fn deepseek_v32_layer_uses_sparse_indexer(
+    metadata: &HfModelMetadata,
+    layer: usize,
+) -> Result<bool> {
+    if metadata.index_topk.unwrap_or(0) == 0 {
+        return Ok(false);
+    }
+    if let Some(pattern) = metadata.index_topk_pattern.get(layer) {
+        return Ok(pattern != "S");
+    }
+    let freq = metadata.index_topk_freq.unwrap_or(1);
+    if freq == 0 {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek V3.2 index_topk_freq must be non-zero".to_string(),
+        });
+    }
+    let offset = metadata.index_skip_topk_offset.unwrap_or(2);
+    let schedule_pos = layer.saturating_add(1).saturating_sub(offset);
+    Ok(schedule_pos % freq == 0)
 }
 
 pub fn deepseek_runtime_weight_contract(
@@ -810,6 +834,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_fp8_ds_mla_kv_pack_smoke".to_string());
     }
     if metadata.architecture == HfArchitectureKind::DeepSeekV32 {
+        primitives.push("deepseek_v32_vllm_index_topk_skip_schedule".to_string());
         primitives.push("cuda_hf_sequence_deepseek_packed_kv_footprint_accounting".to_string());
         primitives.push("cuda_deepseek_v32_fp8_ds_mla_kv_pack_token_row".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v32_fp8_ds_mla_page_runtime".to_string());
@@ -1022,6 +1047,7 @@ fn coverage_for_unit(
             "partial",
             &[
                 "deepseek_vllm_kv_cache_spec_planner",
+                "deepseek_v32_vllm_index_topk_skip_schedule",
                 "deepseek_compressed_slot_mapping_reference",
                 "cuda_deepseek_compressed_slot_mapping_api",
                 "cuda_deepseek_compressed_slot_mapping_smoke",

@@ -72,11 +72,73 @@ fn parses_deepseek_v32_indexer_metadata() {
 
     assert_eq!(metadata.architecture, HfArchitectureKind::DeepSeekV32);
     assert_eq!(metadata.index_topk, Some(2048));
+    assert_eq!(metadata.index_topk_freq, None);
+    assert_eq!(metadata.index_skip_topk_offset, None);
+    assert!(metadata.index_topk_pattern.is_empty());
     assert_eq!(metadata.index_n_heads, Some(64));
     assert_eq!(metadata.index_head_dim, Some(128));
     assert_eq!(metadata.sliding_window, None);
     assert_eq!(metadata.mlp_layer_types[0], HfMlpLayerKind::Dense);
     assert_eq!(metadata.mlp_layer_types[3], HfMlpLayerKind::SparseMoe);
+}
+
+#[test]
+fn deepseek_v32_layer_plan_matches_vllm_index_topk_frequency() {
+    let config = deepseek_v32_config().replace(
+        "\"index_topk\": 2048,",
+        "\"index_topk\": 2048,\n        \"index_topk_freq\": 2,\n        \"index_skip_topk_offset\": 2,",
+    );
+    let metadata = parse_hf_config_metadata(&config).unwrap();
+    let plan = deepseek_layer_execution_plan(&metadata).unwrap();
+
+    assert_eq!(metadata.index_topk_freq, Some(2));
+    assert_eq!(metadata.index_skip_topk_offset, Some(2));
+    assert_eq!(
+        plan.layers
+            .iter()
+            .map(|layer| layer.uses_sparse_indexer)
+            .collect::<Vec<_>>(),
+        vec![true, true, false, true]
+    );
+    assert_eq!(
+        plan.layers
+            .iter()
+            .map(|layer| layer.indexer_kv_cache_group.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            Some("v3_2_sparse_indexer"),
+            Some("v3_2_sparse_indexer"),
+            None,
+            Some("v3_2_sparse_indexer"),
+        ]
+    );
+}
+
+#[test]
+fn deepseek_v32_layer_plan_matches_vllm_index_topk_pattern() {
+    let config = deepseek_v32_config().replace(
+        "\"index_topk\": 2048,",
+        "\"index_topk\": 2048,\n        \"index_topk_pattern\": [\"S\", \"D\", \"S\", \"D\"],",
+    );
+    let metadata = parse_hf_config_metadata(&config).unwrap();
+    let plan = deepseek_layer_execution_plan(&metadata).unwrap();
+
+    assert_eq!(
+        metadata.index_topk_pattern,
+        vec![
+            "S".to_string(),
+            "D".to_string(),
+            "S".to_string(),
+            "D".to_string(),
+        ]
+    );
+    assert_eq!(
+        plan.layers
+            .iter()
+            .map(|layer| layer.uses_sparse_indexer)
+            .collect::<Vec<_>>(),
+        vec![false, true, false, true]
+    );
 }
 
 #[test]
@@ -353,6 +415,25 @@ fn deepseek_v32_projection_coverage_tracks_live_scale_runtime() {
             .all(|gap| !gap.contains("fuse block-FP8 dequant with projection GEMM")),
         "projection coverage should not say fusion is missing after fused tile coverage exists"
     );
+}
+
+#[test]
+fn deepseek_v32_sparse_indexer_coverage_tracks_vllm_topk_schedule() {
+    let metadata = parse_hf_config_metadata(deepseek_v32_config()).unwrap();
+    let primitives = deepseek_implemented_primitives(&metadata);
+    let coverage = deepseek_execution_unit_coverage(&metadata);
+    let unit = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v32_sparse_attention_indexer")
+        .expect("DeepSeek V3.2 should report sparse indexer coverage");
+
+    assert!(primitives
+        .iter()
+        .any(|item| item == "deepseek_v32_vllm_index_topk_skip_schedule"));
+    assert!(unit
+        .validated_primitives
+        .iter()
+        .any(|item| item == "deepseek_v32_vllm_index_topk_skip_schedule"));
 }
 
 #[test]

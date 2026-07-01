@@ -3,21 +3,22 @@ use std::os::unix::ffi::OsStrExt;
 
 use nerva_core::types::error::{NervaError, Result};
 use nerva_cuda::decode::hf_chain::layer::{
+    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN,
     CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW,
-    CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
+    CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
+    CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
     CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK, CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE, CUDA_HF_MLP_DENSE,
-    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_MLP_SPARSE_MOE,
 };
 use nerva_cuda::decode::hf_sequence::weight_plan::{
-    CudaHfDecodeSequenceWeightBlock, hash_weight_blocks,
+    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock,
 };
 use nerva_model::hf::architecture::HfArchitectureKind;
 use nerva_model::hf::deepseek_runtime::{
-    DeepSeekAttentionExecutionKind, DeepSeekLayerExecution, deepseek_layer_execution_plan,
+    deepseek_layer_execution_plan, DeepSeekAttentionExecutionKind, DeepSeekLayerExecution,
 };
 use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
 
@@ -451,9 +452,10 @@ mod tests {
         CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER,
         CUDA_HF_DEEPSEEK_FLAG_MOE, CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS,
         CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-        CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
-        CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
-        CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
+        CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
+        CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+        CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK, CUDA_HF_MLP_DENSE,
+        CUDA_HF_MLP_SPARSE_MOE,
     };
     use nerva_model::hf::architecture::HfArchitectureKind;
     use nerva_model::hf::metadata::{
@@ -516,6 +518,9 @@ mod tests {
             qk_rope_head_dim: None,
             v_head_dim: None,
             index_topk: None,
+            index_topk_freq: None,
+            index_skip_topk_offset: None,
+            index_topk_pattern: Vec::new(),
             index_n_heads: None,
             index_head_dim: None,
             compress_ratios: Vec::new(),
@@ -603,6 +608,9 @@ mod tests {
             qk_rope_head_dim: None,
             v_head_dim: None,
             index_topk: None,
+            index_topk_freq: None,
+            index_skip_topk_offset: None,
+            index_topk_pattern: Vec::new(),
             index_n_heads: None,
             index_head_dim: None,
             compress_ratios: Vec::new(),
@@ -773,6 +781,43 @@ mod tests {
         assert_eq!(layers[3].deepseek.unwrap().swiglu_limit, Some(10.0));
     }
 
+    #[test]
+    fn descriptor_marker_layers_apply_deepseek_v32_vllm_topk_skip_schedule() {
+        let mut metadata = base_metadata(HfArchitectureKind::DeepSeekV32, 4);
+        metadata.hidden_size = 7168;
+        metadata.num_attention_heads = 128;
+        metadata.num_key_value_heads = 128;
+        metadata.head_dim = 192;
+        metadata.intermediate_size = 18432;
+        metadata.q_lora_rank = Some(1536);
+        metadata.kv_lora_rank = Some(512);
+        metadata.qk_nope_head_dim = Some(128);
+        metadata.qk_rope_head_dim = Some(64);
+        metadata.v_head_dim = Some(128);
+        metadata.index_topk = Some(2048);
+        metadata.index_topk_freq = Some(2);
+        metadata.index_skip_topk_offset = Some(2);
+        metadata.index_n_heads = Some(64);
+        metadata.index_head_dim = Some(128);
+        metadata.torch_dtype = Some(DType::BF16);
+
+        let layers = descriptor_marker_layers(&metadata).unwrap();
+
+        assert!(layers
+            .iter()
+            .all(|layer| layer.deepseek.unwrap().mode == CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER));
+        assert_eq!(
+            layers
+                .iter()
+                .map(|layer| {
+                    (layer.deepseek.unwrap().flags & CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER) != 0
+                })
+                .collect::<Vec<_>>(),
+            vec![true, true, false, true]
+        );
+        assert_eq!(layers[2].deepseek.unwrap().index_topk, 2048);
+    }
+
     fn base_metadata(architecture: HfArchitectureKind, layers: usize) -> HfModelMetadata {
         HfModelMetadata {
             architecture,
@@ -826,6 +871,9 @@ mod tests {
             qk_rope_head_dim: None,
             v_head_dim: None,
             index_topk: None,
+            index_topk_freq: None,
+            index_skip_topk_offset: None,
+            index_topk_pattern: Vec::new(),
             index_n_heads: None,
             index_head_dim: None,
             compress_ratios: Vec::new(),

@@ -6,7 +6,7 @@ use crate::common::json::fields::{
     optional_object_f32, optional_object_json, optional_object_string, optional_string,
     optional_u32_or_first, optional_usize,
 };
-use crate::hf::architecture::{HfArchitectureKind, architecture_kind_from_str};
+use crate::hf::architecture::{architecture_kind_from_str, HfArchitectureKind};
 use crate::hf::metadata::{
     HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata, HfRopeScalingMetadata,
 };
@@ -132,6 +132,9 @@ pub fn parse_hf_config_metadata(config_json: &str) -> Result<HfModelMetadata> {
         qk_rope_head_dim: deepseek_config.qk_rope_head_dim,
         v_head_dim: deepseek_config.v_head_dim,
         index_topk: deepseek_config.index_topk,
+        index_topk_freq: deepseek_config.index_topk_freq,
+        index_skip_topk_offset: deepseek_config.index_skip_topk_offset,
+        index_topk_pattern: deepseek_config.index_topk_pattern,
         index_n_heads: deepseek_config.index_n_heads,
         index_head_dim: deepseek_config.index_head_dim,
         compress_ratios: deepseek_config.compress_ratios,
@@ -172,6 +175,9 @@ struct ParsedDeepSeekConfig {
     qk_rope_head_dim: Option<usize>,
     v_head_dim: Option<usize>,
     index_topk: Option<usize>,
+    index_topk_freq: Option<usize>,
+    index_skip_topk_offset: Option<usize>,
+    index_topk_pattern: Vec<String>,
     index_n_heads: Option<usize>,
     index_head_dim: Option<usize>,
     compress_ratios: Vec<usize>,
@@ -696,6 +702,18 @@ fn parse_deepseek_config(
         qk_rope_head_dim,
         v_head_dim,
         index_topk: optional_model_usize(root_json, decoder_json, "index_topk")?,
+        index_topk_freq: optional_model_usize(root_json, decoder_json, "index_topk_freq")?,
+        index_skip_topk_offset: optional_model_usize(
+            root_json,
+            decoder_json,
+            "index_skip_topk_offset",
+        )?,
+        index_topk_pattern: optional_model_string_array(
+            root_json,
+            decoder_json,
+            "index_topk_pattern",
+        )?
+        .unwrap_or_default(),
         index_n_heads: optional_model_usize(root_json, decoder_json, "index_n_heads")?,
         index_head_dim: optional_model_usize(root_json, decoder_json, "index_head_dim")?,
         compress_ratios: optional_model_usize_array(root_json, decoder_json, "compress_ratios")?
@@ -828,6 +846,46 @@ fn optional_usize_array(config_json: &str, key: &'static str) -> Result<Option<V
                 reason: format!("HF config field {key} entry does not fit usize"),
             })?,
         );
+    }
+    Ok(Some(out))
+}
+
+fn optional_model_string_array(
+    root_json: &str,
+    decoder_json: &str,
+    key: &'static str,
+) -> Result<Option<Vec<String>>> {
+    match optional_string_array(decoder_json, key)? {
+        Some(value) => Ok(Some(value)),
+        None if !std::ptr::eq(root_json, decoder_json) => optional_string_array(root_json, key),
+        None => Ok(None),
+    }
+}
+
+fn optional_string_array(config_json: &str, key: &'static str) -> Result<Option<Vec<String>>> {
+    let value: serde_json::Value =
+        serde_json::from_str(config_json).map_err(|err| NervaError::InvalidArgument {
+            reason: format!("HF config JSON is malformed: {err}"),
+        })?;
+    let Some(array) = value.get(key) else {
+        return Ok(None);
+    };
+    if array.is_null() {
+        return Ok(None);
+    }
+    let Some(array) = array.as_array() else {
+        return Err(NervaError::InvalidArgument {
+            reason: format!("HF config field {key} must be a string array"),
+        });
+    };
+    let mut out = Vec::with_capacity(array.len());
+    for item in array {
+        let Some(value) = item.as_str() else {
+            return Err(NervaError::InvalidArgument {
+                reason: format!("HF config field {key} must contain strings"),
+            });
+        };
+        out.push(value.to_string());
     }
     Ok(Some(out))
 }
