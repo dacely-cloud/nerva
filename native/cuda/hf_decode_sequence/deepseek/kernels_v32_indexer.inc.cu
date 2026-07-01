@@ -1042,6 +1042,10 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
   if (has_score_workspace) {
     __shared__ float reduce_scores[kDecodeThreads];
     __shared__ int32_t reduce_slots[kDecodeThreads];
+    __shared__ float sort_scores[4096];
+    __shared__ int32_t sort_slots[4096];
+    __shared__ uint32_t sort_selected;
+    __shared__ unsigned long long sort_hash;
     const uint64_t token_bytes =
         deepseek_v32_indexer_query_state_token_bytes(layout);
     const uint8_t *token_ptr =
@@ -1061,6 +1065,103 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
               slot);
     }
     __syncthreads();
+
+    if (topk_limit == kDeepSeekSessionMaxSparseTopK &&
+        candidate_tokens <= 4096u) {
+      for (uint32_t slot = threadIdx.x; slot < 4096u; slot += blockDim.x) {
+        if (slot < candidate_tokens) {
+          sort_scores[slot] = sparse_topk_score_workspace[slot];
+          sort_slots[slot] = static_cast<int32_t>(slot);
+        } else {
+          sort_scores[slot] = -INFINITY;
+          sort_slots[slot] = -1;
+        }
+      }
+      __syncthreads();
+
+      for (uint32_t width = 2u; width <= 4096u; width <<= 1u) {
+        for (uint32_t stride = width >> 1u; stride != 0u; stride >>= 1u) {
+          for (uint32_t index = threadIdx.x; index < 4096u;
+               index += blockDim.x) {
+            const uint32_t other = index ^ stride;
+            if (other <= index) {
+              continue;
+            }
+            const bool descending = (index & width) == 0u;
+            const float left_score = sort_scores[index];
+            const int32_t left_slot = sort_slots[index];
+            const float right_score = sort_scores[other];
+            const int32_t right_slot = sort_slots[other];
+            const bool left_before_right =
+                deepseek_session_sparse_score_is_better(
+                    left_score, left_slot, right_score, right_slot);
+            const bool swap =
+                descending ? !left_before_right : left_before_right;
+            if (swap) {
+              sort_scores[index] = right_score;
+              sort_slots[index] = right_slot;
+              sort_scores[other] = left_score;
+              sort_slots[other] = left_slot;
+            }
+          }
+          __syncthreads();
+        }
+      }
+
+      if (threadIdx.x == 0) {
+        uint32_t selected = 0;
+        unsigned long long selection_hash = 0ull;
+        for (uint32_t rank = 0; rank < topk_limit; ++rank) {
+          if (sort_slots[rank] < 0 || !isfinite(sort_scores[rank])) {
+            continue;
+          }
+          ++selected;
+          selection_hash +=
+              (static_cast<unsigned long long>(position) + 1ull) *
+                  1315423911ull ^
+              (static_cast<unsigned long long>(rank) + 1ull) *
+                  2654435761ull ^
+              (static_cast<unsigned long long>(sort_slots[rank]) + 1ull);
+        }
+        sort_selected = selected;
+        sort_hash = selection_hash;
+        *sparse_topk_count = selected;
+      }
+      __syncthreads();
+
+      for (uint32_t rank = threadIdx.x; rank < sort_selected;
+           rank += blockDim.x) {
+        sparse_topk_slots[rank] = sort_slots[rank];
+      }
+      __syncthreads();
+
+      if (threadIdx.x != 0 || sort_selected == 0) {
+        return;
+      }
+      if (deepseek_runtime_counters != nullptr) {
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterSparseTopkSelections),
+            1ull);
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
+            static_cast<unsigned long long>(sort_selected));
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
+            static_cast<unsigned long long>(candidate_tokens));
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterSparseTopkSelectionHash),
+            sort_hash);
+      }
+      return;
+    }
 
     unsigned long long selection_hash = 0ull;
     uint32_t selected = 0;
