@@ -139,8 +139,8 @@ fn usage_lines() -> &'static [&'static str] {
         "  default output uses plain streaming logs on stderr",
         "  --debug enables the Ratatui dashboard with charts",
         "  --profiling enables detailed CUDA timing buckets",
-        "  default sampling is accuracy-first greedy decode",
-        "  --temperature >0 enables stochastic sampling",
+        "  default sampling is temperature 0.7 with top_p 0.9",
+        "  use --temperature 0 --top-p 1 for greedy parity runs",
         "  NERVA_COLOR=never|ansi|truecolor|always controls log color",
     ]
 }
