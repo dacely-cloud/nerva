@@ -1,8 +1,10 @@
 use crate::deepseek_quant::ffi::{
-    run_deepseek_quant_fp8_dequant, run_deepseek_quant_fp8_f32_scale_encoded_gemm_tokens,
+    run_deepseek_quant_fp8_dequant, run_deepseek_quant_fp8_e8m0_scale_encoded_gemm_tokens,
+    run_deepseek_quant_fp8_f32_scale_encoded_gemm_tokens,
     run_deepseek_quant_fp8_f32_scale_encoded_matvec, run_deepseek_quant_fp8_f32_scale_matvec,
     run_deepseek_quant_mxfp4_dequant, NervaCudaDeepSeekQuantDequantResult,
     NervaCudaDeepSeekQuantFp8DequantRequest,
+    NervaCudaDeepSeekQuantFp8E8m0ScaleEncodedGemmTokensRequest,
     NervaCudaDeepSeekQuantFp8F32ScaleEncodedGemmTokensRequest,
     NervaCudaDeepSeekQuantFp8F32ScaleEncodedMatvecRequest,
     NervaCudaDeepSeekQuantFp8F32ScaleMatvecRequest, NervaCudaDeepSeekQuantMxfp4DequantRequest,
@@ -288,6 +290,70 @@ pub fn deepseek_fp8_e4m3fn_f32_scale_encoded_gemm_tokens(
         output: output.as_mut_ptr(),
     };
     let return_code = run_deepseek_quant_fp8_f32_scale_encoded_gemm_tokens(&request, &mut out);
+    summarize_gemm_tokens(return_code, out, tokens, output)
+}
+
+pub fn deepseek_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens(
+    weights: &[u8],
+    scales: &[u8],
+    input: &[u16],
+    input_dtype: u32,
+    rows: u32,
+    cols: u32,
+    tokens: u32,
+    block_rows: u32,
+    block_cols: u32,
+) -> CudaDeepSeekFp8GemmTokensSummary {
+    if rows == 0
+        || cols == 0
+        || tokens == 0
+        || block_rows == 0
+        || block_cols == 0
+        || input_dtype > 1
+    {
+        return failed_gemm_tokens_summary(
+            rows,
+            cols,
+            tokens,
+            block_rows,
+            block_cols,
+            vec![0.0; rows as usize * tokens as usize],
+            "invalid DeepSeek FP8 e8m0 encoded GEMM tokens shape",
+        );
+    }
+    let expected_values = rows as usize * cols as usize;
+    let scale_cols = (cols as usize).div_ceil(block_cols as usize);
+    let scale_rows = (rows as usize).div_ceil(block_rows as usize);
+    if weights.len() != expected_values
+        || scales.len() != scale_rows * scale_cols
+        || input.len() != tokens as usize * cols as usize
+    {
+        return failed_gemm_tokens_summary(
+            rows,
+            cols,
+            tokens,
+            block_rows,
+            block_cols,
+            vec![0.0; rows as usize * tokens as usize],
+            "invalid DeepSeek FP8 e8m0 encoded GEMM tokens shape",
+        );
+    }
+
+    let mut output = vec![0.0f32; rows as usize * tokens as usize];
+    let mut out = NervaCudaDeepSeekQuantDequantResult::default();
+    let request = NervaCudaDeepSeekQuantFp8E8m0ScaleEncodedGemmTokensRequest {
+        rows,
+        cols,
+        tokens,
+        block_rows,
+        block_cols,
+        input_dtype,
+        weights: weights.as_ptr(),
+        scales: scales.as_ptr(),
+        input: input.as_ptr(),
+        output: output.as_mut_ptr(),
+    };
+    let return_code = run_deepseek_quant_fp8_e8m0_scale_encoded_gemm_tokens(&request, &mut out);
     summarize_gemm_tokens(return_code, out, tokens, output)
 }
 

@@ -94,6 +94,21 @@ pub(crate) struct NervaCudaDeepSeekQuantFp8F32ScaleEncodedGemmTokensRequest {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct NervaCudaDeepSeekQuantFp8E8m0ScaleEncodedGemmTokensRequest {
+    pub(crate) rows: u32,
+    pub(crate) cols: u32,
+    pub(crate) tokens: u32,
+    pub(crate) block_rows: u32,
+    pub(crate) block_cols: u32,
+    pub(crate) input_dtype: u32,
+    pub(crate) weights: *const u8,
+    pub(crate) scales: *const u8,
+    pub(crate) input: *const u16,
+    pub(crate) output: *mut f32,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub(crate) struct NervaCudaDeepSeekQuantDequantResult {
     pub(crate) status: i32,
@@ -180,6 +195,10 @@ unsafe extern "C" {
         request: *const NervaCudaDeepSeekQuantFp8F32ScaleEncodedGemmTokensRequest,
         out: *mut NervaCudaDeepSeekQuantDequantResult,
     ) -> c_int;
+    fn nerva_cuda_deepseek_quant_fp8_e8m0_scale_encoded_gemm_tokens(
+        request: *const NervaCudaDeepSeekQuantFp8E8m0ScaleEncodedGemmTokensRequest,
+        out: *mut NervaCudaDeepSeekQuantDequantResult,
+    ) -> c_int;
     fn nerva_cuda_deepseek_fused_inv_rope_fp8_quant(
         request: *const NervaCudaDeepSeekFusedInvRopeFp8QuantRequest,
         out: *mut NervaCudaDeepSeekFusedInvRopeFp8QuantResult,
@@ -223,6 +242,13 @@ pub(crate) fn run_deepseek_quant_fp8_f32_scale_encoded_gemm_tokens(
     out: &mut NervaCudaDeepSeekQuantDequantResult,
 ) -> c_int {
     unsafe { nerva_cuda_deepseek_quant_fp8_f32_scale_encoded_gemm_tokens(request, out) }
+}
+
+pub(crate) fn run_deepseek_quant_fp8_e8m0_scale_encoded_gemm_tokens(
+    request: &NervaCudaDeepSeekQuantFp8E8m0ScaleEncodedGemmTokensRequest,
+    out: &mut NervaCudaDeepSeekQuantDequantResult,
+) -> c_int {
+    unsafe { nerva_cuda_deepseek_quant_fp8_e8m0_scale_encoded_gemm_tokens(request, out) }
 }
 
 pub(crate) fn run_deepseek_fused_inv_rope_fp8_quant(

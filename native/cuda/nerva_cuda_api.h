@@ -1382,6 +1382,19 @@ typedef struct NervaCudaDeepSeekQuantFp8F32ScaleEncodedGemmTokensRequest {
   float *output;
 } NervaCudaDeepSeekQuantFp8F32ScaleEncodedGemmTokensRequest;
 
+typedef struct NervaCudaDeepSeekQuantFp8E8m0ScaleEncodedGemmTokensRequest {
+  uint32_t rows;
+  uint32_t cols;
+  uint32_t tokens;
+  uint32_t block_rows;
+  uint32_t block_cols;
+  uint32_t input_dtype;
+  const uint8_t *weights;
+  const uint8_t *scales;
+  const uint16_t *input;
+  float *output;
+} NervaCudaDeepSeekQuantFp8E8m0ScaleEncodedGemmTokensRequest;
+
 typedef struct NervaCudaDeepSeekFusedInvRopeFp8QuantRequest {
   uint32_t num_tokens;
   uint32_t n_groups;
@@ -2224,6 +2237,9 @@ int nerva_cuda_deepseek_quant_fp8_f32_scale_encoded_matvec(
     NervaCudaDeepSeekQuantDequantResult *out);
 int nerva_cuda_deepseek_quant_fp8_f32_scale_encoded_gemm_tokens(
     const NervaCudaDeepSeekQuantFp8F32ScaleEncodedGemmTokensRequest *request,
+    NervaCudaDeepSeekQuantDequantResult *out);
+int nerva_cuda_deepseek_quant_fp8_e8m0_scale_encoded_gemm_tokens(
+    const NervaCudaDeepSeekQuantFp8E8m0ScaleEncodedGemmTokensRequest *request,
     NervaCudaDeepSeekQuantDequantResult *out);
 int nerva_cuda_deepseek_fused_inv_rope_fp8_quant(
     const NervaCudaDeepSeekFusedInvRopeFp8QuantRequest *request,
