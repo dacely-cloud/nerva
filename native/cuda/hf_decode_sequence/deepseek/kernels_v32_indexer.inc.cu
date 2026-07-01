@@ -1079,34 +1079,7 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
       }
       __syncthreads();
 
-      for (uint32_t width = 2u; width <= 4096u; width <<= 1u) {
-        for (uint32_t stride = width >> 1u; stride != 0u; stride >>= 1u) {
-          for (uint32_t index = threadIdx.x; index < 4096u;
-               index += blockDim.x) {
-            const uint32_t other = index ^ stride;
-            if (other <= index) {
-              continue;
-            }
-            const bool descending = (index & width) == 0u;
-            const float left_score = sort_scores[index];
-            const int32_t left_slot = sort_slots[index];
-            const float right_score = sort_scores[other];
-            const int32_t right_slot = sort_slots[other];
-            const bool left_before_right =
-                deepseek_session_sparse_score_is_better(
-                    left_score, left_slot, right_score, right_slot);
-            const bool swap =
-                descending ? !left_before_right : left_before_right;
-            if (swap) {
-              sort_scores[index] = right_score;
-              sort_slots[index] = right_slot;
-              sort_scores[other] = left_score;
-              sort_slots[other] = left_slot;
-            }
-          }
-          __syncthreads();
-        }
-      }
+      deepseek_session_sparse_sort_desc(sort_scores, sort_slots, 4096u);
 
       if (threadIdx.x == 0) {
         uint32_t selected = 0;

@@ -33,6 +33,8 @@ __device__ uint8_t deepseek_session_f32_to_f8_e4m3fn_bits_nearest(
 __device__ float deepseek_swiglu(float gate, float up, float swiglu_limit);
 __device__ bool deepseek_session_sparse_score_is_better(
     float candidate, int32_t slot, float current, int32_t current_slot);
+__device__ void deepseek_session_sparse_sort_desc(float *scores, int32_t *slots,
+                                                  uint32_t sort_size);
 
 __device__ __forceinline__ bool deepseek_v32_packed_physical_block(
     const uint32_t *kv_block_table, uint32_t kv_block_count,

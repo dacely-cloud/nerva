@@ -322,6 +322,36 @@ __device__ bool deepseek_session_sparse_score_is_better(
          (candidate == current && slot >= 0 && slot < current_slot);
 }
 
+__device__ void deepseek_session_sparse_sort_desc(float *scores, int32_t *slots,
+                                                  uint32_t sort_size) {
+  for (uint32_t width = 2u; width <= sort_size; width <<= 1u) {
+    for (uint32_t stride = width >> 1u; stride != 0u; stride >>= 1u) {
+      for (uint32_t index = threadIdx.x; index < sort_size;
+           index += blockDim.x) {
+        const uint32_t other = index ^ stride;
+        if (other <= index) {
+          continue;
+        }
+        const bool descending = (index & width) == 0u;
+        const float left_score = scores[index];
+        const int32_t left_slot = slots[index];
+        const float right_score = scores[other];
+        const int32_t right_slot = slots[other];
+        const bool left_before_right = deepseek_session_sparse_score_is_better(
+            left_score, left_slot, right_score, right_slot);
+        const bool swap = descending ? !left_before_right : left_before_right;
+        if (swap) {
+          scores[index] = right_score;
+          slots[index] = right_slot;
+          scores[other] = left_score;
+          slots[other] = left_slot;
+        }
+      }
+      __syncthreads();
+    }
+  }
+}
+
 __device__ uint32_t deepseek_session_select_v4_c4_sparse_slots(
     uint16_t *arena, const SequenceLayerLayout &layout, const float *qr_norm,
     const uint16_t *projection_input, uint32_t dtype, uint32_t hidden,

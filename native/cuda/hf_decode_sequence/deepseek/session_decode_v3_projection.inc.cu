@@ -312,8 +312,19 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
            : 0u);
   const size_t mla_attention_chunk_shared_bytes =
       (static_cast<size_t>(kv_lora_rank) + qk_rope) * sizeof(float);
+  uint32_t mla_attention_chunks = attention_chunks;
+  if (has_precomputed_v32_sparse_attention) {
+    const uint32_t sparse_attention_tokens =
+        std::min(layout.deepseek_index_topk, kDeepSeekSparseTopKSlotCapacity);
+    const uint32_t sparse_attention_chunks = ceil_div_u32(
+        sparse_attention_tokens, kDeepSeekMlaDecodeAttentionChunkTokens);
+    mla_attention_chunks = std::max(mla_attention_chunks,
+                                    sparse_attention_chunks);
+    mla_attention_chunks =
+        std::min(mla_attention_chunks, session->decode_attention_max_chunks);
+  }
   const bool use_chunked_mla_attention =
-      attention_chunks != 0 &&
+      mla_attention_chunks != 0 &&
       session->device_decode_attention_values != nullptr &&
       session->device_decode_attention_m != nullptr &&
       session->device_decode_attention_l != nullptr &&
@@ -326,14 +337,14 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
     err = cudaGetLastError();
     if (err != cudaSuccess) return err;
 
-    const dim3 chunk_grid(session->heads, attention_chunks);
+    const dim3 chunk_grid(session->heads, mla_attention_chunks);
     hf_deepseek_v3_mla_attention_chunk_kernel<<<
         chunk_grid, kDecodeThreads, mla_attention_chunk_shared_bytes,
         session->stream>>>(
         session->device_arena, layout, layer_index, session->dtype,
         session->heads, session->device_step, max_steps, session->rope_theta,
         scratch.q, scratch.attn, session->device_kv_keys, session->kv_block_count,
-        session->device_kv_block_table, attention_chunks,
+        session->device_kv_block_table, mla_attention_chunks,
         session->device_decode_attention_values,
         session->device_decode_attention_m, session->device_decode_attention_l,
         has_precomputed_v32_sparse_attention
@@ -347,12 +358,13 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
     if (err != cudaSuccess) return err;
 
     const size_t reduce_shared_bytes =
-        (static_cast<size_t>(attention_chunks) + kv_lora_rank) * sizeof(float);
+        (static_cast<size_t>(mla_attention_chunks) + kv_lora_rank) *
+        sizeof(float);
     hf_deepseek_v3_mla_attention_reduce_kernel<<<
         session->heads, kDecodeThreads, reduce_shared_bytes,
         session->stream>>>(
         session->device_arena, layout, session->dtype, session->heads,
-        session->device_step, max_steps, attention_chunks,
+        session->device_step, max_steps, mla_attention_chunks,
         session->device_decode_attention_values,
         session->device_decode_attention_m, session->device_decode_attention_l,
         session->device_projection_input,
