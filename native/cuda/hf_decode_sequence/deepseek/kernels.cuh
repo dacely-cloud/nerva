@@ -302,6 +302,7 @@ __global__ void hf_deepseek_v4_compressed_indexer_sparse_topk_select_kernel(
     uint32_t deepseek_indexer_kv_block_count,
     uint32_t kv_block_count, const uint32_t *kv_block_table,
     int32_t *sparse_topk_slots, uint32_t *sparse_topk_count,
+    float *sparse_topk_score_workspace, uint32_t sparse_topk_score_capacity,
     uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v4_q_a_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,

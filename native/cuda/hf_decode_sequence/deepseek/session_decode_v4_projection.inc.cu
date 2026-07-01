@@ -322,7 +322,7 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       err = deepseek_profile_begin_if(session, profile);
       if (err != cudaSuccess) return err;
       hf_deepseek_v4_compressed_indexer_sparse_topk_select_kernel<<<
-          1, 1, 0, session->stream>>>(
+          1, kDecodeThreads, 0, session->stream>>>(
           session->device_arena, layout, session->dtype, session->hidden,
           session->heads, session->head_dim, session->intermediate,
           session->device_step, max_steps, layer_rope_theta,
@@ -337,6 +337,9 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
           session->kv_block_count, session->device_kv_block_table,
           session->device_deepseek_sparse_topk_slots,
           session->device_deepseek_sparse_topk_count,
+          session->device_deepseek_sparse_topk_scores,
+          static_cast<uint32_t>(session->deepseek_sparse_topk_scores_bytes /
+                                sizeof(float)),
           session->device_deepseek_runtime_counters);
       err = cudaGetLastError();
       if (err != cudaSuccess) return err;
