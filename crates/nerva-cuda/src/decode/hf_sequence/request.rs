@@ -78,7 +78,7 @@ impl CudaHfDecodeSamplerConfig {
 
 impl Default for CudaHfDecodeSamplerConfig {
     fn default() -> Self {
-        Self::accuracy_default()
+        Self::creative_default()
     }
 }
 
