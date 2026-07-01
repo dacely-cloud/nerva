@@ -615,6 +615,8 @@ __global__ void hf_layer_sparse_moe_encode_kernel(
 
 #include "deepseek/kernels_sparse_moe.inc.cu"
 
+#include "deepseek/kernels_mlp.inc.cu"
+
 #include "deepseek/kernels_v4.inc.cu"
 
 __global__ void hf_layer_finish_kernel(

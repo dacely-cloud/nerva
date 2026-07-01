@@ -294,7 +294,7 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     float *deepseek_mhc_comb_mix,
     uint64_t *deepseek_runtime_counters, uint32_t local_window_tokens,
     uint32_t preprojected_qk, uint32_t precomputed_compressor_state,
-    uint32_t precomputed_indexer_state) {
+    uint32_t precomputed_indexer_state, uint32_t run_mlp) {
   if (threadIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
     return;
@@ -806,6 +806,12 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
       layout.deepseek_hc_ffn_scale, layout.rms_mlp, deepseek_mhc_residual,
       deepseek_mhc_post_mix, deepseek_mhc_comb_mix, s.mlp_norm,
       projection_input);
+  if (run_mlp == 0u) {
+    for (uint32_t row = 0; row < hidden; ++row) {
+      s.residual[row] = 0.0f;
+    }
+    return;
+  }
   if (layout.mlp_kind == kMlpKindSparseMoe) {
     float router_logits[kSparseMoeExpertsMax];
     float correction_bias[kSparseMoeExpertsMax];

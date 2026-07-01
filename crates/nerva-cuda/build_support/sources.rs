@@ -49,6 +49,7 @@ impl NativeCudaSources {
             native_dir.join("hf_decode_sequence/device_ops.cuh"),
             native_dir.join("hf_decode_sequence/deepseek/kernels.cuh"),
             native_dir.join("hf_decode_sequence/deepseek/kernels_helpers.inc.cu"),
+            native_dir.join("hf_decode_sequence/deepseek/kernels_mlp.inc.cu"),
             native_dir.join("hf_decode_sequence/deepseek/kernels_prelude.inc.cu"),
             native_dir.join("hf_decode_sequence/deepseek/kernels_residual_norm.inc.cu"),
             native_dir.join("hf_decode_sequence/deepseek/kernels_sparse_moe.inc.cu"),

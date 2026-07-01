@@ -24,6 +24,14 @@ __device__ __forceinline__ uint32_t deepseek_fp8_projection_scale_idx(
   return (row / block_rows) * scale_cols + (col / block_cols);
 }
 
+__device__ __forceinline__ float deepseek_fp8_projection_f32_scale_slot(
+    const uint16_t *scale_slots,
+    uint32_t index) {
+  const uint32_t lo = static_cast<uint32_t>(scale_slots[index * 2u]);
+  const uint32_t hi = static_cast<uint32_t>(scale_slots[index * 2u + 1u]);
+  return __uint_as_float(lo | (hi << 16u));
+}
+
 __global__ void deepseek_fp8_f32_scale_matvec_kernel(
     const uint8_t *weights,
     const float *scales,
@@ -90,6 +98,47 @@ __global__ void deepseek_fp8_f32_scale_encoded_matvec_kernel(
     const float weight =
         nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
         scales[scale_idx];
+    sum += weight * encoded_input_to_f32(input[col], input_dtype);
+  }
+  partial[threadIdx.x] = sum;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      partial[threadIdx.x] += partial[threadIdx.x + stride];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    output[row] = partial[0];
+  }
+}
+
+__global__ void deepseek_fp8_f32_scale_slots_encoded_matvec_kernel(
+    const uint8_t *weights,
+    const uint16_t *scale_slots,
+    const uint16_t *input,
+    uint32_t input_dtype,
+    float *output,
+    uint32_t rows,
+    uint32_t cols,
+    uint32_t block_rows,
+    uint32_t block_cols) {
+  const uint32_t row = blockIdx.x;
+  if (row >= rows) {
+    return;
+  }
+  extern __shared__ float partial[];
+  float sum = 0.0f;
+  const uint32_t scale_cols =
+      deepseek_fp8_projection_scale_cols(cols, block_cols);
+  const uint64_t row_base = static_cast<uint64_t>(row) * cols;
+  for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
+    const uint32_t scale_idx =
+        deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
+                                          block_cols);
+    const float weight =
+        nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
+        deepseek_fp8_projection_f32_scale_slot(scale_slots, scale_idx);
     sum += weight * encoded_input_to_f32(input[col], input_dtype);
   }
   partial[threadIdx.x] = sum;
@@ -406,6 +455,26 @@ cudaError_t launch_deepseek_fp8_f32_scale_encoded_matvec(
                                                  shared_bytes,
                                                  stream>>>(
       weights, scales, input, input_dtype, output, rows, cols, block_rows,
+      block_cols);
+  return cudaGetLastError();
+}
+
+cudaError_t launch_deepseek_fp8_f32_scale_slots_encoded_matvec(
+    cudaStream_t stream, const uint8_t *weights, const uint16_t *scale_slots,
+    const uint16_t *input, uint32_t input_dtype, uint32_t rows, uint32_t cols,
+    uint32_t block_rows, uint32_t block_cols, float *output) {
+  if (weights == nullptr || scale_slots == nullptr || input == nullptr ||
+      output == nullptr || rows == 0 || cols == 0 || block_rows == 0 ||
+      block_cols == 0 || input_dtype > kDTypeBF16) {
+    return cudaErrorInvalidValue;
+  }
+  constexpr uint32_t threads = 256;
+  const size_t shared_bytes = threads * sizeof(float);
+  deepseek_fp8_f32_scale_slots_encoded_matvec_kernel<<<rows,
+                                                       threads,
+                                                       shared_bytes,
+                                                       stream>>>(
+      weights, scale_slots, input, input_dtype, output, rows, cols, block_rows,
       block_cols);
   return cudaGetLastError();
 }
