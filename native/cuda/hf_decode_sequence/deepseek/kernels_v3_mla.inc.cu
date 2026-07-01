@@ -371,7 +371,6 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     }
     local_l = local_l * old_scale + new_scale;
     local_m = next_m;
-    __syncthreads();
   }
 
   if (local_l > 0.0f && isfinite(local_l)) {
@@ -393,7 +392,9 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     }
     const uint16_t encoded = f32_to_encoded(sum, dtype);
     projection_input[head * v_head + value] = encoded;
-    if (record_sparse_attention && deepseek_runtime_counters != nullptr) {
+    const bool full_output_hash = heads <= 4;
+    if ((full_output_hash || head == 0) && record_sparse_attention &&
+        deepseek_runtime_counters != nullptr) {
       const unsigned long long term =
           (static_cast<unsigned long long>(position) + 1ull) * 1315423911ull ^
           (static_cast<unsigned long long>(head) + 1ull) * 2654435761ull ^
