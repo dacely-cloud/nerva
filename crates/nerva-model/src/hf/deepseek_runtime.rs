@@ -893,6 +893,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_index_topk_descriptor".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_window_runtime".to_string());
+        primitives
+            .push("cuda_hf_sequence_deepseek_v4_swa_parallel_head_attention_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_contents".to_string());
         primitives
@@ -909,6 +911,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_hf_sequence_deepseek_v4_sparse_attention_swa_plus_topk".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_topk_cover_all_shortcut".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources".to_string());
+        primitives
+            .push("cuda_hf_sequence_deepseek_v4_external_output_projection_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_mhc_sequence_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_mhc_head_final_norm_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_mhc_native_profile_runtime".to_string());
@@ -1185,6 +1189,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
                 "cuda_hf_sequence_deepseek_v4_swa_window_runtime",
+                "cuda_hf_sequence_deepseek_v4_swa_parallel_head_attention_runtime",
                 "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_runtime",
                 "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_page_contents",
                 "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_nonzero_page_contents",
@@ -1192,7 +1197,7 @@ fn coverage_for_unit(
             ],
             &[
                 "run full-size V4 SWA fp8_ds_mla page differential against vLLM FlashMLA",
-                "replace serial SWA page reader with the vLLM FlashMLA/FlashInfer kernel path",
+                "replace per-head SWA attention kernel with the vLLM FlashMLA/FlashInfer tile scheduler",
             ],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_fp8_ds_mla_cache") => (
@@ -1282,9 +1287,12 @@ fn coverage_for_unit(
                 "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_token4_weight_reuse",
                 "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row8_token4_input_reuse",
                 "cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources",
+                "cuda_hf_sequence_deepseek_v4_swa_parallel_head_attention_runtime",
+                "cuda_hf_sequence_deepseek_v4_external_output_projection_runtime",
             ],
             &[
                 "schedule attention GEMM/compressor/indexer kernels onto the V4 aux streams like vLLM",
+                "replace external matvec output projection with vLLM DeepGEMM grouped o_proj",
                 "measure stream overlap against vLLM DeepseekV4 attention",
             ],
         ),

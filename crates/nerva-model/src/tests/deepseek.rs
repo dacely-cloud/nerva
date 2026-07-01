@@ -300,6 +300,7 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
         .expect("DeepSeek V4 should report SWA cache coverage");
     assert_eq!(swa.status, "partial");
     for primitive in [
+        "cuda_hf_sequence_deepseek_v4_swa_parallel_head_attention_runtime",
         "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_nonzero_page_contents",
         "cuda_hf_sequence_deepseek_v4_swa_fp8_ds_mla_fullsize_page_contents",
         "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",

@@ -110,6 +110,8 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_mxfp4_expert_down_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_parallel_sparse_moe_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_swa_parallel_head_attention_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_external_output_projection_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_descriptor_abi"));
     assert!(json.contains("cuda_hf_sequence_deepseek_footprint_accounting"));
     assert!(json.contains("cuda_hf_sequence_deepseek_packed_kv_footprint_accounting"));
@@ -333,9 +335,16 @@ fn deepseek_cuda_readiness_reports_smokes_and_runtime_gaps() {
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_hash_router_runtime"));
     assert!(json.contains("\"unit\":\"deepseek_v4_parallel_attention_gemm_streams\""));
     assert!(json.contains("cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_swa_parallel_head_attention_runtime"));
+    assert!(json.contains("cuda_hf_sequence_deepseek_v4_external_output_projection_runtime"));
     assert!(json.contains(
         "schedule attention GEMM/compressor/indexer kernels onto the V4 aux streams like vLLM"
     ));
+    assert!(
+        json.contains(
+            "replace external matvec output projection with vLLM DeepGEMM grouped o_proj"
+        )
+    );
     assert!(json.contains("\"default_block_size\":256"));
     assert!(json.contains("\"v4_swa\""));
     assert!(json.contains("\"v4_c4_mla\""));
