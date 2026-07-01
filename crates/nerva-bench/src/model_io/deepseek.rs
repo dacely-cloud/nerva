@@ -535,8 +535,9 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
         ));
     }
     if vllm_run.status != 0 {
+        let status = vllm_benchmark_failure_status(&vllm_run);
         return Ok(deepseek_benchmark_run_json(
-            "vllm_failed",
+            status,
             &checkpoint_dir,
             &prompt_spec,
             max_context_tokens,
@@ -2877,6 +2878,14 @@ fn command_failure_diagnosis(engine: &str, run: &DeepSeekCommandRun) -> Option<&
     deepseek_vllm_failure_diagnosis(&evidence)
 }
 
+fn vllm_benchmark_failure_status(run: &DeepSeekCommandRun) -> &'static str {
+    if command_failure_diagnosis("vllm", run).is_some() {
+        "vllm_reference_unsupported"
+    } else {
+        "vllm_failed"
+    }
+}
+
 fn deepseek_vllm_failure_diagnosis(evidence: &str) -> Option<&'static str> {
     if evidence.contains("fp8_fp4_mqa_logits") && evidence.contains("Unsupported architecture") {
         return Some("vllm_deepgemm_sparse_indexer_attention_unsupported_architecture");
@@ -2938,7 +2947,7 @@ fn deepseek_benchmark_run_json(
         .and_then(|json| find_first_json_string_field(json, "status").ok().flatten())
         .is_some_and(|status| status == "ok");
     let failure_json = match (status, nerva_run) {
-        ("vllm_failed", _) => command_failure_json("vllm", vllm_run),
+        ("vllm_failed" | "vllm_reference_unsupported", _) => command_failure_json("vllm", vllm_run),
         ("nerva_failed", Some(run)) => command_failure_json("nerva", run),
         _ => "null".to_string(),
     };
@@ -3279,7 +3288,10 @@ fn skip_json_ws(bytes: &[u8], mut index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::find_first_json_string_field;
+    use super::{
+        DeepSeekCommandRun, command_failure_diagnosis, find_first_json_string_field,
+        vllm_benchmark_failure_status,
+    };
 
     #[test]
     fn deepseek_json_field_parser_skips_matching_string_values() {
@@ -3289,6 +3301,25 @@ mod tests {
         assert_eq!(
             find_first_json_string_field(source, "error").unwrap(),
             Some("root cause".to_string())
+        );
+    }
+
+    #[test]
+    fn deepseek_vllm_benchmark_classifies_unsupported_reference_kernel() {
+        let run = DeepSeekCommandRun {
+            status: 1,
+            json: r#"{"status":"error","error_type":"EngineDeadError","error":"EngineCore encountered an issue","traceback_tail":"RuntimeError: Assertion error (/workspace/.deps/deepgemm-src/csrc/apis/attention.hpp:184): Unsupported architecture in fp8_fp4_mqa_logits"}"#.to_string(),
+            stdout_tail: String::new(),
+            stderr_tail: String::new(),
+        };
+
+        assert_eq!(
+            command_failure_diagnosis("vllm", &run),
+            Some("vllm_deepgemm_sparse_indexer_attention_unsupported_architecture")
+        );
+        assert_eq!(
+            vllm_benchmark_failure_status(&run),
+            "vllm_reference_unsupported"
         );
     }
 }
