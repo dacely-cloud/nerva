@@ -1409,7 +1409,9 @@ fn generate_text_batch_sync(
     request_count: usize,
 ) -> Result<Vec<GeneratedText>, ApiError> {
     if request_count == 0 {
-        return Err(ApiError::bad_request("batch request_count must be non-zero"));
+        return Err(ApiError::bad_request(
+            "batch request_count must be non-zero",
+        ));
     }
     let prepared = prepare_generation(state, config, &options)?;
     let output = run_hf_causal_lm_cuda_shared_fork_batch_probe(
