@@ -342,8 +342,6 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
                                                     : profile->norm_ns);
   if (err != cudaSuccess) return err;
 
-  err = deepseek_profile_begin_if(session, profile);
-  if (err != cudaSuccess) return err;
   const uint32_t indexer_query_blocks =
       layout.deepseek_index_n_heads == 0 ? 1u : layout.deepseek_index_n_heads;
   const bool has_v32_indexer_query =
@@ -357,17 +355,31 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
       layout.deepseek_indexer_q_scale != kMissingOffset &&
       layout.deepseek_indexer_weights != kMissingOffset &&
       session->device_deepseek_indexer_state != nullptr;
+  const uint32_t indexer_query_rows =
+      layout.deepseek_index_n_heads * layout.deepseek_index_head_dim;
   if (has_v32_indexer_query) {
-    const uint32_t indexer_query_rows =
-        layout.deepseek_index_n_heads * layout.deepseek_index_head_dim;
-    err = launch_deepseek_fp8_f32_scale_encoded_matvec(
+    err = deepseek_profile_begin_if(session, profile);
+    if (err != cudaSuccess) return err;
+    err = launch_deepseek_fp8_f32_scale_dual_encoded_matvec_varrows(
         session->stream,
+        deepseek_fp8_ptr(session->device_arena, layout.deepseek_q_b),
+        deepseek_scale_ptr(session->device_arena, layout.deepseek_q_b_scale),
         deepseek_fp8_ptr(session->device_arena, layout.deepseek_indexer_q),
         deepseek_scale_ptr(session->device_arena,
                            layout.deepseek_indexer_q_scale),
-        session->device_projection_input, session->dtype, indexer_query_rows,
-        q_lora_rank, block_rows, block_cols, scratch.attn);
+        session->device_projection_input, session->dtype, q_rows,
+        indexer_query_rows, q_lora_rank, block_rows, block_cols, scratch.q,
+        scratch.attn);
     if (err != cudaSuccess) return err;
+    err = deepseek_profile_end_if(session, profile, profile == nullptr
+                                                      ? nullptr
+                                                      : profile->qkv_projection_ns);
+    if (err != cudaSuccess) return err;
+  }
+
+  err = deepseek_profile_begin_if(session, profile);
+  if (err != cudaSuccess) return err;
+  if (has_v32_indexer_query) {
     hf_deepseek_v32_indexer_query_state_projected_kernel<<<
         indexer_query_blocks, kDecodeThreads, 0, session->stream>>>(
         session->device_arena, layout, session->device_step, max_steps,
@@ -397,19 +409,21 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
                                                     : profile->attention_ns);
   if (err != cudaSuccess) return err;
 
-  err = deepseek_profile_begin_if(session, profile);
-  if (err != cudaSuccess) return err;
-  err = launch_deepseek_fp8_f32_scale_encoded_matvec(
-      session->stream,
-      deepseek_fp8_ptr(session->device_arena, layout.deepseek_q_b),
-      deepseek_scale_ptr(session->device_arena, layout.deepseek_q_b_scale),
-      session->device_projection_input, session->dtype, q_rows, q_lora_rank,
-      block_rows, block_cols, scratch.q);
-  if (err != cudaSuccess) return err;
-  err = deepseek_profile_end_if(session, profile, profile == nullptr
-                                                    ? nullptr
-                                                    : profile->qkv_projection_ns);
-  if (err != cudaSuccess) return err;
+  if (!has_v32_indexer_query) {
+    err = deepseek_profile_begin_if(session, profile);
+    if (err != cudaSuccess) return err;
+    err = launch_deepseek_fp8_f32_scale_encoded_matvec(
+        session->stream,
+        deepseek_fp8_ptr(session->device_arena, layout.deepseek_q_b),
+        deepseek_scale_ptr(session->device_arena, layout.deepseek_q_b_scale),
+        session->device_projection_input, session->dtype, q_rows, q_lora_rank,
+        block_rows, block_cols, scratch.q);
+    if (err != cudaSuccess) return err;
+    err = deepseek_profile_end_if(session, profile, profile == nullptr
+                                                      ? nullptr
+                                                      : profile->qkv_projection_ns);
+    if (err != cudaSuccess) return err;
+  }
 
   err = deepseek_profile_begin_if(session, profile);
   if (err != cudaSuccess) return err;
