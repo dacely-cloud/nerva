@@ -1,5 +1,7 @@
 #include "../../deepseek_quant.cuh"
 
+constexpr uint32_t kDeepSeekFp8ProjectionTokenTile = 8;
+
 __global__ void deepseek_fp8_f32_scale_matvec_kernel(
     const uint8_t *weights,
     const float *scales,
@@ -89,33 +91,50 @@ __global__ void deepseek_fp8_f32_scale_encoded_gemm_tokens_kernel(
     uint32_t block_rows,
     uint32_t block_cols) {
   const uint32_t row = blockIdx.x;
-  const uint32_t token = blockIdx.y;
-  if (row >= rows || token >= tokens) {
+  const uint32_t token_start = blockIdx.y * kDeepSeekFp8ProjectionTokenTile;
+  if (row >= rows || token_start >= tokens) {
     return;
   }
   extern __shared__ float partial[];
-  float sum = 0.0f;
+  float sum[kDeepSeekFp8ProjectionTokenTile] = {};
   const uint32_t scale_cols = (cols + block_cols - 1) / block_cols;
   const uint64_t row_base = static_cast<uint64_t>(row) * cols;
-  const uint64_t input_base = static_cast<uint64_t>(token) * cols;
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const uint32_t scale_idx =
         (row / block_rows) * scale_cols + (col / block_cols);
     const float weight =
         nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
         scales[scale_idx];
-    sum += weight * encoded_input_to_f32(input[input_base + col], input_dtype);
+    for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
+      const uint32_t token = token_start + tile;
+      if (token < tokens) {
+        const uint64_t input_base = static_cast<uint64_t>(token) * cols;
+        sum[tile] +=
+            weight * encoded_input_to_f32(input[input_base + col], input_dtype);
+      }
+    }
   }
-  partial[threadIdx.x] = sum;
+  for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
+    partial[tile * blockDim.x + threadIdx.x] = sum[tile];
+  }
   __syncthreads();
   for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
     if (threadIdx.x < stride) {
-      partial[threadIdx.x] += partial[threadIdx.x + stride];
+      for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
+        partial[tile * blockDim.x + threadIdx.x] +=
+            partial[tile * blockDim.x + threadIdx.x + stride];
+      }
     }
     __syncthreads();
   }
   if (threadIdx.x == 0) {
-    output[static_cast<uint64_t>(token) * rows + row] = partial[0];
+    for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
+      const uint32_t token = token_start + tile;
+      if (token < tokens) {
+        output[static_cast<uint64_t>(token) * rows + row] =
+            partial[tile * blockDim.x];
+      }
+    }
   }
 }
 
@@ -170,33 +189,50 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_gemm_tokens_kernel(
     uint32_t block_rows,
     uint32_t block_cols) {
   const uint32_t row = blockIdx.x;
-  const uint32_t token = blockIdx.y;
-  if (row >= rows || token >= tokens) {
+  const uint32_t token_start = blockIdx.y * kDeepSeekFp8ProjectionTokenTile;
+  if (row >= rows || token_start >= tokens) {
     return;
   }
   extern __shared__ float partial[];
-  float sum = 0.0f;
+  float sum[kDeepSeekFp8ProjectionTokenTile] = {};
   const uint32_t scale_cols = (cols + block_cols - 1) / block_cols;
   const uint64_t row_base = static_cast<uint64_t>(row) * cols;
-  const uint64_t input_base = static_cast<uint64_t>(token) * cols;
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const uint32_t scale_idx =
         (row / block_rows) * scale_cols + (col / block_cols);
     const float weight =
         nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
         nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
-    sum += weight * encoded_input_to_f32(input[input_base + col], input_dtype);
+    for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
+      const uint32_t token = token_start + tile;
+      if (token < tokens) {
+        const uint64_t input_base = static_cast<uint64_t>(token) * cols;
+        sum[tile] +=
+            weight * encoded_input_to_f32(input[input_base + col], input_dtype);
+      }
+    }
   }
-  partial[threadIdx.x] = sum;
+  for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
+    partial[tile * blockDim.x + threadIdx.x] = sum[tile];
+  }
   __syncthreads();
   for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
     if (threadIdx.x < stride) {
-      partial[threadIdx.x] += partial[threadIdx.x + stride];
+      for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
+        partial[tile * blockDim.x + threadIdx.x] +=
+            partial[tile * blockDim.x + threadIdx.x + stride];
+      }
     }
     __syncthreads();
   }
   if (threadIdx.x == 0) {
-    output[static_cast<uint64_t>(token) * rows + row] = partial[0];
+    for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
+      const uint32_t token = token_start + tile;
+      if (token < tokens) {
+        output[static_cast<uint64_t>(token) * rows + row] =
+            partial[tile * blockDim.x];
+      }
+    }
   }
 }
 
@@ -285,8 +321,12 @@ cudaError_t launch_deepseek_fp8_f32_scale_encoded_gemm_tokens(
     return cudaErrorInvalidValue;
   }
   constexpr uint32_t threads = 256;
-  const size_t shared_bytes = threads * sizeof(float);
-  const dim3 grid(rows, tokens, 1);
+  const size_t shared_bytes =
+      threads * kDeepSeekFp8ProjectionTokenTile * sizeof(float);
+  const dim3 grid(rows,
+                  (tokens + kDeepSeekFp8ProjectionTokenTile - 1) /
+                      kDeepSeekFp8ProjectionTokenTile,
+                  1);
   deepseek_fp8_f32_scale_encoded_gemm_tokens_kernel<<<grid,
                                                       threads,
                                                       shared_bytes,
@@ -327,8 +367,12 @@ cudaError_t launch_deepseek_fp8_e8m0_scale_encoded_gemm_tokens(
     return cudaErrorInvalidValue;
   }
   constexpr uint32_t threads = 256;
-  const size_t shared_bytes = threads * sizeof(float);
-  const dim3 grid(rows, tokens, 1);
+  const size_t shared_bytes =
+      threads * kDeepSeekFp8ProjectionTokenTile * sizeof(float);
+  const dim3 grid(rows,
+                  (tokens + kDeepSeekFp8ProjectionTokenTile - 1) /
+                      kDeepSeekFp8ProjectionTokenTile,
+                  1);
   deepseek_fp8_e8m0_scale_encoded_gemm_tokens_kernel<<<grid,
                                                        threads,
                                                        shared_bytes,

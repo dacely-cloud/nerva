@@ -19,7 +19,8 @@ use nerva_cuda::deepseek_moe::prepare::{
     CudaDeepSeekMegaMoeEplbMapping, CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare,
 };
 use nerva_cuda::deepseek_quant::dequant::{
-    deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_mxfp4_e2m1_e8m0_dequant,
+    deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens,
+    deepseek_mxfp4_e2m1_e8m0_dequant,
 };
 use nerva_cuda::deepseek_quant::inv_rope::deepseek_fused_inv_rope_fp8_quant;
 use nerva_cuda::deepseek_router::route::{
@@ -971,6 +972,11 @@ pub(crate) fn run_deepseek_cuda_primitive_bench(iterations: usize) -> Result<Str
         bench_primitive("router_v4_sqrtsoftplus", iterations, bench_router_v4),
         bench_primitive("router_v4_hash", iterations, bench_router_v4_hash),
         bench_primitive("quant_fp8_e4m3fn_e8m0", iterations, bench_quant_fp8),
+        bench_primitive(
+            "projection_fp8_e4m3fn_e8m0_gemm_tokens",
+            iterations,
+            bench_projection_fp8_e8m0_gemm_tokens,
+        ),
         bench_primitive("quant_mxfp4_e2m1_e8m0", iterations, bench_quant_mxfp4),
         bench_primitive(
             "fused_inv_rope_fp8_quant",
@@ -1833,6 +1839,60 @@ fn bench_quant_fp8() -> DeepSeekPrimitiveMetrics {
         hot_path_allocations: summary.hot_path_allocations,
         error: summary.error,
     }
+}
+
+fn bench_projection_fp8_e8m0_gemm_tokens() -> DeepSeekPrimitiveMetrics {
+    const ROWS: u32 = 64;
+    const COLS: u32 = 128;
+    const TOKENS: u32 = 8;
+    const BLOCK_ROWS: u32 = 16;
+    const BLOCK_COLS: u32 = 128;
+    const BF16: u32 = 1;
+
+    let weights = (0..(ROWS as usize * COLS as usize))
+        .map(|idx| match idx % 8 {
+            0 => 0x38,
+            1 => 0xb8,
+            2 => 0x40,
+            3 => 0xc0,
+            4 => 0x30,
+            5 => 0xb0,
+            6 => 0x28,
+            _ => 0xa8,
+        })
+        .collect::<Vec<_>>();
+    let scale_rows = (ROWS as usize).div_ceil(BLOCK_ROWS as usize);
+    let scale_cols = (COLS as usize).div_ceil(BLOCK_COLS as usize);
+    let scales = (0..(scale_rows * scale_cols))
+        .map(|idx| if idx % 2 == 0 { 0x7f } else { 0x80 })
+        .collect::<Vec<_>>();
+    let input = (0..(TOKENS as usize * COLS as usize))
+        .map(|idx| {
+            let value = ((idx % 17) as f32 - 8.0) * 0.0625;
+            f32_to_bf16_bits(value)
+        })
+        .collect::<Vec<_>>();
+    let summary = deepseek_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens(
+        &weights, &scales, &input, BF16, ROWS, COLS, TOKENS, BLOCK_ROWS, BLOCK_COLS,
+    );
+    DeepSeekPrimitiveMetrics {
+        status: summary.status,
+        output_hash: summary.output_hash,
+        device_arena_bytes: summary.device_arena_bytes,
+        pinned_host_bytes: summary.pinned_host_bytes,
+        h2d_bytes: summary.h2d_bytes,
+        d2h_bytes: summary.d2h_bytes,
+        kernel_launches: summary.kernel_launches,
+        sync_calls: summary.sync_calls,
+        hot_path_allocations: summary.hot_path_allocations,
+        error: summary.error,
+    }
+}
+
+fn f32_to_bf16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let lsb = (bits >> 16) & 1;
+    ((bits + 0x7fff + lsb) >> 16) as u16
 }
 
 fn bench_quant_mxfp4() -> DeepSeekPrimitiveMetrics {

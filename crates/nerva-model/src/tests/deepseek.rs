@@ -321,6 +321,7 @@ fn deepseek_v32_projection_coverage_tracks_live_scale_runtime() {
         "cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime",
         "cuda_hf_sequence_deepseek_v32_output_projection_scale_logits_runtime",
         "cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime",
+        "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile8_weight_reuse",
     ] {
         assert!(
             primitives.iter().any(|item| item == primitive),
@@ -344,6 +345,18 @@ fn deepseek_v32_projection_coverage_tracks_live_scale_runtime() {
             .iter()
             .all(|gap| !gap.contains("q_a/kv_a/q_b projection scale offsets")),
         "q_a/kv_a/q_b scale offsets now have sparse decode output coverage"
+    );
+    assert!(
+        unit.remaining_gaps
+            .iter()
+            .any(|gap| gap.contains("vLLM-class tensor-core/DeepGEMM")),
+        "remaining projection work should name the actual kernel-class gap"
+    );
+    assert!(
+        unit.remaining_gaps
+            .iter()
+            .all(|gap| !gap.contains("fuse block-FP8 dequant with projection GEMM")),
+        "projection coverage should not say fusion is missing after fused tile coverage exists"
     );
 }
 
