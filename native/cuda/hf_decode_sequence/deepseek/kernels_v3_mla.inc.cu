@@ -62,6 +62,138 @@ __global__ void hf_deepseek_v3_mla_cache_encode_kernel(
   }
 }
 
+__global__ void hf_deepseek_rms_norm_encoded_tokens_kernel(
+    uint16_t *arena, uint64_t weight_offset, const uint16_t *input,
+    uint32_t weight_dtype, uint32_t input_dtype, uint32_t output_dtype,
+    uint32_t rows, uint32_t input_stride, uint32_t output_stride,
+    uint32_t tokens, float rms_eps, uint16_t *output) {
+  const uint32_t token = blockIdx.x;
+  if (arena == nullptr || input == nullptr || output == nullptr ||
+      weight_offset == kMissingOffset || rows == 0 || input_stride < rows ||
+      output_stride < rows || token >= tokens || weight_dtype > kDTypeF32 ||
+      input_dtype > kDTypeBF16 || output_dtype > kDTypeBF16) {
+    return;
+  }
+  const uint16_t *token_input =
+      input + static_cast<uint64_t>(token) * input_stride;
+  uint16_t *token_output =
+      output + static_cast<uint64_t>(token) * output_stride;
+  const uint16_t *weight = arena + weight_offset;
+  float mean_square = 0.0f;
+  for (uint32_t row = threadIdx.x; row < rows; row += blockDim.x) {
+    const float value = encoded_to_f32(token_input[row], input_dtype);
+    mean_square += value * value;
+  }
+  mean_square = block_sum(mean_square);
+  const float scale =
+      rsqrtf(mean_square / static_cast<float>(rows) + rms_eps);
+  for (uint32_t row = threadIdx.x; row < rows; row += blockDim.x) {
+    const float norm_weight =
+        weight_dtype == kDTypeF32
+            ? f32_weight_to_f32_unaligned(weight, row)
+            : encoded_to_f32(weight[row], weight_dtype);
+    token_output[row] = f32_to_encoded(
+        encoded_to_f32(token_input[row], input_dtype) * scale * norm_weight,
+        output_dtype);
+  }
+}
+
+__global__ void hf_deepseek_rms_norm_f32_tokens_kernel(
+    uint16_t *arena, uint64_t weight_offset, const float *input,
+    uint32_t weight_dtype, uint32_t output_dtype, uint32_t rows,
+    uint32_t input_stride, uint32_t output_stride, uint32_t tokens,
+    float rms_eps, uint16_t *output) {
+  const uint32_t token = blockIdx.x;
+  if (arena == nullptr || input == nullptr || output == nullptr ||
+      weight_offset == kMissingOffset || rows == 0 || input_stride < rows ||
+      output_stride < rows || token >= tokens || weight_dtype > kDTypeF32 ||
+      output_dtype > kDTypeBF16) {
+    return;
+  }
+  const float *token_input =
+      input + static_cast<uint64_t>(token) * input_stride;
+  uint16_t *token_output =
+      output + static_cast<uint64_t>(token) * output_stride;
+  const uint16_t *weight = arena + weight_offset;
+  float mean_square = 0.0f;
+  for (uint32_t row = threadIdx.x; row < rows; row += blockDim.x) {
+    const float value = token_input[row];
+    mean_square += value * value;
+  }
+  mean_square = block_sum(mean_square);
+  const float scale =
+      rsqrtf(mean_square / static_cast<float>(rows) + rms_eps);
+  for (uint32_t row = threadIdx.x; row < rows; row += blockDim.x) {
+    const float norm_weight =
+        weight_dtype == kDTypeF32
+            ? f32_weight_to_f32_unaligned(weight, row)
+            : encoded_to_f32(weight[row], weight_dtype);
+    token_output[row] =
+        f32_to_encoded(token_input[row] * scale * norm_weight, output_dtype);
+  }
+}
+
+__global__ void hf_deepseek_v3_mla_cache_encode_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, float rope_theta, const float *kv_a_tokens,
+    uint32_t kv_a_stride, const uint16_t *kv_latent_norm_tokens,
+    uint32_t kv_latent_norm_stride, uint16_t *kv_keys,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint8_t *deepseek_v32_mla_kv,
+    uint64_t deepseek_v32_mla_kv_offset_bytes,
+    uint32_t deepseek_v32_mla_kv_block_count) {
+  (void)arena;
+  const uint32_t local_token = blockIdx.x;
+  if (local_token >= chunk_tokens || kv_a_tokens == nullptr ||
+      kv_latent_norm_tokens == nullptr || kv_keys == nullptr) {
+    return;
+  }
+  const uint32_t position = chunk_start + local_token;
+  if (position >= max_steps) {
+    return;
+  }
+  const uint32_t kv_lora_rank = layout.deepseek_kv_lora_rank;
+  const uint32_t qk_rope = layout.deepseek_qk_rope_head_dim;
+  const uint32_t kv_cache_width = kv_lora_rank + qk_rope;
+  if (kv_lora_rank == 0 || qk_rope == 0 || kv_cache_width == 0 ||
+      kv_a_stride < kv_cache_width ||
+      kv_latent_norm_stride < kv_lora_rank) {
+    return;
+  }
+
+  const float *kv_a =
+      kv_a_tokens + static_cast<uint64_t>(local_token) * kv_a_stride;
+  const uint16_t *kv_latent_norm =
+      kv_latent_norm_tokens +
+      static_cast<uint64_t>(local_token) * kv_latent_norm_stride;
+  const uint64_t write_base =
+      kv_cache_token_base(layer_index, kv_block_count, kv_block_table, position,
+                          kv_cache_width, 0);
+  for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
+       latent += blockDim.x) {
+    kv_keys[write_base + latent] = kv_latent_norm[latent];
+  }
+  const uint32_t rope_half = qk_rope / 2u;
+  for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
+    float value = kv_a[kv_lora_rank + dim];
+    if (rope_half != 0) {
+      const uint32_t offset = dim % rope_half;
+      value = deepseek_rope_value_serial(
+          kv_a[kv_lora_rank + offset], kv_a[kv_lora_rank + offset + rope_half],
+          offset, qk_rope, position, rope_theta, dim >= rope_half, layout);
+    }
+    kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    deepseek_session_write_v32_fp8_ds_mla_kv(
+        deepseek_v32_mla_kv, deepseek_v32_mla_kv_offset_bytes,
+        deepseek_v32_mla_kv_block_count, layout, position, dtype,
+        kv_latent_norm, kv_a, rope_theta);
+  }
+}
+
 __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t heads, uint32_t *step_cursor,

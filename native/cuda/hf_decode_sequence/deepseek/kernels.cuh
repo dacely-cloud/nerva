@@ -49,6 +49,26 @@ __global__ void hf_deepseek_v3_mla_cache_encode_kernel(
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_rms_norm_encoded_tokens_kernel(
+    uint16_t *arena, uint64_t weight_offset, const uint16_t *input,
+    uint32_t weight_dtype, uint32_t input_dtype, uint32_t output_dtype,
+    uint32_t rows, uint32_t input_stride, uint32_t output_stride,
+    uint32_t tokens, float rms_eps, uint16_t *output);
+__global__ void hf_deepseek_rms_norm_f32_tokens_kernel(
+    uint16_t *arena, uint64_t weight_offset, const float *input,
+    uint32_t weight_dtype, uint32_t output_dtype, uint32_t rows,
+    uint32_t input_stride, uint32_t output_stride, uint32_t tokens,
+    float rms_eps, uint16_t *output);
+__global__ void hf_deepseek_v3_mla_cache_encode_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, float rope_theta, const float *kv_a_tokens,
+    uint32_t kv_a_stride, const uint16_t *kv_latent_norm_tokens,
+    uint32_t kv_latent_norm_stride, uint16_t *kv_keys,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint8_t *deepseek_v32_mla_kv,
+    uint64_t deepseek_v32_mla_kv_offset_bytes,
+    uint32_t deepseek_v32_mla_kv_block_count);
 __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t heads, uint32_t *step_cursor,

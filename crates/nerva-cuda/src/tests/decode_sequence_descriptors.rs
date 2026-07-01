@@ -1895,7 +1895,7 @@ fn deepseek_v32_sparse_mla_output_matches_vllm_flashmla_topk2_reference() {
 }
 
 #[test]
-fn deepseek_v3_mla_serial_prefill_writes_prompt_cache_rows() {
+fn deepseek_v3_mla_batched_prefill_writes_prompt_cache_rows() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
     let created =
@@ -1906,7 +1906,7 @@ fn deepseek_v3_mla_serial_prefill_writes_prompt_cache_rows() {
     assert_eq!(
         created.summary.status,
         SmokeStatus::Ok,
-        "V3 MLA session should create before serial prefill: {:?}",
+        "V3 MLA session should create before batched prefill: {:?}",
         created.summary.error
     );
     let mut session = created.session.expect("V3 MLA session handle should exist");
@@ -1914,11 +1914,11 @@ fn deepseek_v3_mla_serial_prefill_writes_prompt_cache_rows() {
     assert_eq!(
         prefill.status,
         SmokeStatus::Ok,
-        "V3 MLA serial prefill should accept a two-token prompt: {:?}",
+        "V3 MLA batched prefill should accept a two-token prompt: {:?}",
         prefill.error
     );
     assert_eq!(prefill.kv_tokens, 2);
-    assert_eq!(prefill.graph_replays, 2);
+    assert_eq!(prefill.graph_replays, 1);
 
     let snapshot = session.deepseek_v3_mla_kv_snapshot(0, 96);
     assert_eq!(
@@ -1940,13 +1940,13 @@ fn deepseek_v3_mla_serial_prefill_writes_prompt_cache_rows() {
     assert_page_bytes_eq(
         &snapshot.bytes,
         &expected,
-        "V3 MLA serial prefill must commit each prompt token to the vLLM-ordered latent cache",
+        "V3 MLA batched prefill must commit each prompt token to the vLLM-ordered latent cache",
     );
     assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
 }
 
 #[test]
-fn deepseek_v32_mla_serial_prefill_uses_f32_norm_cache_rows() {
+fn deepseek_v32_mla_batched_prefill_uses_f32_norm_cache_rows() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
     let created =
@@ -1957,7 +1957,7 @@ fn deepseek_v32_mla_serial_prefill_uses_f32_norm_cache_rows() {
     assert_eq!(
         created.summary.status,
         SmokeStatus::Ok,
-        "V3.2 MLA session should create before serial prefill: {:?}",
+        "V3.2 MLA session should create before batched prefill: {:?}",
         created.summary.error
     );
     let mut session = created
@@ -1967,11 +1967,11 @@ fn deepseek_v32_mla_serial_prefill_uses_f32_norm_cache_rows() {
     assert_eq!(
         prefill.status,
         SmokeStatus::Ok,
-        "V3.2 MLA serial prefill should use f32 DeepSeek norm weights: {:?}",
+        "V3.2 MLA batched prefill should use f32 DeepSeek norm weights: {:?}",
         prefill.error
     );
     assert_eq!(prefill.kv_tokens, 2);
-    assert_eq!(prefill.graph_replays, 2);
+    assert_eq!(prefill.graph_replays, 1);
 
     let snapshot = session.deepseek_v3_mla_kv_snapshot(0, 96);
     assert_eq!(
@@ -1992,7 +1992,7 @@ fn deepseek_v32_mla_serial_prefill_uses_f32_norm_cache_rows() {
     assert_page_bytes_eq(
         &snapshot.bytes,
         &expected,
-        "V3.2 MLA serial prefill must commit prompt rows with f32 norm weights",
+        "V3.2 MLA batched prefill must commit prompt rows with f32 norm weights",
     );
     assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
 }

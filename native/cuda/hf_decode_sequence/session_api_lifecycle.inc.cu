@@ -993,13 +993,20 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_start(
     out->h2d_bytes = prompt_bytes;
   }
   if (err == cudaSuccess) {
-    err = use_cublas_prefill_path(session)
-              ? launch_cublas_session_prefill(
-                    session, request->prompt_token_count,
-                    request->has_eos_token, request->eos_token, out)
-              : launch_serial_session_prefill(
-                    session, request->prompt_token_count,
-                    request->has_eos_token, request->eos_token, out);
+    if (use_cublas_prefill_path(session)) {
+      err = launch_cublas_session_prefill(
+          session, request->prompt_token_count, request->has_eos_token,
+          request->eos_token, out);
+    } else if (use_deepseek_v3_single_layer_prefill_cache_path(
+                   session, request->prompt_token_count)) {
+      err = launch_deepseek_v3_single_layer_prefill_cache_path(
+          session, request->prompt_token_count, request->has_eos_token,
+          request->eos_token, out);
+    } else {
+      err = launch_serial_session_prefill(
+          session, request->prompt_token_count, request->has_eos_token,
+          request->eos_token, out);
+    }
   }
   if (err == cudaSuccess) {
     err = initialize_experimental_rt_kv_descriptor_selector_after_prefill(

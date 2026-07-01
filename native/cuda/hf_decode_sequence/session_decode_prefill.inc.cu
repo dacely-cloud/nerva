@@ -828,6 +828,148 @@ cudaError_t encoded_row_major_gemm_tokens_cached(
                                        cols, tokens, dtype, beta, output);
 }
 
+bool use_deepseek_v3_single_layer_prefill_cache_path(
+    const NervaCudaHfDecodeSequenceSession *session, uint32_t prompt_token_count) {
+  if (session == nullptr || prompt_token_count == 0 ||
+      prompt_token_count > session->max_context_tokens ||
+      session->layer_count != 1 || session->host_layouts.empty() ||
+      session->device_prefill_hidden_a == nullptr ||
+      session->device_prefill_norm == nullptr ||
+      session->device_prefill_qkv == nullptr ||
+      session->device_kv_keys == nullptr) {
+    return false;
+  }
+  const SequenceLayerLayout layout = session->host_layouts[0];
+  if (!layout_is_deepseek_v3_mla(layout) ||
+      (layout_is_deepseek_v32_indexer_native(layout) &&
+       layout.deepseek_index_topk != 0) ||
+      layout.rms_attn == kMissingOffset || layout.w_k == kMissingOffset ||
+      layout.deepseek_kv_a_scale == kMissingOffset ||
+      layout.k_norm == kMissingOffset || layout.deepseek_kv_lora_rank == 0 ||
+      layout.deepseek_qk_rope_head_dim == 0) {
+    return false;
+  }
+  const uint32_t kv_a_rows =
+      layout.deepseek_kv_lora_rank + layout.deepseek_qk_rope_head_dim;
+  const uint32_t attention_hidden = session->heads * session->head_dim;
+  const uint32_t kv_hidden = session->kv_heads * session->head_dim;
+  const PackedProjectionShape packed_shape = packed_projection_shape(
+      session->hidden, attention_hidden, kv_hidden, session->intermediate);
+  return packed_shape.qkv_rows >= kv_a_rows;
+}
+
+cudaError_t launch_deepseek_v3_single_layer_prefill_cache_path(
+    NervaCudaHfDecodeSequenceSession *session, uint32_t prompt_token_count,
+    uint32_t has_eos_token, uint32_t eos_token,
+    NervaCudaHfDecodeSequenceResult *out) {
+  if (!use_deepseek_v3_single_layer_prefill_cache_path(session,
+                                                       prompt_token_count)) {
+    return cudaErrorInvalidValue;
+  }
+  const SequenceLayerLayout layout = session->host_layouts[0];
+  const uint32_t kv_lora_rank = layout.deepseek_kv_lora_rank;
+  const uint32_t kv_a_rows =
+      layout.deepseek_kv_lora_rank + layout.deepseek_qk_rope_head_dim;
+  constexpr uint32_t block_rows = 128;
+  constexpr uint32_t block_cols = 128;
+  cudaError_t err = cudaEventRecord(session->device_start, session->stream);
+  for (uint32_t chunk_start = 0;
+       err == cudaSuccess && chunk_start < prompt_token_count;
+       chunk_start += session->prefill_chunk_tokens) {
+    const uint32_t chunk_tokens = std::min(session->prefill_chunk_tokens,
+                                          prompt_token_count - chunk_start);
+    hf_prefill_embed_range_kernel<<<chunk_tokens, kDecodeThreads, 0,
+                                    session->stream>>>(
+        session->device_arena, session->arena_layout, session->hidden,
+        session->device_prompt_tokens + chunk_start, chunk_tokens, chunk_start,
+        session->device_prefill_hidden_a);
+    err = cudaGetLastError();
+    if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+
+    if (err == cudaSuccess) {
+      hf_deepseek_rms_norm_encoded_tokens_kernel<<<chunk_tokens,
+                                                   kDecodeNormThreads, 0,
+                                                   session->stream>>>(
+          session->device_arena, layout.rms_attn,
+          session->device_prefill_hidden_a +
+              static_cast<uint64_t>(chunk_start) * session->hidden,
+          deepseek_norm_weight_dtype(layout), session->dtype, session->dtype,
+          session->hidden, session->hidden, session->hidden, chunk_tokens,
+          session->rms_eps, session->device_prefill_norm);
+      err = cudaGetLastError();
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
+
+    if (err == cudaSuccess) {
+      err = launch_deepseek_fp8_f32_scale_encoded_gemm_tokens(
+          session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_k),
+          deepseek_scale_ptr(session->device_arena,
+                             layout.deepseek_kv_a_scale),
+          session->device_prefill_norm, session->dtype, kv_a_rows,
+          session->hidden, chunk_tokens, block_rows, block_cols,
+          session->device_prefill_qkv);
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
+
+    if (err == cudaSuccess) {
+      hf_deepseek_rms_norm_f32_tokens_kernel<<<chunk_tokens,
+                                               kDecodeNormThreads, 0,
+                                               session->stream>>>(
+          session->device_arena, layout.k_norm, session->device_prefill_qkv,
+          deepseek_norm_weight_dtype(layout), session->dtype, kv_lora_rank,
+          kv_a_rows, kv_lora_rank, chunk_tokens, session->rms_eps,
+          session->device_prefill_norm);
+      err = cudaGetLastError();
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
+
+    if (err == cudaSuccess) {
+      hf_deepseek_v3_mla_cache_encode_tokens_kernel<<<
+          chunk_tokens, kDecodeThreads, 0, session->stream>>>(
+          session->device_arena, layout, 0, session->dtype, chunk_start,
+          chunk_tokens, session->max_context_tokens, session->rope_theta,
+          session->device_prefill_qkv, kv_a_rows, session->device_prefill_norm,
+          kv_lora_rank, session->device_kv_keys, session->kv_block_count,
+          session->device_kv_block_table, session->device_deepseek_v32_mla_kv,
+          deepseek_v32_mla_kv_layer_offset_bytes(session, 0),
+          deepseek_v32_mla_kv_block_count(session, layout));
+      err = cudaGetLastError();
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
+  }
+
+  if (err == cudaSuccess) {
+    err = ensure_session_graph(session, session->max_context_tokens,
+                               prompt_token_count, has_eos_token, eos_token, 0,
+                               1, prompt_token_count - 1u, out);
+  }
+  if (err == cudaSuccess) {
+    err = cudaGraphLaunch(session->cached_graph_exec, session->stream);
+    if (err == cudaSuccess && out != nullptr) {
+      out->graph_replays += 1;
+      out->graph_launches += 1;
+      out->kernel_launches += out->graph_nodes == 0 ? 1 : out->graph_nodes;
+    }
+  }
+  if (err == cudaSuccess) {
+    err = cudaEventRecord(session->device_stop, session->stream);
+  }
+  if (err == cudaSuccess) {
+    err = cudaStreamSynchronize(session->stream);
+    if (out != nullptr) out->sync_calls += 1;
+  }
+  if (err == cudaSuccess && out != nullptr) {
+    float device_ms = 0.0f;
+    err = cudaEventElapsedTime(&device_ms, session->device_start,
+                               session->device_stop);
+    if (err == cudaSuccess && device_ms > 0.0f) {
+      out->device_elapsed_ns = static_cast<uint64_t>(device_ms * 1000000.0f);
+      if (out->device_elapsed_ns == 0) out->device_elapsed_ns = 1;
+    }
+  }
+  return err;
+}
+
 cudaError_t launch_cublas_session_prefill(
     NervaCudaHfDecodeSequenceSession *session, uint32_t prompt_token_count,
     uint32_t has_eos_token, uint32_t eos_token,

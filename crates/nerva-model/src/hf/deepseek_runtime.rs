@@ -763,7 +763,9 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
     ) {
         primitives.push("cuda_hf_sequence_deepseek_v3_mla_kv_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v3_mla_fullsize_kv_page_contents".to_string());
-        primitives.push("cuda_hf_sequence_deepseek_v3_mla_serial_prefill_cache_rows".to_string());
+        primitives.push(
+            "cuda_hf_sequence_deepseek_v3_mla_batched_single_layer_prefill_cache_rows".to_string(),
+        );
         primitives.push("cuda_hf_sequence_deepseek_v3_mla_parallel_head_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v3_split_fp8_moe_runtime".to_string());
     }
@@ -967,11 +969,11 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_execution_guard",
                 "cuda_hf_sequence_deepseek_v3_mla_kv_page_contents",
                 "cuda_hf_sequence_deepseek_v3_mla_fullsize_kv_page_contents",
-                "cuda_hf_sequence_deepseek_v3_mla_serial_prefill_cache_rows",
+                "cuda_hf_sequence_deepseek_v3_mla_batched_single_layer_prefill_cache_rows",
                 "cuda_hf_sequence_deepseek_v3_mla_parallel_head_runtime",
             ],
             &[
-                "replace serial CUDA MLA prefill with token-batched vLLM-equivalent MLA prefill",
+                "extend token-batched CUDA MLA prefill from single-layer cache population to full multi-layer vLLM-equivalent prefill",
                 "consume DeepSeek native sequence layout offsets in MLA kernels",
                 "run direct full-size V3 MLA KV page differential against vLLM runtime",
                 "match vLLM DeepseekV2MLAAttention output numerics",
