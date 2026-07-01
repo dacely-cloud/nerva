@@ -736,6 +736,7 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         "cuda_fp8_e4m3fn_f32_scale_encoded_gemm_tokens_api".to_string(),
         "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_api".to_string(),
         "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile8_weight_reuse".to_string(),
+        "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row2_token8_input_reuse".to_string(),
         "deepseek_vllm_kv_cache_spec_planner".to_string(),
         "deepseek_mla_decode_mqa_reference".to_string(),
         "deepseek_mla_prefill_causal_mqa_reference".to_string(),
@@ -1005,6 +1006,7 @@ fn coverage_for_unit(
                 "cuda_fp8_e4m3fn_f32_scale_encoded_gemm_tokens_api",
                 "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_api",
                 "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile8_weight_reuse",
+                "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row2_token8_input_reuse",
                 "cuda_hf_sequence_deepseek_footprint_accounting",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime",
@@ -1012,7 +1014,7 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime",
             ],
             &[
-                "replace CTA-per-row FP8 projection tile with vLLM-class tensor-core/DeepGEMM kernel",
+                "replace scalar row2/token8 FP8 projection tile with vLLM-class tensor-core/DeepGEMM kernel",
                 "benchmark projection throughput against vLLM fused kernels",
             ],
         ),
@@ -1175,6 +1177,7 @@ fn coverage_for_unit(
                 "cuda_fp8_e4m3fn_e8m0_block_dequant_smoke",
                 "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_api",
                 "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile8_weight_reuse",
+                "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row2_token8_input_reuse",
                 "cuda_deepseek_fp8_ds_mla_kv_pack_api",
                 "cuda_deepseek_fp8_ds_mla_kv_pack_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
@@ -1247,6 +1250,7 @@ fn coverage_for_unit(
             &[
                 "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_api",
                 "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_tile8_weight_reuse",
+                "cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row2_token8_input_reuse",
                 "cuda_hf_sequence_deepseek_v4_attention_aux_stream_resources",
             ],
             &[
