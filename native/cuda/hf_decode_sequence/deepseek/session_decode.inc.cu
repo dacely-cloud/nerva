@@ -572,6 +572,10 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
   constexpr uint32_t block_cols = 128;
   const bool parallel_swa_attention =
       layout.deepseek_mode == kDeepSeekModeV4Swa;
+  const bool parallel_compressed_attention =
+      layout.deepseek_mode == kDeepSeekModeV4Compressed;
+  const bool parallel_v4_attention =
+      parallel_swa_attention || parallel_compressed_attention;
   const float layer_rope_theta =
       deepseek_v4_layer_rope_theta(session->rope_theta, layout);
 
@@ -748,7 +752,7 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       session->device_deepseek_runtime_counters,
       session->experimental_rt_local_window_tokens, 2u,
       precomputed_compressor_state, precomputed_indexer_state,
-      parallel_swa_attention ? 1u : 0u);
+      parallel_v4_attention ? 1u : 0u);
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
   err = deepseek_profile_end_if(session, profile, profile == nullptr
@@ -769,6 +773,33 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
         session->device_kv_block_table, session->device_deepseek_swa_kv,
         deepseek_v4_swa_kv_layer_offset_bytes(session, layer_index),
         deepseek_v4_swa_kv_block_count(session, layout),
+        session->device_deepseek_runtime_counters,
+        session->experimental_rt_local_window_tokens);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+    err = deepseek_profile_end_if(session, profile, profile == nullptr
+                                                       ? nullptr
+                                                       : profile->attention_ns);
+    if (err != cudaSuccess) return err;
+  }
+  if (parallel_compressed_attention) {
+    err = deepseek_profile_begin_if(session, profile);
+    if (err != cudaSuccess) return err;
+    hf_deepseek_v4_compressed_attention_kernel<<<session->heads,
+                                                 kDecodeThreads,
+                                                 0,
+                                                 session->stream>>>(
+        session->device_arena, layout, layer_index, session->dtype,
+        session->hidden, session->heads, session->head_dim,
+        session->intermediate, session->device_step, max_steps,
+        layer_rope_theta, session->device_scratch, session->device_kv_keys,
+        session->device_kv_values, session->kv_block_count,
+        session->device_kv_block_table, session->device_deepseek_swa_kv,
+        deepseek_v4_swa_kv_layer_offset_bytes(session, layer_index),
+        deepseek_v4_swa_kv_block_count(session, layout),
+        session->device_deepseek_compressed_kv,
+        deepseek_v4_main_compressed_kv_layer_offset_bytes(session, layer_index),
+        deepseek_v4_compressed_kv_block_count(session, layout),
         session->device_deepseek_runtime_counters,
         session->experimental_rt_local_window_tokens);
     err = cudaGetLastError();

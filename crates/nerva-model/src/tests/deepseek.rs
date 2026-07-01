@@ -317,6 +317,19 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
         );
     }
 
+    let compressed = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v4_fp8_ds_mla_cache")
+        .expect("DeepSeek V4 should report compressed MLA cache coverage");
+    assert_eq!(compressed.status, "partial");
+    assert!(
+        compressed
+            .validated_primitives
+            .iter()
+            .any(|item| item == "cuda_hf_sequence_deepseek_v4_c128_parallel_head_attention_runtime"),
+        "DeepSeek V4 C128 parallel attention primitive must be reported"
+    );
+
     let megamoe = coverage
         .iter()
         .find(|unit| unit.unit == "deepseek_v4_megamoe_int8_fp4_experts")

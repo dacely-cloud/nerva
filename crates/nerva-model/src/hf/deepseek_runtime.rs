@@ -906,6 +906,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives
             .push("cuda_hf_sequence_deepseek_v4_fp8_ds_mla_fullsize_page_contents".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c128_fp8_ds_mla_page_contents".to_string());
+        primitives
+            .push("cuda_hf_sequence_deepseek_v4_c128_parallel_head_attention_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_c4_sparse_topk_selection_hash".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_sparse_attention_swa_plus_topk".to_string());
@@ -1221,8 +1223,12 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_page_contents",
                 "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_fullsize_page_contents",
                 "cuda_hf_sequence_deepseek_v4_c128_fp8_ds_mla_page_contents",
+                "cuda_hf_sequence_deepseek_v4_c128_parallel_head_attention_runtime",
             ],
-            &["run full-size V4 compressed fp8_ds_mla page differential against vLLM FlashMLA"],
+            &[
+                "run full-size V4 compressed fp8_ds_mla page differential against vLLM FlashMLA",
+                "replace per-head C128 attention kernel with the vLLM FlashMLA/FlashInfer tile scheduler",
+            ],
         ),
         (HfArchitectureKind::DeepSeekV4, "deepseek_v4_c4_c128_compressor") => (
             "partial",
