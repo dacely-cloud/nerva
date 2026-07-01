@@ -325,7 +325,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   __syncthreads();
 
   const uint32_t rope_half = qk_rope / 2u;
-  const float softmax_scale = rsqrtf(static_cast<float>(qk_head_dim));
+  const float softmax_scale = deepseek_mla_attention_scale(layout, qk_head_dim);
   float local_m = -INFINITY;
   float local_l = 0.0f;
   for (uint32_t attention_index = 0; attention_index < attention_tokens;

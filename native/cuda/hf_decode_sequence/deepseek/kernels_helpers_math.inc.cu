@@ -138,6 +138,23 @@ __device__ float deepseek_rope_magnitude(const SequenceLayerLayout &layout) {
   return denominator == 0.0f ? attn_factor : numerator / denominator * attn_factor;
 }
 
+__device__ float deepseek_mla_attention_scale(const SequenceLayerLayout &layout,
+                                              uint32_t qk_head_dim) {
+  if (qk_head_dim == 0) {
+    return 0.0f;
+  }
+  float scale = rsqrtf(static_cast<float>(qk_head_dim));
+  if (layout.deepseek_rope_scaling_type == kDeepSeekRopeScalingDeepSeek &&
+      layout.deepseek_rope_scaling_factor > 0.0f &&
+      isfinite(layout.deepseek_rope_scaling_factor)) {
+    const float mscale = deepseek_yarn_get_mscale(
+        layout.deepseek_rope_scaling_factor,
+        layout.deepseek_rope_mscale_all_dim);
+    scale *= mscale * mscale;
+  }
+  return scale;
+}
+
 __device__ float deepseek_rope_inv_freq(const SequenceLayerLayout &layout,
                                         uint32_t offset, uint32_t dim,
                                         float theta) {
