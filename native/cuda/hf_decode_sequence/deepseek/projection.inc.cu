@@ -3,6 +3,44 @@
 constexpr uint32_t kDeepSeekFp8ProjectionTokenTile = 4;
 constexpr uint32_t kDeepSeekFp8ProjectionRowTile = 8;
 
+template <uint32_t Slots>
+__device__ __forceinline__ void deepseek_fp8_projection_reduce_slots(
+    float (&values)[Slots], float *partial) {
+  const uint32_t lane = threadIdx.x & 31u;
+  const uint32_t warp = threadIdx.x >> 5u;
+  const uint32_t warp_count = (blockDim.x + 31u) >> 5u;
+
+#pragma unroll
+  for (uint32_t slot = 0; slot < Slots; ++slot) {
+    float value = values[slot];
+#pragma unroll
+    for (uint32_t offset = 16u; offset > 0u; offset >>= 1u) {
+      value += __shfl_down_sync(0xffffffffu, value, static_cast<int>(offset));
+    }
+    if (lane == 0u) {
+      partial[slot * blockDim.x + warp] = value;
+    }
+  }
+  __syncthreads();
+
+  if (warp == 0u) {
+#pragma unroll
+    for (uint32_t slot = 0; slot < Slots; ++slot) {
+      float value =
+          lane < warp_count ? partial[slot * blockDim.x + lane] : 0.0f;
+#pragma unroll
+      for (uint32_t offset = 16u; offset > 0u; offset >>= 1u) {
+        value +=
+            __shfl_down_sync(0xffffffffu, value, static_cast<int>(offset));
+      }
+      if (lane == 0u) {
+        partial[slot * blockDim.x] = value;
+      }
+    }
+  }
+  __syncthreads();
+}
+
 __device__ __forceinline__ uint32_t deepseek_fp8_projection_scale_cols(
     uint32_t cols,
     uint32_t block_cols) {
@@ -22,6 +60,16 @@ __device__ __forceinline__ uint32_t deepseek_fp8_projection_scale_idx(
     return ((row >> 7u) * scale_cols) + (col >> 7u);
   }
   return (row / block_rows) * scale_cols + (col / block_cols);
+}
+
+__device__ __forceinline__ bool deepseek_fp8_projection_row_tile_shares_scale(
+    uint32_t row_start,
+    uint32_t block_rows) {
+  if (block_rows < kDeepSeekFp8ProjectionRowTile) {
+    return false;
+  }
+  const uint32_t row_end = row_start + kDeepSeekFp8ProjectionRowTile - 1u;
+  return (row_start / block_rows) == (row_end / block_rows);
 }
 
 __device__ __forceinline__ float deepseek_fp8_projection_f32_scale_slot(
@@ -71,8 +119,19 @@ __device__ __forceinline__ void deepseek_fp8_dual_encoded_matvec_body(
   float sum_b[kDeepSeekFp8ProjectionRowTile] = {};
   const uint32_t scale_cols =
       deepseek_fp8_projection_scale_cols(cols, block_cols);
+  const bool row_tile_shared_scale =
+      deepseek_fp8_projection_row_tile_shares_scale(row_start, block_rows);
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const float input_value = encoded_input_to_f32(input[col], input_dtype);
+    const uint32_t shared_scale_idx =
+        row_tile_shared_scale
+            ? deepseek_fp8_projection_scale_idx(
+                  row_start, col, scale_cols, block_rows, block_cols)
+            : 0u;
+    const float shared_scale_a =
+        row_tile_shared_scale ? scales_a.get(shared_scale_idx) : 0.0f;
+    const float shared_scale_b =
+        row_tile_shared_scale ? scales_b.get(shared_scale_idx) : 0.0f;
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
@@ -80,47 +139,32 @@ __device__ __forceinline__ void deepseek_fp8_dual_encoded_matvec_body(
         continue;
       }
       const uint32_t scale_idx =
-          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
-                                            block_cols);
+          row_tile_shared_scale
+              ? shared_scale_idx
+              : deepseek_fp8_projection_scale_idx(
+                    row, col, scale_cols, block_rows, block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
       if (row < rows_a) {
         const float weight_a =
             nerva::deepseek::f8_e4m3fn_bits_to_f32(weights_a[row_base + col]) *
-            scales_a.get(scale_idx);
+            (row_tile_shared_scale ? shared_scale_a : scales_a.get(scale_idx));
         sum_a[row_tile] += weight_a * input_value;
       }
       if (row < rows_b) {
         const float weight_b =
             nerva::deepseek::f8_e4m3fn_bits_to_f32(weights_b[row_base + col]) *
-            scales_b.get(scale_idx);
+            (row_tile_shared_scale ? shared_scale_b : scales_b.get(scale_idx));
         sum_b[row_tile] += weight_b * input_value;
       }
     }
   }
+  float sum[kDeepSeekFp8ProjectionRowTile * 2u] = {};
   for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
        ++row_tile) {
-    const uint32_t a_offset = row_tile * blockDim.x;
-    const uint32_t b_offset =
-        (kDeepSeekFp8ProjectionRowTile + row_tile) * blockDim.x;
-    partial[a_offset + threadIdx.x] = sum_a[row_tile];
-    partial[b_offset + threadIdx.x] = sum_b[row_tile];
+    sum[row_tile] = sum_a[row_tile];
+    sum[kDeepSeekFp8ProjectionRowTile + row_tile] = sum_b[row_tile];
   }
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-           ++row_tile) {
-        const uint32_t a_offset = row_tile * blockDim.x;
-        const uint32_t b_offset =
-            (kDeepSeekFp8ProjectionRowTile + row_tile) * blockDim.x;
-        partial[a_offset + threadIdx.x] +=
-            partial[a_offset + threadIdx.x + stride];
-        partial[b_offset + threadIdx.x] +=
-            partial[b_offset + threadIdx.x + stride];
-      }
-    }
-    __syncthreads();
-  }
+  deepseek_fp8_projection_reduce_slots(sum, partial);
   if (threadIdx.x == 0) {
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
@@ -163,14 +207,8 @@ __global__ void deepseek_fp8_f32_scale_matvec_kernel(
         scales[scale_idx];
     sum += weight * input[col];
   }
-  partial[threadIdx.x] = sum;
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      partial[threadIdx.x] += partial[threadIdx.x + stride];
-    }
-    __syncthreads();
-  }
+  float reduce[1] = {sum};
+  deepseek_fp8_projection_reduce_slots(reduce, partial);
   if (threadIdx.x == 0) {
     output[row] = partial[0];
   }
@@ -194,8 +232,17 @@ __global__ void deepseek_fp8_f32_scale_encoded_matvec_kernel(
   float sum[kDeepSeekFp8ProjectionRowTile] = {};
   const uint32_t scale_cols =
       deepseek_fp8_projection_scale_cols(cols, block_cols);
+  const bool row_tile_shared_scale =
+      deepseek_fp8_projection_row_tile_shares_scale(row_start, block_rows);
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const float input_value = encoded_input_to_f32(input[col], input_dtype);
+    const uint32_t shared_scale_idx =
+        row_tile_shared_scale
+            ? deepseek_fp8_projection_scale_idx(
+                  row_start, col, scale_cols, block_rows, block_cols)
+            : 0u;
+    const float shared_scale =
+        row_tile_shared_scale ? scales[shared_scale_idx] : 0.0f;
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
@@ -203,31 +250,18 @@ __global__ void deepseek_fp8_f32_scale_encoded_matvec_kernel(
         continue;
       }
       const uint32_t scale_idx =
-          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
-                                            block_cols);
+          row_tile_shared_scale
+              ? shared_scale_idx
+              : deepseek_fp8_projection_scale_idx(
+                    row, col, scale_cols, block_rows, block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
       const float weight =
           nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
-          scales[scale_idx];
+          (row_tile_shared_scale ? shared_scale : scales[scale_idx]);
       sum[row_tile] += weight * input_value;
     }
   }
-  for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-       ++row_tile) {
-    partial[row_tile * blockDim.x + threadIdx.x] = sum[row_tile];
-  }
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-           ++row_tile) {
-        const uint32_t partial_offset = row_tile * blockDim.x;
-        partial[partial_offset + threadIdx.x] +=
-            partial[partial_offset + threadIdx.x + stride];
-      }
-    }
-    __syncthreads();
-  }
+  deepseek_fp8_projection_reduce_slots(sum, partial);
   if (threadIdx.x == 0) {
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
@@ -277,8 +311,20 @@ __global__ void deepseek_fp8_f32_scale_slots_encoded_matvec_kernel(
   float sum[kDeepSeekFp8ProjectionRowTile] = {};
   const uint32_t scale_cols =
       deepseek_fp8_projection_scale_cols(cols, block_cols);
+  const bool row_tile_shared_scale =
+      deepseek_fp8_projection_row_tile_shares_scale(row_start, block_rows);
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const float input_value = encoded_input_to_f32(input[col], input_dtype);
+    const uint32_t shared_scale_idx =
+        row_tile_shared_scale
+            ? deepseek_fp8_projection_scale_idx(
+                  row_start, col, scale_cols, block_rows, block_cols)
+            : 0u;
+    const float shared_scale =
+        row_tile_shared_scale
+            ? deepseek_fp8_projection_f32_scale_slot(scale_slots,
+                                                     shared_scale_idx)
+            : 0.0f;
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
@@ -286,31 +332,21 @@ __global__ void deepseek_fp8_f32_scale_slots_encoded_matvec_kernel(
         continue;
       }
       const uint32_t scale_idx =
-          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
-                                            block_cols);
+          row_tile_shared_scale
+              ? shared_scale_idx
+              : deepseek_fp8_projection_scale_idx(
+                    row, col, scale_cols, block_rows, block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
       const float weight =
           nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
-          deepseek_fp8_projection_f32_scale_slot(scale_slots, scale_idx);
+          (row_tile_shared_scale
+               ? shared_scale
+               : deepseek_fp8_projection_f32_scale_slot(scale_slots,
+                                                        scale_idx));
       sum[row_tile] += weight * input_value;
     }
   }
-  for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-       ++row_tile) {
-    partial[row_tile * blockDim.x + threadIdx.x] = sum[row_tile];
-  }
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-           ++row_tile) {
-        const uint32_t partial_offset = row_tile * blockDim.x;
-        partial[partial_offset + threadIdx.x] +=
-            partial[partial_offset + threadIdx.x + stride];
-      }
-    }
-    __syncthreads();
-  }
+  deepseek_fp8_projection_reduce_slots(sum, partial);
   if (threadIdx.x == 0) {
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
@@ -339,9 +375,12 @@ __global__ void deepseek_fp8_f32_scale_encoded_gemm_tokens_kernel(
     return;
   }
   extern __shared__ float partial[];
-  float sum[kDeepSeekFp8ProjectionRowTile][kDeepSeekFp8ProjectionTokenTile] = {};
+  float sum[kDeepSeekFp8ProjectionRowTile * kDeepSeekFp8ProjectionTokenTile] =
+      {};
   const uint32_t scale_cols =
       deepseek_fp8_projection_scale_cols(cols, block_cols);
+  const bool row_tile_shared_scale =
+      deepseek_fp8_projection_row_tile_shares_scale(row_start, block_rows);
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     float input_value[kDeepSeekFp8ProjectionTokenTile] = {};
     for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
@@ -352,6 +391,13 @@ __global__ void deepseek_fp8_f32_scale_encoded_gemm_tokens_kernel(
                                                  input_dtype);
       }
     }
+    const uint32_t shared_scale_idx =
+        row_tile_shared_scale
+            ? deepseek_fp8_projection_scale_idx(
+                  row_start, col, scale_cols, block_rows, block_cols)
+            : 0u;
+    const float shared_scale =
+        row_tile_shared_scale ? scales[shared_scale_idx] : 0.0f;
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
@@ -359,42 +405,21 @@ __global__ void deepseek_fp8_f32_scale_encoded_gemm_tokens_kernel(
         continue;
       }
       const uint32_t scale_idx =
-          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
-                                            block_cols);
+          row_tile_shared_scale
+              ? shared_scale_idx
+              : deepseek_fp8_projection_scale_idx(
+                    row, col, scale_cols, block_rows, block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
       const float weight =
           nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
-          scales[scale_idx];
+          (row_tile_shared_scale ? shared_scale : scales[scale_idx]);
       for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
-        sum[row_tile][tile] += weight * input_value[tile];
+        sum[row_tile * kDeepSeekFp8ProjectionTokenTile + tile] +=
+            weight * input_value[tile];
       }
     }
   }
-  for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-       ++row_tile) {
-    for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
-      partial[(row_tile * kDeepSeekFp8ProjectionTokenTile + tile) *
-                  blockDim.x +
-              threadIdx.x] = sum[row_tile][tile];
-    }
-  }
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-           ++row_tile) {
-        for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile;
-             ++tile) {
-          const uint32_t partial_offset =
-              (row_tile * kDeepSeekFp8ProjectionTokenTile + tile) *
-              blockDim.x;
-          partial[partial_offset + threadIdx.x] +=
-              partial[partial_offset + threadIdx.x + stride];
-        }
-      }
-    }
-    __syncthreads();
-  }
+  deepseek_fp8_projection_reduce_slots(sum, partial);
   if (threadIdx.x == 0) {
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
@@ -434,8 +459,20 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_matvec_kernel(
   float sum[kDeepSeekFp8ProjectionRowTile] = {};
   const uint32_t scale_cols =
       deepseek_fp8_projection_scale_cols(cols, block_cols);
+  const bool row_tile_shared_scale =
+      deepseek_fp8_projection_row_tile_shares_scale(row_start, block_rows);
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const float input_value = encoded_input_to_f32(input[col], input_dtype);
+    const uint32_t shared_scale_idx =
+        row_tile_shared_scale
+            ? deepseek_fp8_projection_scale_idx(
+                  row_start, col, scale_cols, block_rows, block_cols)
+            : 0u;
+    const float shared_scale =
+        row_tile_shared_scale
+            ? nerva::deepseek::e8m0_exponent_bits_to_f32(
+                  scales[shared_scale_idx])
+            : 0.0f;
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
@@ -443,31 +480,21 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_matvec_kernel(
         continue;
       }
       const uint32_t scale_idx =
-          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
-                                            block_cols);
+          row_tile_shared_scale
+              ? shared_scale_idx
+              : deepseek_fp8_projection_scale_idx(
+                    row, col, scale_cols, block_rows, block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
       const float weight =
           nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
-          nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
+          (row_tile_shared_scale
+               ? shared_scale
+               : nerva::deepseek::e8m0_exponent_bits_to_f32(
+                     scales[scale_idx]));
       sum[row_tile] += weight * input_value;
     }
   }
-  for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-       ++row_tile) {
-    partial[row_tile * blockDim.x + threadIdx.x] = sum[row_tile];
-  }
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-           ++row_tile) {
-        const uint32_t partial_offset = row_tile * blockDim.x;
-        partial[partial_offset + threadIdx.x] +=
-            partial[partial_offset + threadIdx.x + stride];
-      }
-    }
-    __syncthreads();
-  }
+  deepseek_fp8_projection_reduce_slots(sum, partial);
   if (threadIdx.x == 0) {
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
@@ -516,9 +543,12 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_gemm_tokens_kernel(
     return;
   }
   extern __shared__ float partial[];
-  float sum[kDeepSeekFp8ProjectionRowTile][kDeepSeekFp8ProjectionTokenTile] = {};
+  float sum[kDeepSeekFp8ProjectionRowTile * kDeepSeekFp8ProjectionTokenTile] =
+      {};
   const uint32_t scale_cols =
       deepseek_fp8_projection_scale_cols(cols, block_cols);
+  const bool row_tile_shared_scale =
+      deepseek_fp8_projection_row_tile_shares_scale(row_start, block_rows);
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     float input_value[kDeepSeekFp8ProjectionTokenTile] = {};
     for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
@@ -529,6 +559,16 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_gemm_tokens_kernel(
                                                  input_dtype);
       }
     }
+    const uint32_t shared_scale_idx =
+        row_tile_shared_scale
+            ? deepseek_fp8_projection_scale_idx(
+                  row_start, col, scale_cols, block_rows, block_cols)
+            : 0u;
+    const float shared_scale =
+        row_tile_shared_scale
+            ? nerva::deepseek::e8m0_exponent_bits_to_f32(
+                  scales[shared_scale_idx])
+            : 0.0f;
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
@@ -536,42 +576,24 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_gemm_tokens_kernel(
         continue;
       }
       const uint32_t scale_idx =
-          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
-                                            block_cols);
+          row_tile_shared_scale
+              ? shared_scale_idx
+              : deepseek_fp8_projection_scale_idx(
+                    row, col, scale_cols, block_rows, block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
       const float weight =
           nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
-          nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
+          (row_tile_shared_scale
+               ? shared_scale
+               : nerva::deepseek::e8m0_exponent_bits_to_f32(
+                     scales[scale_idx]));
       for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
-        sum[row_tile][tile] += weight * input_value[tile];
+        sum[row_tile * kDeepSeekFp8ProjectionTokenTile + tile] +=
+            weight * input_value[tile];
       }
     }
   }
-  for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-       ++row_tile) {
-    for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
-      partial[(row_tile * kDeepSeekFp8ProjectionTokenTile + tile) *
-                  blockDim.x +
-              threadIdx.x] = sum[row_tile][tile];
-    }
-  }
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-           ++row_tile) {
-        for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile;
-             ++tile) {
-          const uint32_t partial_offset =
-              (row_tile * kDeepSeekFp8ProjectionTokenTile + tile) *
-              blockDim.x;
-          partial[partial_offset + threadIdx.x] +=
-              partial[partial_offset + threadIdx.x + stride];
-        }
-      }
-    }
-    __syncthreads();
-  }
+  deepseek_fp8_projection_reduce_slots(sum, partial);
   if (threadIdx.x == 0) {
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
@@ -610,8 +632,20 @@ __global__ void deepseek_fp8_e8m0_scale_matvec_kernel(
   float sum[kDeepSeekFp8ProjectionRowTile] = {};
   const uint32_t scale_cols =
       deepseek_fp8_projection_scale_cols(cols, block_cols);
+  const bool row_tile_shared_scale =
+      deepseek_fp8_projection_row_tile_shares_scale(row_start, block_rows);
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const float input_value = input[col];
+    const uint32_t shared_scale_idx =
+        row_tile_shared_scale
+            ? deepseek_fp8_projection_scale_idx(
+                  row_start, col, scale_cols, block_rows, block_cols)
+            : 0u;
+    const float shared_scale =
+        row_tile_shared_scale
+            ? nerva::deepseek::e8m0_exponent_bits_to_f32(
+                  scales[shared_scale_idx])
+            : 0.0f;
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
@@ -619,31 +653,21 @@ __global__ void deepseek_fp8_e8m0_scale_matvec_kernel(
         continue;
       }
       const uint32_t scale_idx =
-          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
-                                            block_cols);
+          row_tile_shared_scale
+              ? shared_scale_idx
+              : deepseek_fp8_projection_scale_idx(
+                    row, col, scale_cols, block_rows, block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
       const float weight =
           nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
-          nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
+          (row_tile_shared_scale
+               ? shared_scale
+               : nerva::deepseek::e8m0_exponent_bits_to_f32(
+                     scales[scale_idx]));
       sum[row_tile] += weight * input_value;
     }
   }
-  for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-       ++row_tile) {
-    partial[row_tile * blockDim.x + threadIdx.x] = sum[row_tile];
-  }
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-           ++row_tile) {
-        const uint32_t partial_offset = row_tile * blockDim.x;
-        partial[partial_offset + threadIdx.x] +=
-            partial[partial_offset + threadIdx.x + stride];
-      }
-    }
-    __syncthreads();
-  }
+  deepseek_fp8_projection_reduce_slots(sum, partial);
   if (threadIdx.x == 0) {
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
@@ -674,7 +698,19 @@ __global__ void deepseek_fp8_e8m0_scale_grouped_matvec_kernel(
   float sum[kDeepSeekFp8ProjectionRowTile] = {};
   const uint32_t scale_cols =
       deepseek_fp8_projection_scale_cols(cols_per_group, block_cols);
+  const bool row_tile_shared_scale =
+      deepseek_fp8_projection_row_tile_shares_scale(row_start, block_rows);
   for (uint32_t col = threadIdx.x; col < cols_per_group; col += blockDim.x) {
+    const uint32_t shared_scale_idx =
+        row_tile_shared_scale
+            ? deepseek_fp8_projection_scale_idx(
+                  row_start, col, scale_cols, block_rows, block_cols)
+            : 0u;
+    const float shared_scale =
+        row_tile_shared_scale
+            ? nerva::deepseek::e8m0_exponent_bits_to_f32(
+                  scales[shared_scale_idx])
+            : 0.0f;
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
       const uint32_t row = row_start + row_tile;
@@ -686,30 +722,20 @@ __global__ void deepseek_fp8_e8m0_scale_grouped_matvec_kernel(
           static_cast<uint64_t>(group) * cols_per_group;
       const uint64_t row_base = static_cast<uint64_t>(row) * cols_per_group;
       const uint32_t scale_idx =
-          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
-                                            block_cols);
+          row_tile_shared_scale
+              ? shared_scale_idx
+              : deepseek_fp8_projection_scale_idx(
+                    row, col, scale_cols, block_rows, block_cols);
       const float weight =
           nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
-          nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
+          (row_tile_shared_scale
+               ? shared_scale
+               : nerva::deepseek::e8m0_exponent_bits_to_f32(
+                     scales[scale_idx]));
       sum[row_tile] += weight * input[input_base + col];
     }
   }
-  for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-       ++row_tile) {
-    partial[row_tile * blockDim.x + threadIdx.x] = sum[row_tile];
-  }
-  __syncthreads();
-  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.x < stride) {
-      for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
-           ++row_tile) {
-        const uint32_t partial_offset = row_tile * blockDim.x;
-        partial[partial_offset + threadIdx.x] +=
-            partial[partial_offset + threadIdx.x + stride];
-      }
-    }
-    __syncthreads();
-  }
+  deepseek_fp8_projection_reduce_slots(sum, partial);
   if (threadIdx.x == 0) {
     for (uint32_t row_tile = 0; row_tile < kDeepSeekFp8ProjectionRowTile;
          ++row_tile) {
