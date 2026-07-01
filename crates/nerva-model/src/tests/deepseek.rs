@@ -367,6 +367,23 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
         "DeepSeek V4 C4 sparse parallel attention primitive must be reported"
     );
 
+    let parallel_attention = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v4_parallel_attention_gemm_streams")
+        .expect("DeepSeek V4 should report parallel attention/GEMM stream coverage");
+    for primitive in [
+        "cuda_hf_sequence_deepseek_v4_aux_qk_projection_runtime",
+        "cuda_hf_sequence_deepseek_v4_aux_compressor_indexer_runtime",
+    ] {
+        assert!(
+            parallel_attention
+                .validated_primitives
+                .iter()
+                .any(|item| item == primitive),
+            "missing DeepSeek V4 aux stream primitive: {primitive}"
+        );
+    }
+
     let megamoe = coverage
         .iter()
         .find(|unit| unit.unit == "deepseek_v4_megamoe_int8_fp4_experts")
