@@ -1,20 +1,20 @@
-use crate::deepseek_kv::c128_topk::{
-    deepseek_c128_topk_metadata, deepseek_c128_topk_metadata_reference,
-};
 use crate::deepseek_kv::c4_indexer_topk::{
     deepseek_c4_indexer_topk, deepseek_c4_indexer_topk_reference,
 };
+use crate::deepseek_kv::c128_topk::{
+    deepseek_c128_topk_metadata, deepseek_c128_topk_metadata_reference,
+};
 use crate::deepseek_kv::compress_cache::{
-    deepseek_compress_norm_rope_fp8_cache, deepseek_compress_norm_rope_fp8_cache_reference,
     DEEPSEEK_COMPRESS_SCALE_E8M0, DEEPSEEK_COMPRESS_SCALE_F32, DEEPSEEK_COMPRESS_SCALE_MXFP4,
+    deepseek_compress_norm_rope_fp8_cache, deepseek_compress_norm_rope_fp8_cache_reference,
 };
 use crate::deepseek_kv::pack::{deepseek_fp8_ds_mla_pack, deepseek_v32_fp8_ds_mla_pack};
 use crate::deepseek_kv::partial_states::{
     deepseek_save_partial_states, deepseek_save_partial_states_reference,
 };
 use crate::deepseek_kv::probe::{
-    c4_indexer_topk_fixture, compress_cache_fixture, deepseek_c128_topk_metadata_smoke,
-    deepseek_c4_indexer_topk_smoke, deepseek_compress_norm_rope_fp8_cache_smoke,
+    c4_indexer_topk_fixture, compress_cache_fixture, deepseek_c4_indexer_topk_smoke,
+    deepseek_c128_topk_metadata_smoke, deepseek_compress_norm_rope_fp8_cache_smoke,
     deepseek_compress_norm_rope_mxfp4_cache_smoke, deepseek_compressed_slot_mapping_smoke,
     deepseek_kv_smoke, deepseek_save_partial_states_smoke, mxfp4_compress_cache_fixture,
     scores_close,
@@ -23,7 +23,7 @@ use crate::deepseek_kv::slot_mapping::{
     deepseek_compressed_slot_mapping, deepseek_compressed_slot_mapping_reference,
 };
 use crate::deepseek_kv::summary::{
-    CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekC4IndexerTopkSummary,
+    CudaDeepSeekC4IndexerTopkSummary, CudaDeepSeekC128TopkMetadataSummary,
     CudaDeepSeekCompressNormRopeFp8CacheSummary, CudaDeepSeekCompressedSlotMappingSummary,
     CudaDeepSeekKvSummary, CudaDeepSeekSavePartialStatesSummary,
 };
@@ -113,15 +113,10 @@ fn deepseek_compressed_slot_mapping_reference_matches_vllm_formula() {
     .unwrap();
 
     assert_eq!(slots, vec![-1, -1, 81, -1, -1, 120, -1, -1, -1]);
-    assert!(deepseek_compressed_slot_mapping_reference(
-        &[0, 2, 1],
-        &seq_lens,
-        &block_table,
-        4,
-        4,
-        4,
-    )
-    .is_err());
+    assert!(
+        deepseek_compressed_slot_mapping_reference(&[0, 2, 1], &seq_lens, &block_table, 4, 4, 4,)
+            .is_err()
+    );
 }
 
 #[test]
@@ -328,19 +323,21 @@ fn deepseek_save_partial_states_reference_matches_vllm_kernel_math() {
 
     assert_eq!(&reference.state_cache[0..2], &[7.0, 8.0]);
     assert_close(&reference.state_cache[3..5], &[10.7, 20.8]);
-    assert!(deepseek_save_partial_states_reference(
-        &kv,
-        &score,
-        &ape,
-        &positions,
-        &[8, -1, 5, 0],
-        4,
-        2,
-        3,
-        3,
-        2,
-    )
-    .is_err());
+    assert!(
+        deepseek_save_partial_states_reference(
+            &kv,
+            &score,
+            &ape,
+            &positions,
+            &[8, -1, 5, 0],
+            4,
+            2,
+            3,
+            3,
+            2,
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -727,9 +724,11 @@ fn deepseek_v32_fp8_ds_mla_pack_matches_vllm_token_row() {
         expected_rope.as_slice()
     );
     assert!(summary.output[..token_base].iter().all(|byte| *byte == 0));
-    assert!(summary.output[token_base + 656..]
-        .iter()
-        .all(|byte| *byte == 0));
+    assert!(
+        summary.output[token_base + 656..]
+            .iter()
+            .all(|byte| *byte == 0)
+    );
     assert!(summary.output_hash != 0);
 }
 

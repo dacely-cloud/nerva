@@ -4,8 +4,8 @@ use nerva_model::hf::tokenizer::PromptFormat;
 pub(crate) const AUTO_CONTEXT_MARGIN: usize = 16;
 pub(crate) const DEFAULT_OUTPUT_TOKENS: usize = 256;
 pub(crate) const DEFAULT_QUEUE_CAPACITY: usize = 1024;
-pub(crate) const DEFAULT_TEMPERATURE: f32 = 0.0;
-pub(crate) const DEFAULT_TOP_P: f32 = 1.0;
+pub(crate) const DEFAULT_TEMPERATURE: f32 = 1.0;
+pub(crate) const DEFAULT_TOP_P: f32 = 0.95;
 pub(crate) const DEFAULT_TOP_K: u32 = 0;
 pub(crate) const DEFAULT_SEED: u64 = 0;
 
@@ -21,7 +21,7 @@ pub(crate) struct GenerateArgs {
     pub temperature: f32,
     pub top_p: f32,
     pub top_k: u32,
-    pub seed: u64,
+    pub seed: Option<u64>,
     pub rt: bool,
     pub rt_mode: String,
     pub rt_page_tokens: Option<usize>,
@@ -47,7 +47,7 @@ impl Default for GenerateArgs {
             temperature: DEFAULT_TEMPERATURE,
             top_p: DEFAULT_TOP_P,
             top_k: DEFAULT_TOP_K,
-            seed: DEFAULT_SEED,
+            seed: None,
             rt: false,
             rt_mode: "auto".to_string(),
             rt_page_tokens: None,
@@ -98,8 +98,8 @@ struct ClapGenerateArgs {
     top_p: f32,
     #[arg(long = "top-k", default_value_t = DEFAULT_TOP_K, value_parser = parse_top_k_count)]
     top_k: u32,
-    #[arg(long = "seed", default_value_t = DEFAULT_SEED)]
-    seed: u64,
+    #[arg(long = "seed")]
+    seed: Option<u64>,
     #[arg(long = "rt")]
     rt: bool,
     #[arg(long = "rt-mode", value_parser = ["auto", "shadow", "sparse"])]
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(parsed.temperature, 0.7);
         assert_eq!(parsed.top_p, 0.9);
         assert_eq!(parsed.top_k, 40);
-        assert_eq!(parsed.seed, 123);
+        assert_eq!(parsed.seed, Some(123));
         assert!(parsed.rt);
         assert_eq!(parsed.rt_mode, "auto");
         assert_eq!(parsed.rt_pages, Some(256));
@@ -379,15 +379,15 @@ mod tests {
     }
 
     #[test]
-    fn defaults_use_accuracy_first_greedy_sampling() {
+    fn defaults_use_stochastic_sampling() {
         let args = ["-m", "qwen3-8b", "-p", "hello"]
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
         let parsed = parse_args(&args).unwrap();
-        assert_eq!(parsed.temperature, 0.0);
-        assert_eq!(parsed.top_p, 1.0);
+        assert_eq!(parsed.temperature, 1.0);
+        assert_eq!(parsed.top_p, 0.95);
         assert_eq!(parsed.top_k, 0);
-        assert_eq!(parsed.seed, 0);
+        assert_eq!(parsed.seed, None);
     }
 }

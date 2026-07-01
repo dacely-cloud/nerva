@@ -467,7 +467,8 @@ cudaError_t initialize_experimental_rt_selector(
   }
   if (session->experimental_rt_query_descriptor_selector != 0) {
     session->experimental_rt_query_descriptor_bytes =
-        static_cast<uint64_t>(query_count) * 2ull * sizeof(float);
+        static_cast<uint64_t>(query_count) *
+        kExperimentalRtDescriptorDims * sizeof(float);
     err = cudaMalloc(reinterpret_cast<void **>(
                          &session->device_experimental_rt_query_descriptors),
                      session->experimental_rt_query_descriptor_bytes);
@@ -478,7 +479,7 @@ cudaError_t initialize_experimental_rt_selector(
       const uint64_t descriptor_count =
           static_cast<uint64_t>(session->layer_count) *
           static_cast<uint64_t>(query_count) * static_cast<uint64_t>(pages) *
-          2ull;
+          kExperimentalRtDescriptorDims;
       if (descriptor_count == 0 ||
           descriptor_count > UINT64_MAX / sizeof(float)) {
         cudaFree(session->device_experimental_rt_query_descriptors);
@@ -512,7 +513,8 @@ cudaError_t initialize_experimental_rt_selector(
     const int rt_status = nerva_cuda_rt_candidate_selector_create_with_queries(
         pages, page_tokens, query_count, candidates,
         session->device_experimental_rt_candidate_pages,
-        session->device_experimental_rt_query_descriptors, 2u,
+        session->device_experimental_rt_query_descriptors,
+        kExperimentalRtDescriptorDims,
         session->device_step, session->stream, &selector, &rt_cuda_error);
     if (rt_status != 0 || selector == nullptr) {
       cudaFree(session->device_experimental_rt_query_descriptors);
@@ -597,8 +599,10 @@ cudaError_t initialize_experimental_rt_kv_descriptor_selector_after_prefill(
           pages, session->experimental_rt_page_tokens, session->layer_count,
           session->experimental_rt_query_count, session->experimental_rt_pages,
           session->device_experimental_rt_candidate_pages,
-          session->device_experimental_rt_query_descriptors, 2u,
-          session->device_experimental_rt_page_descriptors, 2u,
+          session->device_experimental_rt_query_descriptors,
+          kExperimentalRtDescriptorDims,
+          session->device_experimental_rt_page_descriptors,
+          kExperimentalRtDescriptorDims,
           session->device_step, session->stream, &selector, &rt_cuda_error);
   if (rt_status != 0 || selector == nullptr) {
     return rt_cuda_error == static_cast<int32_t>(cudaSuccess)

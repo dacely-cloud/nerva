@@ -491,18 +491,27 @@ extern "C" __global__ void __raygen__candidate() {
   if (descriptor_geometry) {
     const unsigned long long query_base =
         static_cast<unsigned long long>(query) * params.query_dims;
-    const float qx = fminf(1.0f, fmaxf(-1.0f, params.queries[query_base]));
-    const float qy =
-        fminf(1.0f, fmaxf(-1.0f, params.queries[query_base + 1ull]));
     const unsigned int far_slot =
         slot >= local_limit ? slot - local_limit : 0u;
+    const unsigned int descriptor_pairs =
+        params.query_dims >= 2u ? params.query_dims / 2u : 1u;
+    const unsigned int descriptor_pair =
+        descriptor_pairs == 0u ? 0u : far_slot % descriptor_pairs;
+    const unsigned int descriptor_dim = descriptor_pair * 2u;
+    const float qx = fminf(
+        1.0f, fmaxf(-1.0f, params.queries[query_base + descriptor_dim]));
+    const float qy = fminf(
+        1.0f, fmaxf(-1.0f,
+                    params.queries[query_base + descriptor_dim + 1ull]));
     const float angle = static_cast<float>(far_slot) * 2.39996323f;
     const float radius = far_slot == 0u ? 0.0f : 0.11f + 0.035f * far_slot;
     x = qx * params.descriptor_scale + cosf(angle) * radius;
     y = qy * params.descriptor_scale + sinf(angle) * radius;
     const unsigned int layer =
         params.layer_index < params.layer_count ? params.layer_index : 0u;
-    const unsigned int plane = layer * params.query_count + query;
+    const unsigned int plane =
+        (layer * params.query_count + query) * descriptor_pairs +
+        descriptor_pair;
     z = static_cast<float>(plane) * params.descriptor_plane_stride + 1.0f;
   } else {
     const unsigned int x_index = target % params.grid_width;
@@ -769,8 +778,14 @@ bool create_optix_candidate_selector(
   constexpr float descriptor_scale = 16.0f;
   constexpr float descriptor_half_size = 0.42f;
   constexpr float descriptor_plane_stride = 4.0f;
+  const uint32_t descriptor_pairs =
+      descriptor_geometry ? page_descriptor_dims / 2u : 1u;
+  const uint64_t descriptor_entries =
+      static_cast<uint64_t>(layer_count) * request->query_count *
+      request->pages;
   const uint64_t descriptor_primitives =
-      static_cast<uint64_t>(layer_count) * request->query_count * request->pages;
+      static_cast<uint64_t>(layer_count) * request->query_count *
+      descriptor_pairs * request->pages;
   const uint64_t primitive_count =
       descriptor_geometry ? descriptor_primitives : request->pages;
   if (primitive_count == 0 || primitive_count > UINT32_MAX) {
@@ -780,7 +795,8 @@ bool create_optix_candidate_selector(
   }
   std::vector<float> host_page_descriptors;
   if (descriptor_geometry) {
-    const uint64_t descriptor_floats = descriptor_primitives * page_descriptor_dims;
+    const uint64_t descriptor_floats =
+        descriptor_entries * page_descriptor_dims;
     if (descriptor_floats == 0 ||
         descriptor_floats > (UINT64_MAX / sizeof(float))) {
       set_optix_fallback_reason(out, "descriptor copy",
@@ -809,21 +825,29 @@ bool create_optix_candidate_selector(
     if (descriptor_geometry) {
       const uint32_t page =
           static_cast<uint32_t>(primitive % request->pages);
-      const uint32_t head =
+      const uint32_t pair =
           static_cast<uint32_t>((primitive / request->pages) %
+                                descriptor_pairs);
+      const uint32_t head =
+          static_cast<uint32_t>((primitive /
+                                 (static_cast<uint64_t>(request->pages) *
+                                  descriptor_pairs)) %
                                 request->query_count);
       const uint32_t layer =
           static_cast<uint32_t>(primitive /
                                 (static_cast<uint64_t>(request->pages) *
+                                 descriptor_pairs *
                                  request->query_count));
       const uint64_t descriptor_index =
           (((static_cast<uint64_t>(layer) * request->query_count + head) *
             request->pages) +
            page) *
-          page_descriptor_dims;
+              page_descriptor_dims +
+          static_cast<uint64_t>(pair) * 2ull;
       x = host_page_descriptors[descriptor_index] * descriptor_scale;
       y = host_page_descriptors[descriptor_index + 1ull] * descriptor_scale;
-      z = static_cast<float>(layer * request->query_count + head) *
+      z = static_cast<float>(
+              (layer * request->query_count + head) * descriptor_pairs + pair) *
           descriptor_plane_stride;
       half_size = descriptor_half_size;
     } else {

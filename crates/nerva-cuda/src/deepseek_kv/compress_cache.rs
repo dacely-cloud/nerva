@@ -1,6 +1,6 @@
 use crate::deepseek_kv::ffi::{
-    run_deepseek_compress_norm_rope_fp8_cache, NervaCudaDeepSeekCompressNormRopeFp8CacheRequest,
-    NervaCudaDeepSeekCompressNormRopeFp8CacheResult,
+    NervaCudaDeepSeekCompressNormRopeFp8CacheRequest,
+    NervaCudaDeepSeekCompressNormRopeFp8CacheResult, run_deepseek_compress_norm_rope_fp8_cache,
 };
 use crate::deepseek_kv::summary::CudaDeepSeekCompressNormRopeFp8CacheSummary;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;

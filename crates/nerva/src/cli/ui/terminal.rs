@@ -62,9 +62,6 @@ pub(crate) fn install_signal_cleanup() {
     });
 }
 
-#[cfg(not(unix))]
-pub(crate) fn install_signal_cleanup() {}
-
 fn current_terminal_size() -> (u16, u16) {
     terminal_size().unwrap_or_else(|_| (terminal_width_hint(), terminal_height_hint()))
 }

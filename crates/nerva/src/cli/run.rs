@@ -9,7 +9,7 @@ use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 use crate::cli::args::{
-    parse_args, AUTO_CONTEXT_MARGIN, DEFAULT_OUTPUT_TOKENS, DEFAULT_QUEUE_CAPACITY,
+    parse_args, AUTO_CONTEXT_MARGIN, DEFAULT_OUTPUT_TOKENS, DEFAULT_QUEUE_CAPACITY, DEFAULT_SEED,
 };
 use crate::cli::model::{detect_cuda_compute_capability, resolve_model_path, resolve_prompt_text};
 use crate::cli::ui::logger::NervaCliLogger;
@@ -72,7 +72,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
         temperature: parsed.temperature,
         top_p: parsed.top_p,
         top_k: parsed.top_k,
-        seed: parsed.seed,
+        seed: resolve_sampler_seed(&parsed),
     };
     let mut rt_decode = HfCudaRtDecodeConfig {
         enabled: parsed.rt,
@@ -119,8 +119,7 @@ pub(crate) fn run_generate(args: &[String]) -> Result<GenerateResult, String> {
         .map_err(|err| format!("runtime init failed: {err:?}"))?;
     logger.load_start();
     let start = std::time::Instant::now();
-    let _native_progress = logger.native_load_progress_guard();
-    let _ticker = logger.ticker_guard();
+    let _progress_guards = logger.start_progress_guards();
     let output =
         run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress(
             &runtime,
@@ -272,11 +271,12 @@ fn generate_json_output(
     let rt_local_tokens = rt_local_pages.saturating_mul(rt_page_tokens);
     let rt_sink_page_tokens = rt_sink_pages.saturating_mul(rt_page_tokens);
     let rt_far_tokens = rt_far_pages.saturating_mul(rt_page_tokens);
-    let experimental_rt_kv_descriptor_selector = experimental_rt_kv_descriptor_selector_from_env();
+    let experimental_rt_kv_descriptor_selector = env_truthy("NERVA_EXPERIMENTAL_RT_KV_DESCRIPTOR");
     let experimental_rt_query_descriptor_selector = experimental_rt_kv_descriptor_selector
-        || experimental_rt_query_descriptor_selector_from_env();
-    let experimental_rt_qk_selector = experimental_rt_qk_selector_from_env();
-    let experimental_rt_qk_fused_selector = experimental_rt_qk_fused_selector_from_env();
+        || env_truthy("NERVA_EXPERIMENTAL_RT_QUERY_DESCRIPTOR");
+    let experimental_rt_qk_selector = env_truthy("NERVA_EXPERIMENTAL_RT_QK_SELECTOR");
+    let experimental_rt_qk_fused_selector =
+        experimental_rt_qk_selector && env_truthy("NERVA_EXPERIMENTAL_RT_QK_FUSED");
     let rt_decode_effective_enabled = output.stream.create.experimental_rt_decode_requested
         && (output.stream.create.experimental_rt_decode_enabled
             || output.stream.start.experimental_rt_sparse_attention_active
@@ -296,10 +296,8 @@ fn generate_json_output(
     );
     let rt_core_page_selector = rt_decode_effective_enabled
         && (experimental_rt_query_descriptor_selector || !experimental_rt_qk_selector);
-    let semantic_page_selection = rt_decode_effective_enabled
-        && (experimental_rt_kv_descriptor_selector || experimental_rt_qk_selector);
-    let semantic_rt_retrieval =
-        rt_decode_effective_enabled && experimental_rt_kv_descriptor_selector;
+    let semantic_page_selection = rt_decode_effective_enabled && experimental_rt_qk_selector;
+    let semantic_rt_retrieval = false;
     let experimental_prefill_local_window_tokens =
         experimental_prefill_local_window_tokens_from_env();
     Ok(format!(
@@ -383,6 +381,36 @@ fn generate_json_output(
     ))
 }
 
+fn resolve_sampler_seed(parsed: &crate::cli::args::GenerateArgs) -> u64 {
+    parsed.seed.unwrap_or_else(|| {
+        if stochastic_sampling_requested(parsed.temperature, parsed.top_k) {
+            auto_sampler_seed()
+        } else {
+            DEFAULT_SEED
+        }
+    })
+}
+
+fn stochastic_sampling_requested(temperature: f32, top_k: u32) -> bool {
+    temperature > 0.0 && top_k != 1
+}
+
+fn auto_sampler_seed() -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let pid = std::process::id() as u64;
+    let stack_addr = &now as *const _ as usize as u64;
+    let mut seed = now.as_nanos() as u64
+        ^ now.as_secs().rotate_left(17)
+        ^ pid.rotate_left(32)
+        ^ stack_addr.rotate_left(7);
+    seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    seed = (seed ^ (seed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    seed = (seed ^ (seed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    seed ^ (seed >> 31)
+}
+
 fn rt_mode_code(mode: &str) -> Result<u32, String> {
     match mode {
         "auto" => Ok(1),
@@ -420,7 +448,7 @@ fn rt_selector_policy(
     } else if !enabled {
         "unavailable_or_dense_fallback"
     } else if kv_descriptor_selector {
-        "optix_kv_page_descriptor_selector"
+        "optix_kv_page_descriptor_approx_selector"
     } else if query_descriptor_selector {
         "optix_live_query_descriptor_page_pattern"
     } else if qk_selector && qk_fused_selector {
@@ -432,22 +460,6 @@ fn rt_selector_policy(
     } else {
         "optix_synthetic_sink_local_far_page_pattern"
     }
-}
-
-fn experimental_rt_kv_descriptor_selector_from_env() -> bool {
-    env_truthy("NERVA_EXPERIMENTAL_RT_KV_DESCRIPTOR")
-}
-
-fn experimental_rt_query_descriptor_selector_from_env() -> bool {
-    env_truthy("NERVA_EXPERIMENTAL_RT_QUERY_DESCRIPTOR")
-}
-
-fn experimental_rt_qk_selector_from_env() -> bool {
-    env_truthy("NERVA_EXPERIMENTAL_RT_QK_SELECTOR")
-}
-
-fn experimental_rt_qk_fused_selector_from_env() -> bool {
-    experimental_rt_qk_selector_from_env() && env_truthy("NERVA_EXPERIMENTAL_RT_QK_FUSED")
 }
 
 fn env_truthy(name: &str) -> bool {
@@ -487,4 +499,45 @@ fn tokens_per_second(tokens: usize, elapsed_ns: u128) -> String {
         return "0.0".to_string();
     }
     format!("{:.6}", tokens as f64 * 1_000_000_000.0 / elapsed_ns as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_sampler_seed, rt_selector_policy, stochastic_sampling_requested};
+    use crate::cli::args::{GenerateArgs, DEFAULT_SEED};
+
+    #[test]
+    fn explicit_sampler_seed_wins() {
+        let parsed = GenerateArgs {
+            temperature: 0.8,
+            seed: Some(123),
+            ..GenerateArgs::default()
+        };
+        assert_eq!(resolve_sampler_seed(&parsed), 123);
+    }
+
+    #[test]
+    fn greedy_sampling_uses_stable_default_seed() {
+        let parsed = GenerateArgs {
+            temperature: 0.0,
+            ..GenerateArgs::default()
+        };
+        assert_eq!(resolve_sampler_seed(&parsed), DEFAULT_SEED);
+    }
+
+    #[test]
+    fn stochastic_sampling_requires_temperature_and_non_greedy_top_k() {
+        assert!(stochastic_sampling_requested(0.8, 0));
+        assert!(stochastic_sampling_requested(0.8, 40));
+        assert!(!stochastic_sampling_requested(0.0, 40));
+        assert!(!stochastic_sampling_requested(0.8, 1));
+    }
+
+    #[test]
+    fn optix_kv_descriptor_policy_is_reported_as_approximate() {
+        assert_eq!(
+            rt_selector_policy(true, true, 3, true, true, false, false),
+            "optix_kv_page_descriptor_approx_selector"
+        );
+    }
 }

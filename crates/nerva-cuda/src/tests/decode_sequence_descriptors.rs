@@ -1,30 +1,31 @@
 use crate::decode::hf_chain::layer::{
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN, CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR,
     CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER, CUDA_HF_DEEPSEEK_FLAG_MOE,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
+    CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
+    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
+    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::layout_plan::{
-    CudaHfDecodeSequenceLayoutPlanRequest, CUDA_HF_SEQUENCE_MISSING_OFFSET,
+    CUDA_HF_SEQUENCE_MISSING_OFFSET, CudaHfDecodeSequenceLayoutPlan,
+    CudaHfDecodeSequenceLayoutPlanRequest,
 };
 use crate::decode::hf_sequence::request::{
-    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest, CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
-    CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
+    CudaHfDecodeSamplerConfig, CudaHfDecodeSequenceRequest,
 };
 use crate::decode::hf_sequence::session::request::{
-    CudaHfDecodeSequenceExperimentalRtConfig, CudaHfDecodeSequenceSessionConfig,
-    CudaHfDecodeSequenceSessionCreateOutput, CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX,
-    CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX, CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL,
+    CUDA_HF_DEEPSEEK_V4_MHC_STATE_COMB_MIX, CUDA_HF_DEEPSEEK_V4_MHC_STATE_POST_MIX,
+    CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL, CudaHfDecodeSequenceExperimentalRtConfig,
+    CudaHfDecodeSequenceSessionConfig, CudaHfDecodeSequenceSessionCreateOutput,
 };
 use crate::decode::hf_sequence::session::stateful::CudaHfDecodeSequenceLoop;
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{
-    hash_weight_blocks, CudaHfDecodeSequenceWeightBlock, CudaHfDecodeSequenceWeightPlan,
-    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
+    CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
+    CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
 use crate::smoke::status::SmokeStatus;
 
@@ -320,10 +321,80 @@ fn write_arena_byte(storage: &mut [u16], arena_offset: u64, byte_offset: usize, 
     }
 }
 
+fn read_arena_byte(storage: &[u16], arena_offset: u64, byte_offset: usize) -> u8 {
+    let absolute = arena_offset as usize * 2 + byte_offset;
+    let slot = absolute / 2;
+    if absolute % 2 == 0 {
+        (storage[slot] & 0x00ff) as u8
+    } else {
+        (storage[slot] >> 8) as u8
+    }
+}
+
+fn write_arena_nibble(
+    storage: &mut [u16],
+    arena_offset: u64,
+    byte_offset: usize,
+    high: bool,
+    nibble: u8,
+) {
+    let current = read_arena_byte(storage, arena_offset, byte_offset);
+    let value = if high {
+        (current & 0x0f) | ((nibble & 0x0f) << 4)
+    } else {
+        (current & 0xf0) | (nibble & 0x0f)
+    };
+    write_arena_byte(storage, arena_offset, byte_offset, value);
+}
+
 fn write_arena_f32(storage: &mut [u16], arena_offset: u64, value: f32) {
     let bits = value.to_bits();
     storage[arena_offset as usize] = bits as u16;
     storage[arena_offset as usize + 1] = (bits >> 16) as u16;
+}
+
+fn write_arena_u64(storage: &mut [u16], arena_offset: u64, index: usize, value: u64) {
+    let offset = arena_offset as usize + index * 4;
+    storage[offset] = value as u16;
+    storage[offset + 1] = (value >> 16) as u16;
+    storage[offset + 2] = (value >> 32) as u16;
+    storage[offset + 3] = (value >> 48) as u16;
+}
+
+fn write_arena_mxfp4_rank3_value(
+    storage: &mut [u16],
+    arena_offset: u64,
+    rows: usize,
+    packed_cols: usize,
+    expert: usize,
+    row: usize,
+    col: usize,
+    nibble: u8,
+) {
+    let packed_col = col / 2;
+    let byte_offset = (expert * rows + row) * packed_cols + packed_col;
+    write_arena_nibble(storage, arena_offset, byte_offset, col % 2 == 1, nibble);
+}
+
+fn rank3_byte_slots(depth: usize, rows: usize, cols: usize) -> u64 {
+    (depth * rows * cols).div_ceil(2) as u64
+}
+
+fn write_arena_mxfp4_rank3_scales(
+    storage: &mut [u16],
+    arena_offset: u64,
+    rows: usize,
+    packed_cols: usize,
+    expert: usize,
+    scale_byte: u8,
+) {
+    let scale_cols = packed_cols.div_ceil(16);
+    for row in 0..rows {
+        for scale_col in 0..scale_cols {
+            let byte_offset = (expert * rows + row) * scale_cols + scale_col;
+            write_arena_byte(storage, arena_offset, byte_offset, scale_byte);
+        }
+    }
 }
 
 fn descriptor_weight_blocks<'a>(
@@ -2918,10 +2989,7 @@ fn deepseek_v4_swa_dense_snapshot_matches_fullsize_fp8_ds_mla_page() {
     assert_eq!(snapshot.output_hash, fnv_hash_bytes(&expected));
 }
 
-#[test]
-fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
-    let _guard = super::cuda_lock::cuda_test_lock();
-
+fn tiny_deepseek_v4_swa_sparse_moe_layer(hash_router: bool) -> CudaHfDecodeChainLayer<'static> {
     let mut layer = tiny_deepseek_v4_swa_dense_descriptor_layer();
     layer.mlp_kind = CUDA_HF_MLP_SPARSE_MOE;
     layer.moe_intermediate = 4;
@@ -2930,10 +2998,151 @@ fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
     layer.experts_per_token = 1;
     layer.norm_topk_prob = true;
     layer.deepseek = layer.deepseek.map(|mut deepseek| {
-        deepseek.flags |= CUDA_HF_DEEPSEEK_FLAG_MOE | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS;
+        deepseek.flags |= CUDA_HF_DEEPSEEK_FLAG_MOE;
+        if hash_router {
+            deepseek.flags |= CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER;
+        } else {
+            deepseek.flags |= CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS;
+        }
         deepseek.routed_scaling_factor = 1.0;
         deepseek
     });
+    layer
+}
+
+fn fill_tiny_v4_swa_sparse_moe_descriptor(
+    storage: &mut [u16],
+    plan: &CudaHfDecodeSequenceLayoutPlan,
+    hash_router: bool,
+    expert_payload: bool,
+) {
+    const HIDDEN: usize = 4;
+    const VOCAB_SIZE: usize = 8;
+    const NUM_EXPERTS: usize = 2;
+    const MOE_INTERMEDIATE: usize = 4;
+    const HALF_HIDDEN: usize = HIDDEN / 2;
+    const HALF_INTERMEDIATE: usize = MOE_INTERMEDIATE / 2;
+
+    for token in 0..VOCAB_SIZE {
+        for dim in 0..HIDDEN {
+            let value = if token == 0 { (dim + 1) as f32 } else { 0.0 };
+            storage[token * HIDDEN + dim] = f32_to_bf16_bits(value);
+        }
+    }
+    for dim in 0..HIDDEN {
+        storage[plan.rms_attn as usize + dim] = f32_to_bf16_bits(1.0);
+        storage[plan.rms_mlp as usize + dim] = f32_to_bf16_bits(1.0);
+    }
+    for dim in 0..2usize {
+        storage[plan.q_norm as usize + dim] = f32_to_bf16_bits(1.0);
+        storage[plan.k_norm as usize + dim] = f32_to_bf16_bits(1.0);
+    }
+    for offset in [plan.deepseek_hc_attn_scale, plan.deepseek_hc_ffn_scale] {
+        if offset != CUDA_HF_SEQUENCE_MISSING_OFFSET {
+            write_arena_f32(storage, offset, 0.0);
+            write_arena_f32(storage, offset + 2, 0.0);
+            write_arena_f32(storage, offset + 4, 0.0);
+        }
+    }
+    if plan.deepseek_hc_head_scale != CUDA_HF_SEQUENCE_MISSING_OFFSET {
+        write_arena_f32(storage, plan.deepseek_hc_head_scale, 0.0);
+    }
+
+    for dim in 0..HIDDEN {
+        storage[plan.w_router as usize + dim] = f32_to_bf16_bits(-1.0);
+        storage[plan.w_router as usize + HIDDEN + dim] = f32_to_bf16_bits(1.0);
+    }
+    let router_metadata = plan.w_router + (NUM_EXPERTS * HIDDEN) as u64;
+    if hash_router {
+        write_arena_u64(storage, router_metadata, 0, 1);
+    } else {
+        write_arena_f32(storage, router_metadata, 0.0);
+        write_arena_f32(storage, router_metadata + 2, 0.0);
+    }
+
+    let expert_gate = plan.w_expert_gate_up;
+    let expert_gate_scale =
+        expert_gate + rank3_byte_slots(NUM_EXPERTS, MOE_INTERMEDIATE, HALF_HIDDEN);
+    let gate_scale_cols = HALF_HIDDEN.div_ceil(16);
+    let expert_up =
+        expert_gate_scale + rank3_byte_slots(NUM_EXPERTS, MOE_INTERMEDIATE, gate_scale_cols);
+    let expert_up_scale = expert_up + rank3_byte_slots(NUM_EXPERTS, MOE_INTERMEDIATE, HALF_HIDDEN);
+    let expert_down = plan.w_expert_down;
+    let expert_down_scale = expert_down + rank3_byte_slots(NUM_EXPERTS, HIDDEN, HALF_INTERMEDIATE);
+
+    let scale = encode_e8m0_scale(1.0);
+    write_arena_mxfp4_rank3_scales(
+        storage,
+        expert_gate_scale,
+        MOE_INTERMEDIATE,
+        HALF_HIDDEN,
+        1,
+        scale,
+    );
+    write_arena_mxfp4_rank3_scales(
+        storage,
+        expert_up_scale,
+        MOE_INTERMEDIATE,
+        HALF_HIDDEN,
+        1,
+        scale,
+    );
+    write_arena_mxfp4_rank3_scales(
+        storage,
+        expert_down_scale,
+        HIDDEN,
+        HALF_INTERMEDIATE,
+        1,
+        scale,
+    );
+
+    if expert_payload {
+        for row in 0..MOE_INTERMEDIATE {
+            for col in 0..HIDDEN {
+                write_arena_mxfp4_rank3_value(
+                    storage,
+                    expert_gate,
+                    MOE_INTERMEDIATE,
+                    HALF_HIDDEN,
+                    1,
+                    row,
+                    col,
+                    0x2,
+                );
+                write_arena_mxfp4_rank3_value(
+                    storage,
+                    expert_up,
+                    MOE_INTERMEDIATE,
+                    HALF_HIDDEN,
+                    1,
+                    row,
+                    col,
+                    0x2,
+                );
+            }
+        }
+        for row in 0..HIDDEN {
+            for col in 0..MOE_INTERMEDIATE {
+                write_arena_mxfp4_rank3_value(
+                    storage,
+                    expert_down,
+                    HIDDEN,
+                    HALF_INTERMEDIATE,
+                    1,
+                    row,
+                    col,
+                    0x2,
+                );
+            }
+        }
+    }
+}
+
+fn run_tiny_v4_swa_sparse_moe_descriptor(
+    hash_router: bool,
+    expert_payload: bool,
+) -> Option<(CudaHfDecodeSequenceSummary, u64)> {
+    let layer = tiny_deepseek_v4_swa_sparse_moe_layer(hash_router);
     let layers = [layer];
     let plan = CudaHfDecodeSequenceLayoutPlanRequest {
         hidden: 4,
@@ -2951,7 +3160,8 @@ fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
     assert_ne!(plan.w_expert_gate_up, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_ne!(plan.w_expert_down, CUDA_HF_SEQUENCE_MISSING_OFFSET);
 
-    let weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    let mut weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
+    fill_tiny_v4_swa_sparse_moe_descriptor(&mut weight_storage, &plan, hash_router, expert_payload);
     let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
         host_source: weight_storage.as_ptr(),
         source_file: core::ptr::null(),
@@ -2995,9 +3205,8 @@ fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
 
     let created = config.create();
     if created.summary.status == SmokeStatus::Unavailable {
-        return;
+        return None;
     }
-
     assert_eq!(
         created.summary.status,
         SmokeStatus::Ok,
@@ -3008,23 +3217,53 @@ fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
         .session
         .expect("V4 SWA sparse MoE session handle should exist");
 
-    let summary = session.run(&[0], 2, None);
+    let summary = session.run(&[0], 1, None);
     assert_eq!(
         summary.status,
         SmokeStatus::Ok,
-        "V4 SWA sparse MoE DeepSeek path should run through sampling: {:?}",
+        "V4 SWA sparse MoE DeepSeek path should decode one token: {:?}",
         summary.error
     );
-    assert_eq!(summary.steps, 2);
-    assert_eq!(summary.tokens.len(), 2);
-    assert_eq!(summary.kv_tokens, 2);
-    assert_eq!(summary.graph_replays, 2);
+    assert_eq!(summary.steps, 1);
+    assert_eq!(summary.tokens.len(), 1);
+    assert_eq!(summary.kv_tokens, 1);
+    assert_eq!(summary.graph_replays, 1);
+
+    let residual = session.deepseek_v4_mhc_snapshot(CUDA_HF_DEEPSEEK_V4_MHC_STATE_RESIDUAL, 0, 32);
+    assert_eq!(
+        residual.status,
+        SmokeStatus::Ok,
+        "V4 mHC residual snapshot should copy sparse MoE decode state: {:?}",
+        residual.error
+    );
+    Some((summary, residual.output_hash))
+}
+
+#[test]
+fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let Some((zero_summary, zero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, false)
+    else {
+        return;
+    };
+    let Some((summary, nonzero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(false, true) else {
+        return;
+    };
     assert_eq!(summary.deepseek_v3_grouped_router_selections, 0);
     assert_eq!(
         summary.deepseek_v4_bias_router_selections,
         summary.graph_replays
     );
     assert_eq!(summary.deepseek_v4_hash_router_selections, 0);
+    assert_eq!(
+        zero_summary.deepseek_v4_bias_router_selections,
+        zero_summary.graph_replays
+    );
+    assert_ne!(
+        nonzero_hash, zero_hash,
+        "non-zero V4 MXFP4 expert weights must change the mHC residual state"
+    );
     assert!(summary.graph_nodes > 0);
 }
 
@@ -3032,110 +3271,26 @@ fn deepseek_v4_swa_sparse_moe_session_runs_through_sampling() {
 fn deepseek_v4_swa_hash_moe_session_runs_through_sampling() {
     let _guard = super::cuda_lock::cuda_test_lock();
 
-    let mut layer = tiny_deepseek_v4_swa_dense_descriptor_layer();
-    layer.mlp_kind = CUDA_HF_MLP_SPARSE_MOE;
-    layer.moe_intermediate = 4;
-    layer.shared_expert_intermediate = 2;
-    layer.num_experts = 2;
-    layer.experts_per_token = 1;
-    layer.norm_topk_prob = true;
-    layer.deepseek = layer.deepseek.map(|mut deepseek| {
-        deepseek.flags |= CUDA_HF_DEEPSEEK_FLAG_MOE
-            | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS
-            | CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER;
-        deepseek.routed_scaling_factor = 1.0;
-        deepseek
-    });
-    let layers = [layer];
-    let plan = CudaHfDecodeSequenceLayoutPlanRequest {
-        hidden: 4,
-        heads: 2,
-        kv_heads: 1,
-        head_dim: 2,
-        intermediate: 4,
-        vocab_size: 8,
-        layers: &layers,
-        layer_index: 0,
-    }
-    .plan()
-    .expect("native layout planner should accept tiny V4 SWA hash MoE layer");
-    assert_ne!(plan.w_router, CUDA_HF_SEQUENCE_MISSING_OFFSET);
-    assert_ne!(plan.w_expert_gate_up, CUDA_HF_SEQUENCE_MISSING_OFFSET);
-    assert_ne!(plan.w_expert_down, CUDA_HF_SEQUENCE_MISSING_OFFSET);
-
-    let weight_storage = vec![0u16; (plan.resident_weight_bytes as usize).div_ceil(2)];
-    let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
-        host_source: weight_storage.as_ptr(),
-        source_file: core::ptr::null(),
-        source_file_len: 0,
-        file_offset_begin: 0,
-        block_id: 1,
-        block_version: 1,
-        offset_bytes: 0,
-        bytes: plan.resident_weight_bytes,
-        strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
-        reserved: 0,
-    }];
-    let config = CudaHfDecodeSequenceSessionConfig {
-        dtype: CUDA_HF_DECODE_SEQUENCE_DTYPE_F16,
-        hidden: 4,
-        heads: 2,
-        kv_heads: 1,
-        head_dim: 2,
-        intermediate: 4,
-        vocab_size: 8,
-        max_context_tokens: 4,
-        rms_eps: 1e-5,
-        rope_theta: Some(10_000.0),
-        embeddings: &[],
-        layers: &layers,
-        final_norm_weight: &[],
-        lm_head: &[],
-        weight_plan: Some(CudaHfDecodeSequenceWeightPlan {
-            blocks: 1,
-            gpu_resident_blocks: 1,
-            gpu_staged_blocks: 0,
-            weight_bytes: plan.resident_weight_bytes,
-            gpu_resident_weight_bytes: plan.resident_weight_bytes,
-            gpu_staged_weight_bytes: 0,
-            descriptor_hash: hash_weight_blocks(&weight_blocks),
-        }),
-        weight_blocks: &weight_blocks,
-        detailed_profile: false,
-        experimental_rt: Default::default(),
-    };
-
-    let created = config.create();
-    if created.summary.status == SmokeStatus::Unavailable {
+    let Some((zero_summary, zero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(true, false) else {
         return;
-    }
-
-    assert_eq!(
-        created.summary.status,
-        SmokeStatus::Ok,
-        "V4 SWA hash MoE DeepSeek should pass session creation: {:?}",
-        created.summary.error
-    );
-    let mut session = created
-        .session
-        .expect("V4 SWA hash MoE session handle should exist");
-
-    let summary = session.run(&[0], 2, None);
-    assert_eq!(
-        summary.status,
-        SmokeStatus::Ok,
-        "V4 SWA hash MoE DeepSeek path should run through sampling: {:?}",
-        summary.error
-    );
-    assert_eq!(summary.steps, 2);
-    assert_eq!(summary.tokens.len(), 2);
-    assert_eq!(summary.kv_tokens, 2);
-    assert_eq!(summary.graph_replays, 2);
+    };
+    let Some((summary, nonzero_hash)) = run_tiny_v4_swa_sparse_moe_descriptor(true, true) else {
+        return;
+    };
     assert_eq!(summary.deepseek_v3_grouped_router_selections, 0);
     assert_eq!(summary.deepseek_v4_bias_router_selections, 0);
     assert_eq!(
         summary.deepseek_v4_hash_router_selections,
         summary.graph_replays
+    );
+    assert_eq!(zero_summary.deepseek_v4_bias_router_selections, 0);
+    assert_eq!(
+        zero_summary.deepseek_v4_hash_router_selections,
+        zero_summary.graph_replays
+    );
+    assert_ne!(
+        nonzero_hash, zero_hash,
+        "non-zero V4 hash-routed MXFP4 expert weights must change the mHC residual state"
     );
     assert!(summary.graph_nodes > 0);
 }

@@ -1,6 +1,6 @@
-use crate::deepseek_mla::ffi::{run_deepseek_mla_smoke, NervaCudaDeepSeekMlaSmokeResult};
+use crate::deepseek_mla::ffi::{NervaCudaDeepSeekMlaSmokeResult, run_deepseek_mla_smoke};
 use crate::deepseek_mla::qkv_norm::{
-    deepseek_qkv_rmsnorm, deepseek_qkv_rmsnorm_reference, CudaDeepSeekQKvRmsNormSummary,
+    CudaDeepSeekQKvRmsNormSummary, deepseek_qkv_rmsnorm, deepseek_qkv_rmsnorm_reference,
 };
 use crate::deepseek_mla::summary::CudaDeepSeekMlaSummary;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;

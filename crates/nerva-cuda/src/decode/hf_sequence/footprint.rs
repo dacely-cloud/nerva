@@ -1,5 +1,6 @@
 use crate::decode::hf_chain::layer::{
-    CudaHfDecodeChainLayer, CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN,
+    CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_LINEAR_GDN,
+    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CudaHfDecodeChainLayer,
 };
 use crate::decode::hf_sequence::request::CudaHfDecodeSequenceRequest;
 use crate::decode::hf_sequence::weight_plan::CudaHfDecodeSequenceWeightPlan;
@@ -204,12 +205,29 @@ fn arena_elements(
             "layer weights",
         )?;
     }
-    elements = checked_add(elements, hidden, "final norm")?;
+    elements = checked_add(
+        elements,
+        final_norm_slots(request.layers, hidden),
+        "final norm",
+    )?;
     checked_add(
         elements,
         checked_mul(as_u64("vocab", request.vocab_size)?, hidden, "LM head")?,
         "arena elements",
     )
+}
+
+fn final_norm_slots(layers: &[CudaHfDecodeChainLayer<'_>], hidden: u64) -> u64 {
+    if layers.first().is_some_and(|layer| {
+        layer.attention_kind == CUDA_HF_ATTENTION_DEEPSEEK_MLA
+            && layer
+                .deepseek
+                .is_some_and(|deepseek| deepseek.mode == CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER)
+    }) {
+        hidden * 2
+    } else {
+        hidden
+    }
 }
 
 fn scratch_bytes(

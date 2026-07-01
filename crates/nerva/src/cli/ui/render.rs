@@ -73,7 +73,7 @@ fn render_status_strip(frame: &mut Frame<'_>, area: Rect, state: &UiState) {
     frame.render_widget(
         Paragraph::new(line)
             .alignment(Alignment::Left)
-            .block(top_rule()),
+            .block(rule()),
         inset(area, 1, 0),
     );
 }
@@ -165,7 +165,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &UiState) {
     frame.render_widget(
         Paragraph::new(line)
             .alignment(Alignment::Left)
-            .block(bottom_rule()),
+            .block(rule()),
         inset(area, 1, 0),
     );
 }
@@ -190,13 +190,7 @@ fn render_panel_lines(
     );
 }
 
-fn top_rule() -> Block<'static> {
-    Block::default()
-        .borders(Borders::TOP)
-        .border_style(border())
-}
-
-fn bottom_rule() -> Block<'static> {
+fn rule() -> Block<'static> {
     Block::default()
         .borders(Borders::TOP)
         .border_style(border())

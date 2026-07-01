@@ -1,13 +1,13 @@
-use crate::deepseek_kv::c128_topk::{
-    deepseek_c128_topk_metadata, deepseek_c128_topk_metadata_reference,
-};
 use crate::deepseek_kv::c4_indexer_topk::{
     deepseek_c4_indexer_topk, deepseek_c4_indexer_topk_reference,
 };
+use crate::deepseek_kv::c128_topk::{
+    deepseek_c128_topk_metadata, deepseek_c128_topk_metadata_reference,
+};
 use crate::deepseek_kv::compress_cache::{
-    deepseek_compress_norm_rope_fp8_cache, deepseek_compress_norm_rope_fp8_cache_reference,
     CudaDeepSeekCompressNormRopeFp8CacheInput, DEEPSEEK_COMPRESS_SCALE_E8M0,
-    DEEPSEEK_COMPRESS_SCALE_MXFP4,
+    DEEPSEEK_COMPRESS_SCALE_MXFP4, deepseek_compress_norm_rope_fp8_cache,
+    deepseek_compress_norm_rope_fp8_cache_reference,
 };
 use crate::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use crate::deepseek_kv::partial_states::{
@@ -17,7 +17,7 @@ use crate::deepseek_kv::slot_mapping::{
     deepseek_compressed_slot_mapping, deepseek_compressed_slot_mapping_reference,
 };
 use crate::deepseek_kv::summary::{
-    CudaDeepSeekC128TopkMetadataSummary, CudaDeepSeekC4IndexerTopkSummary,
+    CudaDeepSeekC4IndexerTopkSummary, CudaDeepSeekC128TopkMetadataSummary,
     CudaDeepSeekCompressNormRopeFp8CacheSummary, CudaDeepSeekCompressedSlotMappingSummary,
     CudaDeepSeekKvSummary, CudaDeepSeekSavePartialStatesSummary,
 };

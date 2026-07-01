@@ -1,11 +1,10 @@
 use crate::decode::hf_chain::layer::{
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN,
     CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR, CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER,
     CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS, CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
-    CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
-    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_MLP_DENSE,
-    CUDA_HF_MLP_SPARSE_MOE,
+    CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
+    CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_MLP_DENSE,
+    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 
 const DEEPSEEK_V32_PACKED_KV_BLOCK_TOKENS: u64 = 64;
@@ -1081,11 +1080,7 @@ fn deepseek_v4_indexer_state_layer_bytes(
 }
 
 fn deepseek_v4_compressor_coff(deepseek: CudaHfDeepSeekLayer) -> u64 {
-    if deepseek.compress_ratio == 4 {
-        2
-    } else {
-        1
-    }
+    if deepseek.compress_ratio == 4 { 2 } else { 1 }
 }
 
 fn deepseek_v4_packed_kv_block_tokens(compress_ratio: usize) -> u64 {
@@ -1134,11 +1129,7 @@ fn optional_len(value: Option<&[u16]>) -> Result<u64, String> {
 }
 
 fn marker(value: Option<&[u16]>, elements: u64) -> u64 {
-    if value.is_some() {
-        elements
-    } else {
-        0
-    }
+    if value.is_some() { elements } else { 0 }
 }
 
 fn bf16_slots(rows: u64, cols: u64, label: &str) -> Result<u64, String> {

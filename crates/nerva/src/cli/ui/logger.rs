@@ -78,12 +78,11 @@ impl NervaCliLogger {
             .unwrap_or(false)
     }
 
-    pub(crate) fn native_load_progress_guard(&self) -> NativeLoadProgressGuard {
-        NativeLoadProgressGuard::install(self.native_load_progress_mode())
-    }
-
-    pub(crate) fn ticker_guard(&self) -> UiTickerGuard {
-        UiTickerGuard::start(Arc::clone(&self.inner))
+    pub(crate) fn start_progress_guards(&self) -> (NativeLoadProgressGuard, UiTickerGuard) {
+        (
+            NativeLoadProgressGuard::install(self.native_load_progress_mode()),
+            UiTickerGuard::start(Arc::clone(&self.inner)),
+        )
     }
 
     pub(crate) fn banner(&mut self) {
@@ -526,12 +525,12 @@ impl NervaCliLoggerInner {
             "report",
             paint(self.color, Tone::Green, "final performance report"),
         );
-        self.print_plain_report_block_line(report_title_line(
+        self.print_plain_report_block_line(paint(
             self.color,
-            "NERVA PERFORMANCE REPORT",
             Tone::Green,
+            "NERVA PERFORMANCE REPORT",
         ));
-        self.print_plain_report_block_line(report_section_line(self.color, "RUN", Tone::Green));
+        self.print_plain_report_block_line(paint(self.color, Tone::Green, "RUN"));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
             "generated",
@@ -552,7 +551,7 @@ impl NervaCliLoggerInner {
         ));
         self.print_plain_report_block_line("");
 
-        self.print_plain_report_block_line(report_section_line(self.color, "LOAD", Tone::Orange));
+        self.print_plain_report_block_line(paint(self.color, Tone::Orange, "LOAD"));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
             "resident weights",
@@ -611,10 +610,10 @@ impl NervaCliLoggerInner {
         self.print_plain_report_block_line("");
 
         if prefill_profile_total_ns != 0 {
-            self.print_plain_report_block_line(report_section_line(
+            self.print_plain_report_block_line(paint(
                 self.color,
-                "PREFILL PROFILE",
                 Tone::Magenta,
+                "PREFILL PROFILE",
             ));
             self.print_plain_report_block_line(report_kv_line(
                 self.color,
@@ -660,7 +659,7 @@ impl NervaCliLoggerInner {
             self.print_plain_report_block_line("");
         }
 
-        self.print_plain_report_block_line(report_section_line(self.color, "DECODE", Tone::Cyan));
+        self.print_plain_report_block_line(paint(self.color, Tone::Cyan, "DECODE"));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
             "throughput",
@@ -702,10 +701,10 @@ impl NervaCliLoggerInner {
         }
         self.print_plain_report_block_line("");
 
-        self.print_plain_report_block_line(report_section_line(
+        self.print_plain_report_block_line(paint(
             self.color,
-            "TIME PROFILE",
             Tone::Magenta,
+            "TIME PROFILE",
         ));
         if profile_total_ns == 0 {
             self.print_plain_report_block_line(report_kv_line(
@@ -765,10 +764,10 @@ impl NervaCliLoggerInner {
         }
         self.print_plain_report_block_line("");
 
-        self.print_plain_report_block_line(report_section_line(
+        self.print_plain_report_block_line(paint(
             self.color,
-            "CUDA GRAPH",
             Tone::Magenta,
+            "CUDA GRAPH",
         ));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
@@ -812,7 +811,7 @@ impl NervaCliLoggerInner {
         ));
         self.print_plain_report_block_line("");
 
-        self.print_plain_report_block_line(report_section_line(self.color, "MEMORY", Tone::Blue));
+        self.print_plain_report_block_line(paint(self.color, Tone::Blue, "MEMORY"));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
             "weights",
@@ -1000,14 +999,6 @@ fn metric(color: ColorMode, label: &str, value: impl AsRef<str>, value_tone: Ton
     } else {
         format!("{} {}", label, value.as_ref())
     }
-}
-
-fn report_title_line(color: ColorMode, title: &str, tone: Tone) -> String {
-    paint(color, tone, title)
-}
-
-fn report_section_line(color: ColorMode, title: &str, tone: Tone) -> String {
-    paint(color, tone, title)
 }
 
 fn report_kv_line(

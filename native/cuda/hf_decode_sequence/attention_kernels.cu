@@ -173,34 +173,27 @@ __global__ void hf_experimental_rt_query_descriptor_kernel(
       layer_scratch_ptrs(scratch, hidden, attention_hidden, kv_hidden, intermediate);
   const uint32_t representative_head = kv_head * (heads / kv_heads);
   const uint32_t q_base = representative_head * head_dim;
-  if (threadIdx.x == 0) {
-    query_descriptors[static_cast<uint64_t>(kv_head) * 2ull] = 0.0f;
-    query_descriptors[static_cast<uint64_t>(kv_head) * 2ull + 1ull] = 0.0f;
-  }
-  __syncthreads();
-  float proj0 = 0.0f;
-  float proj1 = 0.0f;
-  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
-    const float value = s.q[q_base + offset];
-    uint32_t hash0 = offset * 747796405u + 0x9e3779b9u;
-    hash0 ^= hash0 >> 16;
-    hash0 *= 0x7feb352du;
-    hash0 ^= hash0 >> 15;
-    uint32_t hash1 = offset * 2891336453u + 0x85ebca6bu;
-    hash1 ^= hash1 >> 16;
-    hash1 *= 0x846ca68bu;
-    hash1 ^= hash1 >> 15;
-    proj0 += (hash0 & 1u ? value : -value);
-    proj1 += (hash1 & 1u ? value : -value);
-  }
-  proj0 = block_sum(proj0);
-  proj1 = block_sum(proj1);
-  if (threadIdx.x == 0) {
-    const float scale = rsqrtf(static_cast<float>(head_dim));
-    query_descriptors[static_cast<uint64_t>(kv_head) * 2ull] =
-        tanhf(proj0 * scale * 0.25f);
-    query_descriptors[static_cast<uint64_t>(kv_head) * 2ull + 1ull] =
-        tanhf(proj1 * scale * 0.25f);
+  const uint64_t base =
+      static_cast<uint64_t>(kv_head) * kExperimentalRtDescriptorDims;
+  const float scale = rsqrtf(static_cast<float>(head_dim));
+  for (uint32_t dim = 0; dim < kExperimentalRtDescriptorDims; ++dim) {
+    float projection = 0.0f;
+    for (uint32_t offset = threadIdx.x; offset < head_dim;
+         offset += blockDim.x) {
+      const float value = s.q[q_base + offset];
+      uint32_t hash =
+          offset * 747796405u + dim * 2891336453u + 0x9e3779b9u;
+      hash ^= hash >> 16;
+      hash *= 0x7feb352du;
+      hash ^= hash >> 15;
+      hash *= 0x846ca68bu;
+      hash ^= hash >> 16;
+      projection += (hash & 1u ? value : -value);
+    }
+    projection = block_sum(projection);
+    if (threadIdx.x == 0) {
+      query_descriptors[base + dim] = tanhf(projection * scale * 0.25f);
+    }
   }
 }
 
@@ -221,12 +214,13 @@ __global__ void hf_experimental_rt_page_descriptor_kernel(
   const uint64_t out =
       (((static_cast<uint64_t>(layer_index) * kv_heads + kv_head) * pages) +
        page) *
-      2ull;
+      kExperimentalRtDescriptorDims;
   if (active_tokens == 0 ||
       page * kDecodeAttentionChunkTokens >= active_tokens) {
     if (threadIdx.x == 0) {
-      page_descriptors[out] = 100.0f;
-      page_descriptors[out + 1ull] = 100.0f;
+      for (uint32_t dim = 0; dim < kExperimentalRtDescriptorDims; ++dim) {
+        page_descriptors[out + dim] = 100.0f;
+      }
     }
     return;
   }
@@ -243,27 +237,26 @@ __global__ void hf_experimental_rt_page_descriptor_kernel(
       kv_cache_page_offset(layer_index, kv_block_count,
                            kv_block_table[logical_block], block_offset,
                            kv_hidden, kv_start);
-  float proj0 = 0.0f;
-  float proj1 = 0.0f;
-  for (uint32_t offset = threadIdx.x; offset < head_dim; offset += blockDim.x) {
-    const float value = encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
-    uint32_t hash0 = offset * 747796405u + 0x9e3779b9u;
-    hash0 ^= hash0 >> 16;
-    hash0 *= 0x7feb352du;
-    hash0 ^= hash0 >> 15;
-    uint32_t hash1 = offset * 2891336453u + 0x85ebca6bu;
-    hash1 ^= hash1 >> 16;
-    hash1 *= 0x846ca68bu;
-    hash1 ^= hash1 >> 15;
-    proj0 += (hash0 & 1u ? value : -value);
-    proj1 += (hash1 & 1u ? value : -value);
-  }
-  proj0 = block_sum(proj0);
-  proj1 = block_sum(proj1);
-  if (threadIdx.x == 0) {
-    const float scale = rsqrtf(static_cast<float>(head_dim));
-    page_descriptors[out] = tanhf(proj0 * scale * 0.25f);
-    page_descriptors[out + 1ull] = tanhf(proj1 * scale * 0.25f);
+  const float scale = rsqrtf(static_cast<float>(head_dim));
+  for (uint32_t dim = 0; dim < kExperimentalRtDescriptorDims; ++dim) {
+    float projection = 0.0f;
+    for (uint32_t offset = threadIdx.x; offset < head_dim;
+         offset += blockDim.x) {
+      const float value =
+          encoded_to_f32_typed<DType>(kv_keys[token_base + offset]);
+      uint32_t hash =
+          offset * 747796405u + dim * 2891336453u + 0x9e3779b9u;
+      hash ^= hash >> 16;
+      hash *= 0x7feb352du;
+      hash ^= hash >> 15;
+      hash *= 0x846ca68bu;
+      hash ^= hash >> 16;
+      projection += (hash & 1u ? value : -value);
+    }
+    projection = block_sum(projection);
+    if (threadIdx.x == 0) {
+      page_descriptors[out + dim] = tanhf(projection * scale * 0.25f);
+    }
   }
 }
 

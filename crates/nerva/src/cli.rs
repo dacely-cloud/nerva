@@ -6,10 +6,10 @@ mod run;
 mod ui;
 
 pub(crate) fn run() -> ExitCode {
+    #[cfg(unix)]
     ui::terminal::install_signal_cleanup();
 
     let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
-    let json_requested = raw_args.iter().any(|arg| arg == "--json");
     let rest = match raw_args.first().map(String::as_str) {
         Some("generate" | "chat" | "ask") => &raw_args[1..],
         Some("-h" | "--help") | None => {
@@ -18,19 +18,19 @@ pub(crate) fn run() -> ExitCode {
         }
         Some(first) if first.starts_with('-') => &raw_args[..],
         Some(command) => {
-            print_error(&format!("unknown command: {command}"), json_requested);
+            print_error(&format!("unknown command: {command}"));
             return ExitCode::from(2);
         }
     };
     match run::run_generate(rest) {
         Ok(output) => {
             if output.print_stdout {
-                println!("{}", style_stdout_output(&output.output, json_requested));
+                println!("{}", output.output);
             }
             ExitCode::SUCCESS
         }
         Err(reason) => {
-            print_error(&reason, json_requested);
+            print_error(&reason);
             ExitCode::from(1)
         }
     }
@@ -42,7 +42,7 @@ fn print_usage() {
     }
 }
 
-fn print_error(reason: &str, _json_requested: bool) {
+fn print_error(reason: &str) {
     eprintln!("{reason}");
     for line in usage_lines() {
         eprintln!("{line}");
@@ -66,8 +66,4 @@ fn usage_lines() -> &'static [&'static str] {
         "  --temperature >0 enables stochastic sampling",
         "  NERVA_COLOR=never|ansi|truecolor|always controls log color",
     ]
-}
-
-fn style_stdout_output(value: &str, _json_requested: bool) -> String {
-    value.to_string()
 }

@@ -1,7 +1,7 @@
-use crate::deepseek_mla::decode::{deepseek_mla_decode, CudaDeepSeekMlaDecodeInput};
+use crate::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use crate::deepseek_mla::probe::{deepseek_mla_smoke, deepseek_qkv_rmsnorm_smoke};
 use crate::deepseek_mla::qkv_norm::{
-    deepseek_qkv_rmsnorm, deepseek_qkv_rmsnorm_reference, CudaDeepSeekQKvRmsNormSummary,
+    CudaDeepSeekQKvRmsNormSummary, deepseek_qkv_rmsnorm, deepseek_qkv_rmsnorm_reference,
 };
 use crate::deepseek_mla::summary::CudaDeepSeekMlaSummary;
 use crate::smoke::status::SmokeStatus;

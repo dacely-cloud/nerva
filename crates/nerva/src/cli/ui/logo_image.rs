@@ -132,7 +132,12 @@ fn flat_orange_spans(value: &str) -> Vec<Span<'static>> {
             if character.is_whitespace() {
                 Span::raw(character.to_string())
             } else {
-                Span::styled(character.to_string(), orange_style())
+                Span::styled(
+                    character.to_string(),
+                    Style::default()
+                        .fg(Color::Rgb(LOGO_ORANGE.0, LOGO_ORANGE.1, LOGO_ORANGE.2))
+                        .add_modifier(Modifier::BOLD),
+                )
             }
         })
         .collect()
@@ -157,12 +162,6 @@ fn gradient_spans(value: &str) -> Vec<Span<'static>> {
             }
         })
         .collect()
-}
-
-fn orange_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(LOGO_ORANGE.0, LOGO_ORANGE.1, LOGO_ORANGE.2))
-        .add_modifier(Modifier::BOLD)
 }
 
 fn plain_logo_line(n: &str, erva: &str, color: ColorMode) -> String {

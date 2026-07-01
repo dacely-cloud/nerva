@@ -1,5 +1,5 @@
 use crate::deepseek_mla::ffi::{
-    run_deepseek_qkv_rmsnorm, NervaCudaDeepSeekQKvRmsNormRequest, NervaCudaDeepSeekQKvRmsNormResult,
+    NervaCudaDeepSeekQKvRmsNormRequest, NervaCudaDeepSeekQKvRmsNormResult, run_deepseek_qkv_rmsnorm,
 };
 use crate::json::json_opt_str;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;

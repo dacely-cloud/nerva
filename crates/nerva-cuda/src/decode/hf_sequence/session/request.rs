@@ -3,17 +3,11 @@ use core::ptr;
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::ffi::NervaCudaHfDecodeSequenceResult;
 use crate::decode::hf_sequence::request::{
-    CudaHfDecodeSamplerConfig, CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16,
+    CUDA_HF_DECODE_SEQUENCE_DTYPE_BF16, CudaHfDecodeSamplerConfig,
 };
 use crate::decode::hf_sequence::session::failures::{failed_create_summary, failed_run_summary};
 use crate::decode::hf_sequence::session::ffi::{
-    batch_advance_one_hf_decode_sequence, create_hf_decode_sequence_session,
-    destroy_hf_decode_sequence_session, execute_hf_decode_sequence_layer_projection_batch,
-    execute_hf_decode_sequence_projection_batch, fork_shared_weights_hf_decode_sequence_session,
-    plan_hf_decode_sequence_projection_batch, run_hf_decode_sequence_session,
-    snapshot_deepseek_v32_indexer_kv, snapshot_deepseek_v32_indexer_query_state,
-    snapshot_deepseek_v32_mla_packed_kv, snapshot_deepseek_v3_mla_kv,
-    snapshot_deepseek_v4_compressed_kv, snapshot_deepseek_v4_mhc, snapshot_deepseek_v4_swa_kv,
+    DEEPSEEK_V4_MHC_STATE_COMB_MIX, DEEPSEEK_V4_MHC_STATE_POST_MIX, DEEPSEEK_V4_MHC_STATE_RESIDUAL,
     NervaCudaHfDecodeSequenceBatchAdvanceRequest, NervaCudaHfDecodeSequenceBatchAdvanceResult,
     NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotRequest,
     NervaCudaHfDecodeSequenceDeepSeekV3MlaKvSnapshotResult,
@@ -31,21 +25,26 @@ use crate::decode::hf_sequence::session::ffi::{
     NervaCudaHfDecodeSequenceProjectionBatchPlanResult, NervaCudaHfDecodeSequenceSession,
     NervaCudaHfDecodeSequenceSessionCreateRequest, NervaCudaHfDecodeSequenceSessionCreateResult,
     NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest,
-    NervaCudaHfDecodeSequenceSessionRunRequest, DEEPSEEK_V4_MHC_STATE_COMB_MIX,
-    DEEPSEEK_V4_MHC_STATE_POST_MIX, DEEPSEEK_V4_MHC_STATE_RESIDUAL,
-    PROJECTION_BATCH_KIND_ATTENTION_OUTPUT, PROJECTION_BATCH_KIND_DOWN,
-    PROJECTION_BATCH_KIND_GATE_UP, PROJECTION_BATCH_KIND_LM_HEAD, PROJECTION_BATCH_KIND_QKV,
-    PROJECTION_BATCH_PLAN_INSUFFICIENT_COMPATIBLE_READY,
+    NervaCudaHfDecodeSequenceSessionRunRequest, PROJECTION_BATCH_KIND_ATTENTION_OUTPUT,
+    PROJECTION_BATCH_KIND_DOWN, PROJECTION_BATCH_KIND_GATE_UP, PROJECTION_BATCH_KIND_LM_HEAD,
+    PROJECTION_BATCH_KIND_QKV, PROJECTION_BATCH_PLAN_INSUFFICIENT_COMPATIBLE_READY,
     PROJECTION_BATCH_PLAN_INSUFFICIENT_SCRATCH, PROJECTION_BATCH_PLAN_INVALID_LAYER,
     PROJECTION_BATCH_PLAN_INVALID_REQUEST, PROJECTION_BATCH_PLAN_NO_READY_SESSIONS,
     PROJECTION_BATCH_PLAN_NO_SESSIONS, PROJECTION_BATCH_PLAN_READY,
     PROJECTION_BATCH_PLAN_SHARED_WEIGHTS_UNPROVEN, PROJECTION_BATCH_PLAN_UNSUPPORTED_PROJECTION,
+    batch_advance_one_hf_decode_sequence, create_hf_decode_sequence_session,
+    destroy_hf_decode_sequence_session, execute_hf_decode_sequence_layer_projection_batch,
+    execute_hf_decode_sequence_projection_batch, fork_shared_weights_hf_decode_sequence_session,
+    plan_hf_decode_sequence_projection_batch, run_hf_decode_sequence_session,
+    snapshot_deepseek_v3_mla_kv, snapshot_deepseek_v4_compressed_kv, snapshot_deepseek_v4_mhc,
+    snapshot_deepseek_v4_swa_kv, snapshot_deepseek_v32_indexer_kv,
+    snapshot_deepseek_v32_indexer_query_state, snapshot_deepseek_v32_mla_packed_kv,
 };
 use crate::decode::hf_sequence::session::helpers::{
     descriptor_ptr, planned_ptr, summary_from_run, validate_run,
 };
 use crate::decode::hf_sequence::session::summary::{
-    create_summary_from_result, CudaHfDecodeSequenceSessionCreateSummary,
+    CudaHfDecodeSequenceSessionCreateSummary, create_summary_from_result,
 };
 use crate::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 use crate::decode::hf_sequence::weight_plan::{
