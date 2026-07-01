@@ -333,17 +333,29 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   }
 
   const uint32_t kv_b_cols = kv_lora_rank;
-  const uint32_t kv_b_rows = heads * (qk_nope + v_head);
+  const uint8_t *kv_b_weight =
+      reinterpret_cast<const uint8_t *>(arena + layout.w_v);
+  const uint16_t *kv_b_scale = arena + layout.deepseek_kv_b_scale;
+  const uint32_t kv_b_scale_cols = (kv_b_cols + 127u) / 128u;
   for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
        latent += blockDim.x) {
     latent_output[latent] = 0.0f;
     float sum = 0.0f;
+    uint32_t active_scale_row = UINT32_MAX;
+    float active_scale = 0.0f;
     for (uint32_t nope = 0; nope < qk_nope; ++nope) {
       const uint32_t row = head * (qk_nope + v_head) + nope;
+      const uint32_t scale_row = row / 128u;
+      if (scale_row != active_scale_row) {
+        active_scale_row = scale_row;
+        active_scale =
+            f32_from_u16_slots(kv_b_scale,
+                               scale_row * kv_b_scale_cols + latent / 128u);
+      }
+      const uint8_t weight =
+          kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols + latent];
       sum += q[head * qk_head_dim + nope] *
-             deepseek_fp8_scaled_weight(arena, layout.w_v,
-                                        layout.deepseek_kv_b_scale, kv_b_rows,
-                                        kv_b_cols, row, latent);
+             nerva::deepseek::f8_e4m3fn_bits_to_f32(weight) * active_scale;
     }
     q_nope_latent[latent] = sum;
   }
@@ -412,11 +424,19 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   for (uint32_t value = threadIdx.x; value < v_head; value += blockDim.x) {
     const uint32_t row = head * (qk_nope + v_head) + qk_nope + value;
     float sum = 0.0f;
-    for (uint32_t latent = 0; latent < kv_lora_rank; ++latent) {
-      sum += latent_output[latent] *
-             deepseek_fp8_scaled_weight(arena, layout.w_v,
-                                        layout.deepseek_kv_b_scale, kv_b_rows,
-                                        kv_b_cols, row, latent);
+    const uint32_t row_scale_base = (row / 128u) * kv_b_scale_cols;
+    for (uint32_t block_start = 0; block_start < kv_lora_rank;
+         block_start += 128u) {
+      const uint32_t block_end =
+          min(block_start + 128u, kv_lora_rank);
+      const float scale =
+          f32_from_u16_slots(kv_b_scale, row_scale_base + block_start / 128u);
+      for (uint32_t latent = block_start; latent < block_end; ++latent) {
+        const uint8_t weight =
+            kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols + latent];
+        sum += latent_output[latent] *
+               nerva::deepseek::f8_e4m3fn_bits_to_f32(weight) * scale;
+      }
     }
     const uint16_t encoded = f32_to_encoded(sum, dtype);
     projection_input[head * v_head + value] = encoded;
