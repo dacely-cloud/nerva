@@ -1185,6 +1185,7 @@ fn moe_config_from_metadata(metadata: &HfModelMetadata, layer: u32) -> Result<Pr
             "num_experts_per_tok",
         )?,
         norm_topk_prob: metadata.norm_topk_prob,
+        swiglu_limit: metadata.swiglu_limit,
         router_kind: moe_router_kind_from_metadata(metadata, layer)?,
     })
 }

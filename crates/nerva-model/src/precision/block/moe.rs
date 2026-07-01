@@ -29,6 +29,7 @@ pub struct PrecisionMoeTransformerBlock {
     num_experts: usize,
     experts_per_token: usize,
     norm_topk_prob: bool,
+    swiglu_limit: Option<f32>,
     router_kind: PrecisionMoeRouterKind,
     rms_attn_weight: Vec<u16>,
     rms_mlp_weight: Vec<u16>,
@@ -79,6 +80,7 @@ pub struct PrecisionMoeConfig {
     pub num_experts: usize,
     pub experts_per_token: usize,
     pub norm_topk_prob: bool,
+    pub swiglu_limit: Option<f32>,
     pub router_kind: PrecisionMoeRouterKind,
 }
 
@@ -91,6 +93,7 @@ pub struct PrecisionMoeTransformerBlockEncodedView<'a> {
     pub num_experts: usize,
     pub experts_per_token: usize,
     pub norm_topk_prob: bool,
+    pub swiglu_limit: Option<f32>,
     pub router_kind: PrecisionMoeRouterKind,
     pub rms_attn_weight: &'a [u16],
     pub rms_mlp_weight: &'a [u16],
@@ -166,6 +169,7 @@ impl PrecisionMoeTransformerBlock {
             num_experts: config.num_experts,
             experts_per_token: config.experts_per_token,
             norm_topk_prob: config.norm_topk_prob,
+            swiglu_limit: config.swiglu_limit,
             router_kind: config.router_kind,
             rms_attn_weight,
             rms_mlp_weight,
@@ -325,6 +329,7 @@ impl PrecisionMoeTransformerBlock {
             num_experts: self.num_experts,
             experts_per_token: self.experts_per_token,
             norm_topk_prob: self.norm_topk_prob,
+            swiglu_limit: self.swiglu_limit,
             router_kind: self.router_kind,
             rms_attn_weight: &self.rms_attn_weight,
             rms_mlp_weight: &self.rms_mlp_weight,
@@ -786,7 +791,7 @@ impl PrecisionMoeTransformerBlock {
                 .zip(gate[..gate_len].iter().copied())
                 .zip(up[..up_len].iter().copied())
             {
-                *ff = silu(gate) * up;
+                *ff = precision_moe_swiglu(gate, up, self.swiglu_limit);
             }
             mat_vec_encoded_row_major(
                 self.dtype,
@@ -838,7 +843,7 @@ impl PrecisionMoeTransformerBlock {
             .zip(gate[..self.shared_expert_intermediate].iter().copied())
             .zip(up[..self.shared_expert_intermediate].iter().copied())
         {
-            *ff = silu(gate) * up;
+            *ff = precision_moe_swiglu(gate, up, self.swiglu_limit);
         }
         mat_vec_encoded_row_major(
             self.dtype,
@@ -860,8 +865,16 @@ impl PrecisionMoeTransformerBlock {
             num_experts: self.num_experts,
             experts_per_token: self.experts_per_token,
             norm_topk_prob: self.norm_topk_prob,
+            swiglu_limit: self.swiglu_limit,
             router_kind: self.router_kind,
         }
+    }
+}
+
+fn precision_moe_swiglu(gate: f32, up: f32, swiglu_limit: Option<f32>) -> f32 {
+    match swiglu_limit {
+        Some(limit) => silu(gate.min(limit)) * up.clamp(-limit, limit),
+        None => silu(gate) * up,
     }
 }
 
@@ -917,6 +930,7 @@ fn validate_moe_block_layout(
         });
     }
     validate_router_kind(config)?;
+    validate_swiglu_limit(config.swiglu_limit)?;
     require_len("rms_attn_weight", rms_attn_weight_len, shape.hidden)?;
     require_len("rms_mlp_weight", rms_mlp_weight_len, shape.hidden)?;
     require_len("w_q", w_q_len, shape.attention_hidden() * shape.hidden)?;
@@ -964,6 +978,15 @@ fn validate_moe_block_layout(
     if rms_eps <= 0.0 || !rms_eps.is_finite() {
         return Err(NervaError::InvalidArgument {
             reason: "rms epsilon must be positive and finite".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_swiglu_limit(value: Option<f32>) -> Result<()> {
+    if value.is_some_and(|limit| !limit.is_finite() || limit <= 0.0) {
+        return Err(NervaError::InvalidArgument {
+            reason: "DeepSeek MoE swiglu_limit must be finite and positive".to_string(),
         });
     }
     Ok(())

@@ -919,6 +919,7 @@ fn precision_gdn_moe_block_with_linear_out(
         num_experts: 4,
         experts_per_token: 2,
         norm_topk_prob: true,
+        swiglu_limit: None,
         router_kind: PrecisionMoeRouterKind::Softmax,
     };
     PrecisionGatedDeltaNetMoeBlock::new_from_encoded(

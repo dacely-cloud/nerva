@@ -1,9 +1,11 @@
 use crate::common::math::{sigmoid, silu};
 use crate::common::shape::TransformerBlockShape;
+use crate::precision::bits::{decode_f32_for_dtype, encode_f32_for_dtype};
 use crate::precision::block::moe::{
-    PrecisionMoeConfig, PrecisionMoeRouterKind, select_moe_route_for_logits,
-    select_moe_route_for_logits_with_hash_token,
+    PrecisionMoeConfig, PrecisionMoeRouterKind, PrecisionMoeTransformerBlock,
+    select_moe_route_for_logits, select_moe_route_for_logits_with_hash_token,
 };
+use crate::precision::scratch::PrecisionTransformerBlockScratch;
 use crate::reference::block::types::ReferenceTransformerBlock;
 use crate::reference::mhc::{
     DeepSeekMhcConfig, deepseek_hc_head_torch_reference, deepseek_mhc_post_torch_reference,
@@ -21,6 +23,7 @@ use crate::reference::router::{
 use crate::reference::scratch::types::TransformerBlockScratch;
 use crate::reference::smoke::run::reference_block_smoke;
 use crate::reference::smoke::status::ReferenceBlockSmokeStatus;
+use nerva_core::types::dtype::DType;
 use nerva_ledger::types::token::ledger::TokenLedger;
 
 #[test]
@@ -190,6 +193,7 @@ fn precision_moe_deepseek_v3_router_matches_reference() {
             num_experts: 8,
             experts_per_token: 2,
             norm_topk_prob: true,
+            swiglu_limit: None,
             router_kind: PrecisionMoeRouterKind::DeepSeekV3GroupedSigmoid {
                 num_expert_groups: 2,
                 top_k_groups: 1,
@@ -237,6 +241,7 @@ fn precision_moe_deepseek_v4_router_matches_reference() {
             num_experts: 4,
             experts_per_token: 2,
             norm_topk_prob: true,
+            swiglu_limit: None,
             router_kind: PrecisionMoeRouterKind::DeepSeekV4SqrtSoftplus {
                 routed_scaling_factor: 1.5,
             },
@@ -286,6 +291,7 @@ fn precision_moe_deepseek_v4_hash_router_matches_reference() {
             num_experts: 4,
             experts_per_token: 3,
             norm_topk_prob: true,
+            swiglu_limit: None,
             router_kind: PrecisionMoeRouterKind::DeepSeekV4Hash {
                 routed_scaling_factor: 1.0,
             },
@@ -327,6 +333,7 @@ fn precision_moe_deepseek_v4_hash_router_requires_route_table() {
             num_experts: 4,
             experts_per_token: 2,
             norm_topk_prob: true,
+            swiglu_limit: None,
             router_kind: PrecisionMoeRouterKind::DeepSeekV4Hash {
                 routed_scaling_factor: 1.0,
             },
@@ -334,6 +341,67 @@ fn precision_moe_deepseek_v4_hash_router_requires_route_table() {
     )
     .unwrap_err();
     assert!(format!("{error:?}").contains("tid2eid route table"));
+}
+
+#[test]
+fn precision_moe_deepseek_v4_swiglu_limit_clamps_routed_expert_activation() {
+    let dtype = DType::BF16;
+    let shape = TransformerBlockShape::new(1, 1, 1);
+    let enc = |value| encode_f32_for_dtype(value, dtype).unwrap();
+    let block = PrecisionMoeTransformerBlock::new_from_encoded(
+        dtype,
+        shape,
+        PrecisionMoeConfig {
+            moe_intermediate: 1,
+            shared_expert_intermediate: 0,
+            num_experts: 1,
+            experts_per_token: 1,
+            norm_topk_prob: true,
+            swiglu_limit: Some(1.0),
+            router_kind: PrecisionMoeRouterKind::DeepSeekV4SqrtSoftplus {
+                routed_scaling_factor: 1.0,
+            },
+        },
+        vec![enc(1.0)],
+        vec![enc(1.0)],
+        vec![enc(0.0)],
+        vec![enc(0.0)],
+        vec![enc(0.0)],
+        vec![enc(0.0)],
+        vec![enc(0.0)],
+        vec![enc(2.0), enc(-3.0)],
+        vec![enc(1.0)],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        1.0e-5,
+    )
+    .unwrap();
+    let mut scratch = PrecisionTransformerBlockScratch::new(shape).unwrap();
+    let mut output = [0u16; 1];
+    let mut ledger = TokenLedger::new(0);
+    let input = [enc(2.0)];
+
+    block
+        .forward_into(&input, &mut scratch, &mut output, &mut ledger)
+        .unwrap();
+
+    let mlp_norm = 2.0 / (4.0_f32 + 1.0e-5).sqrt();
+    let gate = 2.0 * mlp_norm;
+    let up = -3.0 * mlp_norm;
+    let expected = 2.0 + deepseek_swiglu(gate, up, Some(1.0));
+    let unclamped = 2.0 + deepseek_swiglu(gate, up, None);
+    let actual = decode_f32_for_dtype(output[0], dtype).unwrap();
+
+    assert!(
+        (actual - expected).abs() < 0.01,
+        "actual={actual} expected={expected}"
+    );
+    assert!(
+        (actual - unclamped).abs() > 0.2,
+        "test must distinguish clamped from unclamped activation"
+    );
 }
 
 #[test]
