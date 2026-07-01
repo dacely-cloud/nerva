@@ -41,6 +41,12 @@ __global__ void hf_deepseek_v32_indexer_query_state_kernel(
     uint8_t *deepseek_indexer_state,
     uint64_t deepseek_indexer_state_offset_bytes,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v32_indexer_query_state_projected_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t *step_cursor,
+    uint32_t max_steps, float rope_theta, const float *projected_query,
+    uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v32_indexer_query_state_tokens_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t q_lora_rank, uint32_t chunk_start, uint32_t chunk_tokens,
