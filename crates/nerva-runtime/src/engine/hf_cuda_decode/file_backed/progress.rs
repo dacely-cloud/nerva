@@ -1,3 +1,4 @@
+use nerva_core::types::id::token::TokenId;
 use nerva_cuda::decode::hf_sequence::summary::CudaHfDecodeSequenceSummary;
 
 use crate::engine::hf_cuda_decode::summary::HfCudaSeedDecodeSummary;
@@ -49,6 +50,7 @@ pub struct HfCudaDeviceSessionChunkProgress {
     pub sync_calls: u64,
     pub host_causality_edges: u64,
     pub hot_path_allocations: u64,
+    pub tokens: Vec<TokenId>,
 }
 
 impl HfCudaDeviceSessionChunkProgress {
@@ -83,6 +85,7 @@ impl HfCudaDeviceSessionChunkProgress {
             sync_calls: 0,
             host_causality_edges: 0,
             hot_path_allocations: 0,
+            tokens: Vec::new(),
         }
     }
 
@@ -131,6 +134,7 @@ impl HfCudaDeviceSessionChunkProgress {
             sync_calls: summary.sync_calls,
             host_causality_edges: summary.host_causality_edges,
             hot_path_allocations: summary.hot_path_allocations,
+            tokens: summary.tokens.clone(),
         }
     }
 
@@ -169,6 +173,7 @@ impl HfCudaDeviceSessionChunkProgress {
             sync_calls: summary.sync_calls,
             host_causality_edges: summary.host_causality_edges,
             hot_path_allocations: summary.hot_path_allocations,
+            tokens: summary.tokens.iter().copied().map(TokenId).collect(),
         }
     }
 }

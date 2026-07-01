@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use actix_web::http::StatusCode;
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
+use futures_util::StreamExt;
 use nerva_core::types::id::token::TokenId;
 use nerva_model::causal_lm::types::HfCausalLmStopReason;
 use nerva_model::hf::tokenizer::{
@@ -13,9 +14,11 @@ use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
     HfCudaRtDecodeConfig, HfCudaSamplerConfig,
     run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress,
 };
+use nerva_runtime::engine::hf_cuda_decode::file_backed::progress::HfCudaDeviceProgressPhase;
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 use serde_json::{Value, json};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cli::args::{
     AUTO_CONTEXT_MARGIN, DEFAULT_OUTPUT_TOKENS, DEFAULT_QUEUE_CAPACITY, DEFAULT_SEED,
@@ -91,6 +94,27 @@ struct GeneratedText {
     token_ids: Vec<u32>,
     prompt_tokens: usize,
     finish_reason: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedGeneration {
+    prompt_tokens: Vec<TokenId>,
+    context_tokens: usize,
+    sampler: HfCudaSamplerConfig,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum StreamKind {
+    Completion,
+    ChatCompletion,
+    Response,
+}
+
+#[derive(Clone, Debug)]
+struct StreamMeta {
+    id: String,
+    created: u64,
+    model: String,
 }
 
 #[derive(Clone, Debug)]
@@ -196,32 +220,62 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
                 .route("/rerank", web::post().to(unsupported_pooling))
                 .route("/v1/rerank", web::post().to(unsupported_pooling))
                 .route("/v2/rerank", web::post().to(unsupported_pooling))
-                .route("/v1/audio/transcriptions", web::post().to(unsupported_audio))
+                .route(
+                    "/v1/audio/transcriptions",
+                    web::post().to(unsupported_audio),
+                )
                 .route("/v1/audio/translations", web::post().to(unsupported_audio))
                 .route("/v1/audio/speech", web::post().to(unsupported_audio))
-                .route("/v1/images/generations", web::post().to(unsupported_multimodal))
+                .route(
+                    "/v1/images/generations",
+                    web::post().to(unsupported_multimodal),
+                )
                 .route("/v1/images/edits", web::post().to(unsupported_multimodal))
-                .route("/v1/images/variations", web::post().to(unsupported_multimodal))
+                .route(
+                    "/v1/images/variations",
+                    web::post().to(unsupported_multimodal),
+                )
                 .route("/v1/moderations", web::post().to(unsupported_moderations))
                 .route("/v1/batches", web::post().to(unsupported_batch_api))
                 .route("/v1/batches", web::get().to(unsupported_batch_api))
                 .route("/v1/batches/{_id}", web::get().to(unsupported_batch_api))
-                .route("/v1/batches/{_id}/cancel", web::post().to(unsupported_batch_api))
+                .route(
+                    "/v1/batches/{_id}/cancel",
+                    web::post().to(unsupported_batch_api),
+                )
                 .route("/v1/files", web::post().to(unsupported_files_api))
                 .route("/v1/files", web::get().to(unsupported_files_api))
                 .route("/v1/files/{_id}", web::get().to(unsupported_files_api))
                 .route("/v1/files/{_id}", web::delete().to(unsupported_files_api))
-                .route("/v1/files/{_id}/content", web::get().to(unsupported_files_api))
-                .route("/v1/fine_tuning/jobs", web::post().to(unsupported_fine_tuning))
-                .route("/v1/fine_tuning/jobs", web::get().to(unsupported_fine_tuning))
-                .route("/v1/fine_tuning/jobs/{_id}", web::get().to(unsupported_fine_tuning))
-                .route("/v1/fine_tuning/jobs/{_id}/cancel", web::post().to(unsupported_fine_tuning))
+                .route(
+                    "/v1/files/{_id}/content",
+                    web::get().to(unsupported_files_api),
+                )
+                .route(
+                    "/v1/fine_tuning/jobs",
+                    web::post().to(unsupported_fine_tuning),
+                )
+                .route(
+                    "/v1/fine_tuning/jobs",
+                    web::get().to(unsupported_fine_tuning),
+                )
+                .route(
+                    "/v1/fine_tuning/jobs/{_id}",
+                    web::get().to(unsupported_fine_tuning),
+                )
+                .route(
+                    "/v1/fine_tuning/jobs/{_id}/cancel",
+                    web::post().to(unsupported_fine_tuning),
+                )
                 .route("/v1/load_lora_adapter", web::post().to(unsupported_lora))
                 .route("/v1/unload_lora_adapter", web::post().to(unsupported_lora))
                 .route("/sleep", web::post().to(unsupported_admin_state))
                 .route("/wake_up", web::post().to(unsupported_admin_state))
                 .route("/is_sleeping", web::get().to(is_sleeping))
-                .route("/reset_prefix_cache", web::post().to(unsupported_admin_state))
+                .route(
+                    "/reset_prefix_cache",
+                    web::post().to(unsupported_admin_state),
+                )
                 .route("/start_profile", web::post().to(unsupported_admin_state))
                 .route("/stop_profile", web::post().to(unsupported_admin_state))
                 .default_service(web::to(not_found))
@@ -350,11 +404,43 @@ async fn completions(
     let response = async {
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
-        reject_streaming(&body)?;
         reject_n_gt_one(&body)?;
         let prompts = completion_prompts(&body)?;
+        let max_tokens = request_max_tokens(&state, &body)?;
+        let temperature = request_f32(&body, "temperature", 1.0)?;
+        let top_p = request_f32(&body, "top_p", 1.0)?;
+        let top_k = request_u32(&body, "top_k", 0)?;
+        let seed = request_u64_opt(&body, "seed")?;
+        let stop = request_stop_strings(&body)?;
         let created = unix_seconds();
         let id = state.next_response_id("cmpl");
+        if request_stream(&body) {
+            if prompts.len() != 1 {
+                return Err(ApiError::unsupported(
+                    "streaming completions currently require exactly one prompt",
+                ));
+            }
+            return generate_text_stream(
+                state.clone(),
+                GenerateOptions {
+                    prompt: prompts.into_iter().next().unwrap_or_default(),
+                    prompt_format: PromptFormat::Raw,
+                    max_tokens,
+                    temperature,
+                    top_p,
+                    top_k,
+                    seed,
+                    stop,
+                },
+                StreamKind::Completion,
+                StreamMeta {
+                    id: id.clone(),
+                    created,
+                    model: state.config.model_id.clone(),
+                },
+            )
+            .await;
+        }
         let mut choices = Vec::with_capacity(prompts.len());
         let mut prompt_tokens = 0usize;
         let mut completion_tokens = 0usize;
@@ -364,12 +450,12 @@ async fn completions(
                 GenerateOptions {
                     prompt,
                     prompt_format: PromptFormat::Raw,
-                    max_tokens: request_max_tokens(&state, &body)?,
-                    temperature: request_f32(&body, "temperature", 1.0)?,
-                    top_p: request_f32(&body, "top_p", 1.0)?,
-                    top_k: request_u32(&body, "top_k", 0)?,
-                    seed: request_u64_opt(&body, "seed")?,
-                    stop: request_stop_strings(&body)?,
+                    max_tokens,
+                    temperature,
+                    top_p,
+                    top_k,
+                    seed,
+                    stop: stop.clone(),
                 },
             )
             .await?;
@@ -404,25 +490,34 @@ async fn chat_completions(
     let response = async {
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
-        reject_streaming(&body)?;
         reject_n_gt_one(&body)?;
         let prompt = chat_messages_to_prompt(&body)?;
         let created = unix_seconds();
         let id = state.next_response_id("chatcmpl");
-        let generated = generate_text(
-            state.clone(),
-            GenerateOptions {
-                prompt,
-                prompt_format: PromptFormat::Auto,
-                max_tokens: request_max_tokens(&state, &body)?,
-                temperature: request_f32(&body, "temperature", 1.0)?,
-                top_p: request_f32(&body, "top_p", 1.0)?,
-                top_k: request_u32(&body, "top_k", 0)?,
-                seed: request_u64_opt(&body, "seed")?,
-                stop: request_stop_strings(&body)?,
-            },
-        )
-        .await?;
+        let options = GenerateOptions {
+            prompt,
+            prompt_format: PromptFormat::Auto,
+            max_tokens: request_max_tokens(&state, &body)?,
+            temperature: request_f32(&body, "temperature", 1.0)?,
+            top_p: request_f32(&body, "top_p", 1.0)?,
+            top_k: request_u32(&body, "top_k", 0)?,
+            seed: request_u64_opt(&body, "seed")?,
+            stop: request_stop_strings(&body)?,
+        };
+        if request_stream(&body) {
+            return generate_text_stream(
+                state.clone(),
+                options,
+                StreamKind::ChatCompletion,
+                StreamMeta {
+                    id: id.clone(),
+                    created,
+                    model: state.config.model_id.clone(),
+                },
+            )
+            .await;
+        }
+        let generated = generate_text(state.clone(), options).await?;
         let completion_tokens = generated.token_ids.len();
         Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
             "id": id,
@@ -454,24 +549,33 @@ async fn responses(
     let response = async {
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
-        reject_streaming(&body)?;
         let prompt = responses_input_to_prompt(&body)?;
         let created = unix_seconds();
         let id = state.next_response_id("resp");
-        let generated = generate_text(
-            state.clone(),
-            GenerateOptions {
-                prompt,
-                prompt_format: PromptFormat::Auto,
-                max_tokens: request_max_tokens(&state, &body)?,
-                temperature: request_f32(&body, "temperature", 1.0)?,
-                top_p: request_f32(&body, "top_p", 1.0)?,
-                top_k: request_u32(&body, "top_k", 0)?,
-                seed: request_u64_opt(&body, "seed")?,
-                stop: request_stop_strings(&body)?,
-            },
-        )
-        .await?;
+        let options = GenerateOptions {
+            prompt,
+            prompt_format: PromptFormat::Auto,
+            max_tokens: request_max_tokens(&state, &body)?,
+            temperature: request_f32(&body, "temperature", 1.0)?,
+            top_p: request_f32(&body, "top_p", 1.0)?,
+            top_k: request_u32(&body, "top_k", 0)?,
+            seed: request_u64_opt(&body, "seed")?,
+            stop: request_stop_strings(&body)?,
+        };
+        if request_stream(&body) {
+            return generate_text_stream(
+                state.clone(),
+                options,
+                StreamKind::Response,
+                StreamMeta {
+                    id: id.clone(),
+                    created,
+                    model: state.config.model_id.clone(),
+                },
+            )
+            .await;
+        }
+        let generated = generate_text(state.clone(), options).await?;
         let output_id = state.next_response_id("msg");
         let content_id = state.next_response_id("ct");
         let completion_tokens = generated.token_ids.len();
@@ -617,7 +721,8 @@ async fn unsupported_fine_tuning(request: HttpRequest, state: web::Data<AppState
     if let Err(error) = authorize(&state, &request) {
         return error.into_response();
     }
-    ApiError::unsupported("fine tuning jobs are not implemented in the NERVA inference server").into_response()
+    ApiError::unsupported("fine tuning jobs are not implemented in the NERVA inference server")
+        .into_response()
 }
 
 async fn unsupported_lora(request: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
@@ -643,6 +748,119 @@ async fn is_sleeping(request: HttpRequest, state: web::Data<AppState>) -> HttpRe
 
 async fn not_found(request: HttpRequest) -> HttpResponse {
     ApiError::not_found(format!("unknown route: {}", request.path())).into_response()
+}
+
+async fn generate_text_stream(
+    state: web::Data<AppState>,
+    options: GenerateOptions,
+    kind: StreamKind,
+    meta: StreamMeta,
+) -> Result<HttpResponse, ApiError> {
+    let permit = state
+        .limiter
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| ApiError::internal("request limiter closed"))?;
+    let (tx, rx) = mpsc::channel::<web::Bytes>(32);
+    let config = state.config.clone();
+    let runtime = state.runtime.clone();
+    let state_for_metrics = state.clone();
+    actix_web::rt::task::spawn_blocking(move || {
+        let _permit = permit;
+        match generate_text_stream_sync(&runtime, &config, options, kind, meta, tx.clone()) {
+            Ok(generated_tokens) => {
+                state_for_metrics
+                    .generated_tokens
+                    .fetch_add(generated_tokens as u64, Ordering::Relaxed);
+            }
+            Err(error) => {
+                send_stream_error(&tx, error);
+            }
+        }
+    });
+    let body = ReceiverStream::new(rx).map(Ok::<web::Bytes, actix_web::Error>);
+    Ok(HttpResponse::Ok()
+        .insert_header(("content-type", "text/event-stream"))
+        .insert_header(("cache-control", "no-cache"))
+        .insert_header(("x-accel-buffering", "no"))
+        .streaming(body))
+}
+
+fn generate_text_stream_sync(
+    runtime: &Runtime,
+    config: &ResolvedServeConfig,
+    options: GenerateOptions,
+    kind: StreamKind,
+    meta: StreamMeta,
+    tx: mpsc::Sender<web::Bytes>,
+) -> Result<usize, ApiError> {
+    let prepared = prepare_generation(config, &options)?;
+    let mut streamed_tokens = Vec::new();
+    let mut emitted_text = String::new();
+    let mut stopped_by_stop_string = false;
+    let mut tx_closed = false;
+    let output =
+        run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress(
+            runtime,
+            &config.model_path,
+            &prepared.prompt_tokens,
+            prepared.context_tokens,
+            options.max_tokens,
+            config.queue_capacity,
+            config.compute_capability,
+            prepared.sampler,
+            config.profiling,
+            config.rt_decode,
+            |progress| {
+                if tx_closed
+                    || stopped_by_stop_string
+                    || progress.phase != HfCudaDeviceProgressPhase::Decode
+                    || progress.tokens.is_empty()
+                {
+                    return;
+                }
+                streamed_tokens.extend(progress.tokens.iter().copied());
+                let Ok(Some(current_text)) =
+                    decode_generated_text(&config.model_path, &streamed_tokens)
+                else {
+                    return;
+                };
+                let (limited_text, hit_stop) = apply_stop_strings(current_text, &options.stop);
+                let delta = text_delta(&emitted_text, &limited_text);
+                if !delta.is_empty() && !send_stream_delta(&tx, kind, &meta, delta) {
+                    tx_closed = true;
+                    return;
+                }
+                emitted_text = limited_text;
+                stopped_by_stop_string = hit_stop;
+            },
+        )
+        .map_err(|err| ApiError::internal(format!("generation failed: {err:?}")))?;
+    if !tx_closed {
+        let final_text = decode_generated_text(&config.model_path, output.tokens())
+            .map_err(ApiError::bad_request)?
+            .ok_or_else(|| ApiError::bad_request("tokenizer decode is unavailable"))?;
+        let (limited_text, hit_stop) = apply_stop_strings(final_text, &options.stop);
+        stopped_by_stop_string |= hit_stop;
+        let delta = text_delta(&emitted_text, &limited_text);
+        if !delta.is_empty() {
+            tx_closed = !send_stream_delta(&tx, kind, &meta, delta);
+        }
+    }
+    if !tx_closed {
+        let finish_reason = finish_reason(output.stop_reason(), stopped_by_stop_string).to_string();
+        send_stream_final(
+            &tx,
+            kind,
+            &meta,
+            &finish_reason,
+            prepared.prompt_tokens.len(),
+            output.tokens().len(),
+        );
+        send_stream_done(&tx);
+    }
+    Ok(output.tokens().len())
 }
 
 async fn generate_text(
@@ -675,16 +893,51 @@ fn generate_text_sync(
     config: &ResolvedServeConfig,
     options: GenerateOptions,
 ) -> Result<GeneratedText, ApiError> {
+    let prepared = prepare_generation(config, &options)?;
+    let output =
+        run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress(
+            runtime,
+            &config.model_path,
+            &prepared.prompt_tokens,
+            prepared.context_tokens,
+            options.max_tokens,
+            config.queue_capacity,
+            config.compute_capability,
+            prepared.sampler,
+            config.profiling,
+            config.rt_decode,
+            |_| {},
+        )
+        .map_err(|err| ApiError::internal(format!("generation failed: {err:?}")))?;
+    let token_ids = output
+        .tokens()
+        .iter()
+        .map(|token| token.0)
+        .collect::<Vec<_>>();
+    let decoded = decode_generated_text(&config.model_path, output.tokens())
+        .map_err(ApiError::bad_request)?
+        .ok_or_else(|| ApiError::bad_request("tokenizer decode is unavailable"))?;
+    let (text, stopped_by_stop_string) = apply_stop_strings(decoded, &options.stop);
+    let finish_reason = finish_reason(output.stop_reason(), stopped_by_stop_string);
+    Ok(GeneratedText {
+        text,
+        token_ids,
+        prompt_tokens: prepared.prompt_tokens.len(),
+        finish_reason,
+    })
+}
+
+fn prepare_generation(
+    config: &ResolvedServeConfig,
+    options: &GenerateOptions,
+) -> Result<PreparedGeneration, ApiError> {
     if options.max_tokens == 0 {
         return Err(ApiError::bad_request("max_tokens must be non-zero"));
     }
     validate_sampling(options.temperature, options.top_p)?;
-    let formatted = format_prompt_for_model(
-        &config.model_path,
-        &options.prompt,
-        options.prompt_format,
-    )
-    .map_err(ApiError::bad_request)?;
+    let formatted =
+        format_prompt_for_model(&config.model_path, &options.prompt, options.prompt_format)
+            .map_err(ApiError::bad_request)?;
     let encoded =
         encode_text_prompt(&config.model_path, &formatted.text).map_err(ApiError::bad_request)?;
     let prompt_tokens = encoded
@@ -719,40 +972,10 @@ fn generate_text_sync(
             }
         }),
     };
-    let output =
-        run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress(
-            runtime,
-            &config.model_path,
-            &prompt_tokens,
-            context_tokens,
-            options.max_tokens,
-            config.queue_capacity,
-            config.compute_capability,
-            sampler,
-            config.profiling,
-            config.rt_decode,
-            |_| {},
-        )
-        .map_err(|err| ApiError::internal(format!("generation failed: {err:?}")))?;
-    let token_ids = output
-        .tokens()
-        .iter()
-        .map(|token| token.0)
-        .collect::<Vec<_>>();
-    let decoded = decode_generated_text(&config.model_path, output.tokens())
-        .map_err(ApiError::bad_request)?
-        .ok_or_else(|| ApiError::bad_request("tokenizer decode is unavailable"))?;
-    let (text, stopped_by_stop_string) = apply_stop_strings(decoded, &options.stop);
-    let finish_reason = if stopped_by_stop_string || output.stop_reason() == HfCausalLmStopReason::EosToken {
-        "stop"
-    } else {
-        "length"
-    };
-    Ok(GeneratedText {
-        text,
-        token_ids,
-        prompt_tokens: prompt_tokens.len(),
-        finish_reason,
+    Ok(PreparedGeneration {
+        prompt_tokens,
+        context_tokens,
+        sampler,
     })
 }
 
@@ -786,16 +1009,6 @@ fn require_known_model(state: &AppState, body: &Value) -> Result<(), ApiError> {
     }
 }
 
-fn reject_streaming(body: &Value) -> Result<(), ApiError> {
-    if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
-        Err(ApiError::unsupported(
-            "stream=true is not implemented yet in the NERVA OpenAI server",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 fn reject_n_gt_one(body: &Value) -> Result<(), ApiError> {
     let n = body.get("n").and_then(Value::as_u64).unwrap_or(1);
     if n == 1 {
@@ -803,6 +1016,10 @@ fn reject_n_gt_one(body: &Value) -> Result<(), ApiError> {
     } else {
         Err(ApiError::unsupported("n > 1 is not implemented yet"))
     }
+}
+
+fn request_stream(body: &Value) -> bool {
+    body.get("stream").and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn completion_prompts(body: &Value) -> Result<Vec<String>, ApiError> {
@@ -870,7 +1087,11 @@ fn responses_input_to_prompt(body: &Value) -> Result<String, ApiError> {
             let body = json!({ "messages": messages });
             prompt.push_str(&chat_messages_to_prompt(&body)?);
         }
-        Some(_) => return Err(ApiError::bad_request("input must be a string or messages array")),
+        Some(_) => {
+            return Err(ApiError::bad_request(
+                "input must be a string or messages array",
+            ));
+        }
         None => return Err(ApiError::bad_request("responses require input")),
     }
     Ok(prompt)
@@ -977,6 +1198,167 @@ fn request_stop_strings(body: &Value) -> Result<Vec<String>, ApiError> {
     }
 }
 
+fn send_stream_delta(
+    tx: &mpsc::Sender<web::Bytes>,
+    kind: StreamKind,
+    meta: &StreamMeta,
+    delta: &str,
+) -> bool {
+    match kind {
+        StreamKind::Completion => send_sse_json(
+            tx,
+            None,
+            json!({
+                "id": meta.id,
+                "object": "text_completion",
+                "created": meta.created,
+                "model": meta.model,
+                "choices": [{
+                    "text": delta,
+                    "index": 0,
+                    "logprobs": null,
+                    "finish_reason": null
+                }]
+            }),
+        ),
+        StreamKind::ChatCompletion => send_sse_json(
+            tx,
+            None,
+            json!({
+                "id": meta.id,
+                "object": "chat.completion.chunk",
+                "created": meta.created,
+                "model": meta.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": delta
+                    },
+                    "logprobs": null,
+                    "finish_reason": null
+                }]
+            }),
+        ),
+        StreamKind::Response => send_sse_json(
+            tx,
+            Some("response.output_text.delta"),
+            json!({
+                "type": "response.output_text.delta",
+                "response_id": meta.id,
+                "item_id": format!("{}-message", meta.id),
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta
+            }),
+        ),
+    }
+}
+
+fn send_stream_final(
+    tx: &mpsc::Sender<web::Bytes>,
+    kind: StreamKind,
+    meta: &StreamMeta,
+    finish_reason: &str,
+    prompt_tokens: usize,
+    completion_tokens: usize,
+) -> bool {
+    match kind {
+        StreamKind::Completion => send_sse_json(
+            tx,
+            None,
+            json!({
+                "id": meta.id,
+                "object": "text_completion",
+                "created": meta.created,
+                "model": meta.model,
+                "choices": [{
+                    "text": "",
+                    "index": 0,
+                    "logprobs": null,
+                    "finish_reason": finish_reason
+                }],
+                "usage": usage(prompt_tokens, completion_tokens)
+            }),
+        ),
+        StreamKind::ChatCompletion => send_sse_json(
+            tx,
+            None,
+            json!({
+                "id": meta.id,
+                "object": "chat.completion.chunk",
+                "created": meta.created,
+                "model": meta.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "logprobs": null,
+                    "finish_reason": finish_reason
+                }],
+                "usage": usage(prompt_tokens, completion_tokens)
+            }),
+        ),
+        StreamKind::Response => send_sse_json(
+            tx,
+            Some("response.completed"),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": meta.id,
+                    "object": "response",
+                    "created_at": meta.created,
+                    "status": "completed",
+                    "model": meta.model,
+                    "output": [],
+                    "usage": {
+                        "input_tokens": prompt_tokens,
+                        "output_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens
+                    }
+                }
+            }),
+        ),
+    }
+}
+
+fn send_stream_error(tx: &mpsc::Sender<web::Bytes>, error: ApiError) {
+    let _ = send_sse_json(
+        tx,
+        Some("error"),
+        json!({
+            "error": {
+                "message": error.message,
+                "type": error.code,
+                "param": null,
+                "code": error.code
+            }
+        }),
+    );
+    send_stream_done(tx);
+}
+
+fn send_stream_done(tx: &mpsc::Sender<web::Bytes>) -> bool {
+    tx.blocking_send(web::Bytes::from_static(b"data: [DONE]\n\n"))
+        .is_ok()
+}
+
+fn send_sse_json(tx: &mpsc::Sender<web::Bytes>, event: Option<&str>, value: Value) -> bool {
+    let mut frame = String::new();
+    if let Some(event) = event {
+        frame.push_str("event: ");
+        frame.push_str(event);
+        frame.push('\n');
+    }
+    frame.push_str("data: ");
+    frame.push_str(&value.to_string());
+    frame.push_str("\n\n");
+    tx.blocking_send(web::Bytes::from(frame)).is_ok()
+}
+
+fn text_delta<'a>(previous: &str, current: &'a str) -> &'a str {
+    current.strip_prefix(previous).unwrap_or(current)
+}
+
 fn string_any(body: &Value, names: &[&str]) -> Result<Option<String>, ApiError> {
     for name in names {
         if let Some(value) = body.get(*name) {
@@ -1009,6 +1391,14 @@ fn apply_stop_strings(text: String, stops: &[String]) -> (String, bool) {
         return (text, false);
     };
     (text[..index].to_string(), true)
+}
+
+fn finish_reason(stop_reason: HfCausalLmStopReason, stopped_by_stop_string: bool) -> &'static str {
+    if stopped_by_stop_string || stop_reason == HfCausalLmStopReason::EosToken {
+        "stop"
+    } else {
+        "length"
+    }
 }
 
 fn usage(prompt_tokens: usize, completion_tokens: usize) -> Value {
@@ -1088,9 +1478,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        apply_stop_strings, chat_messages_to_prompt, completion_prompts, request_stop_strings,
-        responses_input_to_prompt,
+        apply_stop_strings, chat_messages_to_prompt, completion_prompts, finish_reason,
+        request_stop_strings, responses_input_to_prompt, text_delta,
     };
+    use nerva_model::causal_lm::types::HfCausalLmStopReason;
 
     #[test]
     fn parses_string_and_array_completion_prompts() {
@@ -1139,5 +1530,21 @@ mod tests {
         let (text, stopped) = apply_stop_strings("hello END world".to_string(), &["END".into()]);
         assert_eq!(text, "hello ");
         assert!(stopped);
+    }
+
+    #[test]
+    fn computes_stream_text_delta() {
+        assert_eq!(text_delta("hello", "hello world"), " world");
+        assert_eq!(text_delta("abc", "xyz"), "xyz");
+    }
+
+    #[test]
+    fn maps_finish_reason_to_openai_values() {
+        assert_eq!(finish_reason(HfCausalLmStopReason::EosToken, false), "stop");
+        assert_eq!(finish_reason(HfCausalLmStopReason::MaxSteps, true), "stop");
+        assert_eq!(
+            finish_reason(HfCausalLmStopReason::MaxSteps, false),
+            "length"
+        );
     }
 }

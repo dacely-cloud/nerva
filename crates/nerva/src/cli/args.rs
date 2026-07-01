@@ -310,7 +310,10 @@ pub(crate) fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
                 .to_string(),
         );
     }
-    validate_positive_count("--max-concurrent-requests", Some(parsed.max_concurrent_requests))?;
+    validate_positive_count(
+        "--max-concurrent-requests",
+        Some(parsed.max_concurrent_requests),
+    )?;
     validate_positive_count("--workers", parsed.workers)?;
     validate_positive_count("--max-blocking-threads", parsed.max_blocking_threads)?;
     validate_positive_count("--rt-page-tokens", parsed.rt_page_tokens)?;
@@ -398,7 +401,7 @@ fn parse_top_k_count(value: &str) -> Result<u32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, parse_serve_args, parse_token_count, PromptFormat};
+    use super::{PromptFormat, parse_args, parse_serve_args, parse_token_count};
 
     #[test]
     fn parses_k_token_counts() {
