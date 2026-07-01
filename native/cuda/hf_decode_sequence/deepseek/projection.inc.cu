@@ -423,6 +423,48 @@ __global__ void deepseek_fp8_e8m0_scale_matvec_kernel(
   }
 }
 
+__global__ void deepseek_fp8_e8m0_scale_matvec_row_offset_kernel(
+    const uint8_t *weights,
+    const uint8_t *scales,
+    const float *input,
+    float *output,
+    uint32_t rows,
+    uint32_t cols,
+    uint32_t global_row_offset,
+    uint32_t block_rows,
+    uint32_t block_cols) {
+  const uint32_t row = blockIdx.x;
+  if (row >= rows) {
+    return;
+  }
+  extern __shared__ float partial[];
+  float sum = 0.0f;
+  const uint32_t scale_cols =
+      deepseek_fp8_projection_scale_cols(cols, block_cols);
+  const uint32_t global_row = global_row_offset + row;
+  const uint64_t row_base = static_cast<uint64_t>(row) * cols;
+  for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
+    const uint32_t scale_idx =
+        deepseek_fp8_projection_scale_idx(global_row, col, scale_cols,
+                                          block_rows, block_cols);
+    const float weight =
+        nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
+        nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
+    sum += weight * input[col];
+  }
+  partial[threadIdx.x] = sum;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride) {
+      partial[threadIdx.x] += partial[threadIdx.x + stride];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    output[row] = partial[0];
+  }
+}
+
 cudaError_t launch_deepseek_fp8_f32_scale_matvec(
     cudaStream_t stream, const uint8_t *weights, const float *scales,
     const float *input, uint32_t rows, uint32_t cols, uint32_t block_rows,
@@ -436,6 +478,27 @@ cudaError_t launch_deepseek_fp8_f32_scale_matvec(
   const size_t shared_bytes = threads * sizeof(float);
   deepseek_fp8_f32_scale_matvec_kernel<<<rows, threads, shared_bytes, stream>>>(
       weights, scales, input, output, rows, cols, block_rows, block_cols);
+  return cudaGetLastError();
+}
+
+cudaError_t launch_deepseek_fp8_e8m0_scale_matvec_row_offset(
+    cudaStream_t stream, const uint8_t *weights, const uint8_t *scales,
+    const float *input, uint32_t rows, uint32_t cols,
+    uint32_t global_row_offset, uint32_t block_rows, uint32_t block_cols,
+    float *output) {
+  if (weights == nullptr || scales == nullptr || input == nullptr ||
+      output == nullptr || rows == 0 || cols == 0 || block_rows == 0 ||
+      block_cols == 0) {
+    return cudaErrorInvalidValue;
+  }
+  constexpr uint32_t threads = 256;
+  const size_t shared_bytes = threads * sizeof(float);
+  deepseek_fp8_e8m0_scale_matvec_row_offset_kernel<<<rows,
+                                                     threads,
+                                                     shared_bytes,
+                                                     stream>>>(
+      weights, scales, input, output, rows, cols, global_row_offset,
+      block_rows, block_cols);
   return cudaGetLastError();
 }
 

@@ -223,6 +223,13 @@ __global__ void hf_deepseek_v4_attn_mhc_pre_kernel(
     uint32_t max_steps, float rms_eps, float *scratch,
     uint16_t *projection_input, float *deepseek_mhc_residual,
     float *deepseek_mhc_post_mix, float *deepseek_mhc_comb_mix);
+__global__ void hf_deepseek_v4_ffn_mhc_pre_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t heads, uint32_t head_dim,
+    uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
+    float rms_eps, float *scratch, uint16_t *projection_input,
+    float *deepseek_mhc_residual, float *deepseek_mhc_post_mix,
+    float *deepseek_mhc_comb_mix);
 __global__ void hf_deepseek_v4_finish_final_norm_encode_kernel(
     uint16_t *arena, SequenceArenaLayout arena_layout, SequenceLayerLayout layout,
     uint32_t dtype, uint32_t final_norm_weight_dtype, uint32_t hidden,
