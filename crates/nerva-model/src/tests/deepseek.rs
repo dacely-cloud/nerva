@@ -320,6 +320,7 @@ fn deepseek_v32_projection_coverage_tracks_live_scale_runtime() {
     for primitive in [
         "cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime",
         "cuda_hf_sequence_deepseek_v32_output_projection_scale_logits_runtime",
+        "cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime",
     ] {
         assert!(
             primitives.iter().any(|item| item == primitive),
@@ -341,8 +342,8 @@ fn deepseek_v32_projection_coverage_tracks_live_scale_runtime() {
     assert!(
         unit.remaining_gaps
             .iter()
-            .any(|gap| gap.contains("q_a/kv_a/q_b projection scale offsets")),
-        "remaining projection-scale work should stay explicit until full-output decode coverage exists"
+            .all(|gap| !gap.contains("q_a/kv_a/q_b projection scale offsets")),
+        "q_a/kv_a/q_b scale offsets now have sparse decode output coverage"
     );
 }
 

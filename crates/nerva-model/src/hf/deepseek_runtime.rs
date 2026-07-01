@@ -831,6 +831,9 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push(
             "cuda_hf_sequence_deepseek_v32_output_projection_scale_logits_runtime".to_string(),
         );
+        primitives.push(
+            "cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime".to_string(),
+        );
     }
     if matches!(
         metadata.architecture,
@@ -1003,10 +1006,10 @@ fn coverage_for_unit(
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime",
                 "cuda_hf_sequence_deepseek_v32_output_projection_scale_logits_runtime",
+                "cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime",
             ],
             &[
                 "fuse block-FP8 dequant with projection GEMM",
-                "add full-output decode regression covering q_a/kv_a/q_b projection scale offsets",
                 "benchmark projection throughput against vLLM fused kernels",
             ],
         ),

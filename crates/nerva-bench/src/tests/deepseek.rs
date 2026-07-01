@@ -178,8 +178,11 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     );
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_output_projection_scale_logits_runtime"));
+    assert!(
+        json.contains("cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime")
+    );
     assert!(!json.contains("consume packed DeepSeek q_a/kv_a/q_b/kv_b/o"));
-    assert!(json.contains("q_a/kv_a/q_b projection scale offsets"));
+    assert!(!json.contains("q_a/kv_a/q_b projection scale offsets"));
     assert!(json.contains(
         "run same-checkpoint routed plus shared MoE output differential against /root/vllm"
     ));
