@@ -11,7 +11,7 @@ use nerva_model::hf::metadata::HfModelMetadata;
 
 use crate::engine::hf_cuda_decode::contract::{attach_cuda_weight_contract, cuda_weight_plan};
 use crate::engine::hf_cuda_decode::file_backed::descriptors::{
-    descriptor_marker_layers, shard_backed_resident_weights,
+    descriptor_marker_layers_for_manifest, shard_backed_resident_weights,
 };
 use crate::engine::hf_cuda_decode::file_backed::load::load_shard_backed_weights;
 use crate::engine::hf_cuda_decode::sequence::cuda_dtype;
@@ -57,7 +57,7 @@ pub fn run_hf_causal_lm_cuda_shard_backed_device_only(
         .iter()
         .map(|token| token.0)
         .collect::<Vec<_>>();
-    let layers = descriptor_marker_layers(&weights.metadata)?;
+    let layers = descriptor_marker_layers_for_manifest(&weights.metadata, &weights.manifest)?;
     let sequence = CudaHfDecodeSequenceRequest {
         dtype: cuda_dtype(weights.dtype)?,
         hidden: weights.metadata.hidden_size,

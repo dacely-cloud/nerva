@@ -117,13 +117,18 @@ __global__ void hf_deepseek_v3_sparse_moe_route_kernel(
 
   const bool has_router_bias =
       (layout.deepseek_flags & kDeepSeekFlagRouterBias) != 0;
+  const bool bf16_storage = layout.deepseek_storage == kDeepSeekStorageBf16;
   const uint64_t router_bias_offset =
       layout.w_router + static_cast<uint64_t>(num_experts) * hidden;
   for (uint32_t expert = threadIdx.x; expert < num_experts;
        expert += blockDim.x) {
     correction_bias[expert] =
-        has_router_bias ? f32_from_u16_slots(arena + router_bias_offset, expert)
-                        : 0.0f;
+        !has_router_bias
+            ? 0.0f
+            : (bf16_storage
+                   ? encoded_to_f32(arena[router_bias_offset + expert],
+                                    kDTypeBF16)
+                   : f32_from_u16_slots(arena + router_bias_offset, expert));
   }
   __syncthreads();
 
@@ -342,29 +347,47 @@ __global__ void hf_deepseek_v3_sparse_moe_expert_gate_up_kernel(
   }
   const uint32_t expert = route_ids[rank + 1u];
   const uint64_t expert_gate = layout.w_expert_gate_up;
+  const bool bf16_storage = layout.deepseek_storage == kDeepSeekStorageBf16;
+  const uint64_t expert_gate_data_slots =
+      bf16_storage
+          ? static_cast<uint64_t>(num_experts) * moe_intermediate * hidden
+          : deepseek_device_fp8_slots(
+                static_cast<uint64_t>(num_experts) * moe_intermediate,
+                hidden);
   const uint64_t expert_gate_scale =
-      expert_gate +
-      deepseek_device_fp8_slots(
-          static_cast<uint64_t>(num_experts) * moe_intermediate, hidden);
+      bf16_storage ? kMissingOffset : expert_gate + expert_gate_data_slots;
   const uint64_t expert_up =
-      expert_gate_scale +
-      static_cast<uint64_t>(num_experts) *
-          deepseek_device_scale_f32_slots(moe_intermediate, hidden);
+      bf16_storage
+          ? expert_gate + expert_gate_data_slots
+          : expert_gate_scale +
+                static_cast<uint64_t>(num_experts) *
+                    deepseek_device_scale_f32_slots(moe_intermediate, hidden);
   const uint64_t expert_up_scale =
-      expert_up +
-      deepseek_device_fp8_slots(
-          static_cast<uint64_t>(num_experts) * moe_intermediate, hidden);
+      bf16_storage
+          ? kMissingOffset
+          : expert_up +
+                deepseek_device_fp8_slots(
+                    static_cast<uint64_t>(num_experts) * moe_intermediate,
+                    hidden);
   float gate_sum = 0.0f;
   float up_sum = 0.0f;
   for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
-    gate_sum += deepseek_fp8_rank3_scaled_weight(
-                    arena, expert_gate, expert_gate_scale,
-                    moe_intermediate, hidden, expert, row, col) *
-                s.mlp_norm[col];
-    up_sum += deepseek_fp8_rank3_scaled_weight(
-                  arena, expert_up, expert_up_scale, moe_intermediate,
-                  hidden, expert, row, col) *
-              s.mlp_norm[col];
+    const float gate_weight =
+        bf16_storage
+            ? deepseek_bf16_rank3_weight(arena, expert_gate, moe_intermediate,
+                                         hidden, expert, row, col)
+            : deepseek_fp8_rank3_scaled_weight(
+                  arena, expert_gate, expert_gate_scale, moe_intermediate,
+                  hidden, expert, row, col);
+    const float up_weight =
+        bf16_storage
+            ? deepseek_bf16_rank3_weight(arena, expert_up, moe_intermediate,
+                                         hidden, expert, row, col)
+            : deepseek_fp8_rank3_scaled_weight(
+                  arena, expert_up, expert_up_scale, moe_intermediate, hidden,
+                  expert, row, col);
+    gate_sum += gate_weight * s.mlp_norm[col];
+    up_sum += up_weight * s.mlp_norm[col];
   }
   gate_sum = block_sum(gate_sum);
   up_sum = block_sum(up_sum);
@@ -543,16 +566,24 @@ __global__ void hf_deepseek_v3_sparse_moe_expert_down_kernel(
   const uint32_t expert = route_ids[rank + 1u];
   const float expert_weight = route_weights[rank];
   const uint64_t expert_down = layout.w_expert_down;
+  const bool bf16_storage = layout.deepseek_storage == kDeepSeekStorageBf16;
   const uint64_t expert_down_scale =
-      expert_down +
-      deepseek_device_fp8_slots(
-          static_cast<uint64_t>(num_experts) * hidden, moe_intermediate);
+      bf16_storage
+          ? kMissingOffset
+          : expert_down +
+                deepseek_device_fp8_slots(
+                    static_cast<uint64_t>(num_experts) * hidden,
+                    moe_intermediate);
   float down_sum = 0.0f;
   for (uint32_t col = threadIdx.x; col < moe_intermediate; col += blockDim.x) {
-    down_sum += deepseek_fp8_rank3_scaled_weight(
-                    arena, expert_down, expert_down_scale, hidden,
-                    moe_intermediate, expert, row, col) *
-                rank_ff[col];
+    const float weight =
+        bf16_storage
+            ? deepseek_bf16_rank3_weight(arena, expert_down, hidden,
+                                         moe_intermediate, expert, row, col)
+            : deepseek_fp8_rank3_scaled_weight(
+                  arena, expert_down, expert_down_scale, hidden,
+                  moe_intermediate, expert, row, col);
+    down_sum += weight * rank_ff[col];
   }
   down_sum = block_sum(down_sum);
   if (threadIdx.x == 0) {
@@ -580,24 +611,36 @@ __global__ void hf_deepseek_v3_sparse_moe_shared_gate_up_kernel(
       shared_intermediate > intermediate) {
     return;
   }
+  const bool bf16_storage = layout.deepseek_storage == kDeepSeekStorageBf16;
   const uint64_t shared_gate_scale =
-      layout.w_shared_expert_gate +
-      deepseek_device_fp8_slots(shared_intermediate, hidden);
+      bf16_storage ? kMissingOffset
+                   : layout.w_shared_expert_gate +
+                         deepseek_device_fp8_slots(shared_intermediate,
+                                                   hidden);
   const uint64_t shared_up_scale =
-      layout.w_shared_expert_up +
-      deepseek_device_fp8_slots(shared_intermediate, hidden);
+      bf16_storage ? kMissingOffset
+                   : layout.w_shared_expert_up +
+                         deepseek_device_fp8_slots(shared_intermediate,
+                                                   hidden);
   float gate_sum = 0.0f;
   float up_sum = 0.0f;
   for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
-    gate_sum += deepseek_fp8_scaled_weight(
-                    arena, layout.w_shared_expert_gate,
-                    shared_gate_scale, shared_intermediate, hidden, row,
-                    col) *
-                s.mlp_norm[col];
-    up_sum += deepseek_fp8_scaled_weight(
+    const float gate_weight =
+        bf16_storage
+            ? deepseek_bf16_weight(arena, layout.w_shared_expert_gate,
+                                   shared_intermediate, hidden, row, col)
+            : deepseek_fp8_scaled_weight(
+                  arena, layout.w_shared_expert_gate, shared_gate_scale,
+                  shared_intermediate, hidden, row, col);
+    const float up_weight =
+        bf16_storage
+            ? deepseek_bf16_weight(arena, layout.w_shared_expert_up,
+                                   shared_intermediate, hidden, row, col)
+            : deepseek_fp8_scaled_weight(
                   arena, layout.w_shared_expert_up, shared_up_scale,
-                  shared_intermediate, hidden, row, col) *
-              s.mlp_norm[col];
+                  shared_intermediate, hidden, row, col);
+    gate_sum += gate_weight * s.mlp_norm[col];
+    up_sum += up_weight * s.mlp_norm[col];
   }
   gate_sum = block_sum(gate_sum);
   up_sum = block_sum(up_sum);
@@ -625,17 +668,23 @@ __global__ void hf_deepseek_v3_sparse_moe_shared_down_kernel(
       shared_intermediate > intermediate) {
     return;
   }
+  const bool bf16_storage = layout.deepseek_storage == kDeepSeekStorageBf16;
   const uint64_t shared_down_scale =
-      layout.w_shared_expert_down +
-      deepseek_device_fp8_slots(hidden, shared_intermediate);
+      bf16_storage ? kMissingOffset
+                   : layout.w_shared_expert_down +
+                         deepseek_device_fp8_slots(hidden,
+                                                   shared_intermediate);
   float down_sum = 0.0f;
   for (uint32_t col = threadIdx.x; col < shared_intermediate;
        col += blockDim.x) {
-    down_sum += deepseek_fp8_scaled_weight(
-                    arena, layout.w_shared_expert_down,
-                    shared_down_scale, hidden, shared_intermediate, row,
-                    col) *
-                s.ff[col];
+    const float weight =
+        bf16_storage
+            ? deepseek_bf16_weight(arena, layout.w_shared_expert_down, hidden,
+                                   shared_intermediate, row, col)
+            : deepseek_fp8_scaled_weight(
+                  arena, layout.w_shared_expert_down, shared_down_scale,
+                  hidden, shared_intermediate, row, col);
+    down_sum += weight * s.ff[col];
   }
   down_sum = block_sum(down_sum);
   if (threadIdx.x == 0) {

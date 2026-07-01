@@ -16,6 +16,7 @@ void initialize_deepseek_layout_metadata(
     SequenceLayerLayout &layout, const NervaCudaHfDecodeChainLayer &layer) {
   layout.deepseek_mode = layer.deepseek_mode;
   layout.deepseek_flags = layer.deepseek_flags;
+  layout.deepseek_storage = layer.deepseek_storage;
   layout.deepseek_hc_mult = layer.deepseek_hc_mult;
   layout.deepseek_hc_sinkhorn_iters = layer.deepseek_hc_sinkhorn_iters;
   layout.deepseek_q_lora_rank = layer.deepseek_q_lora_rank;
@@ -83,6 +84,31 @@ void initialize_deepseek_layout_offsets(SequenceLayerLayout &layout) {
   layout.deepseek_indexer_compressor_norm = kMissingOffset;
 }
 
+bool deepseek_v3_bf16_storage(const NervaCudaHfDecodeChainLayer &layer) {
+  return !deepseek_is_v4(layer.deepseek_mode) &&
+         layer.deepseek_storage == kDeepSeekStorageBf16;
+}
+
+uint64_t deepseek_v3_projection_slots(
+    const NervaCudaHfDecodeChainLayer &layer, uint64_t rows, uint64_t cols) {
+  return deepseek_v3_bf16_storage(layer) ? bf16_slots(rows, cols)
+                                        : fp8_slots(rows, cols);
+}
+
+uint64_t push_deepseek_v3_projection(
+    uint64_t &cursor, const NervaCudaHfDecodeChainLayer &layer, uint64_t rows,
+    uint64_t cols) {
+  return push(cursor, deepseek_v3_projection_slots(layer, rows, cols));
+}
+
+uint64_t push_deepseek_v3_scale(
+    uint64_t &cursor, const NervaCudaHfDecodeChainLayer &layer, uint64_t rows,
+    uint64_t cols) {
+  return deepseek_v3_bf16_storage(layer)
+             ? kMissingOffset
+             : push(cursor, scale_f32_slots(rows, cols));
+}
+
 DeepSeekV4CompressorOffsets push_deepseek_v4_compressor(
     uint64_t &cursor, uint64_t compress_ratio, uint64_t hidden,
     uint64_t head_dim) {
@@ -129,22 +155,25 @@ void pack_deepseek_v3_attention(SequenceLayerLayout &layout, uint64_t &cursor,
   const uint64_t kv_b_rows = heads * (qk_nope + v_head);
   const uint64_t value_hidden = heads * v_head;
 
-  layout.w_q = push(cursor, fp8_slots(q_lora_rank, hidden));
-  layout.deepseek_q_a_scale = push(cursor, scale_f32_slots(q_lora_rank, hidden));
+  layout.w_q = push_deepseek_v3_projection(cursor, layer, q_lora_rank, hidden);
+  layout.deepseek_q_a_scale =
+      push_deepseek_v3_scale(cursor, layer, q_lora_rank, hidden);
   layout.q_norm = push(cursor, deepseek_norm_slots(layer, q_lora_rank));
-  layout.deepseek_q_b = push(cursor, fp8_slots(q_rows, q_lora_rank));
+  layout.deepseek_q_b =
+      push_deepseek_v3_projection(cursor, layer, q_rows, q_lora_rank);
   layout.deepseek_q_b_scale =
-      push(cursor, scale_f32_slots(q_rows, q_lora_rank));
-  layout.w_k = push(cursor, fp8_slots(kv_a_rows, hidden));
+      push_deepseek_v3_scale(cursor, layer, q_rows, q_lora_rank);
+  layout.w_k = push_deepseek_v3_projection(cursor, layer, kv_a_rows, hidden);
   layout.deepseek_kv_a_scale =
-      push(cursor, scale_f32_slots(kv_a_rows, hidden));
+      push_deepseek_v3_scale(cursor, layer, kv_a_rows, hidden);
   layout.k_norm = push(cursor, deepseek_norm_slots(layer, kv_lora_rank));
-  layout.w_v = push(cursor, fp8_slots(kv_b_rows, kv_lora_rank));
+  layout.w_v =
+      push_deepseek_v3_projection(cursor, layer, kv_b_rows, kv_lora_rank);
   layout.deepseek_kv_b_scale =
-      push(cursor, scale_f32_slots(kv_b_rows, kv_lora_rank));
-  layout.w_o = push(cursor, fp8_slots(hidden, value_hidden));
+      push_deepseek_v3_scale(cursor, layer, kv_b_rows, kv_lora_rank);
+  layout.w_o = push_deepseek_v3_projection(cursor, layer, hidden, value_hidden);
   layout.deepseek_o_a_scale =
-      push(cursor, scale_f32_slots(hidden, value_hidden));
+      push_deepseek_v3_scale(cursor, layer, hidden, value_hidden);
 
   if ((layer.deepseek_flags & kDeepSeekFlagSparseIndexer) != 0) {
     const uint64_t index_rows = static_cast<uint64_t>(layer.deepseek_index_n_heads) *
@@ -235,7 +264,14 @@ void pack_deepseek_v4_attention(SequenceLayerLayout &layout, uint64_t &cursor,
 }
 
 void pack_deepseek_dense_mlp(SequenceLayerLayout &layout, uint64_t &cursor,
+                             const NervaCudaHfDecodeChainLayer &layer,
                              uint64_t hidden, uint64_t intermediate) {
+  if (deepseek_v3_bf16_storage(layer)) {
+    layout.w_gate = push(cursor, bf16_slots(intermediate, hidden));
+    layout.w_up = push(cursor, bf16_slots(intermediate, hidden));
+    layout.w_down = push(cursor, bf16_slots(hidden, intermediate));
+    return;
+  }
   layout.w_gate = push(cursor, fp8_slots(intermediate, hidden));
   push(cursor, scale_f32_slots(intermediate, hidden));
   layout.w_up = push(cursor, fp8_slots(intermediate, hidden));
@@ -252,30 +288,41 @@ void pack_deepseek_v3_moe(SequenceLayerLayout &layout, uint64_t &cursor,
   const uint64_t shared_intermediate = layer.shared_expert_intermediate;
   layout.w_router = push(cursor, bf16_slots(num_experts, hidden));
   if ((layer.deepseek_flags & kDeepSeekFlagRouterBias) != 0) {
-    push(cursor, f32_slots(num_experts, 1));
+    push(cursor, deepseek_v3_bf16_storage(layer) ? bf16_slots(num_experts, 1)
+                                                 : f32_slots(num_experts, 1));
   }
   if (shared_intermediate != 0) {
     layout.w_shared_expert_gate =
-        push(cursor, fp8_slots(shared_intermediate, hidden));
-    push(cursor, scale_f32_slots(shared_intermediate, hidden));
+        push_deepseek_v3_projection(cursor, layer, shared_intermediate, hidden);
+    push_deepseek_v3_scale(cursor, layer, shared_intermediate, hidden);
     layout.w_shared_expert_up =
-        push(cursor, fp8_slots(shared_intermediate, hidden));
-    push(cursor, scale_f32_slots(shared_intermediate, hidden));
+        push_deepseek_v3_projection(cursor, layer, shared_intermediate, hidden);
+    push_deepseek_v3_scale(cursor, layer, shared_intermediate, hidden);
     layout.w_shared_expert_down =
-        push(cursor, fp8_slots(hidden, shared_intermediate));
-    push(cursor, scale_f32_slots(hidden, shared_intermediate));
+        push_deepseek_v3_projection(cursor, layer, hidden, shared_intermediate);
+    push_deepseek_v3_scale(cursor, layer, hidden, shared_intermediate);
   }
   layout.w_expert_gate_up = cursor;
-  push(cursor, rank3_slots(num_experts, moe_intermediate, hidden, 1));
-  push(cursor, rank3_f32_slots(num_experts, scale_dim(moe_intermediate),
-                               scale_dim(hidden)));
-  push(cursor, rank3_slots(num_experts, moe_intermediate, hidden, 1));
-  push(cursor, rank3_f32_slots(num_experts, scale_dim(moe_intermediate),
-                               scale_dim(hidden)));
+  const uint64_t v3_expert_bytes = deepseek_v3_bf16_storage(layer) ? 2u : 1u;
+  push(cursor, rank3_slots(num_experts, moe_intermediate, hidden,
+                           v3_expert_bytes));
+  if (!deepseek_v3_bf16_storage(layer)) {
+    push(cursor, rank3_f32_slots(num_experts, scale_dim(moe_intermediate),
+                                 scale_dim(hidden)));
+  }
+  push(cursor, rank3_slots(num_experts, moe_intermediate, hidden,
+                           v3_expert_bytes));
+  if (!deepseek_v3_bf16_storage(layer)) {
+    push(cursor, rank3_f32_slots(num_experts, scale_dim(moe_intermediate),
+                                 scale_dim(hidden)));
+  }
   layout.w_expert_down =
-      push(cursor, rank3_slots(num_experts, hidden, moe_intermediate, 1));
-  push(cursor, rank3_f32_slots(num_experts, scale_dim(hidden),
-                               scale_dim(moe_intermediate)));
+      push(cursor, rank3_slots(num_experts, hidden, moe_intermediate,
+                               v3_expert_bytes));
+  if (!deepseek_v3_bf16_storage(layer)) {
+    push(cursor, rank3_f32_slots(num_experts, scale_dim(hidden),
+                                 scale_dim(moe_intermediate)));
+  }
 }
 
 void pack_deepseek_v4_moe(SequenceLayerLayout &layout, uint64_t &cursor,
@@ -332,7 +379,7 @@ void pack_deepseek_layer(SequenceLayerLayout &layout, uint64_t &cursor,
   }
   layout.rms_mlp = push(cursor, deepseek_norm_slots(layer, hidden));
   if (layer.mlp_kind != kMlpKindSparseMoe) {
-    pack_deepseek_dense_mlp(layout, cursor, hidden, intermediate);
+    pack_deepseek_dense_mlp(layout, cursor, layer, hidden, intermediate);
   } else if (deepseek_is_v4(layer.deepseek_mode)) {
     pack_deepseek_v4_moe(layout, cursor, layer, hidden, vocab_size);
   } else {

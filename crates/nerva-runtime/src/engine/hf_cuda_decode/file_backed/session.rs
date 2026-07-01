@@ -13,7 +13,7 @@ use nerva_model::hf::metadata::HfModelMetadata;
 
 use crate::engine::hf_cuda_decode::contract::cuda_weight_plan;
 use crate::engine::hf_cuda_decode::file_backed::descriptors::{
-    descriptor_marker_layers, shard_backed_resident_weights,
+    descriptor_marker_layers_for_manifest, shard_backed_resident_weights,
 };
 use crate::engine::hf_cuda_decode::file_backed::load::load_shard_backed_weights;
 use crate::engine::hf_cuda_decode::file_backed::run::summary_from_sequence;
@@ -106,7 +106,7 @@ pub fn create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling_
     let weights = load_shard_backed_weights(dir.as_ref())?;
     let resident_weights = shard_backed_resident_weights(runtime, &weights, compute_capability)?;
     let weight_plan = cuda_weight_plan(&resident_weights.summary, &resident_weights.descriptors)?;
-    let layers = descriptor_marker_layers(&weights.metadata)?;
+    let layers = descriptor_marker_layers_for_manifest(&weights.metadata, &weights.manifest)?;
     let mut experimental_rt = experimental_rt;
     if experimental_rt.local_window_tokens
         == CudaHfDecodeSequenceExperimentalRtConfig::default().local_window_tokens

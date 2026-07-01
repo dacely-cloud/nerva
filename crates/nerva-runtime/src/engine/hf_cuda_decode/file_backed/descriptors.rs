@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 
+use nerva_core::types::dtype::DType;
 use nerva_core::types::error::{NervaError, Result};
 use nerva_cuda::decode::hf_chain::layer::{
     CUDA_HF_ATTENTION_DEEPSEEK_MLA, CUDA_HF_ATTENTION_FULL, CUDA_HF_ATTENTION_LINEAR_GDN,
@@ -9,7 +10,8 @@ use nerva_cuda::decode::hf_chain::layer::{
     CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER, CUDA_HF_DEEPSEEK_MODE_V3_MLA,
     CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER,
     CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
-    CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK, CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE, CUDA_HF_MLP_DENSE,
+    CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK, CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE,
+    CUDA_HF_DEEPSEEK_STORAGE_BF16, CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED, CUDA_HF_MLP_DENSE,
     CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use nerva_cuda::decode::hf_sequence::weight_plan::{
@@ -20,6 +22,8 @@ use nerva_model::hf::deepseek_runtime::{
     DeepSeekAttentionExecutionKind, DeepSeekLayerExecution, deepseek_layer_execution_plan,
 };
 use nerva_model::hf::metadata::{HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata};
+use nerva_model::weights::layout::entry::WeightBlockRole;
+use nerva_model::weights::manifest::HfTensorManifest;
 
 use crate::engine::hf_cuda_decode::descriptors::cuda_weight_strategy;
 use crate::engine::hf_cuda_decode::file_backed::load::ShardBackedWeights;
@@ -40,8 +44,26 @@ pub(super) struct ShardBackedResidentWeights {
     pub _source_paths: Vec<CString>,
 }
 
+#[cfg(test)]
 pub(super) fn descriptor_marker_layers(
     metadata: &HfModelMetadata,
+) -> Result<Vec<CudaHfDecodeChainLayer<'static>>> {
+    descriptor_marker_layers_with_storage(metadata, CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED)
+}
+
+pub(super) fn descriptor_marker_layers_for_manifest(
+    metadata: &HfModelMetadata,
+    manifest: &HfTensorManifest,
+) -> Result<Vec<CudaHfDecodeChainLayer<'static>>> {
+    descriptor_marker_layers_with_storage(
+        metadata,
+        deepseek_storage_from_manifest(metadata, manifest),
+    )
+}
+
+fn descriptor_marker_layers_with_storage(
+    metadata: &HfModelMetadata,
+    deepseek_storage: u32,
 ) -> Result<Vec<CudaHfDecodeChainLayer<'static>>> {
     let qk_norm = metadata.qk_norm.then_some(&MARKER[..]);
     let qkv_bias = metadata.attention_qkv_bias.then_some(&MARKER[..]);
@@ -57,7 +79,7 @@ pub(super) fn descriptor_marker_layers(
                 .as_ref()
                 .and_then(|plan| plan.layers.get(layer));
             let deepseek = deepseek_execution
-                .map(|execution| deepseek_marker(metadata, execution))
+                .map(|execution| deepseek_marker(metadata, execution, deepseek_storage))
                 .transpose()?;
             let sparse_moe = metadata
                 .mlp_layer_types
@@ -142,9 +164,35 @@ pub(super) fn descriptor_marker_layers(
         .collect()
 }
 
+fn deepseek_storage_from_manifest(metadata: &HfModelMetadata, manifest: &HfTensorManifest) -> u32 {
+    if !matches!(
+        metadata.architecture,
+        HfArchitectureKind::DeepSeekV3 | HfArchitectureKind::DeepSeekV32
+    ) {
+        return CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED;
+    }
+    if manifest
+        .entries
+        .iter()
+        .any(|entry| entry.role == WeightBlockRole::DeepSeekQALoraScaleInv)
+    {
+        return CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED;
+    }
+    manifest
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.role == WeightBlockRole::DeepSeekQALoraProjection && entry.layer == Some(0)
+        })
+        .filter(|entry| entry.dtype == DType::BF16)
+        .map(|_| CUDA_HF_DEEPSEEK_STORAGE_BF16)
+        .unwrap_or(CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED)
+}
+
 fn deepseek_marker(
     metadata: &HfModelMetadata,
     execution: &DeepSeekLayerExecution,
+    storage: u32,
 ) -> Result<CudaHfDeepSeekLayer> {
     let mode = match execution.attention_kind {
         DeepSeekAttentionExecutionKind::V3Mla => CUDA_HF_DEEPSEEK_MODE_V3_MLA,
@@ -192,6 +240,7 @@ fn deepseek_marker(
     Ok(CudaHfDeepSeekLayer {
         mode,
         flags,
+        storage,
         hc_mult: metadata.hc_mult.unwrap_or(0),
         hc_sinkhorn_iters: metadata.hc_sinkhorn_iters.unwrap_or(0),
         q_lora_rank: required_deepseek_usize(metadata.q_lora_rank, "q_lora_rank")?,
@@ -454,14 +503,16 @@ mod tests {
         CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
         CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
         CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
-        CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
+        CUDA_HF_DEEPSEEK_STORAGE_BF16, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
     };
     use nerva_model::hf::architecture::HfArchitectureKind;
     use nerva_model::hf::metadata::{
         HfAttentionLayerKind, HfMlpLayerKind, HfModelMetadata, HfRopeScalingMetadata,
     };
+    use nerva_model::weights::layout::plan::plan_hf_weight_layout_for_safetensors_index;
+    use nerva_model::weights::manifest::build_hf_tensor_manifest;
 
-    use super::descriptor_marker_layers;
+    use super::{descriptor_marker_layers, descriptor_marker_layers_for_manifest};
 
     #[test]
     fn descriptor_marker_layers_preserve_sparse_moe_metadata() {
@@ -670,6 +721,44 @@ mod tests {
         assert_eq!(
             layers[1].deepseek.unwrap().flags,
             CUDA_HF_DEEPSEEK_FLAG_MOE | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS
+        );
+    }
+
+    #[test]
+    fn descriptor_marker_layers_detect_deepseek_v3_bf16_manifest_storage() {
+        let mut metadata = base_metadata(HfArchitectureKind::DeepSeekV3, 2);
+        metadata.num_attention_heads = 128;
+        metadata.num_key_value_heads = 128;
+        metadata.head_dim = 192;
+        metadata.intermediate_size = 4096;
+        metadata.mlp_layer_types = vec![HfMlpLayerKind::Dense, HfMlpLayerKind::SparseMoe];
+        metadata.moe_intermediate_size = Some(2048);
+        metadata.shared_expert_intermediate_size = Some(2048);
+        metadata.num_experts = Some(256);
+        metadata.num_experts_per_tok = Some(8);
+        metadata.topk_method = Some("noaux_tc".to_string());
+        metadata.q_lora_rank = Some(1536);
+        metadata.kv_lora_rank = Some(512);
+        metadata.qk_nope_head_dim = Some(128);
+        metadata.qk_rope_head_dim = Some(64);
+        metadata.v_head_dim = Some(128);
+        metadata.qk_norm = false;
+        metadata.torch_dtype = Some(DType::BF16);
+        let index = r#"{"metadata":{"total_size":1},"weight_map":{"model.layers.0.self_attn.q_a_proj.weight":"model-00001-of-00001.safetensors"}}"#;
+        let manifest = build_hf_tensor_manifest(
+            &plan_hf_weight_layout_for_safetensors_index(&metadata, index).unwrap(),
+        )
+        .unwrap();
+
+        let layers = descriptor_marker_layers_for_manifest(&metadata, &manifest).unwrap();
+
+        assert_eq!(
+            layers[0].deepseek.unwrap().storage,
+            CUDA_HF_DEEPSEEK_STORAGE_BF16
+        );
+        assert_eq!(
+            layers[1].deepseek.unwrap().storage,
+            CUDA_HF_DEEPSEEK_STORAGE_BF16
         );
     }
 

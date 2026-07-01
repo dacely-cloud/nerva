@@ -1,6 +1,6 @@
 use crate::decode::hf_chain::layer::{
-    CUDA_HF_ATTENTION_FULL, CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_MLP_SPARSE_MOE,
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer,
+    CUDA_HF_ATTENTION_FULL, CUDA_HF_DEEPSEEK_MODE_V4_SWA, CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED,
+    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer,
 };
 use crate::decode::hf_chain::request::{CUDA_HF_DECODE_CHAIN_DTYPE_F16, CudaHfDecodeChainRequest};
 use crate::decode::hf_chain::summary::CudaHfDecodeChainSummary;
@@ -298,6 +298,7 @@ fn deepseek_layer_with_swiglu_limit(limit: f32) -> CudaHfDeepSeekLayer {
     CudaHfDeepSeekLayer {
         mode: CUDA_HF_DEEPSEEK_MODE_V4_SWA,
         flags: 0,
+        storage: CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED,
         hc_mult: 0,
         hc_sinkhorn_iters: 0,
         q_lora_rank: 0,

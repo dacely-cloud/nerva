@@ -220,8 +220,11 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   const uint32_t kv_cache_width = kv_lora_rank + qk_rope;
   if (heads == 0 || kv_lora_rank == 0 || qk_nope == 0 || qk_rope == 0 ||
       v_head == 0 || qk_head_dim == 0 ||
-      layout.w_v == kMissingOffset ||
-      layout.deepseek_kv_b_scale == kMissingOffset) {
+      layout.w_v == kMissingOffset) {
+    return;
+  }
+  const bool bf16_storage = layout.deepseek_storage == kDeepSeekStorageBf16;
+  if (!bf16_storage && layout.deepseek_kv_b_scale == kMissingOffset) {
     return;
   }
 
@@ -335,7 +338,8 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   const uint32_t kv_b_cols = kv_lora_rank;
   const uint8_t *kv_b_weight =
       reinterpret_cast<const uint8_t *>(arena + layout.w_v);
-  const uint16_t *kv_b_scale = arena + layout.deepseek_kv_b_scale;
+  const uint16_t *kv_b_scale =
+      bf16_storage ? nullptr : arena + layout.deepseek_kv_b_scale;
   const uint32_t kv_b_scale_cols = (kv_b_cols + 127u) / 128u;
   for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
        latent += blockDim.x) {
@@ -346,16 +350,22 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     for (uint32_t nope = 0; nope < qk_nope; ++nope) {
       const uint32_t row = head * (qk_nope + v_head) + nope;
       const uint32_t scale_row = row / 128u;
-      if (scale_row != active_scale_row) {
+      if (!bf16_storage && scale_row != active_scale_row) {
         active_scale_row = scale_row;
         active_scale =
             f32_from_u16_slots(kv_b_scale,
                                scale_row * kv_b_scale_cols + latent / 128u);
       }
-      const uint8_t weight =
-          kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols + latent];
-      sum += q[head * qk_head_dim + nope] *
-             nerva::deepseek::f8_e4m3fn_bits_to_f32(weight) * active_scale;
+      const float weight =
+          bf16_storage
+              ? deepseek_bf16_weight(arena, layout.w_v,
+                                     heads * (qk_nope + v_head),
+                                     kv_b_cols, row, latent)
+              : nerva::deepseek::f8_e4m3fn_bits_to_f32(
+                    kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols +
+                                latent]) *
+                    active_scale;
+      sum += q[head * qk_head_dim + nope] * weight;
     }
     q_nope_latent[latent] = sum;
   }
@@ -430,12 +440,21 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
       const uint32_t block_end =
           min(block_start + 128u, kv_lora_rank);
       const float scale =
-          f32_from_u16_slots(kv_b_scale, row_scale_base + block_start / 128u);
+          bf16_storage
+              ? 1.0f
+              : f32_from_u16_slots(kv_b_scale,
+                                   row_scale_base + block_start / 128u);
       for (uint32_t latent = block_start; latent < block_end; ++latent) {
-        const uint8_t weight =
-            kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols + latent];
-        sum += latent_output[latent] *
-               nerva::deepseek::f8_e4m3fn_bits_to_f32(weight) * scale;
+        const float weight =
+            bf16_storage
+                ? deepseek_bf16_weight(arena, layout.w_v,
+                                       heads * (qk_nope + v_head),
+                                       kv_b_cols, row, latent)
+                : nerva::deepseek::f8_e4m3fn_bits_to_f32(
+                      kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols +
+                                  latent]) *
+                      scale;
+        sum += latent_output[latent] * weight;
       }
     }
     const uint16_t encoded = f32_to_encoded(sum, dtype);

@@ -11,6 +11,16 @@ __device__ float deepseek_fp8_scaled_weight(const uint16_t *arena,
          f32_from_u16_slots(arena + scale_offset, scale_idx);
 }
 
+__device__ float deepseek_bf16_weight(const uint16_t *arena,
+                                      uint64_t weight_offset,
+                                      uint32_t rows, uint32_t cols,
+                                      uint32_t row, uint32_t col) {
+  (void)rows;
+  return encoded_to_f32(
+      arena[weight_offset + static_cast<uint64_t>(row) * cols + col],
+      kDTypeBF16);
+}
+
 __device__ float deepseek_swiglu(float gate, float up, float swiglu_limit) {
   if (isfinite(swiglu_limit) && swiglu_limit > 0.0f) {
     gate = fminf(gate, swiglu_limit);
@@ -83,6 +93,14 @@ __device__ float deepseek_fp8_rank3_scaled_weight(
       (col / 128u);
   return nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[weight_idx]) *
          f32_from_u16_slots(arena + scale_offset, scale_idx);
+}
+
+__device__ float deepseek_bf16_rank3_weight(
+    const uint16_t *arena, uint64_t weight_offset, uint32_t rows,
+    uint32_t cols, uint32_t expert, uint32_t row, uint32_t col) {
+  const uint64_t weight_idx =
+      (static_cast<uint64_t>(expert) * rows + row) * cols + col;
+  return encoded_to_f32(arena[weight_offset + weight_idx], kDTypeBF16);
 }
 
 __device__ float deepseek_mxfp4_rank3_scaled_weight(

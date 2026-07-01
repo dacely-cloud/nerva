@@ -22,6 +22,8 @@ pub const CUDA_HF_DEEPSEEK_FLAG_SLIDING_WINDOW: u32 = 1 << 4;
 pub const CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS: u32 = 1 << 5;
 pub const CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE: u32 = 0;
 pub const CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK: u32 = 1;
+pub const CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED: u32 = 0;
+pub const CUDA_HF_DEEPSEEK_STORAGE_BF16: u32 = 1;
 
 #[derive(Clone, Debug)]
 pub struct CudaHfDecodeChainLayer<'a> {
@@ -63,6 +65,7 @@ pub struct CudaHfDecodeChainLayer<'a> {
 pub struct CudaHfDeepSeekLayer {
     pub mode: u32,
     pub flags: u32,
+    pub storage: u32,
     pub hc_mult: usize,
     pub hc_sinkhorn_iters: usize,
     pub q_lora_rank: usize,
@@ -285,6 +288,9 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             attention_kind: self.attention_kind,
             deepseek_mode: self.deepseek.map_or(0, |layer| layer.mode),
             deepseek_flags: self.deepseek.map_or(0, |layer| layer.flags),
+            deepseek_storage: self
+                .deepseek
+                .map_or(CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED, |layer| layer.storage),
             deepseek_hc_mult: self.deepseek.map_or(0, |layer| layer.hc_mult as u32),
             deepseek_hc_sinkhorn_iters: self
                 .deepseek
@@ -391,6 +397,9 @@ impl<'a> CudaHfDecodeChainLayer<'a> {
             attention_kind: self.attention_kind,
             deepseek_mode: self.deepseek.map_or(0, |layer| layer.mode),
             deepseek_flags: self.deepseek.map_or(0, |layer| layer.flags),
+            deepseek_storage: self
+                .deepseek
+                .map_or(CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED, |layer| layer.storage),
             deepseek_hc_mult: self.deepseek.map_or(0, |layer| layer.hc_mult as u32),
             deepseek_hc_sinkhorn_iters: self
                 .deepseek

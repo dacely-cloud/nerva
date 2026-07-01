@@ -5,8 +5,8 @@ use crate::decode::hf_chain::layer::{
     CUDA_HF_DEEPSEEK_MODE_V3_MLA, CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED,
     CUDA_HF_DEEPSEEK_MODE_V4_COMPRESSED_INDEXER, CUDA_HF_DEEPSEEK_MODE_V4_SWA,
     CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER, CUDA_HF_DEEPSEEK_ROPE_SCALING_DEEPSEEK,
-    CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE, CUDA_HF_MLP_DENSE, CUDA_HF_MLP_SPARSE_MOE,
-    CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
+    CUDA_HF_DEEPSEEK_ROPE_SCALING_NONE, CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED, CUDA_HF_MLP_DENSE,
+    CUDA_HF_MLP_SPARSE_MOE, CudaHfDecodeChainLayer, CudaHfDeepSeekLayer, CudaHfLinearGdnLayer,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::layout_plan::{
@@ -560,6 +560,7 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
             | CUDA_HF_DEEPSEEK_FLAG_COMPRESSOR
             | CUDA_HF_DEEPSEEK_FLAG_HASH_ROUTER
             | CUDA_HF_DEEPSEEK_FLAG_MOE,
+        storage: CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED,
         hc_mult: 4,
         hc_sinkhorn_iters: 20,
         q_lora_rank: 1536,
@@ -729,6 +730,7 @@ fn deepseek_v3_mla_shape_matches_vllm_contract() {
     let deepseek = CudaHfDeepSeekLayer {
         mode: CUDA_HF_DEEPSEEK_MODE_V3_MLA,
         flags: 0,
+        storage: CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED,
         hc_mult: 0,
         hc_sinkhorn_iters: 0,
         q_lora_rank: 1536,
@@ -5317,6 +5319,7 @@ fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
         deepseek: Some(CudaHfDeepSeekLayer {
             mode: CUDA_HF_DEEPSEEK_MODE_V32_MLA_INDEXER,
             flags: CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER,
+            storage: CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED,
             hc_mult: 0,
             hc_sinkhorn_iters: 0,
             q_lora_rank: 2,
@@ -5386,6 +5389,7 @@ fn tiny_deepseek_v3_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
         deepseek: Some(CudaHfDeepSeekLayer {
             mode: CUDA_HF_DEEPSEEK_MODE_V3_MLA,
             flags: 0,
+            storage: CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED,
             hc_mult: 0,
             hc_sinkhorn_iters: 0,
             q_lora_rank: 2,
@@ -5626,6 +5630,7 @@ fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
                 | CUDA_HF_DEEPSEEK_FLAG_SPARSE_INDEXER
                 | CUDA_HF_DEEPSEEK_FLAG_MOE
                 | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS,
+            storage: CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED,
             hc_mult: 2,
             hc_sinkhorn_iters: 20,
             q_lora_rank: 2,
@@ -5695,6 +5700,7 @@ fn tiny_deepseek_v4_swa_dense_descriptor_layer() -> CudaHfDecodeChainLayer<'stat
         deepseek: Some(CudaHfDeepSeekLayer {
             mode: CUDA_HF_DEEPSEEK_MODE_V4_SWA,
             flags: 0,
+            storage: CUDA_HF_DEEPSEEK_STORAGE_FP8_SCALED,
             hc_mult: 2,
             hc_sinkhorn_iters: 20,
             q_lora_rank: 2,

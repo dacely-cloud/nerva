@@ -10,6 +10,8 @@ bool deepseek_mode_valid(uint32_t mode) {
 
 bool deepseek_dims_valid(const NervaCudaHfDecodeChainLayer &layer) {
   if (!deepseek_mode_valid(layer.deepseek_mode) ||
+      (layer.deepseek_storage != kDeepSeekStorageFp8Scaled &&
+       layer.deepseek_storage != kDeepSeekStorageBf16) ||
       layer.deepseek_q_lora_rank == 0 ||
       layer.deepseek_qk_rope_head_dim == 0 ||
       layer.deepseek_v_head_dim == 0 ||

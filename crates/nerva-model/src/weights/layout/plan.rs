@@ -1279,13 +1279,17 @@ fn push_deepseek_v3_moe_blocks(
         DType::BF16,
     )?;
     if metadata.topk_method.as_deref() == Some("noaux_tc") {
+        let correction_bias_dtype = match projection_storage {
+            DeepSeekV3ProjectionStorage::Fp8Scaled => DType::F32,
+            DeepSeekV3ProjectionStorage::Bf16 => DType::BF16,
+        };
         push_block(
             blocks,
             WeightBlockRole::RouterCorrectionBias,
             layer,
             num_experts,
             1,
-            DType::F32,
+            correction_bias_dtype,
         )?;
     }
     for (role, scale_role, rows, cols) in [
