@@ -905,6 +905,9 @@ uint32_t tuned_head_threads(uint32_t head_dim, const cudaDeviceProp &props) {
   return exact_head_threads;
 }
 
+bool session_has_deepseek_layers(
+    const NervaCudaHfDecodeSequenceSession *session);
+
 uint32_t decode_attention_chunks_for_cursor(
     const NervaCudaHfDecodeSequenceSession *session, uint32_t cursor) {
   const uint32_t kv_tokens = cursor >= session->max_context_tokens
@@ -918,8 +921,12 @@ uint32_t decode_attention_chunks_for_cursor(
       session->head_dim > kDecodeThreads) {
     return 0;
   }
+  const uint32_t chunk_tokens =
+      session_has_deepseek_layers(session)
+          ? kDeepSeekMlaDecodeAttentionChunkTokens
+          : kDecodeAttentionChunkTokens;
   const uint32_t chunks =
-      ceil_div_u32(kv_tokens, kDecodeAttentionChunkTokens);
+      ceil_div_u32(kv_tokens, chunk_tokens);
   return std::min(chunks, session->decode_attention_max_chunks);
 }
 

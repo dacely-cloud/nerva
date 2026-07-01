@@ -100,11 +100,14 @@ bool shader_compiler_available() {
   return path_exists("/usr/bin/glslc") ||
          path_exists("/usr/bin/glslangValidator") ||
          path_exists("/opt/android-sdk/ndk/27.1.12297006/shader-tools/linux-x86_64/glslc") ||
-         path_exists("/opt/android-sdk/ndk/27.0.12077973/shader-tools/linux-x86_64/glslc");
+         path_exists("/opt/android-sdk/ndk/27.1.12297006/shader-tools/linux-aarch64/glslc") ||
+         path_exists("/opt/android-sdk/ndk/27.0.12077973/shader-tools/linux-x86_64/glslc") ||
+         path_exists("/opt/android-sdk/ndk/27.0.12077973/shader-tools/linux-aarch64/glslc");
 }
 
 bool vulkan_loader_available() {
   return path_exists("/usr/lib/x86_64-linux-gnu/libvulkan.so.1") ||
+         path_exists("/usr/lib/aarch64-linux-gnu/libvulkan.so.1") ||
          path_exists("/usr/local/lib/ollama/vulkan/libvulkan.so.1");
 }
 
@@ -583,6 +586,16 @@ void set_nvrtc_reason(NervaCudaExperimentalRtCandidateBenchResult *out,
   set_optix_fallback_reason(out, stage, detail);
 }
 
+const char *nvrtc_host_arch_define() {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  return "-D__aarch64__";
+#elif defined(__x86_64__) || defined(_M_X64)
+  return "-D__x86_64";
+#else
+  return "-DNERVA_UNKNOWN_HOST_ARCH";
+#endif
+}
+
 bool compile_optix_candidate_input(
     const NervaCudaExperimentalRtCandidateBenchResult *out,
     std::string *input, NervaCudaExperimentalRtCandidateBenchResult *result) {
@@ -611,7 +624,7 @@ bool compile_optix_candidate_input(
       "-default-device",
       "-rdc",
       "true",
-      "-D__x86_64",
+      nvrtc_host_arch_define(),
   };
   nvrtc = nvrtcCompileProgram(program,
                               static_cast<int>(sizeof(options) / sizeof(options[0])),

@@ -223,8 +223,11 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
   session->prefill_hidden_bytes =
       static_cast<uint64_t>(request->max_context_tokens) * hidden *
       sizeof(uint16_t);
+  const uint32_t decode_attention_chunk_tokens =
+      request_has_deepseek_layers ? kDeepSeekMlaDecodeAttentionChunkTokens
+                                  : kDecodeAttentionChunkTokens;
   session->decode_attention_max_chunks =
-      ceil_div_u32(request->max_context_tokens, kDecodeAttentionChunkTokens);
+      ceil_div_u32(request->max_context_tokens, decode_attention_chunk_tokens);
   session->decode_attention_values_bytes =
       attention_workspace_rows * session->decode_attention_max_chunks *
       sizeof(float);

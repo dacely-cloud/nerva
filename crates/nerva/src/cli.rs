@@ -123,13 +123,13 @@ fn usage_lines() -> &'static [&'static str] {
         "  nerva -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [--json] [--debug] [--profiling]",
         "  nerva run -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [--thinking] [--profiling]",
         "  nerva generate -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [--debug] [--profiling]",
-        "  nerva serve -m model [--host 127.0.0.1] [--port 8000] [--max-concurrent-requests count] [--api-key key]",
+        "  nerva serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [-q queue] [--compute-cap cc] [--max-concurrent-requests count] [--api-key key]",
         "",
         "cargo dev equivalents:",
         "  cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [--json] [--debug] [--profiling]",
         "  cargo run -p nerva -- run -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [--thinking] [--profiling]",
         "  cargo run -p nerva -- generate -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [--debug] [--profiling]",
-        "  cargo run -p nerva -- serve -m model [--host 127.0.0.1] [--port 8000] [--max-concurrent-requests count] [--api-key key]",
+        "  cargo run -p nerva -- serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [-q queue] [--compute-cap cc] [--max-concurrent-requests count] [--api-key key]",
         "",
         "aliases:",
         "  run, generate, chat, ask",
@@ -148,10 +148,10 @@ fn usage_lines() -> &'static [&'static str] {
 fn serve_usage_lines() -> &'static [&'static str] {
     &[
         "usage:",
-        "  nerva serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [--max-concurrent-requests count] [--workers count] [--max-blocking-threads count] [--api-key key] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling]",
+        "  nerva serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [-q queue] [--compute-cap cc] [--max-concurrent-requests count] [--workers count] [--max-blocking-threads count] [--api-key key] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling]",
         "",
         "cargo dev equivalent:",
-        "  cargo run -p nerva -- serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [--max-concurrent-requests count] [--workers count] [--max-blocking-threads count] [--api-key key] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling]",
+        "  cargo run -p nerva -- serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [-q queue] [--compute-cap cc] [--max-concurrent-requests count] [--workers count] [--max-blocking-threads count] [--api-key key] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling]",
     ]
 }
 

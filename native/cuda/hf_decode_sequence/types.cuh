@@ -76,6 +76,7 @@ constexpr uint32_t kDeepSeekV4PackedKvDefaultBlockTokens = 64;
 constexpr uint32_t kDeepSeekV4PackedKvC128BlockTokens = 2;
 constexpr uint32_t kDeepSeekV4PackedKvAlignmentBytes = 576;
 constexpr uint32_t kDecodeAttentionChunkTokens = 64;
+constexpr uint32_t kDeepSeekMlaDecodeAttentionChunkTokens = 512;
 constexpr uint32_t kExperimentalRtDescriptorDims = 16;
 constexpr uint32_t kGroupedGqaHeads = 4;
 constexpr uint32_t kGroupedGqaThreadsPerHead = 64;

@@ -58,6 +58,7 @@ pub(crate) fn find_cuda_lib_dir(cuda_root: Option<&PathBuf>) -> Option<PathBuf> 
     }
     candidates.push(PathBuf::from("/usr/local/cuda/lib64"));
     candidates.push(PathBuf::from("/usr/lib/x86_64-linux-gnu"));
+    candidates.push(PathBuf::from("/usr/lib/aarch64-linux-gnu"));
     candidates
         .into_iter()
         .find(|candidate| candidate.join("libcudart.so").is_file() || candidate.exists())

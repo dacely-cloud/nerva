@@ -310,7 +310,7 @@ pub(crate) fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
     let parsed = ClapServeArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
     if parsed.help {
         return Err(
-            "usage: nerva serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [--max-concurrent-requests count] [--workers count] [--max-blocking-threads count] [--api-key key] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling]"
+            "usage: nerva serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [-q queue] [--compute-cap cc] [--max-concurrent-requests count] [--workers count] [--max-blocking-threads count] [--api-key key] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling]"
                 .to_string(),
         );
     }

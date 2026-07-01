@@ -63,6 +63,7 @@ Memory residency, device-first token state, heterogeneous CPU/GPU execution, and
 - [Implementation and running it](#implementation-and-running-it)
   - [Current implementation](#current-implementation)
   - [Requirements](#requirements)
+  - [Server mode](#server-mode)
   - [Running the checks](#running-the-checks)
 
 ---
@@ -602,7 +603,7 @@ Not finished:
 
 | Area | Current limitation |
 |---|---|
-| Production serving | No production scheduler/API server yet. |
+| Production serving | `nerva serve` exposes an OpenAI-compatible HTTP API; production-grade scheduling, admission control, and deployment hardening are still under development. |
 | Full RT decode proof | Candidate selection is measured; full Qwen decode speedup, semantic RT selection, and quality bounds are still being tested. |
 | Long-context overprovisioning | Hot/warm/cold KV design exists and cold-KV H2D staging is measured, but exact multi-tier long-context decode is not complete. |
 | Qwen3.5 hybrid attention | Configs are recognized and intentionally rejected until the required attention runtime exists. |
@@ -678,6 +679,110 @@ NERVA currently builds on Linux only, and the first host targets are Ubuntu on `
 The CUDA backend supports **CUDA 12.x and CUDA 13.x only.** Older CUDA stacks are not supported, and newer CUDA major versions should be treated as unsupported until the loader and smoke checks are updated to match. The CUDA loader is written to probe platform-specific driver and runtime library names, but the runtime crates stay gated to Linux while the M0 runtime contracts are being built.
 
 CUDA architecture selection uses explicit overrides first, local GPU detection second, and compiler-supported default architectures last. Use `NERVA_CUDA_ARCHITECTURES`, `CUDAARCHS`, or `CMAKE_CUDA_ARCHITECTURES` for a list such as `75;86;89;120`; use `NERVA_CUDA_ARCH` or `CUDA_ARCH` for one target such as `sm_120` or `12.0`. `CUDA_HOME`, `CUDA_PATH`, and `CUDACXX` select the CUDA toolkit and compiler when the default `nvcc` is not the right one.
+
+### Server mode
+
+`nerva serve` starts an OpenAI-compatible HTTP API backed by the same local runtime path as direct generation. The development form is:
+
+```bash
+cargo run -p nerva -- serve -m qwen3-8b
+```
+
+An installed or already-built binary uses the same arguments without `cargo`:
+
+```bash
+./target/release/nerva serve -m qwen3-8b --host 127.0.0.1 --port 8000
+```
+
+Bind to `127.0.0.1` for local-only access. Use `--host 0.0.0.0` only when the server should listen on the network and the host firewall or reverse proxy is configured appropriately.
+
+Authentication is optional. When `--api-key` or `NERVA_OPENAI_API_KEY` is set, requests must include a matching bearer token:
+
+```bash
+NERVA_OPENAI_API_KEY=dev-secret cargo run -p nerva -- serve -m qwen3-8b
+```
+
+```bash
+curl http://127.0.0.1:8000/v1/models \
+  -H "Authorization: Bearer dev-secret"
+```
+
+Basic OpenAI-compatible requests:
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3-8b",
+    "messages": [{"role": "user", "content": "Explain NERVA in one paragraph"}],
+    "max_tokens": 128
+  }'
+```
+
+```bash
+curl http://127.0.0.1:8000/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3-8b",
+    "input": "Write a concise status update.",
+    "max_output_tokens": 128
+  }'
+```
+
+Streaming works with the OpenAI-style `stream` flag:
+
+```bash
+curl -N http://127.0.0.1:8000/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3-8b",
+    "input": "Stream three short bullets.",
+    "stream": true
+  }'
+```
+
+OpenAI SDKs can point at the local server by overriding the base URL:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="dev-secret")
+response = client.responses.create(
+    model="qwen3-8b",
+    input="Say hello from NERVA.",
+)
+print(response.output_text)
+```
+
+Full server launch configuration:
+
+| Option | Default | Meaning |
+|---|---:|---|
+| `-m`, `--model` | required | Model alias or local checkpoint path to serve. `qwen3-8b` resolves to the local Qwen3-8B path used by the runtime probes. |
+| `--host` | `127.0.0.1` | Listen address. Use `0.0.0.0` for external network access. |
+| `--port` | `8000` | Listen port. |
+| `-c`, `--context` | model/runtime default | Context token budget. Counts accept plain integers, `k`, or `m`, such as `32768`, `32k`, or `1m`. |
+| `-o`, `--output`, `--max-new-tokens` | `256` | Default generation output-token cap when a request does not provide its own cap. |
+| `-q`, `--queue` | `1024` | Host-visible token queue capacity. Counts accept the same `k`/`m` suffixes. |
+| `--compute-cap`, `--compute-capability` | detected | Override CUDA compute capability, for example `120` for `sm_120`. |
+| `--max-concurrent-requests` | `1` | Maximum in-flight generation requests admitted by the server. Must be non-zero. |
+| `--workers` | Actix default | HTTP worker thread count. Must be non-zero when set. |
+| `--max-blocking-threads` | Actix default | Blocking thread-pool limit for runtime work that cannot run on async workers. Must be non-zero when set. |
+| `--api-key` | unset | Required bearer token for HTTP requests. Can also be set with `NERVA_OPENAI_API_KEY`. |
+| `-rt`, `--rt` | off | Enable the experimental RT candidate-selection path. |
+| `--rt-mode auto` | `auto` | Enable sparse RT only when the runtime can use it; otherwise fall back explicitly. Setting any non-default RT mode enables RT. |
+| `--rt-mode shadow` | `auto` | Run the selector and report counters while dense decode remains authoritative. |
+| `--rt-mode sparse` | `auto` | Use selected pages in the sparse attention path when selected pages are fewer than dense pages. |
+| `--rt-page-tokens` | runtime default | Tokens per RT page. Must be non-zero when set. |
+| `--rt-pages` | runtime default | Total selected RT pages. Mutually exclusive with `--rt-far-pages`; must be non-zero when set. |
+| `--rt-far-pages` | runtime default | Selected far-page count while sink/local pages are derived separately. Mutually exclusive with `--rt-pages`; must be non-zero when set. |
+| `--rt-local-window` | runtime default | Recent-token local window preserved by RT selection. |
+| `--rt-sink-tokens` | runtime default | Prefix/sink tokens preserved by RT selection. |
+| `--profiling` | off | Emit the runtime profiling/reporting path for server generations. |
+
+Any RT knob (`--rt-page-tokens`, `--rt-pages`, `--rt-far-pages`, `--rt-local-window`, or `--rt-sink-tokens`) enables RT even when `--rt` is not passed. `--rt-pages` and `--rt-far-pages` cannot be used together.
+
+Request bodies can still override generation behavior per call. The chat and responses paths accept OpenAI-style fields including `max_tokens` or `max_output_tokens`, `temperature`, `top_p`, `top_k`, `seed`, `stop`, `stream`, `store`, `metadata`, `previous_response_id`, `conversation`, `session_id`, `cache_key`, `response_format`, `reasoning_effort`, `tools`, and `tool_choice`.
 
 ### Running the checks
 

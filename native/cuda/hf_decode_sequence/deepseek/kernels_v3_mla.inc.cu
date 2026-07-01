@@ -383,7 +383,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
                     active_scale;
       sum += f32_to_model_dtype(q[head * qk_head_dim + nope], dtype) * weight;
     }
-    q_nope_latent[latent] = sum;
+    q_nope_latent[latent] = f32_to_model_dtype(sum, dtype);
   }
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
     float q_pe =
@@ -396,7 +396,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
           f32_to_model_dtype(q[head * qk_head_dim + qk_nope + odd], dtype),
           dim, qk_rope, position, rope_theta, layout);
     }
-    q_rope[dim] = q_pe;
+    q_rope[dim] = f32_to_model_dtype(q_pe, dtype);
   }
   __syncthreads();
 
@@ -433,11 +433,12 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     const float next_m = fmaxf(local_m, score);
     const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
     const float new_scale = expf(score - next_m);
+    const float value_scale = f32_to_model_dtype(new_scale, dtype);
     for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
          latent += blockDim.x) {
       latent_output[latent] =
           latent_output[latent] * old_scale +
-          encoded_to_f32(kv_keys[token_base + latent], dtype) * new_scale;
+          encoded_to_f32(kv_keys[token_base + latent], dtype) * value_scale;
     }
     local_l = local_l * old_scale + new_scale;
     local_m = next_m;
@@ -446,7 +447,8 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   if (local_l > 0.0f && isfinite(local_l)) {
     for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
          latent += blockDim.x) {
-      latent_output[latent] /= local_l;
+      latent_output[latent] = f32_to_model_dtype(latent_output[latent] / local_l,
+                                                 dtype);
     }
   }
   __syncthreads();
@@ -550,7 +552,7 @@ __global__ void hf_deepseek_v3_mla_query_latent_kernel(
                     active_scale;
       sum += f32_to_model_dtype(q[head * qk_head_dim + nope], dtype) * weight;
     }
-    head_latent[latent] = sum;
+    head_latent[latent] = f32_to_model_dtype(sum, dtype);
   }
 }
 
@@ -607,7 +609,7 @@ __global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
       static_cast<uint64_t>(head) * attention_chunks + selected_slot;
   const uint32_t attention_tokens = attention_tokens_shared;
   const uint32_t chunk_start =
-      selected_slot * kDecodeAttentionChunkTokens;
+      selected_slot * kDeepSeekMlaDecodeAttentionChunkTokens;
   if (chunk_start >= attention_tokens) {
     if (threadIdx.x == 0) {
       partial_m[partial_slot] = -INFINITY;
@@ -616,7 +618,8 @@ __global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
     return;
   }
   const uint32_t chunk_end =
-      min(chunk_start + kDecodeAttentionChunkTokens, attention_tokens);
+      min(chunk_start + kDeepSeekMlaDecodeAttentionChunkTokens,
+          attention_tokens);
 
   extern __shared__ float shared[];
   float *latent_output = shared;
@@ -638,7 +641,7 @@ __global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
           f32_to_model_dtype(q[head * qk_head_dim + qk_nope + odd], dtype),
           dim, qk_rope, position, rope_theta, layout);
     }
-    q_rope[dim] = q_pe;
+    q_rope[dim] = f32_to_model_dtype(q_pe, dtype);
   }
   __syncthreads();
 
@@ -678,11 +681,12 @@ __global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
     const float next_m = fmaxf(local_m, score);
     const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
     const float new_scale = expf(score - next_m);
+    const float value_scale = f32_to_model_dtype(new_scale, dtype);
     for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
          latent += blockDim.x) {
       latent_output[latent] =
           latent_output[latent] * old_scale +
-          encoded_to_f32(kv_keys[token_base + latent], dtype) * new_scale;
+          encoded_to_f32(kv_keys[token_base + latent], dtype) * value_scale;
     }
     local_l = local_l * old_scale + new_scale;
     local_m = next_m;
@@ -782,7 +786,7 @@ __global__ void hf_deepseek_v3_mla_attention_reduce_kernel(
         value += partial_latent[slot * kv_lora_rank + latent] * weight;
       }
     }
-    latent_output[latent] = value;
+    latent_output[latent] = f32_to_model_dtype(value, dtype);
   }
   __syncthreads();
 
@@ -915,7 +919,7 @@ __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
                     active_scale;
       sum += f32_to_model_dtype(q[head * qk_head_dim + nope], dtype) * weight;
     }
-    q_nope_latent[latent] = sum;
+    q_nope_latent[latent] = f32_to_model_dtype(sum, dtype);
   }
   for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
     float q_pe =
@@ -928,7 +932,7 @@ __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
           f32_to_model_dtype(q[head * qk_head_dim + qk_nope + odd], dtype),
           dim, qk_rope, position, rope_theta, layout);
     }
-    q_rope[dim] = q_pe;
+    q_rope[dim] = f32_to_model_dtype(q_pe, dtype);
   }
   __syncthreads();
 
@@ -974,11 +978,12 @@ __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
     const float next_m = fmaxf(local_m, score);
     const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
     const float new_scale = expf(score - next_m);
+    const float value_scale = f32_to_model_dtype(new_scale, dtype);
     for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
          latent += blockDim.x) {
       latent_output[latent] =
           latent_output[latent] * old_scale +
-          encoded_to_f32(kv_keys[token_base + latent], dtype) * new_scale;
+          encoded_to_f32(kv_keys[token_base + latent], dtype) * value_scale;
     }
     local_l = local_l * old_scale + new_scale;
     local_m = next_m;
@@ -987,7 +992,8 @@ __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
   if (local_l > 0.0f && isfinite(local_l)) {
     for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
          latent += blockDim.x) {
-      latent_output[latent] /= local_l;
+      latent_output[latent] = f32_to_model_dtype(latent_output[latent] / local_l,
+                                                 dtype);
     }
   }
   __syncthreads();
