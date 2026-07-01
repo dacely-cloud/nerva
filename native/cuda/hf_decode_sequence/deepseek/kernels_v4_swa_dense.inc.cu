@@ -275,9 +275,7 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float rms_eps, float rope_theta, float *scratch, uint16_t *kv_keys,
     uint16_t *kv_values, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint32_t vocab_size,
-    const uint32_t *prompt_tokens, uint32_t prompt_token_count,
-    const NervaCudaSyntheticTokenSlot *slots, uint16_t *projection_input,
+    const uint32_t *kv_block_table, uint16_t *projection_input,
     uint8_t *deepseek_swa_kv, uint64_t deepseek_swa_kv_offset_bytes,
     uint32_t deepseek_swa_kv_block_count,
     float *deepseek_compressor_state,
@@ -294,15 +292,12 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     float *deepseek_mhc_comb_mix,
     uint64_t *deepseek_runtime_counters, uint32_t local_window_tokens,
     uint32_t preprojected_qk, uint32_t precomputed_compressor_state,
-    uint32_t precomputed_indexer_state, uint32_t run_mlp) {
+    uint32_t precomputed_indexer_state) {
   if (threadIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
     return;
   }
   const uint32_t position = step_cursor == nullptr ? 0 : *step_cursor;
-  const uint32_t current_token =
-      position < prompt_token_count ? prompt_tokens[position]
-                                    : slots[position - 1u].token;
   const uint32_t q_lora_rank = layout.deepseek_q_lora_rank;
   const uint32_t qk_nope = layout.deepseek_qk_nope_head_dim;
   const uint32_t qk_rope = layout.deepseek_qk_rope_head_dim;
@@ -806,233 +801,6 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
       layout.deepseek_hc_ffn_scale, layout.rms_mlp, deepseek_mhc_residual,
       deepseek_mhc_post_mix, deepseek_mhc_comb_mix, s.mlp_norm,
       projection_input);
-  if (run_mlp == 0u) {
-    for (uint32_t row = 0; row < hidden; ++row) {
-      s.residual[row] = 0.0f;
-    }
-    return;
-  }
-  if (layout.mlp_kind == kMlpKindSparseMoe) {
-    float router_logits[kSparseMoeExpertsMax];
-    float correction_bias[kSparseMoeExpertsMax];
-    uint32_t selected_experts[kSparseMoeTopKMax];
-    float selected_weights[kSparseMoeTopKMax];
-    const uint32_t num_experts = layout.num_experts;
-    const uint32_t top_k = layout.experts_per_token;
-    const uint32_t moe_intermediate = layout.moe_intermediate;
-    if (layout.w_router == kMissingOffset ||
-        layout.w_expert_gate_up == kMissingOffset ||
-        layout.w_expert_down == kMissingOffset ||
-        num_experts == 0 || num_experts > kSparseMoeExpertsMax ||
-        top_k == 0 || top_k > kSparseMoeTopKMax ||
-        top_k > num_experts || moe_intermediate == 0 ||
-        moe_intermediate > intermediate || (hidden & 1u) != 0 ||
-        (moe_intermediate & 1u) != 0) {
-      return;
-    }
-    const uint64_t router_metadata_offset =
-        layout.w_router + static_cast<uint64_t>(num_experts) * hidden;
-    const bool hash_router =
-        (layout.deepseek_flags & kDeepSeekFlagHashRouter) != 0;
-    for (uint32_t expert = 0; expert < num_experts; ++expert) {
-      float sum = 0.0f;
-      const uint64_t row = layout.w_router +
-                           static_cast<uint64_t>(expert) * hidden;
-      for (uint32_t col = 0; col < hidden; ++col) {
-        sum += encoded_to_f32(arena[row + col], kDTypeBF16) * s.mlp_norm[col];
-      }
-      router_logits[expert] = sum;
-      correction_bias[expert] =
-          hash_router ? 0.0f
-                      : f32_from_u16_slots(arena + router_metadata_offset,
-                                           expert);
-    }
-    const float routed_scale =
-        isfinite(layout.deepseek_routed_scaling_factor) &&
-                layout.deepseek_routed_scaling_factor != 0.0f
-            ? layout.deepseek_routed_scaling_factor
-            : 1.0f;
-    if (hash_router) {
-      if (current_token >= vocab_size) {
-        return;
-      }
-      float weight_sum = 0.0f;
-      for (uint32_t rank = 0; rank < top_k; ++rank) {
-        const uint64_t table_index =
-            static_cast<uint64_t>(current_token) * top_k + rank;
-        const uint64_t expert64 =
-            deepseek_u64_from_u16_slots(arena + router_metadata_offset,
-                                        table_index);
-        if (expert64 >= num_experts) {
-          return;
-        }
-        const uint32_t expert = static_cast<uint32_t>(expert64);
-        selected_experts[rank] = expert;
-        selected_weights[rank] =
-            nerva::deepseek::router::sqrtsoftplus_score(router_logits[expert]);
-        weight_sum += selected_weights[rank];
-      }
-      const float scale = nerva::deepseek::router::route_scale(
-          weight_sum, layout.norm_topk_prob, routed_scale);
-      for (uint32_t rank = 0; rank < top_k; ++rank) {
-        selected_weights[rank] *= scale;
-      }
-      if (deepseek_runtime_counters != nullptr) {
-        atomicAdd(
-            reinterpret_cast<unsigned long long *>(
-                deepseek_runtime_counters +
-                kDeepSeekRuntimeCounterV4HashRouterSelections),
-            1ull);
-      }
-    } else {
-      if (nerva::deepseek::router::route_v4_sqrtsoftplus(
-              router_logits, correction_bias, num_experts, top_k,
-              layout.norm_topk_prob, routed_scale, selected_experts,
-              selected_weights) != 0) {
-        return;
-      }
-      if (deepseek_runtime_counters != nullptr) {
-        atomicAdd(
-            reinterpret_cast<unsigned long long *>(
-                deepseek_runtime_counters +
-                kDeepSeekRuntimeCounterV4BiasRouterSelections),
-            1ull);
-      }
-    }
-    for (uint32_t row = 0; row < hidden; ++row) {
-      s.down[row] = 0.0f;
-    }
-
-    const uint32_t half_hidden = hidden >> 1u;
-    const uint32_t half_intermediate = moe_intermediate >> 1u;
-    const uint64_t expert_gate = layout.w_expert_gate_up;
-    const uint64_t expert_gate_scale =
-        expert_gate +
-        deepseek_device_rank3_slots(num_experts, moe_intermediate,
-                                    half_hidden);
-    const uint32_t gate_scale_cols = (half_hidden + 15u) / 16u;
-    const uint64_t expert_up =
-        expert_gate_scale +
-        deepseek_device_rank3_slots(num_experts, moe_intermediate,
-                                    gate_scale_cols);
-    const uint64_t expert_up_scale =
-        expert_up +
-        deepseek_device_rank3_slots(num_experts, moe_intermediate,
-                                    half_hidden);
-    const uint64_t expert_down = layout.w_expert_down;
-    const uint64_t expert_down_scale =
-        expert_down +
-        deepseek_device_rank3_slots(num_experts, hidden, half_intermediate);
-    for (uint32_t rank = 0; rank < top_k; ++rank) {
-      const uint32_t expert = selected_experts[rank];
-      const float expert_weight = selected_weights[rank];
-      for (uint32_t row = 0; row < moe_intermediate; ++row) {
-        float gate_sum = 0.0f;
-        float up_sum = 0.0f;
-        for (uint32_t col = 0; col < hidden; ++col) {
-          gate_sum += deepseek_mxfp4_rank3_scaled_weight(
-                          arena, expert_gate, expert_gate_scale,
-                          moe_intermediate, half_hidden, expert, row, col) *
-                      s.mlp_norm[col];
-          up_sum += deepseek_mxfp4_rank3_scaled_weight(
-                        arena, expert_up, expert_up_scale, moe_intermediate,
-                        half_hidden, expert, row, col) *
-                    s.mlp_norm[col];
-        }
-        s.ff[row] =
-            deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
-      }
-      for (uint32_t row = 0; row < hidden; ++row) {
-        float sum = 0.0f;
-        for (uint32_t col = 0; col < moe_intermediate; ++col) {
-          sum += deepseek_mxfp4_rank3_scaled_weight(
-                     arena, expert_down, expert_down_scale, hidden,
-                     half_intermediate, expert, row, col) *
-                 s.ff[col];
-        }
-        s.down[row] += expert_weight * sum;
-      }
-    }
-
-    const uint32_t shared_intermediate = layout.shared_expert_intermediate;
-    if (shared_intermediate != 0 && run_mlp != 2u) {
-      if (layout.w_shared_expert_gate == kMissingOffset ||
-          layout.w_shared_expert_up == kMissingOffset ||
-          layout.w_shared_expert_down == kMissingOffset ||
-          shared_intermediate > intermediate) {
-        return;
-      }
-      const uint64_t shared_gate_scale =
-          layout.w_shared_expert_gate +
-          deepseek_device_fp8_slots(shared_intermediate, hidden);
-      const uint64_t shared_up_scale =
-          layout.w_shared_expert_up +
-          deepseek_device_fp8_slots(shared_intermediate, hidden);
-      const uint64_t shared_down_scale =
-          layout.w_shared_expert_down +
-          deepseek_device_fp8_slots(hidden, shared_intermediate);
-      for (uint32_t row = 0; row < shared_intermediate; ++row) {
-        float gate_sum = 0.0f;
-        float up_sum = 0.0f;
-        for (uint32_t col = 0; col < hidden; ++col) {
-          gate_sum += deepseek_fp8_e8m0_scaled_weight(
-                          arena, layout.w_shared_expert_gate,
-                          shared_gate_scale, shared_intermediate, hidden, row,
-                          col) *
-                      s.mlp_norm[col];
-          up_sum += deepseek_fp8_e8m0_scaled_weight(
-                        arena, layout.w_shared_expert_up, shared_up_scale,
-                        shared_intermediate, hidden, row, col) *
-                    s.mlp_norm[col];
-        }
-        s.ff[row] =
-            deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
-      }
-      for (uint32_t row = 0; row < hidden; ++row) {
-        float sum = 0.0f;
-        for (uint32_t col = 0; col < shared_intermediate; ++col) {
-          sum += deepseek_fp8_e8m0_scaled_weight(
-                     arena, layout.w_shared_expert_down, shared_down_scale,
-                     hidden, shared_intermediate, row, col) *
-                 s.ff[col];
-        }
-        s.down[row] += sum;
-      }
-    }
-  } else {
-    const uint64_t gate_scale =
-        layout.w_gate + deepseek_device_fp8_slots(intermediate, hidden);
-    const uint64_t up_scale =
-        layout.w_up + deepseek_device_fp8_slots(intermediate, hidden);
-    const uint64_t down_scale =
-        layout.w_down + deepseek_device_fp8_slots(hidden, intermediate);
-    for (uint32_t row = 0; row < intermediate; ++row) {
-      float gate_sum = 0.0f;
-      float up_sum = 0.0f;
-      for (uint32_t col = 0; col < hidden; ++col) {
-        gate_sum += deepseek_fp8_scaled_weight(
-                        arena, layout.w_gate, gate_scale, intermediate, hidden,
-                        row, col) *
-                    s.mlp_norm[col];
-        up_sum += deepseek_fp8_scaled_weight(
-                      arena, layout.w_up, up_scale, intermediate, hidden, row,
-                      col) *
-                  s.mlp_norm[col];
-      }
-      s.ff[row] =
-          deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
-    }
-    for (uint32_t row = 0; row < hidden; ++row) {
-      float sum = 0.0f;
-      for (uint32_t col = 0; col < intermediate; ++col) {
-        sum += deepseek_fp8_scaled_weight(
-                   arena, layout.w_down, down_scale, hidden, intermediate, row,
-                   col) *
-               s.ff[col];
-      }
-      s.down[row] = sum;
-    }
-  }
   for (uint32_t row = 0; row < hidden; ++row) {
     s.residual[row] = 0.0f;
   }

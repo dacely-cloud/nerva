@@ -123,6 +123,13 @@ __global__ void hf_deepseek_v3_sparse_moe_route_kernel(
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float *scratch, uint16_t *projection_input,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v4_sparse_moe_route_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t *step_cursor, uint32_t max_steps, uint32_t vocab_size,
+    const uint32_t *prompt_tokens, uint32_t prompt_token_count,
+    const NervaCudaSyntheticTokenSlot *slots, float *scratch,
+    uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v3_sparse_moe_expert_gate_up_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
@@ -143,6 +150,14 @@ __global__ void hf_deepseek_v3_sparse_moe_shared_down_kernel(
     uint32_t hidden, uint32_t attention_hidden, uint32_t kv_hidden,
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float *scratch);
+__global__ void hf_deepseek_v4_sparse_moe_expert_gate_up_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t rank, uint32_t *step_cursor, uint32_t max_steps, float *scratch);
+__global__ void hf_deepseek_v4_sparse_moe_expert_down_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
+    uint32_t rank, uint32_t *step_cursor, uint32_t max_steps, float *scratch);
 __global__ void hf_deepseek_ff_encode_kernel(
     SequenceLayerLayout layout, uint32_t dtype, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
@@ -158,9 +173,7 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     uint32_t intermediate, uint32_t *step_cursor, uint32_t max_steps,
     float rms_eps, float rope_theta, float *scratch, uint16_t *kv_keys,
     uint16_t *kv_values, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint32_t vocab_size,
-    const uint32_t *prompt_tokens, uint32_t prompt_token_count,
-    const NervaCudaSyntheticTokenSlot *slots, uint16_t *projection_input,
+    const uint32_t *kv_block_table, uint16_t *projection_input,
     uint8_t *deepseek_swa_kv, uint64_t deepseek_swa_kv_offset_bytes,
     uint32_t deepseek_swa_kv_block_count,
     float *deepseek_compressor_state,
@@ -177,7 +190,7 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
     float *deepseek_mhc_comb_mix,
     uint64_t *deepseek_runtime_counters, uint32_t local_window_tokens,
     uint32_t preprojected_qk, uint32_t precomputed_compressor_state,
-    uint32_t precomputed_indexer_state, uint32_t run_mlp);
+    uint32_t precomputed_indexer_state);
 __global__ void hf_deepseek_v4_q_a_norm_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
     uint32_t heads, uint32_t head_dim, uint32_t intermediate,
