@@ -1406,19 +1406,46 @@ cudaError_t launch_deepseek_v3_session_prefill(
               ? reinterpret_cast<uint32_t *>(session->device_prefill_down)
               : nullptr;
       if (err == cudaSuccess && use_sparse_prefill_topk) {
-        hf_deepseek_v32_sparse_topk_select_tokens_kernel<<<
-            chunk_tokens, 1, 0, session->stream>>>(
-            layout, chunk_start, chunk_tokens, session->max_context_tokens,
-            reinterpret_cast<const uint8_t *>(
-                session->device_deepseek_indexer_state),
-            deepseek_v32_indexer_query_state_layer_offset_bytes(session,
-                                                                layer_index),
-            session->device_deepseek_indexer_kv,
-            deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
-            deepseek_v32_indexer_kv_block_count(session, layout),
-            session->kv_block_count, session->device_kv_block_table,
-            sparse_topk_slots, sparse_topk_stride, sparse_topk_counts,
-            session->device_deepseek_runtime_counters);
+        const uint64_t prefill_down_floats =
+            session->prefill_down_bytes / sizeof(float);
+        const uint64_t score_workspace_offset = chunk_tokens;
+        const uint64_t score_workspace_floats =
+            prefill_down_floats > score_workspace_offset
+                ? prefill_down_floats - score_workspace_offset
+                : 0u;
+        const uint64_t score_workspace_needed =
+            static_cast<uint64_t>(chunk_tokens) * session->max_context_tokens;
+        if (score_workspace_floats >= score_workspace_needed) {
+          hf_deepseek_v32_sparse_topk_select_tokens_parallel_kernel<<<
+              chunk_tokens, kDecodeThreads, 0, session->stream>>>(
+              layout, chunk_start, chunk_tokens, session->max_context_tokens,
+              reinterpret_cast<const uint8_t *>(
+                  session->device_deepseek_indexer_state),
+              deepseek_v32_indexer_query_state_layer_offset_bytes(session,
+                                                                  layer_index),
+              session->device_deepseek_indexer_kv,
+              deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
+              deepseek_v32_indexer_kv_block_count(session, layout),
+              session->kv_block_count, session->device_kv_block_table,
+              sparse_topk_slots, sparse_topk_stride, sparse_topk_counts,
+              session->device_prefill_down + score_workspace_offset,
+              session->max_context_tokens,
+              session->device_deepseek_runtime_counters);
+        } else {
+          hf_deepseek_v32_sparse_topk_select_tokens_kernel<<<
+              chunk_tokens, 1, 0, session->stream>>>(
+              layout, chunk_start, chunk_tokens, session->max_context_tokens,
+              reinterpret_cast<const uint8_t *>(
+                  session->device_deepseek_indexer_state),
+              deepseek_v32_indexer_query_state_layer_offset_bytes(session,
+                                                                  layer_index),
+              session->device_deepseek_indexer_kv,
+              deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
+              deepseek_v32_indexer_kv_block_count(session, layout),
+              session->kv_block_count, session->device_kv_block_table,
+              sparse_topk_slots, sparse_topk_stride, sparse_topk_counts,
+              session->device_deepseek_runtime_counters);
+        }
         err = cudaGetLastError();
         if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
       }

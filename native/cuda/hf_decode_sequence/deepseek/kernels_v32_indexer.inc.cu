@@ -1246,3 +1246,182 @@ __global__ void hf_deepseek_v32_sparse_topk_select_tokens_kernel(
         selection_hash);
   }
 }
+
+__global__ void hf_deepseek_v32_sparse_topk_select_tokens_parallel_kernel(
+    SequenceLayerLayout layout, uint32_t chunk_start, uint32_t chunk_tokens,
+    uint32_t max_steps, const uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    const uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    int32_t *sparse_topk_slots, uint32_t sparse_topk_stride,
+    uint32_t *sparse_topk_count, float *sparse_topk_score_workspace,
+    uint32_t sparse_topk_score_stride,
+    uint64_t *deepseek_runtime_counters) {
+  __shared__ float reduce_scores[kDecodeThreads];
+  __shared__ int32_t reduce_slots[kDecodeThreads];
+  const uint32_t local_token = blockIdx.x;
+  if (local_token >= chunk_tokens || sparse_topk_slots == nullptr ||
+      sparse_topk_count == nullptr || sparse_topk_stride == 0 ||
+      sparse_topk_score_workspace == nullptr ||
+      sparse_topk_score_stride == 0 ||
+      !deepseek_v32_indexer_query_state_supported(layout) ||
+      deepseek_indexer_state == nullptr || deepseek_indexer_kv == nullptr ||
+      layout.deepseek_index_topk == 0 ||
+      deepseek_indexer_kv_block_count == 0) {
+    return;
+  }
+  if (threadIdx.x == 0) {
+    sparse_topk_count[local_token] = 0;
+  }
+  __syncthreads();
+
+  const uint32_t position = chunk_start + local_token;
+  if (position >= max_steps) {
+    return;
+  }
+  const uint32_t capacity =
+      deepseek_indexer_kv_block_count * kDeepSeekV32IndexerKvBlockTokens;
+  const uint32_t candidate_tokens = min(position + 1u, capacity);
+  const uint32_t topk_limit =
+      min(min(min(layout.deepseek_index_topk, candidate_tokens),
+              kDeepSeekSessionMaxSparseTopK),
+          sparse_topk_stride);
+  if (candidate_tokens == 0 || topk_limit == 0 ||
+      sparse_topk_score_stride < candidate_tokens) {
+    return;
+  }
+
+  int32_t *token_slots =
+      sparse_topk_slots + static_cast<uint64_t>(local_token) * sparse_topk_stride;
+  if (topk_limit >= candidate_tokens) {
+    for (uint32_t rank = threadIdx.x; rank < candidate_tokens;
+         rank += blockDim.x) {
+      token_slots[rank] = static_cast<int32_t>(rank);
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+      unsigned long long selection_hash = 0ull;
+      for (uint32_t rank = 0; rank < topk_limit; ++rank) {
+        selection_hash +=
+            (static_cast<unsigned long long>(position) + 1ull) *
+                1315423911ull ^
+            (static_cast<unsigned long long>(rank) + 1ull) * 2654435761ull ^
+            (static_cast<unsigned long long>(rank) + 1ull);
+      }
+      sparse_topk_count[local_token] = topk_limit;
+      if (deepseek_runtime_counters != nullptr) {
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterSparseTopkSelections),
+            1ull);
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
+            static_cast<unsigned long long>(topk_limit));
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                deepseek_runtime_counters +
+                kDeepSeekRuntimeCounterSparseTopkSelectionHash),
+            selection_hash);
+      }
+    }
+    return;
+  }
+
+  const uint64_t token_bytes =
+      deepseek_v32_indexer_query_state_token_bytes(layout);
+  const uint8_t *token_ptr =
+      deepseek_indexer_state + deepseek_indexer_state_offset_bytes +
+      static_cast<uint64_t>(position) * token_bytes;
+  const uint8_t *q_fp8 = token_ptr;
+  const auto *weights = reinterpret_cast<const float *>(
+      token_ptr + deepseek_v32_indexer_query_state_weights_offset_bytes(layout));
+  float *token_scores =
+      sparse_topk_score_workspace +
+      static_cast<uint64_t>(local_token) * sparse_topk_score_stride;
+  for (uint32_t slot = threadIdx.x; slot < candidate_tokens;
+       slot += blockDim.x) {
+    token_scores[slot] = deepseek_session_score_v32_sparse_slot(
+        layout, q_fp8, weights, deepseek_indexer_kv,
+        deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
+        kv_block_count, kv_block_table, slot);
+  }
+  __syncthreads();
+
+  unsigned long long selection_hash = 0ull;
+  uint32_t selected = 0;
+  for (uint32_t rank = 0; rank < topk_limit; ++rank) {
+    float thread_best_score = -INFINITY;
+    int32_t thread_best_slot = -1;
+    for (uint32_t slot = threadIdx.x; slot < candidate_tokens;
+         slot += blockDim.x) {
+      const float score = token_scores[slot];
+      const int32_t slot_i32 = static_cast<int32_t>(slot);
+      if (deepseek_session_sparse_score_is_better(
+              score, slot_i32, thread_best_score, thread_best_slot)) {
+        thread_best_score = score;
+        thread_best_slot = slot_i32;
+      }
+    }
+    reduce_scores[threadIdx.x] = thread_best_score;
+    reduce_slots[threadIdx.x] = thread_best_slot;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x / 2u; stride != 0; stride >>= 1u) {
+      if (threadIdx.x < stride) {
+        const float other_score = reduce_scores[threadIdx.x + stride];
+        const int32_t other_slot = reduce_slots[threadIdx.x + stride];
+        if (deepseek_session_sparse_score_is_better(
+                other_score, other_slot, reduce_scores[threadIdx.x],
+                reduce_slots[threadIdx.x])) {
+          reduce_scores[threadIdx.x] = other_score;
+          reduce_slots[threadIdx.x] = other_slot;
+        }
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+      const int32_t best_slot = reduce_slots[0];
+      token_slots[rank] = best_slot;
+      if (best_slot >= 0) {
+        token_scores[best_slot] = -INFINITY;
+        ++selected;
+        selection_hash +=
+            (static_cast<unsigned long long>(position) + 1ull) *
+                1315423911ull ^
+            (static_cast<unsigned long long>(rank) + 1ull) * 2654435761ull ^
+            (static_cast<unsigned long long>(best_slot) + 1ull);
+      }
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x != 0 || selected == 0) {
+    return;
+  }
+  sparse_topk_count[local_token] = selected;
+  if (deepseek_runtime_counters != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelections),
+        1ull);
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
+        static_cast<unsigned long long>(selected));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
+        static_cast<unsigned long long>(candidate_tokens));
+    atomicAdd(
+        reinterpret_cast<unsigned long long *>(
+            deepseek_runtime_counters +
+            kDeepSeekRuntimeCounterSparseTopkSelectionHash),
+        selection_hash);
+  }
+}
