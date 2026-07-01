@@ -3,6 +3,27 @@
 constexpr uint32_t kDeepSeekFp8ProjectionTokenTile = 4;
 constexpr uint32_t kDeepSeekFp8ProjectionRowTile = 8;
 
+__device__ __forceinline__ uint32_t deepseek_fp8_projection_scale_cols(
+    uint32_t cols,
+    uint32_t block_cols) {
+  if (block_cols == 128u) {
+    return (cols + 127u) >> 7u;
+  }
+  return (cols + block_cols - 1) / block_cols;
+}
+
+__device__ __forceinline__ uint32_t deepseek_fp8_projection_scale_idx(
+    uint32_t row,
+    uint32_t col,
+    uint32_t scale_cols,
+    uint32_t block_rows,
+    uint32_t block_cols) {
+  if (block_rows == 128u && block_cols == 128u) {
+    return ((row >> 7u) * scale_cols) + (col >> 7u);
+  }
+  return (row / block_rows) * scale_cols + (col / block_cols);
+}
+
 __global__ void deepseek_fp8_f32_scale_matvec_kernel(
     const uint8_t *weights,
     const float *scales,
@@ -18,11 +39,13 @@ __global__ void deepseek_fp8_f32_scale_matvec_kernel(
   }
   extern __shared__ float partial[];
   float sum = 0.0f;
-  const uint32_t scale_cols = (cols + block_cols - 1) / block_cols;
+  const uint32_t scale_cols =
+      deepseek_fp8_projection_scale_cols(cols, block_cols);
   const uint64_t row_base = static_cast<uint64_t>(row) * cols;
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const uint32_t scale_idx =
-        (row / block_rows) * scale_cols + (col / block_cols);
+        deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
+                                          block_cols);
     const float weight =
         nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
         scales[scale_idx];
@@ -57,11 +80,13 @@ __global__ void deepseek_fp8_f32_scale_encoded_matvec_kernel(
   }
   extern __shared__ float partial[];
   float sum = 0.0f;
-  const uint32_t scale_cols = (cols + block_cols - 1) / block_cols;
+  const uint32_t scale_cols =
+      deepseek_fp8_projection_scale_cols(cols, block_cols);
   const uint64_t row_base = static_cast<uint64_t>(row) * cols;
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const uint32_t scale_idx =
-        (row / block_rows) * scale_cols + (col / block_cols);
+        deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
+                                          block_cols);
     const float weight =
         nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
         scales[scale_idx];
@@ -98,7 +123,8 @@ __global__ void deepseek_fp8_f32_scale_encoded_gemm_tokens_kernel(
   }
   extern __shared__ float partial[];
   float sum[kDeepSeekFp8ProjectionRowTile][kDeepSeekFp8ProjectionTokenTile] = {};
-  const uint32_t scale_cols = (cols + block_cols - 1) / block_cols;
+  const uint32_t scale_cols =
+      deepseek_fp8_projection_scale_cols(cols, block_cols);
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     float input_value[kDeepSeekFp8ProjectionTokenTile] = {};
     for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
@@ -116,7 +142,8 @@ __global__ void deepseek_fp8_f32_scale_encoded_gemm_tokens_kernel(
         continue;
       }
       const uint32_t scale_idx =
-          (row / block_rows) * scale_cols + (col / block_cols);
+          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
+                                            block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
       const float weight =
           nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
@@ -188,11 +215,13 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_matvec_kernel(
   }
   extern __shared__ float partial[];
   float sum = 0.0f;
-  const uint32_t scale_cols = (cols + block_cols - 1) / block_cols;
+  const uint32_t scale_cols =
+      deepseek_fp8_projection_scale_cols(cols, block_cols);
   const uint64_t row_base = static_cast<uint64_t>(row) * cols;
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const uint32_t scale_idx =
-        (row / block_rows) * scale_cols + (col / block_cols);
+        deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
+                                          block_cols);
     const float weight =
         nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
         nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);
@@ -229,7 +258,8 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_gemm_tokens_kernel(
   }
   extern __shared__ float partial[];
   float sum[kDeepSeekFp8ProjectionRowTile][kDeepSeekFp8ProjectionTokenTile] = {};
-  const uint32_t scale_cols = (cols + block_cols - 1) / block_cols;
+  const uint32_t scale_cols =
+      deepseek_fp8_projection_scale_cols(cols, block_cols);
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     float input_value[kDeepSeekFp8ProjectionTokenTile] = {};
     for (uint32_t tile = 0; tile < kDeepSeekFp8ProjectionTokenTile; ++tile) {
@@ -247,7 +277,8 @@ __global__ void deepseek_fp8_e8m0_scale_encoded_gemm_tokens_kernel(
         continue;
       }
       const uint32_t scale_idx =
-          (row / block_rows) * scale_cols + (col / block_cols);
+          deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
+                                            block_cols);
       const uint64_t row_base = static_cast<uint64_t>(row) * cols;
       const float weight =
           nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
@@ -318,11 +349,13 @@ __global__ void deepseek_fp8_e8m0_scale_matvec_kernel(
   }
   extern __shared__ float partial[];
   float sum = 0.0f;
-  const uint32_t scale_cols = (cols + block_cols - 1) / block_cols;
+  const uint32_t scale_cols =
+      deepseek_fp8_projection_scale_cols(cols, block_cols);
   const uint64_t row_base = static_cast<uint64_t>(row) * cols;
   for (uint32_t col = threadIdx.x; col < cols; col += blockDim.x) {
     const uint32_t scale_idx =
-        (row / block_rows) * scale_cols + (col / block_cols);
+        deepseek_fp8_projection_scale_idx(row, col, scale_cols, block_rows,
+                                          block_cols);
     const float weight =
         nerva::deepseek::f8_e4m3fn_bits_to_f32(weights[row_base + col]) *
         nerva::deepseek::e8m0_exponent_bits_to_f32(scales[scale_idx]);

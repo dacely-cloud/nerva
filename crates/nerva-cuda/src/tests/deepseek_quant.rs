@@ -5,7 +5,7 @@ use crate::deepseek_quant::dequant::{
     deepseek_mxfp4_e2m1_e8m0_dequant,
 };
 use crate::deepseek_quant::inv_rope::{
-    CudaDeepSeekFusedInvRopeFp8QuantSummary, deepseek_fused_inv_rope_fp8_quant,
+    deepseek_fused_inv_rope_fp8_quant, CudaDeepSeekFusedInvRopeFp8QuantSummary,
 };
 use crate::deepseek_quant::probe::{deepseek_fused_inv_rope_fp8_quant_smoke, deepseek_quant_smoke};
 use crate::deepseek_quant::summary::CudaDeepSeekQuantSummary;
@@ -322,9 +322,7 @@ fn deepseek_quant_dequant_apis_match_reference_values() {
     assert_eq!(fp8.block_cols, 2);
     assert_eq!(
         fp8.output,
-        [
-            1.0, 2.0, 1.0, -2.0, 128.0, 240.0, 512.0, 896.0, 0.0625, 0.125, 2.0, 4.0
-        ]
+        [1.0, 2.0, 1.0, -2.0, 128.0, 240.0, 512.0, 896.0, 0.0625, 0.125, 2.0, 4.0]
     );
     assert_eq!(fp8.kernel_launches, 1);
     assert_eq!(fp8.sync_calls, 1);
@@ -492,6 +490,101 @@ fn deepseek_fp8_e8m0_scale_encoded_gemm_tokens_matches_reference_values() {
     assert_eq!(summary.sync_calls, 1);
     assert_eq!(summary.hot_path_allocations, 0);
     assert!(summary.output_hash != 0);
+}
+
+#[test]
+fn deepseek_fp8_f32_scale_encoded_gemm_tokens_matches_reference_with_128_blocks() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let rows = 130u32;
+    let cols = 130u32;
+    let tokens = 5u32;
+    let weights = patterned_fp8_weights((rows * cols) as usize);
+    let scales = [0.75, 1.25, 0.5, 1.75];
+    let input = patterned_bf16_input((tokens * cols) as usize);
+    const BF16: u32 = 1;
+
+    let summary = deepseek_fp8_e4m3fn_f32_scale_encoded_gemm_tokens(
+        &weights, &scales, &input, BF16, rows, cols, tokens, 128, 128,
+    );
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let expected = reference_fp8_f32_scale_encoded_gemm_tokens(
+        &weights,
+        &scales,
+        &input,
+        rows as usize,
+        cols as usize,
+        tokens as usize,
+        128,
+        128,
+    );
+    assert_eq!(summary.block_rows, 128);
+    assert_eq!(summary.block_cols, 128);
+    assert_fp8_gemm_close(&summary.output, &expected, 1e-3);
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+}
+
+#[test]
+fn deepseek_fp8_e8m0_scale_encoded_gemm_tokens_matches_reference_with_128_blocks() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let rows = 130u32;
+    let cols = 130u32;
+    let tokens = 5u32;
+    let weights = patterned_fp8_weights((rows * cols) as usize);
+    let scales = [0x7f, 0x80, 0x7e, 0x81];
+    let input = patterned_bf16_input((tokens * cols) as usize);
+    const BF16: u32 = 1;
+
+    let summary = deepseek_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens(
+        &weights, &scales, &input, BF16, rows, cols, tokens, 128, 128,
+    );
+    if summary.status != SmokeStatus::Ok {
+        return;
+    }
+
+    let expected = reference_fp8_e8m0_scale_encoded_gemm_tokens(
+        &weights,
+        &scales,
+        &input,
+        rows as usize,
+        cols as usize,
+        tokens as usize,
+        128,
+        128,
+    );
+    assert_eq!(summary.block_rows, 128);
+    assert_eq!(summary.block_cols, 128);
+    assert_fp8_gemm_close(&summary.output, &expected, 1e-3);
+    assert_eq!(summary.kernel_launches, 1);
+    assert_eq!(summary.sync_calls, 1);
+    assert_eq!(summary.hot_path_allocations, 0);
+}
+
+fn patterned_fp8_weights(len: usize) -> Vec<u8> {
+    const PATTERN: [u8; 8] = [0x18, 0x20, 0x28, 0x30, 0x98, 0xa0, 0xa8, 0xb0];
+    (0..len).map(|idx| PATTERN[idx % PATTERN.len()]).collect()
+}
+
+fn patterned_bf16_input(len: usize) -> Vec<u16> {
+    (0..len)
+        .map(|idx| ((idx % 17) as f32 - 8.0) * 0.03125)
+        .map(f32_to_bf16_bits)
+        .collect()
+}
+
+fn assert_fp8_gemm_close(actual: &[f32], expected: &[f32], tolerance: f32) {
+    for (idx, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "output[{idx}] actual={actual} expected={expected}"
+        );
+    }
 }
 
 fn f32_to_bf16_bits(value: f32) -> u16 {
