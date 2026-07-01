@@ -508,24 +508,6 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
             vllm_artifact.display()
         )
     })?;
-    if vllm_run.status != 0 {
-        return Ok(deepseek_benchmark_run_json(
-            "vllm_failed",
-            &checkpoint_dir,
-            &prompt_spec,
-            max_context_tokens,
-            max_new_tokens,
-            &artifact_dir,
-            &vllm_artifact,
-            &nerva_artifact,
-            &compare_artifact,
-            &vllm_command,
-            &nerva_command,
-            &vllm_run,
-            None,
-            None,
-        ));
-    }
 
     let nerva_run = run_json_command(&nerva_command, &repo_root)?;
     std::fs::write(&nerva_artifact, &nerva_run.json).map_err(|err| {
@@ -537,6 +519,24 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
     if nerva_run.status != 0 {
         return Ok(deepseek_benchmark_run_json(
             "nerva_failed",
+            &checkpoint_dir,
+            &prompt_spec,
+            max_context_tokens,
+            max_new_tokens,
+            &artifact_dir,
+            &vllm_artifact,
+            &nerva_artifact,
+            &compare_artifact,
+            &vllm_command,
+            &nerva_command,
+            &vllm_run,
+            Some(&nerva_run),
+            None,
+        ));
+    }
+    if vllm_run.status != 0 {
+        return Ok(deepseek_benchmark_run_json(
+            "vllm_failed",
             &checkpoint_dir,
             &prompt_spec,
             max_context_tokens,
