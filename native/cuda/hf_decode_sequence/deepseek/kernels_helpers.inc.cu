@@ -395,9 +395,13 @@ __device__ bool deepseek_session_write_fp8_ds_mla_compressed_kv(
   const uint32_t compressed_slot = position / compress_ratio;
   const uint32_t packed_block_tokens =
       deepseek_v4_packed_kv_block_tokens(compress_ratio);
-  const uint32_t compressed_block = compressed_slot / packed_block_tokens;
+  const uint32_t logical_compressed_block = compressed_slot / packed_block_tokens;
+  uint32_t compressed_block = 0;
   if (head_dim == 0 || head_dim > kDeepSeekSessionMaxCompressHeadSize ||
-      compressed_block >= compressed_block_count) {
+      !deepseek_v4_packed_physical_block(
+          kv_block_table, kv_block_count, compressed_block_count,
+          logical_compressed_block, packed_block_tokens * compress_ratio,
+          &compressed_block)) {
     return false;
   }
   deepseek_session_compress_state_to_scratch(
@@ -484,9 +488,13 @@ __device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
   const uint32_t compressed_slot = position / compress_ratio;
   const uint32_t packed_block_tokens =
       deepseek_v4_packed_kv_block_tokens(compress_ratio);
-  const uint32_t compressed_block = compressed_slot / packed_block_tokens;
+  const uint32_t logical_compressed_block = compressed_slot / packed_block_tokens;
+  uint32_t compressed_block = 0;
   if (head_dim > kDeepSeekSessionMaxCompressHeadSize ||
-      compressed_block >= compressed_block_count) {
+      !deepseek_v4_packed_physical_block(
+          kv_block_table, kv_block_count, compressed_block_count,
+          logical_compressed_block, packed_block_tokens * compress_ratio,
+          &compressed_block)) {
     return false;
   }
   deepseek_session_compress_state_to_scratch(
@@ -537,6 +545,7 @@ __device__ bool deepseek_session_write_indexer_fp8_compressed_kv(
 __device__ float deepseek_session_read_fp8_ds_mla_compressed_kv(
     const uint8_t *kv_cache, uint64_t kv_offset_bytes,
     uint32_t compressed_block_count, const SequenceLayerLayout &layout,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     uint32_t compressed_slot, uint32_t dim) {
   const uint32_t nope = layout.deepseek_qk_nope_head_dim;
   const uint32_t rope = layout.deepseek_qk_rope_head_dim;
@@ -546,8 +555,13 @@ __device__ float deepseek_session_read_fp8_ds_mla_compressed_kv(
   }
   const uint32_t packed_block_tokens =
       deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio);
-  const uint32_t compressed_block = compressed_slot / packed_block_tokens;
-  if (compressed_block >= compressed_block_count) {
+  const uint32_t logical_compressed_block = compressed_slot / packed_block_tokens;
+  uint32_t compressed_block = 0;
+  if (!deepseek_v4_packed_physical_block(
+          kv_block_table, kv_block_count, compressed_block_count,
+          logical_compressed_block,
+          packed_block_tokens * layout.deepseek_compress_ratio,
+          &compressed_block)) {
     return 0.0f;
   }
   const uint32_t token_stride = nope + rope * 2u;
@@ -580,6 +594,7 @@ __device__ float deepseek_session_read_fp8_ds_mla_compressed_kv(
 
 __device__ bool deepseek_session_write_fp8_ds_mla_swa_kv(
     uint8_t *kv_cache, uint64_t kv_offset_bytes, uint32_t block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     const SequenceLayerLayout &layout, uint32_t position, const float *kv) {
   const uint32_t nope = layout.deepseek_qk_nope_head_dim;
   const uint32_t rope = layout.deepseek_qk_rope_head_dim;
@@ -587,9 +602,12 @@ __device__ bool deepseek_session_write_fp8_ds_mla_swa_kv(
   if (kv_cache == nullptr || kv == nullptr || head_dim == 0) {
     return false;
   }
-  const uint32_t block =
+  const uint32_t logical_block =
       position / kDeepSeekV4PackedKvDefaultBlockTokens;
-  if (block >= block_count) {
+  uint32_t block = 0;
+  if (!deepseek_v4_packed_physical_block(
+          kv_block_table, kv_block_count, block_count, logical_block,
+          kDeepSeekV4PackedKvDefaultBlockTokens, &block)) {
     return false;
   }
   const uint32_t token_stride = nope + rope * 2u;
@@ -718,6 +736,7 @@ __device__ bool deepseek_session_write_v32_fp8_ds_mla_kv(
 
 __device__ float deepseek_session_read_fp8_ds_mla_swa_kv(
     const uint8_t *kv_cache, uint64_t kv_offset_bytes, uint32_t block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     const SequenceLayerLayout &layout, uint32_t position, uint32_t dim) {
   const uint32_t nope = layout.deepseek_qk_nope_head_dim;
   const uint32_t rope = layout.deepseek_qk_rope_head_dim;
@@ -725,9 +744,12 @@ __device__ float deepseek_session_read_fp8_ds_mla_swa_kv(
   if (kv_cache == nullptr || dim >= head_dim) {
     return 0.0f;
   }
-  const uint32_t block =
+  const uint32_t logical_block =
       position / kDeepSeekV4PackedKvDefaultBlockTokens;
-  if (block >= block_count) {
+  uint32_t block = 0;
+  if (!deepseek_v4_packed_physical_block(
+          kv_block_table, kv_block_count, block_count, logical_block,
+          kDeepSeekV4PackedKvDefaultBlockTokens, &block)) {
     return 0.0f;
   }
   const uint32_t token_stride = nope + rope * 2u;
@@ -763,6 +785,7 @@ __device__ float deepseek_session_read_fp8_ds_mla_swa_kv(
 __device__ float deepseek_session_read_indexer_fp8_compressed_kv(
     const uint8_t *kv_cache, uint64_t kv_offset_bytes,
     uint32_t compressed_block_count, const SequenceLayerLayout &layout,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     uint32_t compressed_slot, uint32_t dim) {
   const uint32_t head_dim = layout.deepseek_index_head_dim;
   const uint32_t scale_dim = deepseek_device_scale_dim(head_dim) * sizeof(float);
@@ -772,8 +795,13 @@ __device__ float deepseek_session_read_indexer_fp8_compressed_kv(
   }
   const uint32_t packed_block_tokens =
       deepseek_v4_packed_kv_block_tokens(layout.deepseek_compress_ratio);
-  const uint32_t compressed_block = compressed_slot / packed_block_tokens;
-  if (compressed_block >= compressed_block_count) {
+  const uint32_t logical_compressed_block = compressed_slot / packed_block_tokens;
+  uint32_t compressed_block = 0;
+  if (!deepseek_v4_packed_physical_block(
+          kv_block_table, kv_block_count, compressed_block_count,
+          logical_compressed_block,
+          packed_block_tokens * layout.deepseek_compress_ratio,
+          &compressed_block)) {
     return 0.0f;
   }
   const uint32_t kv_pos = compressed_slot % packed_block_tokens;
@@ -844,7 +872,8 @@ __device__ uint32_t deepseek_session_select_v4_c4_sparse_slots(
     const uint16_t *projection_input, uint32_t dtype, uint32_t hidden,
     uint32_t q_lora_rank, uint32_t position, float rope_theta,
     const uint8_t *indexer_kv, uint64_t indexer_kv_offset_bytes,
-    uint32_t indexer_kv_block_count, uint32_t compressed_attention_tokens,
+    uint32_t indexer_kv_block_count, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint32_t compressed_attention_tokens,
     int32_t *topk_slots, float *topk_scores, float *indexer_query,
     uint32_t *scored_candidates, unsigned long long *selection_hash_out) {
   if (scored_candidates != nullptr) {
@@ -962,7 +991,8 @@ __device__ uint32_t deepseek_session_select_v4_c4_sparse_slots(
           dot += query_head[dim] *
                  deepseek_session_read_indexer_fp8_compressed_kv(
                      indexer_kv, indexer_kv_offset_bytes,
-                     indexer_kv_block_count, layout, slot, dim);
+                     indexer_kv_block_count, layout, kv_block_count,
+                     kv_block_table, slot, dim);
         }
         score += indexer_weights[head] * softmax_scale * head_scale * dot;
       }

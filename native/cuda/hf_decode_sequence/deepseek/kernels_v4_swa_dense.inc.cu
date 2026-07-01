@@ -524,8 +524,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
           arena, layout, s.q_gate, projection_input, dtype, hidden, q_lora_rank,
           position, rope_theta, deepseek_indexer_kv,
           deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
-          compressed_attention_tokens, sparse_compressed_slots,
-          sparse_compressed_scores, sparse_indexer_query,
+          kv_block_count, kv_block_table, compressed_attention_tokens,
+          sparse_compressed_slots, sparse_compressed_scores, sparse_indexer_query,
           &sparse_compressed_candidates_scored,
           &sparse_compressed_selection_hash);
   if (sparse_compressed_attention_tokens != 0 &&
@@ -623,7 +623,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
   const bool use_packed_swa_kv =
       deepseek_session_write_fp8_ds_mla_swa_kv(
           deepseek_swa_kv, deepseek_swa_kv_offset_bytes,
-          deepseek_swa_kv_block_count, layout, position, s.k);
+          deepseek_swa_kv_block_count, kv_block_count, kv_block_table, layout,
+          position, s.k);
   if (!use_packed_swa_kv) {
     const uint64_t write_base =
         kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
@@ -692,8 +693,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
                  deepseek_session_read_fp8_ds_mla_compressed_kv(
                      deepseek_compressed_kv,
                      deepseek_compressed_kv_offset_bytes,
-                     deepseek_compressed_kv_block_count, layout,
-                     compressed_slot, dim);
+                     deepseek_compressed_kv_block_count, layout, kv_block_count,
+                     kv_block_table, compressed_slot, dim);
       }
       score *= attn_scale;
       const float next_m = fmaxf(local_m, score);
@@ -705,8 +706,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
             s.attn[out] * old_scale +
             deepseek_session_read_fp8_ds_mla_compressed_kv(
                 deepseek_compressed_kv, deepseek_compressed_kv_offset_bytes,
-                deepseek_compressed_kv_block_count, layout, compressed_slot,
-                dim) *
+                deepseek_compressed_kv_block_count, layout, kv_block_count,
+                kv_block_table, compressed_slot, dim) *
                 new_scale;
       }
       local_l = local_l * old_scale + new_scale;
@@ -722,7 +723,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
             use_packed_swa_kv
                 ? deepseek_session_read_fp8_ds_mla_swa_kv(
                       deepseek_swa_kv, deepseek_swa_kv_offset_bytes,
-                      deepseek_swa_kv_block_count, layout, token, dim)
+                      deepseek_swa_kv_block_count, kv_block_count,
+                      kv_block_table, layout, token, dim)
                 : encoded_to_f32(kv_keys[token_base + dim], dtype);
         score += s.q[head_start + dim] * key_value;
       }
@@ -736,7 +738,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
             use_packed_swa_kv
                 ? deepseek_session_read_fp8_ds_mla_swa_kv(
                       deepseek_swa_kv, deepseek_swa_kv_offset_bytes,
-                      deepseek_swa_kv_block_count, layout, token, dim)
+                      deepseek_swa_kv_block_count, kv_block_count,
+                      kv_block_table, layout, token, dim)
                 : encoded_to_f32(kv_values[token_base + dim], dtype);
         s.attn[out] =
             s.attn[out] * old_scale + value * new_scale;
