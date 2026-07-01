@@ -247,6 +247,16 @@ __global__ void hf_deepseek_v4_compressor_state_kernel(
     float *deepseek_compressor_state,
     uint64_t deepseek_compressor_state_offset_bytes,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v4_compressed_kv_write_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t head_dim,
+    uint32_t *step_cursor, uint32_t max_steps, float rms_eps,
+    float rope_theta, float *deepseek_compressor_state,
+    uint64_t deepseek_compressor_state_offset_bytes,
+    uint8_t *deepseek_compressed_kv,
+    uint64_t deepseek_compressed_kv_offset_bytes,
+    uint32_t deepseek_compressed_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v4_indexer_state_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,

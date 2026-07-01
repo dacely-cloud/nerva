@@ -890,6 +890,8 @@ pub fn deepseek_implemented_primitives(metadata: &HfModelMetadata) -> Vec<String
         primitives.push("cuda_deepseek_compress_norm_rope_fp8_cache_smoke".to_string());
         primitives.push("cuda_deepseek_compress_norm_rope_mxfp4_cache_api".to_string());
         primitives.push("cuda_deepseek_compress_norm_rope_mxfp4_cache_smoke".to_string());
+        primitives
+            .push("cuda_hf_sequence_deepseek_v4_parallel_compressed_kv_pack_runtime".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_index_topk_descriptor".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_compressed_scan_metrics".to_string());
         primitives.push("cuda_hf_sequence_deepseek_v4_swa_window_runtime".to_string());
@@ -1253,11 +1255,12 @@ fn coverage_for_unit(
                 "cuda_deepseek_compressed_slot_mapping_smoke",
                 "cuda_hf_sequence_deepseek_native_layout_pack",
                 "cuda_hf_sequence_deepseek_packed_kv_footprint_accounting",
+                "cuda_hf_sequence_deepseek_v4_parallel_compressed_kv_pack_runtime",
                 "cuda_hf_sequence_deepseek_v4_fp8_ds_mla_fullsize_page_contents",
                 "cuda_hf_sequence_deepseek_v4_c128_fp8_ds_mla_page_contents",
             ],
             &[
-                "replace serial C4/C128 compressor path with the vLLM fused compressor kernel pattern",
+                "parallelize C4 indexer compressed KV packing and validate against vLLM",
                 "run C4/C128 compressor cache differential against vLLM",
             ],
         ),

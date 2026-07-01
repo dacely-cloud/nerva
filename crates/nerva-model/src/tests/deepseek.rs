@@ -329,6 +329,17 @@ fn deepseek_v4_coverage_reports_cuda_mhc_sequence_runtime_complete() {
             .any(|item| item == "cuda_hf_sequence_deepseek_v4_c128_parallel_head_attention_runtime"),
         "DeepSeek V4 C128 parallel attention primitive must be reported"
     );
+    let compressor = coverage
+        .iter()
+        .find(|unit| unit.unit == "deepseek_v4_c4_c128_compressor")
+        .expect("DeepSeek V4 should report C4/C128 compressor coverage");
+    assert!(
+        compressor
+            .validated_primitives
+            .iter()
+            .any(|item| item == "cuda_hf_sequence_deepseek_v4_parallel_compressed_kv_pack_runtime"),
+        "DeepSeek V4 parallel compressed KV pack primitive must be reported"
+    );
     let sparse_indexer = coverage
         .iter()
         .find(|unit| unit.unit == "deepseek_v4_sparse_indexer")
