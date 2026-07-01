@@ -1,7 +1,7 @@
 use crate::decode::hf_chain::layer::CudaHfDecodeChainLayer;
 use crate::decode::hf_sequence::ffi::{
-    NervaCudaHfDecodeSamplerConfig as FfiSamplerConfig, NervaCudaHfDecodeSequenceRequest,
-    NervaCudaHfDecodeSequenceResult, run_hf_decode_sequence_u16,
+    run_hf_decode_sequence_u16, NervaCudaHfDecodeSamplerConfig as FfiSamplerConfig,
+    NervaCudaHfDecodeSequenceRequest, NervaCudaHfDecodeSequenceResult,
 };
 use crate::decode::hf_sequence::footprint::estimate_sequence_footprint;
 use crate::decode::hf_sequence::status::{sequence_failure_reason, sequence_status_from_result};
@@ -24,6 +24,15 @@ pub struct CudaHfDecodeSamplerConfig {
 }
 
 impl CudaHfDecodeSamplerConfig {
+    pub const fn creative_default() -> Self {
+        Self {
+            temperature: 0.7,
+            top_p: 0.9,
+            top_k: 0,
+            seed: 0,
+        }
+    }
+
     pub const fn accuracy_default() -> Self {
         Self::greedy()
     }

@@ -99,7 +99,7 @@ where
         max_new_tokens,
         queue_capacity,
         compute_capability,
-        CudaHfDecodeSamplerConfig::greedy(),
+        CudaHfDecodeSamplerConfig::creative_default(),
         detailed_profile,
         progress,
     )
