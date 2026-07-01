@@ -1,12 +1,12 @@
 use actix_web::HttpRequest;
 use nerva_core::types::id::token::TokenId;
 use nerva_model::causal_lm::types::HfCausalLmStopReason;
-use nerva_model::hf::tokenizer::PromptFormat;
+use nerva_model::hf::tokenizer::{PromptFormat, decode_generated_text};
 use serde_json::{Value, json};
 
 use super::{
-    ApiError, AppState, PromptInput, ReasoningMode, validate_mcp_tools_field,
-    validate_tool_choice_field,
+    ApiError, AppState, GeneratedText, PromptInput, ReasoningMode, validate_functions_field,
+    validate_mcp_tools_field, validate_tool_choice_field,
 };
 
 pub(crate) fn authorize(state: &AppState, request: &HttpRequest) -> Result<(), ApiError> {
@@ -57,7 +57,9 @@ pub(crate) fn reject_unsupported_generation_options_with_tools(
     body: &Value,
 ) -> Result<(), ApiError> {
     reject_unsupported_generation_options_common(body)?;
-    reject_nonempty_field(body, "functions")?;
+    reject_present_field(body, "echo")?;
+    reject_present_field(body, "suffix")?;
+    validate_functions_field(body)?;
     validate_mcp_tools_field(body)?;
     validate_tool_choice_field(body)?;
     reject_unsupported_response_format(body)
@@ -69,8 +71,6 @@ fn reject_unsupported_generation_options_common(body: &Value) -> Result<(), ApiE
     reject_nonempty_field(body, "logit_bias")?;
     reject_present_field(body, "logprobs")?;
     reject_present_field(body, "top_logprobs")?;
-    reject_present_field(body, "echo")?;
-    reject_present_field(body, "suffix")?;
     reject_present_field(body, "best_of")?;
     Ok(())
 }
@@ -81,9 +81,9 @@ fn reject_unsupported_response_format(body: &Value) -> Result<(), ApiError> {
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or("text");
-        if ty != "text" {
+        if !matches!(ty, "text" | "json_object" | "json_schema") {
             return Err(ApiError::unsupported(
-                "structured response_format is not implemented yet",
+                "response_format type must be text, json_object, or json_schema",
             ));
         }
     }
@@ -148,6 +148,10 @@ pub(crate) fn request_n(body: &Value) -> Result<usize, ApiError> {
 
 pub(crate) fn request_stream(body: &Value) -> bool {
     body.get("stream").and_then(Value::as_bool).unwrap_or(false)
+}
+
+pub(crate) fn request_echo(body: &Value) -> Result<bool, ApiError> {
+    request_bool(body, "echo", false)
 }
 
 pub(crate) fn request_include_reasoning(body: &Value) -> Result<bool, ApiError> {
@@ -528,6 +532,14 @@ pub(crate) fn request_optional_string(
     }
 }
 
+pub(crate) fn request_suffix(body: &Value) -> Result<Option<String>, ApiError> {
+    match body.get("suffix") {
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(ApiError::bad_request("suffix must be a string")),
+    }
+}
+
 pub(crate) fn string_any(body: &Value, names: &[&str]) -> Result<Option<String>, ApiError> {
     for name in names {
         if let Some(value) = body.get(*name) {
@@ -538,6 +550,113 @@ pub(crate) fn string_any(body: &Value, names: &[&str]) -> Result<Option<String>,
         }
     }
     Ok(None)
+}
+
+pub(crate) fn completion_echo_prefix(
+    model_path: &str,
+    prompt: &PromptInput,
+    echo: bool,
+) -> Result<Option<String>, ApiError> {
+    if !echo {
+        return Ok(None);
+    }
+    match prompt {
+        PromptInput::Text { text, .. } => Ok(Some(text.clone())),
+        PromptInput::TokenIds(tokens) => decode_generated_text(model_path, tokens)
+            .map_err(ApiError::bad_request)?
+            .ok_or_else(|| ApiError::bad_request("tokenizer decode is unavailable"))
+            .map(Some),
+    }
+}
+
+pub(crate) fn request_response_format_instruction(
+    body: &Value,
+) -> Result<Option<String>, ApiError> {
+    let Some(response_format) = body.get("response_format") else {
+        return Ok(None);
+    };
+    if response_format.is_null() {
+        return Ok(None);
+    }
+    let ty = response_format
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("text");
+    match ty {
+        "text" => Ok(None),
+        "json_object" => Ok(Some(
+            "Respond with a single valid JSON object and no surrounding prose.".to_string(),
+        )),
+        "json_schema" => {
+            let json_schema = response_format.get("json_schema").ok_or_else(|| {
+                ApiError::bad_request("response_format json_schema requires json_schema")
+            })?;
+            let name = json_schema
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("response");
+            let schema = json_schema.get("schema").unwrap_or(json_schema);
+            Ok(Some(format!(
+                "Respond with JSON matching schema '{name}': {}",
+                schema
+            )))
+        }
+        _ => Err(ApiError::unsupported(
+            "response_format type must be text, json_object, or json_schema",
+        )),
+    }
+}
+
+pub(crate) fn apply_response_format_instruction(
+    prompt: PromptInput,
+    instruction: Option<&str>,
+) -> Result<PromptInput, ApiError> {
+    let Some(instruction) = instruction else {
+        return Ok(prompt);
+    };
+    match prompt {
+        PromptInput::Text { text, format } => Ok(PromptInput::Text {
+            text: append_assistant_instruction(text, instruction),
+            format,
+        }),
+        PromptInput::TokenIds(_) => Err(ApiError::unsupported(
+            "response_format with token-id prompts requires a text prompt",
+        )),
+    }
+}
+
+pub(crate) fn append_assistant_instruction(mut prompt: String, instruction: &str) -> String {
+    const ASSISTANT_MARKER: &str = "Assistant:";
+    if prompt.ends_with(ASSISTANT_MARKER) {
+        let new_len = prompt.len().saturating_sub(ASSISTANT_MARKER.len());
+        prompt.truncate(new_len);
+        prompt.push_str("System: ");
+        prompt.push_str(instruction);
+        prompt.push('\n');
+        prompt.push_str(ASSISTANT_MARKER);
+    } else {
+        if !prompt.ends_with('\n') {
+            prompt.push('\n');
+        }
+        prompt.push_str(instruction);
+    }
+    prompt
+}
+
+pub(crate) fn completion_text(
+    generated: &str,
+    output_prefix: Option<&str>,
+    output_suffix: Option<&str>,
+) -> String {
+    let mut text = String::new();
+    if let Some(prefix) = output_prefix {
+        text.push_str(prefix);
+    }
+    text.push_str(generated);
+    if let Some(suffix) = output_suffix {
+        text.push_str(suffix);
+    }
+    text
 }
 
 pub(crate) fn validate_sampling(temperature: f32, top_p: f32) -> Result<(), ApiError> {
@@ -578,5 +697,14 @@ pub(crate) fn usage(prompt_tokens: usize, completion_tokens: usize) -> Value {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": prompt_tokens + completion_tokens
+    })
+}
+
+pub(crate) fn generated_metadata(generated: &GeneratedText) -> Value {
+    json!({
+        "cache_key": &generated.cache_key,
+        "cache_hit": generated.cache_hit,
+        "session_id": &generated.session_id,
+        "prompt_hash": format!("{:016x}", generated.prompt_hash)
     })
 }

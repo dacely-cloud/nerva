@@ -21,7 +21,7 @@ pub(crate) fn resolve_model_path(model: &str) -> Result<PathBuf, String> {
         return resolve_hf_snapshot(repo);
     }
     Err(format!(
-        "unknown model '{model}'. Use a checkpoint path, Hugging Face repo id, or a known alias like qwen3-8b, qwen3-moe, qwen-coder, deepseek-v3, or deepseek-v4-flash"
+        "unknown model '{model}'. Use a checkpoint path, Hugging Face repo id, or a known alias like qwen3-8b, qwen3-moe, qwen-coder, qwen3.5, deepseek-v3, deepseek-v4-flash, mixtral, llama3.1-8b-instruct, or mistral-7b-instruct"
     ))
 }
 

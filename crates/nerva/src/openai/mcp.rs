@@ -217,11 +217,28 @@ pub(crate) fn validate_mcp_tools_field(body: &Value) -> Result<(), ApiError> {
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or("function");
-        if ty != "mcp" {
-            return Err(ApiError::unsupported(format!(
-                "tool type '{ty}' is not implemented; only MCP tools are wired"
-            )));
+        match ty {
+            "mcp" => {}
+            "function" => validate_function_tool(tool)?,
+            _ => {
+                return Err(ApiError::unsupported(format!(
+                    "tool type '{ty}' is not implemented; use MCP or function tools"
+                )));
+            }
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_functions_field(body: &Value) -> Result<(), ApiError> {
+    let Some(functions) = body.get("functions") else {
+        return Ok(());
+    };
+    let Value::Array(functions) = functions else {
+        return Err(ApiError::bad_request("functions must be an array"));
+    };
+    for function in functions {
+        validate_function_definition(function, "functions entries")?;
     }
     Ok(())
 }
@@ -248,11 +265,17 @@ pub(crate) fn mcp_tool_invocation_from_request(
         .or_else(|| body.get("mcp_call"))
         .or_else(|| body.get("tool_call"))
     {
+        if function_tool_choice_object(value) {
+            return Ok(None);
+        }
         return parse_mcp_tool_invocation_value(value, body).map(Some);
     }
 
     if let Some(Value::Object(_)) = body.get("tool_choice") {
         let value = body.get("tool_choice").expect("checked above");
+        if function_tool_choice_object(value) || !mcp_tool_choice_object(value) {
+            return Ok(None);
+        }
         return parse_mcp_tool_invocation_value(value, body).map(Some);
     }
 
@@ -261,7 +284,7 @@ pub(crate) fn mcp_tool_invocation_from_request(
         .and_then(Value::as_str)
         .is_some_and(|choice| choice == "required")
     {
-        return required_single_mcp_tool_invocation(body).map(Some);
+        return required_single_mcp_tool_invocation(body);
     }
 
     Ok(None)
@@ -299,23 +322,25 @@ fn parse_mcp_tool_invocation_value(
     Ok(invocation)
 }
 
-fn required_single_mcp_tool_invocation(body: &Value) -> Result<McpToolInvocation, ApiError> {
+fn required_single_mcp_tool_invocation(
+    body: &Value,
+) -> Result<Option<McpToolInvocation>, ApiError> {
     let tools = body
         .get("tools")
         .and_then(Value::as_array)
-        .ok_or_else(|| ApiError::bad_request("tool_choice required needs one MCP tool"))?;
+        .ok_or_else(|| ApiError::bad_request("tool_choice required needs tools"))?;
     let mut mcp_tools = tools
         .iter()
         .filter(|tool| tool.get("type").and_then(Value::as_str) == Some("mcp"));
-    let tool = mcp_tools
-        .next()
-        .ok_or_else(|| ApiError::bad_request("tool_choice required needs one MCP tool"))?;
+    let Some(tool) = mcp_tools.next() else {
+        return Ok(None);
+    };
     if mcp_tools.next().is_some() {
         return Err(ApiError::unsupported(
             "tool_choice required needs an explicit MCP tool name when multiple MCP tools are provided",
         ));
     }
-    parse_mcp_tool_invocation_value(tool, body)
+    parse_mcp_tool_invocation_value(tool, body).map(Some)
 }
 
 fn fill_mcp_server_from_tools(
@@ -395,6 +420,20 @@ fn mcp_invocation_arguments(value: &Value) -> Result<Value, ApiError> {
     }
 }
 
+fn mcp_tool_choice_object(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("mcp")
+        || value.get("mcp").is_some()
+        || mcp_invocation_string(value, "server_id").is_some()
+        || mcp_invocation_string(value, "server_label").is_some()
+        || mcp_invocation_string(value, "server_url").is_some()
+        || mcp_invocation_string(value, "endpoint").is_some()
+        || mcp_invocation_string(value, "url").is_some()
+}
+
+fn function_tool_choice_object(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("function") || value.get("function").is_some()
+}
+
 fn resolve_mcp_server_for_invocation(
     state: &AppState,
     invocation: &McpToolInvocation,
@@ -472,27 +511,90 @@ pub(crate) fn augment_prompt_with_mcp_tool(
 }
 
 fn mcp_tools_prompt_catalog(body: &Value) -> Option<String> {
-    let tools = body.get("tools")?.as_array()?;
     let mut lines = Vec::new();
-    for tool in tools {
-        if tool.get("type").and_then(Value::as_str) != Some("mcp") {
-            continue;
+    if let Some(tools) = body.get("tools").and_then(Value::as_array) {
+        for tool in tools {
+            match tool
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("function")
+            {
+                "mcp" => {
+                    let name = mcp_invocation_name(tool).unwrap_or("unknown");
+                    let server = mcp_invocation_string(tool, "server_id")
+                        .or_else(|| mcp_invocation_string(tool, "server_label"))
+                        .or_else(|| mcp_invocation_string(tool, "server_url"))
+                        .unwrap_or_else(|| "registered-mcp-server".to_string());
+                    lines.push(format!("- MCP {name} on {server}"));
+                }
+                "function" => {
+                    if let Some(line) =
+                        function_definition_line(tool.get("function").unwrap_or(tool), "function")
+                    {
+                        lines.push(line);
+                    }
+                }
+                _ => {}
+            }
         }
-        let name = mcp_invocation_name(tool).unwrap_or("unknown");
-        let server = mcp_invocation_string(tool, "server_id")
-            .or_else(|| mcp_invocation_string(tool, "server_label"))
-            .or_else(|| mcp_invocation_string(tool, "server_url"))
-            .unwrap_or_else(|| "registered-mcp-server".to_string());
-        lines.push(format!("- {name} on {server}"));
+    }
+    if let Some(functions) = body.get("functions").and_then(Value::as_array) {
+        for function in functions {
+            if let Some(line) = function_definition_line(function, "function") {
+                lines.push(line);
+            }
+        }
     }
     if lines.is_empty() {
         None
     } else {
         Some(format!(
-            "Available MCP tools, if needed:\n{}\n",
+            "Available tools, if needed:\n{}\n",
             lines.join("\n")
         ))
     }
+}
+
+fn validate_function_tool(tool: &Value) -> Result<(), ApiError> {
+    validate_function_definition(
+        tool.get("function").unwrap_or(tool),
+        "function tool definitions",
+    )
+}
+
+fn validate_function_definition(function: &Value, context: &str) -> Result<(), ApiError> {
+    let Value::Object(_) = function else {
+        return Err(ApiError::bad_request(format!("{context} must be objects")));
+    };
+    let Some(name) = function.get("name").and_then(Value::as_str) else {
+        return Err(ApiError::bad_request(format!(
+            "{context} require a function name"
+        )));
+    };
+    if name.trim().is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "{context} require a non-empty function name"
+        )));
+    }
+    Ok(())
+}
+
+fn function_definition_line(function: &Value, label: &str) -> Option<String> {
+    let name = function.get("name").and_then(Value::as_str)?;
+    let mut line = format!("- {label} {name}");
+    if let Some(description) = function.get("description").and_then(Value::as_str) {
+        if !description.trim().is_empty() {
+            line.push_str(": ");
+            line.push_str(description);
+        }
+    }
+    if let Some(parameters) = function.get("parameters") {
+        if !parameters.is_null() {
+            line.push_str("; parameters: ");
+            line.push_str(&parameters.to_string());
+        }
+    }
+    Some(line)
 }
 
 pub(crate) fn mcp_tool_result_json(result: &McpToolResult) -> Value {

@@ -84,6 +84,8 @@ pub(crate) struct GenerateOptions {
     pub(crate) stop: Vec<String>,
     pub(crate) session_id: Option<String>,
     pub(crate) cache_key: Option<String>,
+    pub(crate) output_prefix: Option<String>,
+    pub(crate) output_suffix: Option<String>,
     pub(crate) include_reasoning: bool,
     pub(crate) reasoning_mode: ReasoningMode,
 }

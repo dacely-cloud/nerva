@@ -1,15 +1,15 @@
 use serde_json::json;
 
 use super::{
-    McpToolResult, PromptInput, ReasoningMode, StreamKind, StreamMeta, apply_stop_strings,
-    augment_prompt_with_mcp_tool, chat_messages_to_prompt, completion_prompts, decode_chunked_body,
-    finish_reason, first_sse_json_payload, hash_tokens, mcp_tool_invocation_from_request,
-    normalize_batch_endpoint, parse_http_endpoint, parse_mcp_http_response,
-    parse_multipart_file_upload, percent_decode_query, prompt_format_for_reasoning,
-    reject_unsupported_generation_options, reject_unsupported_generation_options_with_tools,
-    request_n, request_optional_string, request_stop_strings, responses_input_to_prompt,
-    send_stream_reasoning_delta, session_json, shared_fork_batch_supported,
-    split_generated_reasoning, text_delta,
+    GeneratedText, McpToolResult, PromptInput, ReasoningMode, StreamKind, StreamMeta,
+    apply_stop_strings, augment_prompt_with_mcp_tool, chat_messages_to_prompt, completion_prompts,
+    completion_text, decode_chunked_body, finish_reason, first_sse_json_payload,
+    generated_metadata, hash_tokens, mcp_tool_invocation_from_request, normalize_batch_endpoint,
+    parse_http_endpoint, parse_mcp_http_response, parse_multipart_file_upload,
+    percent_decode_query, prompt_format_for_reasoning, reject_unsupported_generation_options,
+    reject_unsupported_generation_options_with_tools, request_n, request_optional_string,
+    request_stop_strings, responses_input_to_prompt, send_stream_reasoning_delta, session_json,
+    shared_fork_batch_supported, split_generated_reasoning, text_delta,
 };
 use crate::openai::SessionRecord;
 use nerva_model::causal_lm::types::HfCausalLmStopReason;
@@ -66,6 +66,38 @@ fn parses_stop_strings() {
     let (text, stopped) = apply_stop_strings("hello END world".to_string(), &["END".into()]);
     assert_eq!(text, "hello ");
     assert!(stopped);
+}
+
+#[test]
+fn formats_completion_echo_and_suffix_text() {
+    assert_eq!(completion_text("answer", None, None), "answer");
+    assert_eq!(
+        completion_text("answer", Some("prompt "), Some(" done")),
+        "prompt answer done"
+    );
+}
+
+#[test]
+fn serializes_generated_cache_and_session_metadata() {
+    let generated = GeneratedText {
+        text: "ok".to_string(),
+        token_ids: vec![1, 2],
+        prompt_tokens: 3,
+        finish_reason: "stop",
+        prompt_hash: 0x12ab,
+        cache_key: "prompt:12ab".to_string(),
+        cache_hit: true,
+        session_id: Some("sess-1".to_string()),
+    };
+    assert_eq!(
+        generated_metadata(&generated),
+        json!({
+            "cache_key": "prompt:12ab",
+            "cache_hit": true,
+            "session_id": "sess-1",
+            "prompt_hash": "00000000000012ab"
+        })
+    );
 }
 
 #[test]
@@ -144,6 +176,8 @@ fn maps_finish_reason_to_openai_values() {
 #[test]
 fn rejects_unsupported_generation_options() {
     assert!(reject_unsupported_generation_options(&json!({})).is_ok());
+    assert!(reject_unsupported_generation_options(&json!({"echo": true})).is_ok());
+    assert!(reject_unsupported_generation_options(&json!({"suffix": " done"})).is_ok());
     assert!(reject_unsupported_generation_options(&json!({"presence_penalty": 0.0})).is_ok());
     assert!(reject_unsupported_generation_options(&json!({"presence_penalty": 1.0})).is_err());
     assert!(reject_unsupported_generation_options(&json!({"tools": [{"type": "mcp"}]})).is_err());
@@ -158,7 +192,7 @@ fn rejects_unsupported_generation_options() {
 }
 
 #[test]
-fn tool_aware_generation_validation_accepts_mcp_tools_only() {
+fn tool_aware_generation_validation_accepts_mcp_and_function_tools() {
     assert!(
         reject_unsupported_generation_options_with_tools(&json!({
             "tools": [{
@@ -174,8 +208,20 @@ fn tool_aware_generation_validation_accepts_mcp_tools_only() {
         reject_unsupported_generation_options_with_tools(&json!({
             "tools": [{
                 "type": "function",
-                "function": {"name": "lookup"}
+                "function": {"name": "lookup", "description": "search docs"}
             }]
+        }))
+        .is_ok()
+    );
+    assert!(
+        reject_unsupported_generation_options_with_tools(&json!({
+            "functions": [{"name": "lookup", "description": "search docs"}]
+        }))
+        .is_ok()
+    );
+    assert!(
+        reject_unsupported_generation_options_with_tools(&json!({
+            "tools": [{"type": "file_search"}]
         }))
         .is_err()
     );
@@ -186,6 +232,39 @@ fn tool_aware_generation_validation_accepts_mcp_tools_only() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn function_tools_are_prompt_context_not_mcp_invocations() {
+    assert!(
+        mcp_tool_invocation_from_request(&json!({
+            "tools": [{
+                "type": "function",
+                "function": {"name": "lookup"}
+            }],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "lookup"}
+            }
+        }))
+        .unwrap()
+        .is_none()
+    );
+
+    let augmented = augment_prompt_with_mcp_tool(
+        "User: answer this\nAssistant:".to_string(),
+        None,
+        &json!({
+            "functions": [{
+                "name": "lookup",
+                "description": "search docs",
+                "parameters": {"type": "object"}
+            }]
+        }),
+    );
+    assert!(augmented.contains("Available tools, if needed:"));
+    assert!(augmented.contains("function lookup: search docs"));
+    assert!(augmented.ends_with("Assistant:"));
 }
 
 #[test]

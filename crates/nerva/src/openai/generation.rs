@@ -21,9 +21,10 @@ use crate::cli::args::{AUTO_CONTEXT_MARGIN, DEFAULT_SEED};
 use super::{
     ApiError, AppState, GenerateOptions, GeneratedText, PreparedGeneration, PromptInput,
     ResolvedServeConfig, StreamEmissionState, StreamKind, StreamMeta, StreamRunStats,
-    apply_stop_strings, auto_sampler_seed, emit_stream_text, ensure_session_for_request,
-    finish_reason, record_context_cache_probe, record_session_generation, send_stream_done,
-    send_stream_error, send_stream_final, stochastic_sampling_requested, validate_sampling,
+    apply_stop_strings, auto_sampler_seed, completion_text, emit_stream_text,
+    ensure_session_for_request, finish_reason, record_context_cache_probe,
+    record_session_generation, send_stream_done, send_stream_error, send_stream_final,
+    stochastic_sampling_requested, validate_sampling,
 };
 
 pub(crate) async fn generate_text_stream(
@@ -125,6 +126,8 @@ fn generate_text_stream_sync(
                     return;
                 };
                 let (limited_text, hit_stop) = apply_stop_strings(current_text, &options.stop);
+                let limited_text =
+                    completion_text(&limited_text, options.output_prefix.as_deref(), None);
                 if !emit_stream_text(
                     &tx,
                     kind,
@@ -146,6 +149,11 @@ fn generate_text_stream_sync(
             .map_err(ApiError::bad_request)?
             .ok_or_else(|| ApiError::bad_request("tokenizer decode is unavailable"))?;
         let (limited_text, hit_stop) = apply_stop_strings(final_text, &options.stop);
+        let limited_text = completion_text(
+            &limited_text,
+            options.output_prefix.as_deref(),
+            options.output_suffix.as_deref(),
+        );
         stopped_by_stop_string |= hit_stop;
         tx_closed = !emit_stream_text(
             &tx,
@@ -320,6 +328,11 @@ fn generate_text_batch_sync(
                 .map_err(ApiError::bad_request)?
                 .ok_or_else(|| ApiError::bad_request("tokenizer decode is unavailable"))?;
             let (text, stopped_by_stop_string) = apply_stop_strings(decoded, &options.stop);
+            let text = completion_text(
+                &text,
+                options.output_prefix.as_deref(),
+                options.output_suffix.as_deref(),
+            );
             let finish_reason = if stopped_by_stop_string
                 || output
                     .stopped_by_request
@@ -377,6 +390,11 @@ fn generate_text_sync(
         .map_err(ApiError::bad_request)?
         .ok_or_else(|| ApiError::bad_request("tokenizer decode is unavailable"))?;
     let (text, stopped_by_stop_string) = apply_stop_strings(decoded, &options.stop);
+    let text = completion_text(
+        &text,
+        options.output_prefix.as_deref(),
+        options.output_suffix.as_deref(),
+    );
     let finish_reason = finish_reason(output.stop_reason(), stopped_by_stop_string);
     Ok(GeneratedText {
         text,

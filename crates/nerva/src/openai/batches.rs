@@ -5,13 +5,14 @@ use serde_json::{Value, json};
 
 use super::{
     ApiError, AppState, BatchRecord, BatchRequestCounts, GenerateOptions, PromptInput,
-    ReasoningMode, authorize, chat_messages_to_prompt, completion_prompts, empty_text_prompt,
-    generate_text_batch_direct_sync, generate_text_direct_sync, insert_generated_file, lock_files,
-    prompt_format_for_reasoning, reject_unsupported_generation_options, request_f32,
-    request_include_reasoning, request_max_tokens, request_n, request_optional_string,
-    request_reasoning_mode, request_stop_strings, request_u32, request_u64_opt,
-    require_known_model, responses_input_to_prompt, shared_fork_batch_supported,
-    split_generated_reasoning, unix_seconds, usage,
+    ReasoningMode, authorize, chat_messages_to_prompt, completion_echo_prefix, completion_prompts,
+    empty_text_prompt, generate_text_batch_direct_sync, generate_text_direct_sync,
+    generated_metadata, insert_generated_file, lock_files, prompt_format_for_reasoning,
+    reject_unsupported_generation_options, request_echo, request_f32, request_include_reasoning,
+    request_max_tokens, request_n, request_optional_string, request_reasoning_mode,
+    request_stop_strings, request_suffix, request_u32, request_u64_opt, require_known_model,
+    responses_input_to_prompt, shared_fork_batch_supported, split_generated_reasoning,
+    unix_seconds, usage,
 };
 
 pub(crate) async fn create_batch(
@@ -332,15 +333,19 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
     let stop = request_stop_strings(body)?;
     let session_id = request_optional_string(body, "session_id")?;
     let cache_key = request_optional_string(body, "cache_key")?;
+    let echo = request_echo(body)?;
+    let suffix = request_suffix(body)?;
     let created = unix_seconds();
     let mut choices = Vec::new();
     let mut prompt_tokens = 0usize;
     let mut completion_tokens = 0usize;
     if n > 1 && prompts.len() == 1 && shared_fork_batch_supported(temperature, top_p, top_k, seed) {
+        let prompt = prompts.into_iter().next().unwrap_or_else(empty_text_prompt);
+        let output_prefix = completion_echo_prefix(&state.config.model_path, &prompt, echo)?;
         let generated = generate_text_batch_direct_sync(
             state,
             GenerateOptions {
-                prompt: prompts.into_iter().next().unwrap_or_else(empty_text_prompt),
+                prompt,
                 max_tokens,
                 temperature,
                 top_p,
@@ -349,6 +354,8 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
                 stop,
                 session_id,
                 cache_key,
+                output_prefix,
+                output_suffix: suffix.clone(),
                 include_reasoning: false,
                 reasoning_mode: ReasoningMode::None,
             },
@@ -361,11 +368,13 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
                 "text": item.text,
                 "index": choices.len(),
                 "logprobs": null,
-                "finish_reason": item.finish_reason
+                "finish_reason": item.finish_reason,
+                "nerva": generated_metadata(&item)
             }));
         }
     } else {
         for prompt in prompts {
+            let output_prefix = completion_echo_prefix(&state.config.model_path, &prompt, echo)?;
             for _ in 0..n {
                 let generated = generate_text_direct_sync(
                     state,
@@ -379,6 +388,8 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
                         stop: stop.clone(),
                         session_id: session_id.clone(),
                         cache_key: cache_key.clone(),
+                        output_prefix: output_prefix.clone(),
+                        output_suffix: suffix.clone(),
                         include_reasoning: false,
                         reasoning_mode: ReasoningMode::None,
                     },
@@ -389,7 +400,8 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
                     "text": generated.text,
                     "index": choices.len(),
                     "logprobs": null,
-                    "finish_reason": generated.finish_reason
+                    "finish_reason": generated.finish_reason,
+                    "nerva": generated_metadata(&generated)
                 }));
             }
         }
@@ -436,6 +448,8 @@ fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result
                 stop: stop.clone(),
                 session_id: session_id.clone(),
                 cache_key: cache_key.clone(),
+                output_prefix: None,
+                output_suffix: None,
                 include_reasoning,
                 reasoning_mode,
             },
@@ -455,7 +469,8 @@ fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result
             "index": index,
             "message": message,
             "logprobs": null,
-            "finish_reason": generated.finish_reason
+            "finish_reason": generated.finish_reason,
+            "nerva": generated_metadata(&generated)
         }));
     }
     Ok(json!({
@@ -487,6 +502,8 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
             stop: request_stop_strings(body)?,
             session_id: request_optional_string(body, "session_id")?,
             cache_key: request_optional_string(body, "cache_key")?,
+            output_prefix: None,
+            output_suffix: None,
             include_reasoning,
             reasoning_mode,
         },
@@ -528,6 +545,7 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
         "model": state.config.model_id,
         "output": output,
         "output_text": split.content,
+        "nerva": generated_metadata(&generated),
         "usage": {
             "input_tokens": generated.prompt_tokens,
             "output_tokens": completion_tokens,
