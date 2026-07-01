@@ -1,5 +1,6 @@
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use actix_web::http::StatusCode;
@@ -15,6 +16,7 @@ use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
     run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress,
 };
 use nerva_runtime::engine::hf_cuda_decode::file_backed::progress::HfCudaDeviceProgressPhase;
+use nerva_runtime::engine::hf_cuda_decode::file_backed::shared_fork_batch::run_hf_causal_lm_cuda_shared_fork_batch_probe;
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, mpsc};
@@ -71,21 +73,36 @@ struct AppState {
     config: Arc<ResolvedServeConfig>,
     runtime: Runtime,
     limiter: Arc<Semaphore>,
+    sessions: Mutex<HashMap<String, SessionRecord>>,
+    context_cache: Mutex<ContextCacheState>,
+    mcp_servers: Mutex<HashMap<String, McpServerRecord>>,
     next_id: AtomicU64,
     request_count: AtomicU64,
     generated_tokens: AtomicU64,
+    scheduler_admitted: AtomicU64,
+    scheduler_completed: AtomicU64,
+    scheduler_active: AtomicU64,
+    scheduler_cache_hits: AtomicU64,
+    scheduler_cache_misses: AtomicU64,
 }
 
 #[derive(Clone, Debug)]
 struct GenerateOptions {
-    prompt: String,
-    prompt_format: PromptFormat,
+    prompt: PromptInput,
     max_tokens: usize,
     temperature: f32,
     top_p: f32,
     top_k: u32,
     seed: Option<u64>,
     stop: Vec<String>,
+    session_id: Option<String>,
+    cache_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PromptInput {
+    Text { text: String, format: PromptFormat },
+    TokenIds(Vec<TokenId>),
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +111,10 @@ struct GeneratedText {
     token_ids: Vec<u32>,
     prompt_tokens: usize,
     finish_reason: &'static str,
+    prompt_hash: u64,
+    cache_key: String,
+    cache_hit: bool,
+    session_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -101,6 +122,60 @@ struct PreparedGeneration {
     prompt_tokens: Vec<TokenId>,
     context_tokens: usize,
     sampler: HfCudaSamplerConfig,
+    prompt_hash: u64,
+    cache_key: String,
+    cache_hit: bool,
+    session_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct StreamRunStats {
+    generated_tokens: usize,
+    prompt_tokens: usize,
+    prompt_hash: u64,
+    cache_key: String,
+    cache_hit: bool,
+    session_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct SessionRecord {
+    id: String,
+    object: &'static str,
+    created: u64,
+    updated: u64,
+    request_count: u64,
+    prompt_tokens: u64,
+    generated_tokens: u64,
+    last_cache_key: Option<String>,
+    last_prompt_hash: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct ContextCacheEntry {
+    key: String,
+    prompt_hash: u64,
+    prompt_tokens: usize,
+    created: u64,
+    updated: u64,
+    hits: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ContextCacheState {
+    entries: HashMap<String, ContextCacheEntry>,
+    hits: u64,
+    misses: u64,
+}
+
+#[derive(Clone, Debug)]
+struct McpServerRecord {
+    id: String,
+    created: u64,
+    updated: u64,
+    transport: String,
+    endpoint: String,
+    status: &'static str,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -188,9 +263,17 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
         limiter: Arc::new(Semaphore::new(config.max_concurrent_requests)),
         config: Arc::new(config),
         runtime,
+        sessions: Mutex::new(HashMap::new()),
+        context_cache: Mutex::new(ContextCacheState::default()),
+        mcp_servers: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
         request_count: AtomicU64::new(0),
         generated_tokens: AtomicU64::new(0),
+        scheduler_admitted: AtomicU64::new(0),
+        scheduler_completed: AtomicU64::new(0),
+        scheduler_active: AtomicU64::new(0),
+        scheduler_cache_hits: AtomicU64::new(0),
+        scheduler_cache_misses: AtomicU64::new(0),
     });
     eprintln!(
         "NERVA OpenAI-compatible API listening on http://{address} model={} concurrency={}",
@@ -209,6 +292,25 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
                 .route("/v1/tokenize", web::post().to(tokenize))
                 .route("/v1/detokenize", web::post().to(detokenize))
                 .route("/v1/models", web::get().to(models))
+                .route("/v1/models/{model}", web::get().to(model))
+                .route("/v1/sessions", web::post().to(create_session))
+                .route("/v1/sessions", web::get().to(list_sessions))
+                .route("/v1/sessions/{session_id}", web::get().to(get_session))
+                .route(
+                    "/v1/sessions/{session_id}",
+                    web::delete().to(delete_session),
+                )
+                .route("/v1/context_cache", web::get().to(context_cache_status))
+                .route(
+                    "/v1/context_cache/{cache_key}",
+                    web::delete().to(delete_context_cache),
+                )
+                .route("/v1/mcp/servers", web::post().to(register_mcp_server))
+                .route("/v1/mcp/servers", web::get().to(list_mcp_servers))
+                .route(
+                    "/v1/mcp/servers/{server_id}",
+                    web::delete().to(delete_mcp_server),
+                )
                 .route("/v1/completions", web::post().to(completions))
                 .route("/v1/chat/completions", web::post().to(chat_completions))
                 .route("/v1/responses", web::post().to(responses))
@@ -272,10 +374,7 @@ pub(crate) fn run_server(config: ServeConfig) -> Result<(), String> {
                 .route("/sleep", web::post().to(unsupported_admin_state))
                 .route("/wake_up", web::post().to(unsupported_admin_state))
                 .route("/is_sleeping", web::get().to(is_sleeping))
-                .route(
-                    "/reset_prefix_cache",
-                    web::post().to(unsupported_admin_state),
-                )
+                .route("/reset_prefix_cache", web::post().to(reset_context_cache))
                 .route("/start_profile", web::post().to(unsupported_admin_state))
                 .route("/stop_profile", web::post().to(unsupported_admin_state))
                 .default_service(web::to(not_found))
@@ -370,10 +469,25 @@ async fn metrics(state: web::Data<AppState>) -> HttpResponse {
             "# TYPE nerva_openai_requests_total counter\n",
             "nerva_openai_requests_total {}\n",
             "# TYPE nerva_openai_generated_tokens_total counter\n",
-            "nerva_openai_generated_tokens_total {}\n"
+            "nerva_openai_generated_tokens_total {}\n",
+            "# TYPE nerva_openai_scheduler_active gauge\n",
+            "nerva_openai_scheduler_active {}\n",
+            "# TYPE nerva_openai_scheduler_admitted_total counter\n",
+            "nerva_openai_scheduler_admitted_total {}\n",
+            "# TYPE nerva_openai_scheduler_completed_total counter\n",
+            "nerva_openai_scheduler_completed_total {}\n",
+            "# TYPE nerva_openai_context_cache_hits_total counter\n",
+            "nerva_openai_context_cache_hits_total {}\n",
+            "# TYPE nerva_openai_context_cache_misses_total counter\n",
+            "nerva_openai_context_cache_misses_total {}\n"
         ),
         state.request_count.load(Ordering::Relaxed),
-        state.generated_tokens.load(Ordering::Relaxed)
+        state.generated_tokens.load(Ordering::Relaxed),
+        state.scheduler_active.load(Ordering::Relaxed),
+        state.scheduler_admitted.load(Ordering::Relaxed),
+        state.scheduler_completed.load(Ordering::Relaxed),
+        state.scheduler_cache_hits.load(Ordering::Relaxed),
+        state.scheduler_cache_misses.load(Ordering::Relaxed)
     );
     HttpResponse::Ok()
         .content_type("text/plain; version=0.0.4")
@@ -395,6 +509,229 @@ async fn models(state: web::Data<AppState>, request: HttpRequest) -> HttpRespons
     }))
 }
 
+async fn model(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if let Err(error) = authorize(&state, &request) {
+        return error.into_response();
+    }
+    let requested = path.into_inner();
+    if requested != state.config.model_id {
+        return ApiError::not_found(format!(
+            "model '{requested}' is not served by this NERVA instance"
+        ))
+        .into_response();
+    }
+    HttpResponse::Ok().json(json!({
+        "id": state.config.model_id,
+        "object": "model",
+        "created": 0,
+        "owned_by": "nerva"
+    }))
+}
+
+async fn create_session(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = body
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| state.next_response_id("sess"));
+        let now = unix_seconds();
+        let record = SessionRecord {
+            id: id.clone(),
+            object: "session",
+            created: now,
+            updated: now,
+            request_count: 0,
+            prompt_tokens: 0,
+            generated_tokens: 0,
+            last_cache_key: None,
+            last_prompt_hash: None,
+        };
+        lock_sessions(&state)?.insert(id, record.clone());
+        Ok::<_, ApiError>(HttpResponse::Ok().json(session_json(&record)))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn list_sessions(state: web::Data<AppState>, request: HttpRequest) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let sessions = lock_sessions(&state)?
+            .values()
+            .map(session_json)
+            .collect::<Vec<_>>();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "object": "list",
+            "data": sessions
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn get_session(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = path.into_inner();
+        let sessions = lock_sessions(&state)?;
+        let record = sessions
+            .get(&id)
+            .ok_or_else(|| ApiError::not_found(format!("session '{id}' does not exist")))?;
+        Ok::<_, ApiError>(HttpResponse::Ok().json(session_json(record)))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn delete_session(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = path.into_inner();
+        let removed = lock_sessions(&state)?.remove(&id).is_some();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "id": id,
+            "object": "session.deleted",
+            "deleted": removed
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn context_cache_status(state: web::Data<AppState>, request: HttpRequest) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let cache = lock_context_cache(&state)?;
+        let entries = cache
+            .entries
+            .values()
+            .map(context_cache_json)
+            .collect::<Vec<_>>();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "object": "context_cache",
+            "entries": entries,
+            "entry_count": cache.entries.len(),
+            "hits": cache.hits,
+            "misses": cache.misses
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn delete_context_cache(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let key = path.into_inner();
+        let removed = lock_context_cache(&state)?.entries.remove(&key).is_some();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "id": key,
+            "object": "context_cache.deleted",
+            "deleted": removed
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn register_mcp_server(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = body
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| state.next_response_id("mcp"));
+        let transport = body
+            .get("transport")
+            .and_then(Value::as_str)
+            .unwrap_or("streamable_http")
+            .to_string();
+        let endpoint = body
+            .get("endpoint")
+            .or_else(|| body.get("url"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ApiError::bad_request("MCP server registration requires endpoint or url")
+            })?
+            .to_string();
+        let now = unix_seconds();
+        let record = McpServerRecord {
+            id: id.clone(),
+            created: now,
+            updated: now,
+            transport,
+            endpoint,
+            status: "registered",
+        };
+        lock_mcp_servers(&state)?.insert(id, record.clone());
+        Ok::<_, ApiError>(HttpResponse::Ok().json(mcp_server_json(&record)))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn list_mcp_servers(state: web::Data<AppState>, request: HttpRequest) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let servers = lock_mcp_servers(&state)?
+            .values()
+            .map(mcp_server_json)
+            .collect::<Vec<_>>();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "object": "list",
+            "data": servers
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
+async fn delete_mcp_server(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let id = path.into_inner();
+        let removed = lock_mcp_servers(&state)?.remove(&id).is_some();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "id": id,
+            "object": "mcp_server.deleted",
+            "deleted": removed
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
 async fn completions(
     state: web::Data<AppState>,
     request: HttpRequest,
@@ -404,7 +741,8 @@ async fn completions(
     let response = async {
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
-        reject_n_gt_one(&body)?;
+        reject_unsupported_generation_options(&body)?;
+        let n = request_n(&body)?;
         let prompts = completion_prompts(&body)?;
         let max_tokens = request_max_tokens(&state, &body)?;
         let temperature = request_f32(&body, "temperature", 1.0)?;
@@ -412,25 +750,28 @@ async fn completions(
         let top_k = request_u32(&body, "top_k", 0)?;
         let seed = request_u64_opt(&body, "seed")?;
         let stop = request_stop_strings(&body)?;
+        let session_id = request_optional_string(&body, "session_id")?;
+        let cache_key = request_optional_string(&body, "cache_key")?;
         let created = unix_seconds();
         let id = state.next_response_id("cmpl");
         if request_stream(&body) {
-            if prompts.len() != 1 {
+            if prompts.len() != 1 || n != 1 {
                 return Err(ApiError::unsupported(
-                    "streaming completions currently require exactly one prompt",
+                    "streaming completions currently require exactly one prompt and n=1",
                 ));
             }
             return generate_text_stream(
                 state.clone(),
                 GenerateOptions {
-                    prompt: prompts.into_iter().next().unwrap_or_default(),
-                    prompt_format: PromptFormat::Raw,
+                    prompt: prompts.into_iter().next().unwrap_or_else(empty_text_prompt),
                     max_tokens,
                     temperature,
                     top_p,
                     top_k,
                     seed,
                     stop,
+                    session_id,
+                    cache_key,
                 },
                 StreamKind::Completion,
                 StreamMeta {
@@ -444,29 +785,70 @@ async fn completions(
         let mut choices = Vec::with_capacity(prompts.len());
         let mut prompt_tokens = 0usize;
         let mut completion_tokens = 0usize;
-        for (index, prompt) in prompts.into_iter().enumerate() {
-            let generated = generate_text(
+        if n > 1
+            && prompts.len() == 1
+            && shared_fork_batch_supported(temperature, top_p, top_k, seed)
+        {
+            let generated = generate_text_batch(
                 state.clone(),
                 GenerateOptions {
-                    prompt,
-                    prompt_format: PromptFormat::Raw,
+                    prompt: prompts.into_iter().next().unwrap_or_else(empty_text_prompt),
                     max_tokens,
                     temperature,
                     top_p,
                     top_k,
                     seed,
                     stop: stop.clone(),
+                    session_id: session_id.clone(),
+                    cache_key: cache_key.clone(),
                 },
+                n,
             )
             .await?;
-            prompt_tokens += generated.prompt_tokens;
-            completion_tokens += generated.token_ids.len();
-            choices.push(json!({
-                "text": generated.text,
-                "index": index,
-                "logprobs": null,
-                "finish_reason": generated.finish_reason
-            }));
+            for item in generated {
+                prompt_tokens += item.prompt_tokens;
+                completion_tokens += item.token_ids.len();
+                choices.push(json!({
+                    "text": item.text,
+                    "index": choices.len(),
+                    "logprobs": null,
+                    "finish_reason": item.finish_reason
+                }));
+            }
+        } else {
+            if n > 1 {
+                return Err(ApiError::unsupported(
+                    "n > 1 currently requires one prompt with greedy sampler for shared-fork batching",
+                ));
+            }
+            for prompt in prompts {
+            for _ in 0..n {
+                let index = choices.len();
+                let generated = generate_text(
+                    state.clone(),
+                    GenerateOptions {
+                        prompt: prompt.clone(),
+                        max_tokens,
+                        temperature,
+                        top_p,
+                        top_k,
+                        seed,
+                        stop: stop.clone(),
+                        session_id: session_id.clone(),
+                        cache_key: cache_key.clone(),
+                    },
+                )
+                .await?;
+                prompt_tokens += generated.prompt_tokens;
+                completion_tokens += generated.token_ids.len();
+                choices.push(json!({
+                    "text": generated.text,
+                    "index": index,
+                    "logprobs": null,
+                    "finish_reason": generated.finish_reason
+                }));
+            }
+            }
         }
         Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
             "id": id,
@@ -490,19 +872,24 @@ async fn chat_completions(
     let response = async {
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
+        reject_unsupported_generation_options(&body)?;
         reject_n_gt_one(&body)?;
         let prompt = chat_messages_to_prompt(&body)?;
         let created = unix_seconds();
         let id = state.next_response_id("chatcmpl");
         let options = GenerateOptions {
-            prompt,
-            prompt_format: PromptFormat::Auto,
+            prompt: PromptInput::Text {
+                text: prompt,
+                format: PromptFormat::Auto,
+            },
             max_tokens: request_max_tokens(&state, &body)?,
             temperature: request_f32(&body, "temperature", 1.0)?,
             top_p: request_f32(&body, "top_p", 1.0)?,
             top_k: request_u32(&body, "top_k", 0)?,
             seed: request_u64_opt(&body, "seed")?,
             stop: request_stop_strings(&body)?,
+            session_id: request_optional_string(&body, "session_id")?,
+            cache_key: request_optional_string(&body, "cache_key")?,
         };
         if request_stream(&body) {
             return generate_text_stream(
@@ -549,18 +936,23 @@ async fn responses(
     let response = async {
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
+        reject_unsupported_generation_options(&body)?;
         let prompt = responses_input_to_prompt(&body)?;
         let created = unix_seconds();
         let id = state.next_response_id("resp");
         let options = GenerateOptions {
-            prompt,
-            prompt_format: PromptFormat::Auto,
+            prompt: PromptInput::Text {
+                text: prompt,
+                format: PromptFormat::Auto,
+            },
             max_tokens: request_max_tokens(&state, &body)?,
             temperature: request_f32(&body, "temperature", 1.0)?,
             top_p: request_f32(&body, "top_p", 1.0)?,
             top_k: request_u32(&body, "top_k", 0)?,
             seed: request_u64_opt(&body, "seed")?,
             stop: request_stop_strings(&body)?,
+            session_id: request_optional_string(&body, "session_id")?,
+            cache_key: request_optional_string(&body, "cache_key")?,
         };
         if request_stream(&body) {
             return generate_text_stream(
@@ -746,6 +1138,21 @@ async fn is_sleeping(request: HttpRequest, state: web::Data<AppState>) -> HttpRe
     HttpResponse::Ok().json(json!({"is_sleeping": false}))
 }
 
+async fn reset_context_cache(request: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
+    let response = async {
+        authorize(&state, &request)?;
+        let mut cache = lock_context_cache(&state)?;
+        let removed = cache.entries.len();
+        cache.entries.clear();
+        Ok::<_, ApiError>(HttpResponse::Ok().json(json!({
+            "object": "context_cache.reset",
+            "removed": removed
+        })))
+    }
+    .await;
+    response.unwrap_or_else(ApiError::into_response)
+}
+
 async fn not_found(request: HttpRequest) -> HttpResponse {
     ApiError::not_found(format!("unknown route: {}", request.path())).into_response()
 }
@@ -756,6 +1163,7 @@ async fn generate_text_stream(
     kind: StreamKind,
     meta: StreamMeta,
 ) -> Result<HttpResponse, ApiError> {
+    state.scheduler_admitted.fetch_add(1, Ordering::Relaxed);
     let permit = state
         .limiter
         .clone()
@@ -765,19 +1173,37 @@ async fn generate_text_stream(
     let (tx, rx) = mpsc::channel::<web::Bytes>(32);
     let config = state.config.clone();
     let runtime = state.runtime.clone();
-    let state_for_metrics = state.clone();
+    let state_for_engine = state.clone();
     actix_web::rt::task::spawn_blocking(move || {
         let _permit = permit;
-        match generate_text_stream_sync(&runtime, &config, options, kind, meta, tx.clone()) {
-            Ok(generated_tokens) => {
-                state_for_metrics
+        state_for_engine
+            .scheduler_active
+            .fetch_add(1, Ordering::Relaxed);
+        match generate_text_stream_sync(
+            &state_for_engine,
+            &runtime,
+            &config,
+            options,
+            kind,
+            meta,
+            tx.clone(),
+        ) {
+            Ok(stats) => {
+                state_for_engine
                     .generated_tokens
-                    .fetch_add(generated_tokens as u64, Ordering::Relaxed);
+                    .fetch_add(stats.generated_tokens as u64, Ordering::Relaxed);
+                record_session_generation(&state_for_engine, &stats);
             }
             Err(error) => {
                 send_stream_error(&tx, error);
             }
         }
+        state_for_engine
+            .scheduler_active
+            .fetch_sub(1, Ordering::Relaxed);
+        state_for_engine
+            .scheduler_completed
+            .fetch_add(1, Ordering::Relaxed);
     });
     let body = ReceiverStream::new(rx).map(Ok::<web::Bytes, actix_web::Error>);
     Ok(HttpResponse::Ok()
@@ -788,14 +1214,15 @@ async fn generate_text_stream(
 }
 
 fn generate_text_stream_sync(
+    state: &AppState,
     runtime: &Runtime,
     config: &ResolvedServeConfig,
     options: GenerateOptions,
     kind: StreamKind,
     meta: StreamMeta,
     tx: mpsc::Sender<web::Bytes>,
-) -> Result<usize, ApiError> {
-    let prepared = prepare_generation(config, &options)?;
+) -> Result<StreamRunStats, ApiError> {
+    let prepared = prepare_generation(state, config, &options)?;
     let mut streamed_tokens = Vec::new();
     let mut emitted_text = String::new();
     let mut stopped_by_stop_string = false;
@@ -860,13 +1287,21 @@ fn generate_text_stream_sync(
         );
         send_stream_done(&tx);
     }
-    Ok(output.tokens().len())
+    Ok(StreamRunStats {
+        generated_tokens: output.tokens().len(),
+        prompt_tokens: prepared.prompt_tokens.len(),
+        prompt_hash: prepared.prompt_hash,
+        cache_key: prepared.cache_key,
+        cache_hit: prepared.cache_hit,
+        session_id: prepared.session_id,
+    })
 }
 
 async fn generate_text(
     state: web::Data<AppState>,
     options: GenerateOptions,
 ) -> Result<GeneratedText, ApiError> {
+    state.scheduler_admitted.fetch_add(1, Ordering::Relaxed);
     let permit = state
         .limiter
         .clone()
@@ -875,9 +1310,20 @@ async fn generate_text(
         .map_err(|_| ApiError::internal("request limiter closed"))?;
     let config = state.config.clone();
     let runtime = state.runtime.clone();
+    let state_for_engine = state.clone();
     let result = web::block(move || {
         let _permit = permit;
-        generate_text_sync(&runtime, &config, options)
+        state_for_engine
+            .scheduler_active
+            .fetch_add(1, Ordering::Relaxed);
+        let result = generate_text_sync(&state_for_engine, &runtime, &config, options);
+        state_for_engine
+            .scheduler_active
+            .fetch_sub(1, Ordering::Relaxed);
+        state_for_engine
+            .scheduler_completed
+            .fetch_add(1, Ordering::Relaxed);
+        result
     })
     .await
     .map_err(|err| ApiError::internal(format!("generation task failed: {err}")))?;
@@ -885,15 +1331,144 @@ async fn generate_text(
     state
         .generated_tokens
         .fetch_add(generated.token_ids.len() as u64, Ordering::Relaxed);
+    record_session_generation(
+        &state,
+        &StreamRunStats {
+            generated_tokens: generated.token_ids.len(),
+            prompt_tokens: generated.prompt_tokens,
+            prompt_hash: generated.prompt_hash,
+            cache_key: generated.cache_key.clone(),
+            cache_hit: generated.cache_hit,
+            session_id: generated.session_id.clone(),
+        },
+    );
     Ok(generated)
 }
 
+async fn generate_text_batch(
+    state: web::Data<AppState>,
+    options: GenerateOptions,
+    request_count: usize,
+) -> Result<Vec<GeneratedText>, ApiError> {
+    state.scheduler_admitted.fetch_add(1, Ordering::Relaxed);
+    let permit = state
+        .limiter
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| ApiError::internal("request limiter closed"))?;
+    let config = state.config.clone();
+    let runtime = state.runtime.clone();
+    let state_for_engine = state.clone();
+    let result = web::block(move || {
+        let _permit = permit;
+        state_for_engine
+            .scheduler_active
+            .fetch_add(1, Ordering::Relaxed);
+        let result =
+            generate_text_batch_sync(&state_for_engine, &runtime, &config, options, request_count);
+        state_for_engine
+            .scheduler_active
+            .fetch_sub(1, Ordering::Relaxed);
+        state_for_engine
+            .scheduler_completed
+            .fetch_add(1, Ordering::Relaxed);
+        result
+    })
+    .await
+    .map_err(|err| ApiError::internal(format!("batch generation task failed: {err}")))?;
+    let generated = result?;
+    let total_generated = generated
+        .iter()
+        .map(|item| item.token_ids.len())
+        .sum::<usize>();
+    state
+        .generated_tokens
+        .fetch_add(total_generated as u64, Ordering::Relaxed);
+    for item in &generated {
+        record_session_generation(
+            &state,
+            &StreamRunStats {
+                generated_tokens: item.token_ids.len(),
+                prompt_tokens: item.prompt_tokens,
+                prompt_hash: item.prompt_hash,
+                cache_key: item.cache_key.clone(),
+                cache_hit: item.cache_hit,
+                session_id: item.session_id.clone(),
+            },
+        );
+    }
+    Ok(generated)
+}
+
+fn generate_text_batch_sync(
+    state: &AppState,
+    runtime: &Runtime,
+    config: &ResolvedServeConfig,
+    options: GenerateOptions,
+    request_count: usize,
+) -> Result<Vec<GeneratedText>, ApiError> {
+    if request_count == 0 {
+        return Err(ApiError::bad_request("batch request_count must be non-zero"));
+    }
+    let prepared = prepare_generation(state, config, &options)?;
+    let output = run_hf_causal_lm_cuda_shared_fork_batch_probe(
+        runtime,
+        &config.model_path,
+        &prepared.prompt_tokens,
+        request_count,
+        prepared.context_tokens,
+        options.max_tokens,
+        32,
+        1,
+        config.compute_capability,
+        true,
+        config.profiling,
+    )
+    .map_err(|err| ApiError::internal(format!("shared-fork batch generation failed: {err:?}")))?;
+    output
+        .tokens_by_request
+        .iter()
+        .enumerate()
+        .map(|(index, tokens)| {
+            let token_ids = tokens.iter().map(|token| token.0).collect::<Vec<_>>();
+            let decoded = decode_generated_text(&config.model_path, tokens)
+                .map_err(ApiError::bad_request)?
+                .ok_or_else(|| ApiError::bad_request("tokenizer decode is unavailable"))?;
+            let (text, stopped_by_stop_string) = apply_stop_strings(decoded, &options.stop);
+            let finish_reason = if stopped_by_stop_string
+                || output
+                    .stopped_by_request
+                    .get(index)
+                    .copied()
+                    .unwrap_or(false)
+                    && tokens.len() < options.max_tokens
+            {
+                "stop"
+            } else {
+                "length"
+            };
+            Ok(GeneratedText {
+                text,
+                token_ids,
+                prompt_tokens: prepared.prompt_tokens.len(),
+                finish_reason,
+                prompt_hash: prepared.prompt_hash,
+                cache_key: prepared.cache_key.clone(),
+                cache_hit: prepared.cache_hit,
+                session_id: prepared.session_id.clone(),
+            })
+        })
+        .collect()
+}
+
 fn generate_text_sync(
+    state: &AppState,
     runtime: &Runtime,
     config: &ResolvedServeConfig,
     options: GenerateOptions,
 ) -> Result<GeneratedText, ApiError> {
-    let prepared = prepare_generation(config, &options)?;
+    let prepared = prepare_generation(state, config, &options)?;
     let output =
         run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress(
             runtime,
@@ -924,10 +1499,24 @@ fn generate_text_sync(
         token_ids,
         prompt_tokens: prepared.prompt_tokens.len(),
         finish_reason,
+        prompt_hash: prepared.prompt_hash,
+        cache_key: prepared.cache_key,
+        cache_hit: prepared.cache_hit,
+        session_id: prepared.session_id,
     })
 }
 
+fn shared_fork_batch_supported(
+    temperature: f32,
+    top_p: f32,
+    top_k: u32,
+    seed: Option<u64>,
+) -> bool {
+    temperature == 0.0 && top_p == 1.0 && top_k == 0 && seed.unwrap_or(DEFAULT_SEED) == DEFAULT_SEED
+}
+
 fn prepare_generation(
+    state: &AppState,
     config: &ResolvedServeConfig,
     options: &GenerateOptions,
 ) -> Result<PreparedGeneration, ApiError> {
@@ -935,17 +1524,24 @@ fn prepare_generation(
         return Err(ApiError::bad_request("max_tokens must be non-zero"));
     }
     validate_sampling(options.temperature, options.top_p)?;
-    let formatted =
-        format_prompt_for_model(&config.model_path, &options.prompt, options.prompt_format)
-            .map_err(ApiError::bad_request)?;
-    let encoded =
-        encode_text_prompt(&config.model_path, &formatted.text).map_err(ApiError::bad_request)?;
-    let prompt_tokens = encoded
-        .token_ids
-        .iter()
-        .copied()
-        .map(TokenId)
-        .collect::<Vec<_>>();
+    let prompt_tokens = match &options.prompt {
+        PromptInput::Text { text, format } => {
+            let formatted = format_prompt_for_model(&config.model_path, text, *format)
+                .map_err(ApiError::bad_request)?;
+            let encoded = encode_text_prompt(&config.model_path, &formatted.text)
+                .map_err(ApiError::bad_request)?;
+            encoded
+                .token_ids
+                .iter()
+                .copied()
+                .map(TokenId)
+                .collect::<Vec<_>>()
+        }
+        PromptInput::TokenIds(tokens) => tokens.clone(),
+    };
+    if prompt_tokens.is_empty() {
+        return Err(ApiError::bad_request("prompt token list must not be empty"));
+    }
     let context_tokens = config.context_tokens.unwrap_or_else(|| {
         prompt_tokens
             .len()
@@ -972,10 +1568,22 @@ fn prepare_generation(
             }
         }),
     };
+    let prompt_hash = hash_tokens(&prompt_tokens);
+    let cache_key = options
+        .cache_key
+        .clone()
+        .unwrap_or_else(|| format!("prompt:{prompt_hash:016x}"));
+    let cache_hit =
+        record_context_cache_probe(state, &cache_key, prompt_hash, prompt_tokens.len())?;
+    let session_id = ensure_session_for_request(state, options.session_id.as_deref())?;
     Ok(PreparedGeneration {
         prompt_tokens,
         context_tokens,
         sampler,
+        prompt_hash,
+        cache_key,
+        cache_hit,
+        session_id,
     })
 }
 
@@ -1009,12 +1617,102 @@ fn require_known_model(state: &AppState, body: &Value) -> Result<(), ApiError> {
     }
 }
 
+fn reject_unsupported_generation_options(body: &Value) -> Result<(), ApiError> {
+    reject_nonzero_penalty(body, "presence_penalty")?;
+    reject_nonzero_penalty(body, "frequency_penalty")?;
+    reject_nonempty_field(body, "logit_bias")?;
+    reject_present_field(body, "logprobs")?;
+    reject_present_field(body, "top_logprobs")?;
+    reject_present_field(body, "echo")?;
+    reject_present_field(body, "suffix")?;
+    reject_present_field(body, "best_of")?;
+    reject_nonempty_field(body, "tools")?;
+    reject_nonempty_field(body, "functions")?;
+    if let Some(tool_choice) = body.get("tool_choice") {
+        if tool_choice != "none" {
+            return Err(ApiError::unsupported(
+                "tool_choice requires tool execution support; MCP/tool execution is not wired into generation yet",
+            ));
+        }
+    }
+    if let Some(response_format) = body.get("response_format") {
+        let ty = response_format
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("text");
+        if ty != "text" {
+            return Err(ApiError::unsupported(
+                "structured response_format is not implemented yet",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_present_field(body: &Value, name: &'static str) -> Result<(), ApiError> {
+    if body.get(name).is_some_and(|value| !value.is_null()) {
+        Err(ApiError::unsupported(format!(
+            "{name} is not implemented by the NERVA OpenAI server yet"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn reject_nonempty_field(body: &Value, name: &'static str) -> Result<(), ApiError> {
+    let Some(value) = body.get(name) else {
+        return Ok(());
+    };
+    let empty = match value {
+        Value::Null => true,
+        Value::Array(items) => items.is_empty(),
+        Value::Object(items) => items.is_empty(),
+        _ => false,
+    };
+    if empty {
+        Ok(())
+    } else {
+        Err(ApiError::unsupported(format!(
+            "{name} is not implemented by the NERVA OpenAI server yet"
+        )))
+    }
+}
+
+fn reject_nonzero_penalty(body: &Value, name: &'static str) -> Result<(), ApiError> {
+    let Some(value) = body.get(name).and_then(Value::as_f64) else {
+        return Ok(());
+    };
+    if value == 0.0 {
+        Ok(())
+    } else {
+        Err(ApiError::unsupported(format!(
+            "{name} is not implemented by the NERVA OpenAI server yet"
+        )))
+    }
+}
+
 fn reject_n_gt_one(body: &Value) -> Result<(), ApiError> {
-    let n = body.get("n").and_then(Value::as_u64).unwrap_or(1);
+    let n = request_n(body)?;
     if n == 1 {
         Ok(())
     } else {
-        Err(ApiError::unsupported("n > 1 is not implemented yet"))
+        Err(ApiError::unsupported(
+            "n > 1 is only implemented for legacy completions in this build",
+        ))
+    }
+}
+
+fn request_n(body: &Value) -> Result<usize, ApiError> {
+    let value = body
+        .get("n")
+        .and_then(Value::as_u64)
+        .map(|value| usize::try_from(value).map_err(|_| ApiError::bad_request("n is too large")))
+        .transpose()?
+        .unwrap_or(1);
+    if value == 0 {
+        Err(ApiError::bad_request("n must be non-zero"))
+    } else {
+        Ok(value)
     }
 }
 
@@ -1022,23 +1720,61 @@ fn request_stream(body: &Value) -> bool {
     body.get("stream").and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn completion_prompts(body: &Value) -> Result<Vec<String>, ApiError> {
+fn completion_prompts(body: &Value) -> Result<Vec<PromptInput>, ApiError> {
     match body.get("prompt") {
-        Some(Value::String(prompt)) => Ok(vec![prompt.clone()]),
-        Some(Value::Array(prompts)) => prompts
+        Some(Value::String(prompt)) => Ok(vec![text_prompt(prompt.clone(), PromptFormat::Raw)]),
+        Some(Value::Array(items)) if items.iter().all(Value::is_number) => {
+            Ok(vec![PromptInput::TokenIds(parse_token_id_array(items)?)])
+        }
+        Some(Value::Array(items)) if items.iter().all(Value::is_string) => items
             .iter()
             .map(|value| {
                 value
                     .as_str()
-                    .map(str::to_string)
+                    .map(|prompt| text_prompt(prompt.to_string(), PromptFormat::Raw))
                     .ok_or_else(|| ApiError::bad_request("prompt arrays must contain strings"))
             })
             .collect(),
+        Some(Value::Array(items)) if items.iter().all(Value::is_array) => items
+            .iter()
+            .map(|value| {
+                let tokens = value.as_array().ok_or_else(|| {
+                    ApiError::bad_request("prompt token arrays must contain arrays")
+                })?;
+                Ok(PromptInput::TokenIds(parse_token_id_array(tokens)?))
+            })
+            .collect(),
         Some(_) => Err(ApiError::bad_request(
-            "prompt must be a string or an array of strings",
+            "prompt must be a string, token-id array, string array, or token-id array array",
         )),
         None => Err(ApiError::bad_request("missing prompt")),
     }
+}
+
+fn text_prompt(text: String, format: PromptFormat) -> PromptInput {
+    PromptInput::Text { text, format }
+}
+
+fn empty_text_prompt() -> PromptInput {
+    text_prompt(String::new(), PromptFormat::Raw)
+}
+
+fn parse_token_id_array(items: &[Value]) -> Result<Vec<TokenId>, ApiError> {
+    if items.is_empty() {
+        return Err(ApiError::bad_request(
+            "prompt token arrays must not be empty",
+        ));
+    }
+    items
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|token| u32::try_from(token).ok())
+                .map(TokenId)
+                .ok_or_else(|| ApiError::bad_request("prompt token ids must fit u32"))
+        })
+        .collect()
 }
 
 fn chat_messages_to_prompt(body: &Value) -> Result<String, ApiError> {
@@ -1196,6 +1932,185 @@ fn request_stop_strings(body: &Value) -> Result<Vec<String>, ApiError> {
             "stop must be a string or an array of strings",
         )),
     }
+}
+
+fn request_optional_string(body: &Value, name: &'static str) -> Result<Option<String>, ApiError> {
+    match body.get(name) {
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(Some(value.clone())),
+        Some(Value::String(_)) => Err(ApiError::bad_request(format!("{name} must not be empty"))),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(ApiError::bad_request(format!("{name} must be a string"))),
+    }
+}
+
+fn record_context_cache_probe(
+    state: &AppState,
+    key: &str,
+    prompt_hash: u64,
+    prompt_tokens: usize,
+) -> Result<bool, ApiError> {
+    let mut cache = lock_context_cache(state)?;
+    let now = unix_seconds();
+    let hit = match cache.entries.get_mut(key) {
+        Some(entry) if entry.prompt_hash == prompt_hash => {
+            entry.updated = now;
+            entry.hits = entry.hits.saturating_add(1);
+            true
+        }
+        Some(entry) => {
+            entry.prompt_hash = prompt_hash;
+            entry.prompt_tokens = prompt_tokens;
+            entry.updated = now;
+            entry.hits = 0;
+            false
+        }
+        None => {
+            cache.entries.insert(
+                key.to_string(),
+                ContextCacheEntry {
+                    key: key.to_string(),
+                    prompt_hash,
+                    prompt_tokens,
+                    created: now,
+                    updated: now,
+                    hits: 0,
+                },
+            );
+            false
+        }
+    };
+    if hit {
+        cache.hits = cache.hits.saturating_add(1);
+        state.scheduler_cache_hits.fetch_add(1, Ordering::Relaxed);
+    } else {
+        cache.misses = cache.misses.saturating_add(1);
+        state.scheduler_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+    Ok(hit)
+}
+
+fn ensure_session_for_request(
+    state: &AppState,
+    session_id: Option<&str>,
+) -> Result<Option<String>, ApiError> {
+    let Some(session_id) = session_id else {
+        return Ok(None);
+    };
+    let mut sessions = lock_sessions(state)?;
+    if !sessions.contains_key(session_id) {
+        let now = unix_seconds();
+        sessions.insert(
+            session_id.to_string(),
+            SessionRecord {
+                id: session_id.to_string(),
+                object: "session",
+                created: now,
+                updated: now,
+                request_count: 0,
+                prompt_tokens: 0,
+                generated_tokens: 0,
+                last_cache_key: None,
+                last_prompt_hash: None,
+            },
+        );
+    }
+    Ok(Some(session_id.to_string()))
+}
+
+fn record_session_generation(state: &AppState, stats: &StreamRunStats) {
+    let Some(session_id) = stats.session_id.as_deref() else {
+        return;
+    };
+    let Ok(mut sessions) = state.sessions.lock() else {
+        return;
+    };
+    if let Some(session) = sessions.get_mut(session_id) {
+        session.updated = unix_seconds();
+        session.request_count = session.request_count.saturating_add(1);
+        session.prompt_tokens = session
+            .prompt_tokens
+            .saturating_add(stats.prompt_tokens as u64);
+        session.generated_tokens = session
+            .generated_tokens
+            .saturating_add(stats.generated_tokens as u64);
+        session.last_cache_key = Some(stats.cache_key.clone());
+        session.last_prompt_hash = Some(stats.prompt_hash);
+        let _ = stats.cache_hit;
+    }
+}
+
+fn lock_sessions(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, HashMap<String, SessionRecord>>, ApiError> {
+    state
+        .sessions
+        .lock()
+        .map_err(|_| ApiError::internal("session registry lock poisoned"))
+}
+
+fn lock_context_cache(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, ContextCacheState>, ApiError> {
+    state
+        .context_cache
+        .lock()
+        .map_err(|_| ApiError::internal("context cache lock poisoned"))
+}
+
+fn lock_mcp_servers(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, HashMap<String, McpServerRecord>>, ApiError> {
+    state
+        .mcp_servers
+        .lock()
+        .map_err(|_| ApiError::internal("MCP server registry lock poisoned"))
+}
+
+fn session_json(record: &SessionRecord) -> Value {
+    json!({
+        "id": record.id,
+        "object": record.object,
+        "created": record.created,
+        "updated": record.updated,
+        "request_count": record.request_count,
+        "prompt_tokens": record.prompt_tokens,
+        "generated_tokens": record.generated_tokens,
+        "last_cache_key": record.last_cache_key,
+        "last_prompt_hash": record.last_prompt_hash.map(|hash| format!("{hash:016x}"))
+    })
+}
+
+fn context_cache_json(entry: &ContextCacheEntry) -> Value {
+    json!({
+        "id": entry.key,
+        "object": "context_cache_entry",
+        "prompt_hash": format!("{:016x}", entry.prompt_hash),
+        "prompt_tokens": entry.prompt_tokens,
+        "created": entry.created,
+        "updated": entry.updated,
+        "hits": entry.hits
+    })
+}
+
+fn mcp_server_json(record: &McpServerRecord) -> Value {
+    json!({
+        "id": record.id,
+        "object": "mcp_server",
+        "created": record.created,
+        "updated": record.updated,
+        "transport": record.transport,
+        "endpoint": record.endpoint,
+        "status": record.status
+    })
+}
+
+fn hash_tokens(tokens: &[TokenId]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for token in tokens {
+        hash ^= u64::from(token.0);
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    hash
 }
 
 fn send_stream_delta(
@@ -1478,22 +2393,29 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        apply_stop_strings, chat_messages_to_prompt, completion_prompts, finish_reason,
-        request_stop_strings, responses_input_to_prompt, text_delta,
+        PromptInput, apply_stop_strings, chat_messages_to_prompt, completion_prompts,
+        finish_reason, hash_tokens, reject_unsupported_generation_options, request_n,
+        request_optional_string, request_stop_strings, responses_input_to_prompt, session_json,
+        shared_fork_batch_supported, text_delta,
     };
+    use crate::openai::SessionRecord;
     use nerva_model::causal_lm::types::HfCausalLmStopReason;
 
     #[test]
     fn parses_string_and_array_completion_prompts() {
-        assert_eq!(
-            completion_prompts(&json!({"prompt": "hello"})).unwrap(),
-            vec!["hello".to_string()]
-        );
-        assert_eq!(
-            completion_prompts(&json!({"prompt": ["a", "b"]})).unwrap(),
-            vec!["a".to_string(), "b".to_string()]
-        );
-        assert!(completion_prompts(&json!({"prompt": [1]})).is_err());
+        let prompts = completion_prompts(&json!({"prompt": "hello"})).unwrap();
+        assert!(matches!(prompts[0], PromptInput::Text { .. }));
+
+        let prompts = completion_prompts(&json!({"prompt": ["a", "b"]})).unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(matches!(prompts[0], PromptInput::Text { .. }));
+
+        let prompts = completion_prompts(&json!({"prompt": [1, 2, 3]})).unwrap();
+        assert!(matches!(prompts[0], PromptInput::TokenIds(_)));
+
+        let prompts = completion_prompts(&json!({"prompt": [[1, 2], [3, 4]]})).unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(matches!(prompts[1], PromptInput::TokenIds(_)));
     }
 
     #[test]
@@ -1546,5 +2468,82 @@ mod tests {
             finish_reason(HfCausalLmStopReason::MaxSteps, false),
             "length"
         );
+    }
+
+    #[test]
+    fn rejects_unsupported_generation_options() {
+        assert!(reject_unsupported_generation_options(&json!({})).is_ok());
+        assert!(reject_unsupported_generation_options(&json!({"presence_penalty": 0.0})).is_ok());
+        assert!(reject_unsupported_generation_options(&json!({"presence_penalty": 1.0})).is_err());
+        assert!(
+            reject_unsupported_generation_options(&json!({"tools": [{"type": "mcp"}]})).is_err()
+        );
+        assert!(
+            reject_unsupported_generation_options(&json!({"response_format": {"type": "text"}}))
+                .is_ok()
+        );
+        assert!(
+            reject_unsupported_generation_options(
+                &json!({"response_format": {"type": "json_object"}})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_n_and_optional_strings() {
+        assert_eq!(request_n(&json!({})).unwrap(), 1);
+        assert_eq!(request_n(&json!({"n": 3})).unwrap(), 3);
+        assert!(request_n(&json!({"n": 0})).is_err());
+        assert_eq!(
+            request_optional_string(&json!({"session_id": "abc"}), "session_id").unwrap(),
+            Some("abc".to_string())
+        );
+        assert!(request_optional_string(&json!({"session_id": ""}), "session_id").is_err());
+    }
+
+    #[test]
+    fn hashes_tokens_stably() {
+        let a = hash_tokens(&[
+            nerva_core::types::id::token::TokenId(1),
+            nerva_core::types::id::token::TokenId(2),
+        ]);
+        let b = hash_tokens(&[
+            nerva_core::types::id::token::TokenId(1),
+            nerva_core::types::id::token::TokenId(2),
+        ]);
+        let c = hash_tokens(&[
+            nerva_core::types::id::token::TokenId(2),
+            nerva_core::types::id::token::TokenId(1),
+        ]);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn serializes_session_records() {
+        let record = SessionRecord {
+            id: "sess-1".to_string(),
+            object: "session",
+            created: 1,
+            updated: 2,
+            request_count: 3,
+            prompt_tokens: 4,
+            generated_tokens: 5,
+            last_cache_key: Some("cache".to_string()),
+            last_prompt_hash: Some(0xabcd),
+        };
+        let value = session_json(&record);
+        assert_eq!(value["id"], "sess-1");
+        assert_eq!(value["last_prompt_hash"], "000000000000abcd");
+    }
+
+    #[test]
+    fn gates_shared_fork_batch_to_greedy_sampler() {
+        assert!(shared_fork_batch_supported(0.0, 1.0, 0, None));
+        assert!(!shared_fork_batch_supported(1.0, 1.0, 0, None));
+        assert!(!shared_fork_batch_supported(0.0, 0.95, 0, None));
+        assert!(!shared_fork_batch_supported(0.0, 1.0, 40, None));
+        assert!(!shared_fork_batch_supported(0.0, 1.0, 0, Some(7)));
     }
 }
