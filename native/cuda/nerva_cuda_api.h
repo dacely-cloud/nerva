@@ -317,6 +317,7 @@ typedef struct NervaCudaHfDecodeChainLayer {
   float deepseek_routed_scaling_factor;
   float deepseek_hc_eps;
   float deepseek_hc_post_alpha;
+  float deepseek_swiglu_limit;
 } NervaCudaHfDecodeChainLayer;
 
 typedef struct NervaCudaHfDecodeChainRequest {
@@ -580,6 +581,7 @@ typedef struct NervaCudaHfDecodeSequenceLayoutPlanResult {
   uint64_t deepseek_hc_ffn_scale;
   float deepseek_hc_eps;
   float deepseek_hc_post_alpha;
+  float deepseek_swiglu_limit;
 } NervaCudaHfDecodeSequenceLayoutPlanResult;
 
 typedef struct NervaCudaHfDecodeSequenceSession NervaCudaHfDecodeSequenceSession;

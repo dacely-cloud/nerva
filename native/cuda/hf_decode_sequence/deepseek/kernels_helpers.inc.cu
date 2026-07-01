@@ -11,6 +11,14 @@ __device__ float deepseek_fp8_scaled_weight(const uint16_t *arena,
          f32_from_u16_slots(arena + scale_offset, scale_idx);
 }
 
+__device__ float deepseek_swiglu(float gate, float up, float swiglu_limit) {
+  if (isfinite(swiglu_limit) && swiglu_limit > 0.0f) {
+    gate = fminf(gate, swiglu_limit);
+    up = fminf(fmaxf(up, -swiglu_limit), swiglu_limit);
+  }
+  return silu(gate) * up;
+}
+
 __device__ float deepseek_fp8_e8m0_scaled_weight(const uint16_t *arena,
                                                  uint64_t weight_offset,
                                                  uint64_t scale_offset,

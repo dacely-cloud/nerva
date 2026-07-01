@@ -144,6 +144,8 @@ struct ClapGenerateArgs {
     debug: bool,
     #[arg(long = "profiling")]
     profiling: bool,
+    #[arg(long = "thinking", conflicts_with = "raw")]
+    thinking: bool,
     #[arg(long = "temperature", default_value_t = DEFAULT_TEMPERATURE)]
     temperature: f32,
     #[arg(long = "top-p", default_value_t = DEFAULT_TOP_P)]
@@ -245,7 +247,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
     let parsed = ClapGenerateArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
     if parsed.help {
         return Err(
-            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling] [--chat|--raw] [--json] [--debug]"
+            "usage: cargo run -p nerva -- -m model -p prompt [-c context] [-o output] [--temperature value] [--top-p value] [--top-k value] [--seed value] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling] [--thinking] [--chat|--raw] [--json] [--debug]"
                 .to_string(),
         );
     }
@@ -271,6 +273,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<GenerateArgs, String> {
         compute_capability: parsed.compute_capability,
         prompt_format: if parsed.raw {
             PromptFormat::Raw
+        } else if parsed.thinking {
+            PromptFormat::DeepSeekThinking
         } else if parsed.chat {
             PromptFormat::Chat
         } else {
@@ -306,7 +310,7 @@ pub(crate) fn parse_serve_args(args: &[String]) -> Result<ServeArgs, String> {
     let parsed = ClapServeArgs::try_parse_from(argv).map_err(|err| err.to_string())?;
     if parsed.help {
         return Err(
-            "usage: cargo run -p nerva -- serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [--max-concurrent-requests count] [--workers count] [--max-blocking-threads count] [--api-key key] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling]"
+            "usage: nerva serve -m model [--host 127.0.0.1] [--port 8000] [-c context] [-o output] [--max-concurrent-requests count] [--workers count] [--max-blocking-threads count] [--api-key key] [-rt|--rt] [--rt-mode auto|shadow|sparse] [--rt-pages count|--rt-far-pages count] [--rt-page-tokens tokens] [--rt-local-window tokens] [--rt-sink-tokens tokens] [--profiling]"
                 .to_string(),
         );
     }

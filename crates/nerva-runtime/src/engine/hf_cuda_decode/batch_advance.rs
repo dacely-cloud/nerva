@@ -156,8 +156,8 @@ mod tests {
     use nerva_cuda::smoke::status::SmokeStatus;
 
     use super::{
-        advance_decode_loops_once, batch_tokens_by_loop, safe_to_fallback_after_batch_rejection,
-        successful_batch_advance, CudaDecodeBatchAdvanceConfig, CudaDecodeBatchAdvanceMode,
+        CudaDecodeBatchAdvanceConfig, CudaDecodeBatchAdvanceMode, advance_decode_loops_once,
+        batch_tokens_by_loop, safe_to_fallback_after_batch_rejection, successful_batch_advance,
     };
 
     fn batch_summary(

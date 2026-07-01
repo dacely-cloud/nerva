@@ -536,6 +536,7 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
         routed_scaling_factor: 1.0,
         hc_eps: 1.0e-6,
         hc_post_alpha: 2.0,
+        swiglu_limit: Some(10.0),
     };
     let layer = CudaHfDecodeChainLayer {
         rms_attn_weight: &rms,
@@ -614,6 +615,10 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     );
     assert_eq!(ffi.deepseek_hc_eps, deepseek.hc_eps);
     assert_eq!(ffi.deepseek_hc_post_alpha, deepseek.hc_post_alpha);
+    assert_eq!(
+        ffi.deepseek_swiglu_limit,
+        deepseek.swiglu_limit.unwrap_or(0.0)
+    );
 
     let descriptor = layer.to_descriptor_layout_ffi();
     assert!(descriptor.w_q.is_null());
@@ -630,6 +635,10 @@ fn deepseek_mla_layer_validation_preserves_layout_metadata() {
     );
     assert_eq!(descriptor.deepseek_hc_eps, deepseek.hc_eps);
     assert_eq!(descriptor.deepseek_hc_post_alpha, deepseek.hc_post_alpha);
+    assert_eq!(
+        descriptor.deepseek_swiglu_limit,
+        deepseek.swiglu_limit.unwrap_or(0.0)
+    );
 }
 
 #[test]
@@ -655,6 +664,7 @@ fn deepseek_v3_mla_shape_matches_vllm_contract() {
         routed_scaling_factor: 2.5,
         hc_eps: 0.0,
         hc_post_alpha: 0.0,
+        swiglu_limit: None,
     };
 
     assert!(deepseek.is_v3_mla());
@@ -2287,7 +2297,7 @@ fn deepseek_v32_layout_plan_names_projection_and_indexer_offsets() {
         plan.deepseek_compressor_ape,
         CUDA_HF_SEQUENCE_MISSING_OFFSET
     );
-    assert_eq!(plan.layout_bytes, 640);
+    assert_eq!(plan.layout_bytes, 648);
     assert!(plan.resident_weight_bytes > 0);
 
     let request = CudaHfDecodeSequenceRequest {
@@ -4437,6 +4447,7 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     assert_eq!(plan.deepseek_hc_sinkhorn_iters, 20);
     assert_eq!(plan.deepseek_hc_eps, 1.0e-6);
     assert_eq!(plan.deepseek_hc_post_alpha, 2.0);
+    assert_eq!(plan.deepseek_swiglu_limit, 10.0);
     assert_eq!(plan.deepseek_qk_head_dim, 0);
     assert_eq!(plan.deepseek_q_rows, 0);
     assert_eq!(plan.deepseek_kv_cache_width, 0);
@@ -4479,7 +4490,7 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     assert_eq!(plan.rms_mlp, 558);
     assert_eq!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_eq!(plan.deepseek_kv_b_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
-    assert_eq!(plan.layout_bytes, 640);
+    assert_eq!(plan.layout_bytes, 648);
 }
 
 fn with_tiny_deepseek_v4_descriptor_session(
@@ -4616,6 +4627,7 @@ fn tiny_deepseek_v32_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             routed_scaling_factor: 1.0,
             hc_eps: 0.0,
             hc_post_alpha: 0.0,
+            swiglu_limit: None,
         }),
         mlp_kind: 0,
         moe_intermediate: 0,
@@ -4674,6 +4686,7 @@ fn tiny_deepseek_v3_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             routed_scaling_factor: 1.0,
             hc_eps: 0.0,
             hc_post_alpha: 0.0,
+            swiglu_limit: None,
         }),
         mlp_kind: CUDA_HF_MLP_DENSE,
         moe_intermediate: 0,
@@ -4835,6 +4848,7 @@ fn tiny_deepseek_v4_descriptor_layer() -> CudaHfDecodeChainLayer<'static> {
             routed_scaling_factor: 1.0,
             hc_eps: 1.0e-6,
             hc_post_alpha: 2.0,
+            swiglu_limit: Some(10.0),
         }),
         mlp_kind: CUDA_HF_MLP_SPARSE_MOE,
         moe_intermediate: 4,
@@ -4893,6 +4907,7 @@ fn tiny_deepseek_v4_swa_dense_descriptor_layer() -> CudaHfDecodeChainLayer<'stat
             routed_scaling_factor: 1.0,
             hc_eps: 1.0e-6,
             hc_post_alpha: 2.0,
+            swiglu_limit: Some(10.0),
         }),
         mlp_kind: CUDA_HF_MLP_DENSE,
         moe_intermediate: 0,

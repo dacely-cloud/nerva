@@ -13,7 +13,7 @@ use crate::hf::parser::parse_hf_config_metadata;
 use crate::precision::bits::f32_to_f16_bits;
 use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::layout::plan::plan_hf_weight_layout;
-use crate::weights::manifest::{build_hf_tensor_manifest, HfTensorManifest, HfTensorManifestEntry};
+use crate::weights::manifest::{HfTensorManifest, HfTensorManifestEntry, build_hf_tensor_manifest};
 use crate::weights::safetensors::header::synthetic_safetensors_header_for_manifest;
 
 pub fn hf_causal_lm_safetensors_smoke(steps: usize) -> Result<HfCausalLmSmokeSummary> {

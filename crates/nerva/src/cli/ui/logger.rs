@@ -610,11 +610,7 @@ impl NervaCliLoggerInner {
         self.print_plain_report_block_line("");
 
         if prefill_profile_total_ns != 0 {
-            self.print_plain_report_block_line(paint(
-                self.color,
-                Tone::Magenta,
-                "PREFILL PROFILE",
-            ));
+            self.print_plain_report_block_line(paint(self.color, Tone::Magenta, "PREFILL PROFILE"));
             self.print_plain_report_block_line(report_kv_line(
                 self.color,
                 "profiled total",
@@ -701,11 +697,7 @@ impl NervaCliLoggerInner {
         }
         self.print_plain_report_block_line("");
 
-        self.print_plain_report_block_line(paint(
-            self.color,
-            Tone::Magenta,
-            "TIME PROFILE",
-        ));
+        self.print_plain_report_block_line(paint(self.color, Tone::Magenta, "TIME PROFILE"));
         if profile_total_ns == 0 {
             self.print_plain_report_block_line(report_kv_line(
                 self.color,
@@ -764,11 +756,7 @@ impl NervaCliLoggerInner {
         }
         self.print_plain_report_block_line("");
 
-        self.print_plain_report_block_line(paint(
-            self.color,
-            Tone::Magenta,
-            "CUDA GRAPH",
-        ));
+        self.print_plain_report_block_line(paint(self.color, Tone::Magenta, "CUDA GRAPH"));
         self.print_plain_report_block_line(report_kv_line(
             self.color,
             "replays",

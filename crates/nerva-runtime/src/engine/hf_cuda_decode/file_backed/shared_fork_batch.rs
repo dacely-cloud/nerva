@@ -14,7 +14,7 @@ use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::tokenizer::stop_token_ids;
 
 use crate::engine::hf_cuda_decode::continuous_batch::{
-    advance_continuous_decode_batch_once, CudaDecodeLoopBatchEntry,
+    CudaDecodeLoopBatchEntry, advance_continuous_decode_batch_once,
 };
 use crate::engine::hf_cuda_decode::file_backed::session::create_hf_causal_lm_cuda_shard_backed_device_only_session_with_profiling;
 use crate::engine::hf_cuda_decode::projection_batch::{

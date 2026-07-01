@@ -205,6 +205,7 @@ fn null_layer() -> NervaCudaHfDecodeChainLayer {
         deepseek_routed_scaling_factor: 1.0,
         deepseek_hc_eps: 0.0,
         deepseek_hc_post_alpha: 0.0,
+        deepseek_swiglu_limit: 0.0,
     }
 }
 

@@ -928,7 +928,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
                         half_hidden, expert, row, col) *
                     s.mlp_norm[col];
         }
-        s.ff[row] = silu(gate_sum) * up_sum;
+        s.ff[row] =
+            deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
       }
       for (uint32_t row = 0; row < hidden; ++row) {
         float sum = 0.0f;
@@ -973,7 +974,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
                         shared_intermediate, hidden, row, col) *
                     s.mlp_norm[col];
         }
-        s.ff[row] = silu(gate_sum) * up_sum;
+        s.ff[row] =
+            deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
       }
       for (uint32_t row = 0; row < hidden; ++row) {
         float sum = 0.0f;
@@ -1006,7 +1008,8 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
                       col) *
                   s.mlp_norm[col];
       }
-      s.ff[row] = silu(gate_sum) * up_sum;
+      s.ff[row] =
+          deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
     }
     for (uint32_t row = 0; row < hidden; ++row) {
       float sum = 0.0f;

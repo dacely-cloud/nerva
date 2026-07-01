@@ -131,10 +131,12 @@ fn qwen3_5_real_4b_config_uses_language_model_prefix() {
             && entry.role == WeightBlockRole::FinalNorm
             && entry.rows == 2560
     }));
-    assert!(!manifest
-        .entries
-        .iter()
-        .any(|entry| entry.role == WeightBlockRole::LmHead));
+    assert!(
+        !manifest
+            .entries
+            .iter()
+            .any(|entry| entry.role == WeightBlockRole::LmHead)
+    );
     assert!(manifest.entries.iter().any(|entry| {
         entry.name == "model.language_model.layers.0.linear_attn.in_proj_qkv.weight"
             && entry.role == WeightBlockRole::LinearQkvProjection
@@ -804,10 +806,12 @@ fn qwen2_moe_real_a27b_config_uses_split_and_shared_expert_manifest() {
             && entry.layer == Some(0)
             && (entry.rows, entry.cols) == (2048, 1)
     }));
-    assert!(!manifest
-        .entries
-        .iter()
-        .any(|entry| entry.name == "model.layers.0.self_attn.o_proj.bias"));
+    assert!(
+        !manifest
+            .entries
+            .iter()
+            .any(|entry| entry.name == "model.layers.0.self_attn.o_proj.bias")
+    );
     assert!(manifest.entries.iter().any(|entry| {
         entry.name == "model.layers.0.mlp.experts.0.gate_proj.weight"
             && entry.role == WeightBlockRole::ExpertGateProjection

@@ -1,6 +1,6 @@
 use crate::tests::support::{
-    synthetic_header_for_entries, synthetic_sharded_index_json, tiny_llama_manifest, SHARD_ONE,
-    SHARD_TWO,
+    SHARD_ONE, SHARD_TWO, synthetic_header_for_entries, synthetic_sharded_index_json,
+    tiny_llama_manifest,
 };
 use crate::weights::layout::entry::WeightBlockRole;
 use crate::weights::manifest::{HfTensorManifest, HfTensorManifestEntry};
@@ -85,10 +85,12 @@ fn safetensors_shard_plan_ignores_extra_non_manifest_tensors() {
     assert_eq!(plan.total_weight_bytes, manifest.total_weight_bytes);
     assert_eq!(plan.index_total_size, Some(manifest.total_weight_bytes + 2));
     assert_eq!(plan.shards[0].tensor_count, 10);
-    assert!(!plan
-        .entries
-        .iter()
-        .any(|entry| entry.tensor_name.starts_with("model.visual.")));
+    assert!(
+        !plan
+            .entries
+            .iter()
+            .any(|entry| entry.tensor_name.starts_with("model.visual."))
+    );
 }
 
 #[test]
@@ -113,10 +115,12 @@ fn safetensors_shard_plan_supports_tied_embedding_manifest() {
         plan.entries.last().unwrap().tensor_name,
         "model.norm.weight"
     );
-    assert!(!plan
-        .entries
-        .iter()
-        .any(|entry| entry.tensor_name == "lm_head.weight"));
+    assert!(
+        !plan
+            .entries
+            .iter()
+            .any(|entry| entry.tensor_name == "lm_head.weight")
+    );
 }
 
 #[test]
@@ -210,19 +214,23 @@ fn safetensors_shard_plan_rejects_missing_index_or_header() {
     );
 
     assert!(required_safetensors_shards_for_manifest(&missing_lm_head_index, &manifest).is_err());
-    assert!(plan_safetensors_shards_for_manifest(
-        &index,
-        &[SafetensorsShardHeader::new(SHARD_ONE, &header_one)],
-        &manifest,
-    )
-    .is_err());
-    assert!(plan_safetensors_shards_for_manifest(
-        &index,
-        &[
-            SafetensorsShardHeader::new(SHARD_ONE, &header_one),
-            SafetensorsShardHeader::new(SHARD_ONE, &header_one),
-        ],
-        &manifest,
-    )
-    .is_err());
+    assert!(
+        plan_safetensors_shards_for_manifest(
+            &index,
+            &[SafetensorsShardHeader::new(SHARD_ONE, &header_one)],
+            &manifest,
+        )
+        .is_err()
+    );
+    assert!(
+        plan_safetensors_shards_for_manifest(
+            &index,
+            &[
+                SafetensorsShardHeader::new(SHARD_ONE, &header_one),
+                SafetensorsShardHeader::new(SHARD_ONE, &header_one),
+            ],
+            &manifest,
+        )
+        .is_err()
+    );
 }

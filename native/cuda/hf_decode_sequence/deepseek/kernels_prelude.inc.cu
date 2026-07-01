@@ -24,6 +24,7 @@ __device__ __forceinline__ float deepseek_session_bf16_bits_to_f32(
     uint16_t bits);
 __device__ uint8_t deepseek_session_f32_to_f8_e4m3fn_bits_nearest(
     float value);
+__device__ float deepseek_swiglu(float gate, float up, float swiglu_limit);
 __device__ bool deepseek_session_sparse_score_is_better(
     float candidate, int32_t slot, float current, int32_t current_slot);
 

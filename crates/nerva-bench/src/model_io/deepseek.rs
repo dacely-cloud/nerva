@@ -4,19 +4,19 @@ use std::{
     time::Instant,
 };
 
-use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::c4_indexer_topk::deepseek_c4_indexer_topk;
+use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use nerva_cuda::deepseek_kv::partial_states::deepseek_save_partial_states;
 use nerva_cuda::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
-use nerva_cuda::deepseek_mla::decode::{deepseek_mla_decode, CudaDeepSeekMlaDecodeInput};
+use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use nerva_cuda::deepseek_mla::qkv_norm::deepseek_qkv_rmsnorm;
 use nerva_cuda::deepseek_moe::experts::{
-    deepseek_megamoe_experts, CudaDeepSeekMegaMoeExpertsInput,
+    CudaDeepSeekMegaMoeExpertsInput, deepseek_megamoe_experts,
 };
-use nerva_cuda::deepseek_moe::forward::{deepseek_moe_forward, CudaDeepSeekMoeForwardInput};
+use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
 use nerva_cuda::deepseek_moe::prepare::{
-    deepseek_megamoe_prepare, CudaDeepSeekMegaMoeEplbMapping, CudaDeepSeekMegaMoePrepareInput,
+    CudaDeepSeekMegaMoeEplbMapping, CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare,
 };
 use nerva_cuda::deepseek_quant::dequant::{
     deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_mxfp4_e2m1_e8m0_dequant,
@@ -31,12 +31,12 @@ use nerva_model::hf::architecture::HfArchitectureKind;
 use nerva_model::hf::contract::validate_exact_runtime_contract;
 use nerva_model::hf::deepseek::plan_deepseek_vllm_kv_cache;
 use nerva_model::hf::deepseek_runtime::{
+    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS, DeepSeekExecutionUnitCoverage,
     deepseek_execution_unit_coverage as execution_unit_coverage,
     deepseek_implemented_primitives as implemented_primitives,
     deepseek_layer_report as layer_report,
     deepseek_required_execution_units as required_execution_units,
-    deepseek_v4_mhc_warmup_token_sizes, DeepSeekExecutionUnitCoverage,
-    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS,
+    deepseek_v4_mhc_warmup_token_sizes,
 };
 use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::parser::parse_hf_config_metadata;
@@ -726,10 +726,26 @@ fn deepseek_vllm_compare_json(
         json_opt_string(nerva_model.as_deref()),
         prompt_comparable,
         prompt_token_parity,
-        json_opt_usize(prompt_comparison.as_ref().map(|comparison| comparison.matched_tokens)),
-        json_opt_usize(prompt_comparison.as_ref().map(|comparison| comparison.mismatched_tokens)),
-        json_opt_usize(prompt_comparison.as_ref().map(|comparison| comparison.missing_tokens)),
-        json_opt_usize(prompt_comparison.as_ref().map(|comparison| comparison.extra_tokens)),
+        json_opt_usize(
+            prompt_comparison
+                .as_ref()
+                .map(|comparison| comparison.matched_tokens)
+        ),
+        json_opt_usize(
+            prompt_comparison
+                .as_ref()
+                .map(|comparison| comparison.mismatched_tokens)
+        ),
+        json_opt_usize(
+            prompt_comparison
+                .as_ref()
+                .map(|comparison| comparison.missing_tokens)
+        ),
+        json_opt_usize(
+            prompt_comparison
+                .as_ref()
+                .map(|comparison| comparison.extra_tokens)
+        ),
         json_opt_usize(
             prompt_comparison
                 .as_ref()

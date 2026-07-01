@@ -3,13 +3,13 @@ use nerva_model::hf::tokenizer::{
     decode_generated_text, encode_text_prompt, format_prompt_for_model, stop_token_ids,
 };
 use nerva_runtime::engine::hf_cuda_decode::file_backed::generate::{
-    run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress,
     HfCudaDeviceGenerateOutput, HfCudaRtDecodeConfig, HfCudaSamplerConfig,
+    run_hf_causal_lm_cuda_shard_backed_device_generate_with_sampler_profiling_rt_and_progress,
 };
 use nerva_runtime::engine::runtime::{Runtime, RuntimeConfig};
 
 use crate::cli::args::{
-    parse_args, AUTO_CONTEXT_MARGIN, DEFAULT_OUTPUT_TOKENS, DEFAULT_QUEUE_CAPACITY, DEFAULT_SEED,
+    AUTO_CONTEXT_MARGIN, DEFAULT_OUTPUT_TOKENS, DEFAULT_QUEUE_CAPACITY, DEFAULT_SEED, parse_args,
 };
 use crate::cli::model::{detect_cuda_compute_capability, resolve_model_path, resolve_prompt_text};
 use crate::cli::ui::logger::NervaCliLogger;
@@ -504,7 +504,7 @@ fn tokens_per_second(tokens: usize, elapsed_ns: u128) -> String {
 #[cfg(test)]
 mod tests {
     use super::{resolve_sampler_seed, rt_selector_policy, stochastic_sampling_requested};
-    use crate::cli::args::{GenerateArgs, DEFAULT_SEED};
+    use crate::cli::args::{DEFAULT_SEED, GenerateArgs};
 
     #[test]
     fn explicit_sampler_seed_wins() {

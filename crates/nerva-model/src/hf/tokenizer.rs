@@ -17,6 +17,8 @@ pub struct EncodedPrompt {
 pub enum PromptFormat {
     Auto,
     Chat,
+    DeepSeekChat,
+    DeepSeekThinking,
     Raw,
 }
 

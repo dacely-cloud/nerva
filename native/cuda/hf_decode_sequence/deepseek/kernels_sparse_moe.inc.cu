@@ -125,7 +125,8 @@ __global__ void hf_deepseek_v3_sparse_moe_encode_kernel(
       }
       s.gate[row] = gate_sum;
       s.up[row] = up_sum;
-      s.ff[row] = silu(gate_sum) * up_sum;
+      s.ff[row] =
+          deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
     }
     __syncthreads();
     for (uint32_t row = threadIdx.x; row < hidden; row += blockDim.x) {
@@ -173,7 +174,8 @@ __global__ void hf_deepseek_v3_sparse_moe_encode_kernel(
                       shared_intermediate, hidden, row, col) *
                   s.mlp_norm[col];
       }
-      s.ff[row] = silu(gate_sum) * up_sum;
+      s.ff[row] =
+          deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
     }
     __syncthreads();
     for (uint32_t row = threadIdx.x; row < hidden; row += blockDim.x) {

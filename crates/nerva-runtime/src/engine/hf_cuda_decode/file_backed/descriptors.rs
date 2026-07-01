@@ -207,6 +207,7 @@ fn deepseek_marker(
         } else {
             0.0
         },
+        swiglu_limit: metadata.swiglu_limit,
     })
 }
 
@@ -613,6 +614,7 @@ mod tests {
         metadata.num_hash_layers = Some(3);
         metadata.topk_method = Some("noaux_tc".to_string());
         metadata.scoring_func = Some("sqrtsoftplus".to_string());
+        metadata.swiglu_limit = Some(10.0);
         metadata.expert_dtype = Some("fp4".to_string());
         metadata.torch_dtype = Some(DType::BF16);
 
@@ -659,6 +661,8 @@ mod tests {
         assert_eq!(layers[3].deepseek.unwrap().hc_mult, 4);
         assert_eq!(layers[2].deepseek.unwrap().index_n_heads, 64);
         assert_eq!(layers[2].deepseek.unwrap().index_head_dim, 128);
+        assert_eq!(layers[0].deepseek.unwrap().swiglu_limit, Some(10.0));
+        assert_eq!(layers[3].deepseek.unwrap().swiglu_limit, Some(10.0));
     }
 
     fn base_metadata(architecture: HfArchitectureKind, layers: usize) -> HfModelMetadata {

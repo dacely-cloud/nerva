@@ -33,12 +33,29 @@ pub(super) fn format_prompt_for_model(
                 mode: kind.mode(),
             })
         }
+        PromptFormat::DeepSeekChat | PromptFormat::DeepSeekThinking => {
+            let kind = chat_template_kind(Path::new(path))?.ok_or_else(|| {
+                "model does not declare a supported DeepSeek chat template".to_string()
+            })?;
+            if kind != ChatTemplateKind::DeepSeek {
+                return Err("DeepSeek prompt mode requires a DeepSeek chat template".to_string());
+            }
+            Ok(FormattedPrompt {
+                text: kind.render_deepseek(prompt, format == PromptFormat::DeepSeekThinking),
+                mode: if format == PromptFormat::DeepSeekThinking {
+                    "deepseek_thinking"
+                } else {
+                    "deepseek_chat"
+                },
+            })
+        }
     }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ChatTemplateKind {
     ChatMl,
+    DeepSeek,
     Llama3,
     Gemma,
     MistralInst,
@@ -48,6 +65,7 @@ impl ChatTemplateKind {
     const fn mode(self) -> &'static str {
         match self {
             Self::ChatMl => "chatml",
+            Self::DeepSeek => "deepseek_chat",
             Self::Llama3 => "llama3_chat",
             Self::Gemma => "gemma_chat",
             Self::MistralInst => "mistral_inst",
@@ -59,6 +77,7 @@ impl ChatTemplateKind {
             Self::ChatMl => format!(
                 "<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
             ),
+            Self::DeepSeek => self.render_deepseek(user_prompt, false),
             Self::Llama3 => format!(
                 "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n{user_prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
             ),
@@ -67,6 +86,11 @@ impl ChatTemplateKind {
             }
             Self::MistralInst => format!("<s>[INST] {user_prompt} [/INST]"),
         }
+    }
+
+    fn render_deepseek(self, user_prompt: &str, thinking: bool) -> String {
+        let suffix = if thinking { "<think>" } else { "</think>" };
+        format!("<｜begin▁of▁sentence｜><｜User｜>{user_prompt}<｜Assistant｜>{suffix}")
     }
 }
 
@@ -79,6 +103,9 @@ fn chat_template_kind(dir: &Path) -> Result<Option<ChatTemplateKind>, String> {
     };
     if template.contains("<|im_start|>") && template.contains("<|im_end|>") {
         return Ok(Some(ChatTemplateKind::ChatMl));
+    }
+    if template.contains("<｜User｜>") && template.contains("<｜Assistant｜>") {
+        return Ok(Some(ChatTemplateKind::DeepSeek));
     }
     if template.contains("<|start_header_id|>") && template.contains("<|eot_id|>") {
         return Ok(Some(ChatTemplateKind::Llama3));
@@ -112,6 +139,38 @@ mod tests {
         assert_eq!(formatted.mode, "chatml");
         assert!(formatted.text.contains("<|im_start|>user\nhello<|im_end|>"));
         assert!(formatted.text.ends_with("</think>\n\n"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn formats_deepseek_chat_template_in_auto_and_thinking_modes() {
+        let dir = temp_dir("deepseek-chat");
+        fs::write(
+            dir.join("tokenizer_config.json"),
+            r#"{"chat_template":"<｜begin▁of▁sentence｜><｜User｜>{{ content }}<｜Assistant｜>"}"#,
+        )
+        .unwrap();
+
+        let chat =
+            format_prompt_for_model(dir.to_str().unwrap(), "hello", PromptFormat::Auto).unwrap();
+        assert_eq!(chat.mode, "deepseek_chat");
+        assert_eq!(
+            chat.text,
+            "<｜begin▁of▁sentence｜><｜User｜>hello<｜Assistant｜></think>"
+        );
+
+        let thinking = format_prompt_for_model(
+            dir.to_str().unwrap(),
+            "solve it",
+            PromptFormat::DeepSeekThinking,
+        )
+        .unwrap();
+        assert_eq!(thinking.mode, "deepseek_thinking");
+        assert_eq!(
+            thinking.text,
+            "<｜begin▁of▁sentence｜><｜User｜>solve it<｜Assistant｜><think>"
+        );
+
         let _ = fs::remove_dir_all(dir);
     }
 

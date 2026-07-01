@@ -35,6 +35,7 @@ void initialize_deepseek_layout_metadata(
       layer.deepseek_routed_scaling_factor;
   layout.deepseek_hc_eps = layer.deepseek_hc_eps;
   layout.deepseek_hc_post_alpha = layer.deepseek_hc_post_alpha;
+  layout.deepseek_swiglu_limit = layer.deepseek_swiglu_limit;
 }
 
 void initialize_deepseek_layout_offsets(SequenceLayerLayout &layout) {
