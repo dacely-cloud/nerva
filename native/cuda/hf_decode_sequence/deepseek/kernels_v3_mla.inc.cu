@@ -227,6 +227,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
 
   extern __shared__ float shared[];
   float *latent_output = shared;
+  float *q_nope_latent = shared + kv_lora_rank;
 
   int32_t sparse_slots[kDeepSeekSessionMaxSparseTopK];
   float sparse_scores[kDeepSeekSessionMaxSparseTopK];
@@ -273,16 +274,25 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     }
   }
 
+  const uint32_t kv_b_cols = kv_lora_rank;
+  const uint32_t kv_b_rows = heads * (qk_nope + v_head);
   for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
        latent += blockDim.x) {
     latent_output[latent] = 0.0f;
+    float sum = 0.0f;
+    for (uint32_t nope = 0; nope < qk_nope; ++nope) {
+      const uint32_t row = head * (qk_nope + v_head) + nope;
+      sum += q[head * qk_head_dim + nope] *
+             deepseek_fp8_scaled_weight(arena, layout.w_v,
+                                        layout.deepseek_kv_b_scale, kv_b_rows,
+                                        kv_b_cols, row, latent);
+    }
+    q_nope_latent[latent] = sum;
   }
   __syncthreads();
 
   const uint32_t rope_half = qk_rope / 2u;
   const float softmax_scale = rsqrtf(static_cast<float>(qk_head_dim));
-  const uint32_t kv_b_cols = kv_lora_rank;
-  const uint32_t kv_b_rows = heads * (qk_nope + v_head);
   float local_m = -INFINITY;
   float local_l = 0.0f;
   for (uint32_t attention_index = 0; attention_index < attention_tokens;
@@ -298,19 +308,10 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
         kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
                             token, kv_cache_width, 0);
     float score_part = 0.0f;
-    const uint32_t nope_terms = qk_nope * kv_lora_rank;
-    for (uint32_t term = threadIdx.x; term < nope_terms;
-         term += blockDim.x) {
-      const uint32_t nope = term / kv_lora_rank;
-      const uint32_t latent = term - nope * kv_lora_rank;
-      const uint32_t row = head * (qk_nope + v_head) + nope;
-      const float q_value = q[head * qk_head_dim + nope];
-      score_part +=
-          q_value *
-          deepseek_fp8_scaled_weight(arena, layout.w_v,
-                                     layout.deepseek_kv_b_scale, kv_b_rows,
-                                     kv_b_cols, row, latent) *
-          encoded_to_f32(kv_keys[token_base + latent], dtype);
+    for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
+         latent += blockDim.x) {
+      score_part += q_nope_latent[latent] *
+                    encoded_to_f32(kv_keys[token_base + latent], dtype);
     }
     for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
       float q_pe = q[head * qk_head_dim + qk_nope + dim];

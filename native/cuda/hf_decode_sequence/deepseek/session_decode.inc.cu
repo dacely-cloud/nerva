@@ -254,7 +254,8 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
 
   hf_deepseek_v3_mla_attention_encode_kernel<<<
       session->heads, kDecodeThreads,
-      static_cast<size_t>(kv_lora_rank) * sizeof(float), session->stream>>>(
+      static_cast<size_t>(kv_lora_rank) * 2u * sizeof(float),
+      session->stream>>>(
       session->device_arena, layout, layer_index, session->dtype,
       session->heads, session->device_step, max_steps, session->rope_theta,
       scratch.q, session->device_kv_keys, session->kv_block_count,
