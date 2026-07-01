@@ -2884,7 +2884,7 @@ fn run_deepseek_vllm_prefix_probe(
 
     let mut prefix_tokens = prompt_tokens.clone();
     prefix_tokens.extend(vllm_tokens.iter().take(first_mismatch_index).copied());
-    let command = deepseek_vllm_generate_token_ids_command_with_options(
+    let mut command = deepseek_vllm_generate_token_ids_command_with_options(
         repo_root,
         vllm_root,
         checkpoint_dir,
@@ -2893,6 +2893,8 @@ fn run_deepseek_vllm_prefix_probe(
         1,
         vllm_options,
     );
+    command.push("--logprobs".to_string());
+    command.push("20".to_string());
     let run = run_json_command(&command, repo_root)?;
     std::fs::write(artifact, &run.json).map_err(|err| {
         format!(

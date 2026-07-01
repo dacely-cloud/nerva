@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -38,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attention-backend", default="auto")
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--warmup-runs", type=int, default=1)
+    parser.add_argument("--logprobs", type=int, default=0)
     parser.add_argument("--enable-prefix-caching", action="store_true")
     trust_remote_code = parser.add_mutually_exclusive_group()
     trust_remote_code.add_argument(
@@ -91,6 +93,42 @@ def token_ids_from_output(output: Any) -> list[int]:
     if token_ids is None:
         return []
     return [int(token) for token in token_ids]
+
+
+def top_logprobs_from_output(output: Any) -> list[list[dict[str, Any]]]:
+    logprobs = getattr(output, "logprobs", None)
+    if not logprobs:
+        return []
+    steps: list[list[dict[str, Any]]] = []
+    for step in logprobs:
+        if not step:
+            steps.append([])
+            continue
+        entries: list[dict[str, Any]] = []
+        for token, value in step.items():
+            logprob = getattr(value, "logprob", value)
+            rank = getattr(value, "rank", None)
+            decoded = getattr(value, "decoded_token", None)
+            try:
+                logprob_value = float(logprob)
+            except (TypeError, ValueError):
+                continue
+            entries.append(
+                {
+                    "token": int(token),
+                    "logprob": logprob_value if math.isfinite(logprob_value) else None,
+                    "rank": int(rank) if rank is not None else None,
+                    "decoded": decoded,
+                }
+            )
+        entries.sort(
+            key=lambda item: (
+                -(item["logprob"] if item["logprob"] is not None else float("-inf")),
+                item["token"],
+            )
+        )
+        steps.append(entries)
+    return steps
 
 
 def percentile(values: list[float], quantile: float) -> float:
@@ -157,6 +195,7 @@ def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[s
                     "top_k": args.top_k,
                     "seed": args.seed,
                 },
+                "logprobs_requested": args.logprobs,
             }
         )
     return payload
@@ -219,6 +258,7 @@ def run_generation(args: argparse.Namespace) -> None:
         top_k=args.top_k,
         max_tokens=args.max_tokens,
         seed=args.seed,
+        logprobs=args.logprobs if args.logprobs > 0 else None,
     )
 
     tokenizer = llm.get_tokenizer()
@@ -309,6 +349,10 @@ def run_generation(args: argparse.Namespace) -> None:
                 },
                 "generated_tokens": generated_tokens,
                 "tokens": generated_token_ids,
+                "logprobs_requested": args.logprobs,
+                "top_logprobs": (
+                    top_logprobs_from_output(candidate) if args.logprobs > 0 else None
+                ),
                 "generated_text": candidate.text,
                 "finish_reason": candidate.finish_reason,
                 "elapsed_wall_ns": best_elapsed_ns,
