@@ -546,6 +546,8 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     let vllm_root = dir.join("vllm-root");
     let prompt_path = dir.join("prompt.txt");
     write_vllm_reference_fixture(&vllm_root);
+    std::fs::create_dir_all(vllm_root.join(".venv/bin")).unwrap();
+    std::fs::write(vllm_root.join(".venv/bin/python"), b"").unwrap();
     std::fs::create_dir_all(&checkpoint).unwrap();
     std::fs::write(checkpoint.join("config.json"), deepseek_v4_config()).unwrap();
     std::fs::write(checkpoint.join("model.safetensors"), b"fixture").unwrap();
@@ -580,7 +582,8 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"nerva_bench_generate\""));
     assert!(json.contains("\"hf-cuda-generate\""));
     assert!(json.contains("\"vllm_generate\""));
-    assert!(json.contains("\"tools/deepseek_vllm_generate.py\""));
+    assert!(json.contains("deepseek_vllm_generate.py"));
+    assert!(json.contains(".venv/bin/python"));
     assert!(json.contains("\"compare\""));
     assert!(json.contains("\"deepseek-vllm-compare\""));
     assert!(json.contains("\"vllm.json\""));

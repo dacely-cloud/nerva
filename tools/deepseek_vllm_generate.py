@@ -12,6 +12,7 @@ import argparse
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -61,17 +62,50 @@ def percentile(values: list[float], quantile: float) -> float:
     return sorted_values[min(rank - 1, len(sorted_values) - 1)]
 
 
-def main() -> None:
-    args = parse_args()
+def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": "error",
+        "schema": "nerva-vllm-generate-v1",
+        "engine": "vllm",
+        "error_type": type(exc).__name__,
+        "error": str(exc),
+        "traceback_tail": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[
+            -8192:
+        ],
+    }
+    if args is not None:
+        payload.update(
+            {
+                "vllm_root": str(Path(args.vllm_root).resolve()),
+                "model": args.model,
+                "prompt_mode": "file" if args.prompt.startswith("@") else "literal",
+                "max_model_len": args.max_model_len,
+                "max_tokens": args.max_tokens,
+                "runs": args.runs,
+                "warmup_runs": args.warmup_runs,
+                "dtype": args.dtype,
+                "enable_prefix_caching": args.enable_prefix_caching,
+                "sampler": {
+                    "temperature": args.temperature,
+                    "top_p": args.top_p,
+                    "top_k": args.top_k,
+                    "seed": args.seed,
+                },
+            }
+        )
+    return payload
+
+
+def run_generation(args: argparse.Namespace) -> None:
     if args.runs <= 0:
-        raise SystemExit("--runs must be positive")
+        raise ValueError("--runs must be positive")
     if args.warmup_runs < 0:
-        raise SystemExit("--warmup-runs must be zero or positive")
+        raise ValueError("--warmup-runs must be zero or positive")
     prompt, prompt_mode = resolve_prompt(args.prompt)
 
     vllm_root = Path(args.vllm_root).resolve()
     if not vllm_root.is_dir():
-        raise SystemExit(f"vLLM root does not exist: {vllm_root}")
+        raise FileNotFoundError(f"vLLM root does not exist: {vllm_root}")
     sys.path.insert(0, str(vllm_root))
 
     from vllm import LLM, SamplingParams
@@ -116,7 +150,7 @@ def main() -> None:
         total_elapsed_ns += elapsed_ns
 
     if outputs is None:
-        raise SystemExit("vLLM generation did not run")
+        raise RuntimeError("vLLM generation did not run")
     candidate = outputs[0].outputs[0]
     generated_token_ids = token_ids_from_output(candidate)
     generated_tokens = len(generated_token_ids)
@@ -172,6 +206,16 @@ def main() -> None:
             separators=(",", ":"),
         )
     )
+
+
+def main() -> None:
+    args: argparse.Namespace | None = None
+    try:
+        args = parse_args()
+        run_generation(args)
+    except Exception as exc:
+        print(json.dumps(error_payload(args, exc), separators=(",", ":")))
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":
