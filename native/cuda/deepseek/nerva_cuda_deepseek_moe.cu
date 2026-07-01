@@ -126,6 +126,44 @@ __device__ float swiglu_dynamic(float gate,
   return silu(gate) * up;
 }
 
+template <uint32_t Slots>
+__device__ __forceinline__ void megamoe_reduce_slots(float (&values)[Slots],
+                                                     float *partial) {
+  const uint32_t lane = threadIdx.x & 31u;
+  const uint32_t warp = threadIdx.x >> 5u;
+  const uint32_t warp_count = (blockDim.x + 31u) >> 5u;
+
+#pragma unroll
+  for (uint32_t slot = 0; slot < Slots; ++slot) {
+    float value = values[slot];
+#pragma unroll
+    for (uint32_t offset = 16u; offset > 0u; offset >>= 1u) {
+      value += __shfl_down_sync(0xffffffffu, value, static_cast<int>(offset));
+    }
+    if (lane == 0u) {
+      partial[slot * blockDim.x + warp] = value;
+    }
+  }
+  __syncthreads();
+
+  if (warp == 0u) {
+#pragma unroll
+    for (uint32_t slot = 0; slot < Slots; ++slot) {
+      float value =
+          lane < warp_count ? partial[slot * blockDim.x + lane] : 0.0f;
+#pragma unroll
+      for (uint32_t offset = 16u; offset > 0u; offset >>= 1u) {
+        value +=
+            __shfl_down_sync(0xffffffffu, value, static_cast<int>(offset));
+      }
+      if (lane == 0u) {
+        partial[slot * blockDim.x] = value;
+      }
+    }
+  }
+  __syncthreads();
+}
+
 __device__ uint8_t f32_to_f8_e4m3fn_nearest(float value) {
   if (!isfinite(value)) {
     return 0x7fu;
@@ -356,24 +394,14 @@ __global__ void deepseek_megamoe_gate_up_kernel(
                                         up_scale_base,
                                         hidden);
   }
-  __shared__ float gate_partial[kMegaMoeExpertThreads];
-  __shared__ float up_partial[kMegaMoeExpertThreads];
-  gate_partial[tid] = gate;
-  up_partial[tid] = up;
-  __syncthreads();
-
-  for (uint32_t stride = blockDim.x / 2u; stride > 0; stride >>= 1u) {
-    if (tid < stride) {
-      gate_partial[tid] += gate_partial[tid + stride];
-      up_partial[tid] += up_partial[tid + stride];
-    }
-    __syncthreads();
-  }
+  __shared__ float partial[kMegaMoeExpertThreads * 2u];
+  float sums[2] = {gate, up};
+  megamoe_reduce_slots(sums, partial);
 
   if (tid == 0) {
     activation[static_cast<uint64_t>(route) * intermediate_size +
                intermediate] =
-        swiglu_dynamic(gate_partial[0], up_partial[0], 1u, swiglu_limit);
+        swiglu_dynamic(partial[0], partial[blockDim.x], 1u, swiglu_limit);
   }
 }
 
@@ -435,15 +463,8 @@ __global__ void deepseek_megamoe_down_kernel(const int64_t *topk_ids,
   }
 
   __shared__ float partial[kMegaMoeExpertThreads];
-  partial[tid] = token_sum;
-  __syncthreads();
-
-  for (uint32_t stride = blockDim.x / 2u; stride > 0; stride >>= 1u) {
-    if (tid < stride) {
-      partial[tid] += partial[tid + stride];
-    }
-    __syncthreads();
-  }
+  float sum[1] = {token_sum};
+  megamoe_reduce_slots(sum, partial);
 
   if (tid == 0) {
     output[output_index] = partial[0];
