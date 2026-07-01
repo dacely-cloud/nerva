@@ -1,8 +1,8 @@
 use crate::model_io::deepseek::{
+    DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
     deepseek_cuda_primitive_bench_report_json, deepseek_cuda_readiness_report_json,
     run_deepseek_runtime_plan, run_deepseek_vllm_benchmark_plan, run_deepseek_vllm_benchmark_run,
     run_deepseek_vllm_compare, run_deepseek_vllm_parity_gate, run_deepseek_vllm_reference_audit,
-    DeepSeekCudaPrimitiveBenchSample, DeepSeekCudaPrimitiveReport,
 };
 
 #[test]
@@ -29,7 +29,7 @@ fn deepseek_v4_runtime_plan_reports_vllm_gap_and_layer_mix() {
     assert!(json.contains(
         "\"v4_mhc_warmup_token_sizes\":[1,2,4,8,16,32,64,128,256,512,1024,2048,4096,8192,16384]"
     ));
-    assert!(json.contains("\"runtime_status\":\"unsupported\""));
+    assert!(json.contains("\"runtime_status\":\"runnable_partial\""));
     assert!(json.contains("\"claim_allowed\":false"));
     assert!(json.contains("fp8_e4m3fn_decode_matches_torch"));
     assert!(json.contains("e8m0_scale_upcast_matches_vllm_raw_exponent_path"));
@@ -183,7 +183,9 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     );
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_sparse_mla_kv_b_scale_runtime"));
     assert!(json.contains("cuda_hf_sequence_deepseek_v32_output_projection_scale_logits_runtime"));
-    assert!(json.contains("cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime"));
+    assert!(
+        json.contains("cuda_hf_sequence_deepseek_v32_q_a_kv_a_q_b_scale_sparse_decode_runtime")
+    );
     assert!(json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_token4_weight_reuse"));
     assert!(
         json.contains("cuda_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens_row8_token4_input_reuse")
@@ -206,7 +208,7 @@ fn deepseek_v32_runtime_plan_reports_sparse_indexer_requirement() {
     assert!(json.contains(
         "run same-checkpoint V3.2 sparse MLA greedy text differential against /root/vllm"
     ));
-    assert!(json.contains("\"runtime_status\":\"unsupported\""));
+    assert!(json.contains("\"runtime_status\":\"runnable_partial\""));
     assert!(json.contains("\"claim_allowed\":false"));
 
     let _ = std::fs::remove_file(config_path);
@@ -497,7 +499,7 @@ fn deepseek_vllm_reference_audit_pins_expected_source_units() {
 }
 
 #[test]
-fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
+fn deepseek_vllm_parity_gate_allows_same_checkpoint_benchmark_for_runnable_partial_runtime() {
     let dir = std::env::temp_dir().join(format!(
         "nerva-bench-deepseek-vllm-gate-{}",
         std::process::id()
@@ -515,9 +517,9 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     .expect("DeepSeek parity gate should parse config and fixture references");
 
     assert!(json.contains("\"schema\":\"nerva-deepseek-vllm-parity-gate-v1\""));
-    assert!(json.contains("\"status\":\"runtime_blocked\""));
+    assert!(json.contains("\"status\":\"benchmark_ready\""));
     assert!(json.contains("\"architecture\":\"deepseek_v4\""));
-    assert!(json.contains("\"runtime_contract_status\":\"unsupported\""));
+    assert!(json.contains("\"runtime_contract_status\":\"runnable_partial\""));
     assert!(json.contains("\"vllm_reference_status\":\"ok\""));
     assert!(json.contains("\"vllm_reference_units_total\":19"));
     assert!(json.contains("\"vllm_reference_units_ok\":19"));
@@ -526,16 +528,19 @@ fn deepseek_vllm_parity_gate_blocks_until_runtime_units_are_complete() {
     assert!(json.contains("\"runtime_units_partial\":8"));
     assert!(json.contains("\"runtime_units_missing\":0"));
     assert!(json.contains("\"deepseek_v4_parallel_attention_gemm_streams\""));
-    assert!(json.contains("\"runtime_parity_status\":\"blocked_before_end_to_end_parity\""));
-    assert!(json.contains("\"performance_status\":\"blocked_until_runtime_units_complete\""));
+    assert!(json.contains("\"runtime_parity_status\":\"ready_for_same_checkpoint_run\""));
+    assert!(json.contains("\"performance_status\":\"ready_for_vllm_runtime_benchmark\""));
     assert!(json.contains("\"claim_allowed\":false"));
-    assert!(json.contains("\"performance_comparison_allowed\":false"));
+    assert!(json.contains("\"performance_comparison_allowed\":true"));
     assert!(json.contains("\"deepseek_v4_vllm_e2e_parity\""));
     assert!(
         json.contains("benchmark V4 mHC, sparse MLA, and MegaMoE throughput against /root/vllm")
     );
-    assert!(json
-        .contains("run same-checkpoint full-layer routed output differential against /root/vllm"));
+    assert!(
+        json.contains(
+            "run same-checkpoint full-layer routed output differential against /root/vllm"
+        )
+    );
 
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -600,8 +605,11 @@ fn deepseek_vllm_benchmark_plan_emits_same_checkpoint_commands() {
     assert!(json.contains("\"--linear-backend\""));
     assert!(json.contains("\"--moe-backend\""));
     assert!(json.contains("\"--attention-backend\""));
-    assert!(json
-        .contains("same literal prompt text with NERVA --raw and vLLM tokenizer.encode(prompt)"));
+    assert!(
+        json.contains(
+            "same literal prompt text with NERVA --raw and vLLM tokenizer.encode(prompt)"
+        )
+    );
     assert!(json.contains("same prompt_token_ids in both JSON artifacts"));
     assert!(json.contains("same greedy sampler temperature=0 top_p=1 top_k=0 seed=0"));
     assert!(json.contains(

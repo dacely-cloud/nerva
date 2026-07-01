@@ -4,19 +4,19 @@ use std::{
     time::Instant,
 };
 
-use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::c4_indexer_topk::deepseek_c4_indexer_topk;
+use nerva_cuda::deepseek_kv::c128_topk::deepseek_c128_topk_metadata;
 use nerva_cuda::deepseek_kv::pack::deepseek_fp8_ds_mla_pack;
 use nerva_cuda::deepseek_kv::partial_states::deepseek_save_partial_states;
 use nerva_cuda::deepseek_kv::slot_mapping::deepseek_compressed_slot_mapping;
-use nerva_cuda::deepseek_mla::decode::{deepseek_mla_decode, CudaDeepSeekMlaDecodeInput};
+use nerva_cuda::deepseek_mla::decode::{CudaDeepSeekMlaDecodeInput, deepseek_mla_decode};
 use nerva_cuda::deepseek_mla::qkv_norm::deepseek_qkv_rmsnorm;
 use nerva_cuda::deepseek_moe::experts::{
-    deepseek_megamoe_experts, CudaDeepSeekMegaMoeExpertsInput,
+    CudaDeepSeekMegaMoeExpertsInput, deepseek_megamoe_experts,
 };
-use nerva_cuda::deepseek_moe::forward::{deepseek_moe_forward, CudaDeepSeekMoeForwardInput};
+use nerva_cuda::deepseek_moe::forward::{CudaDeepSeekMoeForwardInput, deepseek_moe_forward};
 use nerva_cuda::deepseek_moe::prepare::{
-    deepseek_megamoe_prepare, CudaDeepSeekMegaMoeEplbMapping, CudaDeepSeekMegaMoePrepareInput,
+    CudaDeepSeekMegaMoeEplbMapping, CudaDeepSeekMegaMoePrepareInput, deepseek_megamoe_prepare,
 };
 use nerva_cuda::deepseek_quant::dequant::{
     deepseek_fp8_e4m3fn_e8m0_dequant, deepseek_fp8_e4m3fn_e8m0_scale_encoded_gemm_tokens,
@@ -29,15 +29,14 @@ use nerva_cuda::deepseek_router::route::{
 };
 use nerva_cuda::smoke::status::SmokeStatus;
 use nerva_model::hf::architecture::HfArchitectureKind;
-use nerva_model::hf::contract::validate_exact_runtime_contract;
 use nerva_model::hf::deepseek::plan_deepseek_vllm_kv_cache;
 use nerva_model::hf::deepseek_runtime::{
+    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS, DeepSeekExecutionUnitCoverage,
     deepseek_execution_unit_coverage as execution_unit_coverage,
     deepseek_implemented_primitives as implemented_primitives,
     deepseek_layer_report as layer_report,
     deepseek_required_execution_units as required_execution_units,
-    deepseek_v4_mhc_warmup_token_sizes, DeepSeekExecutionUnitCoverage,
-    DEEPSEEK_V4_MHC_AUTO_WARMUP_MAX_TOKENS,
+    deepseek_v4_mhc_warmup_token_sizes,
 };
 use nerva_model::hf::metadata::HfModelMetadata;
 use nerva_model::hf::parser::parse_hf_config_metadata;
@@ -790,17 +789,8 @@ fn deepseek_vllm_parity_gate_json(
     metadata: &HfModelMetadata,
     vllm_units: &[DeepSeekVllmReferenceUnit],
 ) -> String {
-    let runtime_contract = match validate_exact_runtime_contract(metadata) {
-        Ok(()) => RuntimeContractReport {
-            status: "supported",
-            reason: "exact runtime contract accepts this DeepSeek config".to_string(),
-        },
-        Err(err) => RuntimeContractReport {
-            status: "unsupported",
-            reason: format!("{err:?}"),
-        },
-    };
     let execution_units = execution_unit_coverage(metadata);
+    let runtime_contract = deepseek_runtime_contract_report(&execution_units);
     let runtime_blockers = execution_units
         .iter()
         .filter(|unit| unit.status != "complete" && unit.status != "optional_missing")
@@ -828,6 +818,8 @@ fn deepseek_vllm_parity_gate_json(
         .filter(|unit| unit.status == "failed")
         .count();
     let vllm_reference_status = vllm_reference_status(vllm_units);
+    let runtime_executable = matches!(runtime_contract.status, "supported" | "runnable_partial");
+    let performance_comparison_allowed = runtime_executable && vllm_reference_status == "ok";
     let claim_allowed = runtime_contract.status == "supported"
         && runtime_blockers.is_empty()
         && vllm_reference_status == "ok";
@@ -835,8 +827,10 @@ fn deepseek_vllm_parity_gate_json(
         "ready"
     } else if vllm_reference_status != "ok" {
         "reference_blocked"
+    } else if performance_comparison_allowed {
+        "benchmark_ready"
     } else {
-        "runtime_blocked"
+        "runtime_incomplete"
     };
     let blocking_reasons = deepseek_parity_blocking_reasons(
         &runtime_contract,
@@ -874,17 +868,21 @@ fn deepseek_vllm_parity_gate_json(
         deepseek_vllm_reference_units_json(vllm_units),
         if claim_allowed {
             "verified_ready_for_end_to_end_parity"
+        } else if performance_comparison_allowed {
+            "ready_for_same_checkpoint_run"
         } else {
             "blocked_before_end_to_end_parity"
         },
         if claim_allowed {
+            "ready_for_vllm_runtime_benchmark"
+        } else if performance_comparison_allowed {
             "ready_for_vllm_runtime_benchmark"
         } else {
             "blocked_until_runtime_units_complete"
         },
         json_string_array(&blocking_reasons),
         claim_allowed,
-        claim_allowed,
+        performance_comparison_allowed,
     )
 }
 
@@ -1230,19 +1228,10 @@ pub(crate) fn deepseek_runtime_plan_json(metadata: &HfModelMetadata) -> Result<S
         ));
     }
 
-    let runtime_contract = match validate_exact_runtime_contract(metadata) {
-        Ok(()) => RuntimeContractReport {
-            status: "supported",
-            reason: "exact runtime contract accepts this DeepSeek config".to_string(),
-        },
-        Err(err) => RuntimeContractReport {
-            status: "unsupported",
-            reason: format!("{err:?}"),
-        },
-    };
     let implemented = implemented_primitives(metadata);
     let units = required_execution_units(metadata);
     let execution_unit_status = execution_unit_coverage(metadata);
+    let runtime_contract = deepseek_runtime_contract_report(&execution_unit_status);
     let vllm_refs = vllm_reference_units(metadata.architecture);
     let layer_report = layer_report(metadata);
     let claim_allowed = runtime_contract.status == "supported";
@@ -1331,6 +1320,48 @@ fn vllm_reference_status(units: &[DeepSeekVllmReferenceUnit]) -> &'static str {
 struct RuntimeContractReport {
     status: &'static str,
     reason: String,
+}
+
+fn deepseek_runtime_contract_report(
+    execution_units: &[DeepSeekExecutionUnitCoverage],
+) -> RuntimeContractReport {
+    let blockers = execution_units
+        .iter()
+        .filter(|unit| unit.status != "complete" && unit.status != "optional_missing")
+        .collect::<Vec<_>>();
+    if blockers.is_empty() {
+        return RuntimeContractReport {
+            status: "supported",
+            reason: "all required DeepSeek execution units are complete".to_string(),
+        };
+    }
+
+    let missing = blockers
+        .iter()
+        .filter(|unit| unit.status == "missing")
+        .map(|unit| unit.unit.as_str())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return RuntimeContractReport {
+            status: "incomplete",
+            reason: format!(
+                "DeepSeek runtime is missing required execution units: {}",
+                missing.join(", ")
+            ),
+        };
+    }
+
+    let partial = blockers
+        .iter()
+        .map(|unit| unit.unit.as_str())
+        .collect::<Vec<_>>();
+    RuntimeContractReport {
+        status: "runnable_partial",
+        reason: format!(
+            "DeepSeek CUDA runtime can execute this config; vLLM e2e parity/performance still needs verification for: {}",
+            partial.join(", ")
+        ),
+    }
 }
 
 fn execution_unit_coverage_json(units: &[DeepSeekExecutionUnitCoverage]) -> String {
@@ -2636,13 +2667,47 @@ fn tail_chars(value: &str, max_chars: usize) -> String {
 
 fn command_run_json(run: Option<&DeepSeekCommandRun>) -> String {
     match run {
-        Some(run) => format!(
-            "{{\"exit_status\":{},\"stderr_tail\":\"{}\"}}",
-            run.status,
-            json_escape(&run.stderr_tail)
-        ),
+        Some(run) => {
+            let json_status = find_first_json_string_field(&run.json, "status")
+                .ok()
+                .flatten();
+            let error_type = find_first_json_string_field(&run.json, "error_type")
+                .ok()
+                .flatten();
+            let error = find_first_json_string_field(&run.json, "error")
+                .ok()
+                .flatten();
+            format!(
+                "{{\"exit_status\":{},\"json_status\":{},\"error_type\":{},\"error\":{},\"stderr_tail\":\"{}\"}}",
+                run.status,
+                json_opt_string(json_status.as_deref()),
+                json_opt_string(error_type.as_deref()),
+                json_opt_string(error.as_deref()),
+                json_escape(&run.stderr_tail)
+            )
+        }
         None => "null".to_string(),
     }
+}
+
+fn command_failure_json(engine: &str, run: &DeepSeekCommandRun) -> String {
+    let json_status = find_first_json_string_field(&run.json, "status")
+        .ok()
+        .flatten();
+    let error_type = find_first_json_string_field(&run.json, "error_type")
+        .ok()
+        .flatten();
+    let error = find_first_json_string_field(&run.json, "error")
+        .ok()
+        .flatten();
+    format!(
+        "{{\"engine\":\"{}\",\"exit_status\":{},\"json_status\":{},\"error_type\":{},\"error\":{}}}",
+        json_escape(engine),
+        run.status,
+        json_opt_string(json_status.as_deref()),
+        json_opt_string(error_type.as_deref()),
+        json_opt_string(error.as_deref()),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2665,8 +2730,13 @@ fn deepseek_benchmark_run_json(
     let claim_allowed = compare_json
         .and_then(|json| find_first_json_string_field(json, "status").ok().flatten())
         .is_some_and(|status| status == "ok");
+    let failure_json = match (status, nerva_run) {
+        ("vllm_failed", _) => command_failure_json("vllm", vllm_run),
+        ("nerva_failed", Some(run)) => command_failure_json("nerva", run),
+        _ => "null".to_string(),
+    };
     format!(
-        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-run-v1\",\"checkpoint_dir\":\"{}\",\"prompt_spec\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"artifact_dir\":\"{}\",\"artifacts\":{{\"vllm\":\"{}\",\"nerva\":\"{}\",\"compare\":\"{}\"}},\"commands\":{{\"vllm_generate\":{},\"nerva_generate\":{}}},\"runs\":{{\"vllm\":{},\"nerva\":{}}},\"compare\":{},\"claim_allowed\":{}}}",
+        "{{\"status\":\"{}\",\"schema\":\"nerva-deepseek-vllm-benchmark-run-v1\",\"checkpoint_dir\":\"{}\",\"prompt_spec\":\"{}\",\"max_context_tokens\":{},\"max_new_tokens\":{},\"sampler\":{{\"temperature\":0,\"top_p\":1,\"top_k\":0,\"seed\":0}},\"artifact_dir\":\"{}\",\"artifacts\":{{\"vllm\":\"{}\",\"nerva\":\"{}\",\"compare\":\"{}\"}},\"commands\":{{\"vllm_generate\":{},\"nerva_generate\":{}}},\"runs\":{{\"vllm\":{},\"nerva\":{}}},\"compare\":{},\"failure\":{},\"claim_allowed\":{}}}",
         status,
         json_escape(checkpoint_dir),
         json_escape(prompt_spec),
@@ -2681,6 +2751,7 @@ fn deepseek_benchmark_run_json(
         command_run_json(Some(vllm_run)),
         command_run_json(nerva_run),
         compare_json.unwrap_or("null"),
+        failure_json,
         claim_allowed,
     )
 }
@@ -2936,7 +3007,7 @@ fn find_json_value_start_for_key(source: &str, key: &str) -> Result<Option<usize
         }
         let colon = skip_json_ws(bytes, after_field);
         if bytes.get(colon) != Some(&b':') {
-            return Err(format!("JSON key {key} is missing ':'"));
+            continue;
         }
         return Ok(Some(skip_json_ws(bytes, colon + 1)));
     }
@@ -2996,6 +3067,22 @@ fn skip_json_ws(bytes: &[u8], mut index: usize) -> usize {
         index += 1;
     }
     index
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_first_json_string_field;
+
+    #[test]
+    fn deepseek_json_field_parser_skips_matching_string_values() {
+        let source =
+            r#"{"traceback_tail":"the word error appears before the key","error":"root cause"}"#;
+
+        assert_eq!(
+            find_first_json_string_field(source, "error").unwrap(),
+            Some("root cause".to_string())
+        );
+    }
 }
 
 fn json_opt_architecture(value: Option<&str>) -> String {
