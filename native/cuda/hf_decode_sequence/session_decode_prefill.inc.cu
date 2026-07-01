@@ -1202,6 +1202,109 @@ cudaError_t deepseek_prefill_project_tokens(
       session->dtype, rows, cols, tokens, block_rows, block_cols, output);
 }
 
+bool deepseek_prefill_sparse_moe_split_supported(
+    const NervaCudaHfDecodeSequenceSession *session,
+    const SequenceLayerLayout &layout, uint32_t chunk_tokens) {
+  if (session == nullptr || chunk_tokens == 0 ||
+      session->device_prefill_ff == nullptr ||
+      session->device_prefill_gate_up == nullptr ||
+      session->device_prefill_down == nullptr ||
+      layout.mlp_kind != kMlpKindSparseMoe || layout.num_experts == 0 ||
+      layout.experts_per_token == 0 || layout.moe_intermediate == 0 ||
+      layout.moe_intermediate > session->intermediate ||
+      layout.w_router == kMissingOffset ||
+      layout.w_expert_gate_up == kMissingOffset ||
+      layout.w_expert_down == kMissingOffset) {
+    return false;
+  }
+  const uint64_t top_k = layout.experts_per_token;
+  const uint64_t moe_intermediate = layout.moe_intermediate;
+  const uint64_t shared_intermediate =
+      layout.shared_expert_intermediate == 0 ? 0 : layout.shared_expert_intermediate;
+  if (shared_intermediate > session->intermediate) {
+    return false;
+  }
+  const uint64_t rank_ff_rows =
+      sat_add_u64(sat_mul_u64(top_k, moe_intermediate), shared_intermediate);
+  const uint64_t rank_ff_bytes =
+      sat_mul_u64(sat_mul_u64(rank_ff_rows, chunk_tokens), sizeof(float));
+  if (rank_ff_bytes > session->prefill_gate_up_bytes) {
+    return false;
+  }
+  const uint64_t route_slots = sat_mul_u64(chunk_tokens, top_k);
+  const uint64_t route_bytes =
+      sat_mul_u64(route_slots, sizeof(uint32_t) + sizeof(float));
+  return route_bytes <= session->prefill_ff_bytes;
+}
+
+cudaError_t launch_deepseek_prefill_sparse_moe_split(
+    NervaCudaHfDecodeSequenceSession *session,
+    const SequenceLayerLayout &layout, uint32_t chunk_tokens,
+    NervaCudaHfDecodeSequenceResult *out) {
+  if (!deepseek_prefill_sparse_moe_split_supported(session, layout,
+                                                   chunk_tokens)) {
+    return cudaErrorInvalidValue;
+  }
+  constexpr uint32_t threads = kDecodeThreads;
+  constexpr uint32_t row_tile = 8;
+  constexpr uint32_t token_tile = 2;
+  constexpr uint32_t slots = row_tile * token_tile;
+  const size_t shared_one_reduce = slots * threads * sizeof(float);
+  const size_t shared_two_reduce = shared_one_reduce * 2u;
+
+  hf_deepseek_prefill_sparse_moe_route_kernel<<<
+      chunk_tokens, threads, 0, session->stream>>>(
+      session->device_arena, layout, session->dtype, session->hidden,
+      session->intermediate, chunk_tokens, session->device_prefill_norm,
+      session->device_prefill_ff, session->device_deepseek_runtime_counters);
+  cudaError_t err = cudaGetLastError();
+  if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+
+  if (err == cudaSuccess) {
+    const dim3 grid(ceil_div_u32(layout.moe_intermediate, row_tile),
+                    ceil_div_u32(chunk_tokens, token_tile),
+                    layout.experts_per_token);
+    hf_deepseek_prefill_sparse_moe_gate_up_kernel<<<
+        grid, threads, shared_two_reduce, session->stream>>>(
+        session->device_arena, layout, session->dtype, session->hidden,
+        session->intermediate, chunk_tokens, session->device_prefill_norm,
+        session->device_prefill_ff, session->device_prefill_gate_up);
+    err = cudaGetLastError();
+    if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+  }
+
+  const bool has_shared_expert =
+      layout.shared_expert_intermediate != 0 &&
+      layout.w_shared_expert_gate != kMissingOffset &&
+      layout.w_shared_expert_up != kMissingOffset &&
+      layout.w_shared_expert_down != kMissingOffset;
+  if (err == cudaSuccess && has_shared_expert) {
+    const dim3 shared_grid(ceil_div_u32(layout.shared_expert_intermediate,
+                                        row_tile),
+                           ceil_div_u32(chunk_tokens, token_tile));
+    hf_deepseek_prefill_sparse_moe_shared_gate_up_kernel<<<
+        shared_grid, threads, shared_two_reduce, session->stream>>>(
+        session->device_arena, layout, session->dtype, session->hidden,
+        session->intermediate, chunk_tokens, session->device_prefill_norm,
+        session->device_prefill_gate_up);
+    err = cudaGetLastError();
+    if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+  }
+
+  if (err == cudaSuccess) {
+    const dim3 down_grid(ceil_div_u32(session->hidden, row_tile),
+                         ceil_div_u32(chunk_tokens, token_tile));
+    hf_deepseek_prefill_sparse_moe_down_kernel<<<
+        down_grid, threads, shared_one_reduce, session->stream>>>(
+        session->device_arena, layout, session->hidden, session->intermediate,
+        chunk_tokens, session->device_prefill_ff,
+        session->device_prefill_gate_up, session->device_prefill_down);
+    err = cudaGetLastError();
+    if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+  }
+  return err;
+}
+
 cudaError_t launch_deepseek_v3_session_prefill(
     NervaCudaHfDecodeSequenceSession *session, uint32_t prompt_token_count,
     uint32_t has_eos_token, uint32_t eos_token,
@@ -1495,14 +1598,21 @@ cudaError_t launch_deepseek_v3_session_prefill(
       if (layout.mlp_kind == kMlpKindSparseMoe) {
         if (err == cudaSuccess) err = profile_stage_begin();
         if (err == cudaSuccess) {
-          hf_deepseek_prefill_sparse_moe_kernel<<<
-              chunk_tokens, kDecodeThreads, 0, session->stream>>>(
-              session->device_arena, layout, session->dtype, session->hidden,
-              session->intermediate, chunk_tokens, session->device_prefill_norm,
-              session->device_prefill_gate_up, session->device_prefill_down,
-              session->device_deepseek_runtime_counters);
-          err = cudaGetLastError();
-          if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+          if (deepseek_prefill_sparse_moe_split_supported(session, layout,
+                                                          chunk_tokens)) {
+            err = launch_deepseek_prefill_sparse_moe_split(session, layout,
+                                                           chunk_tokens, out);
+          } else {
+            hf_deepseek_prefill_sparse_moe_kernel<<<
+                chunk_tokens, kDecodeThreads, 0, session->stream>>>(
+                session->device_arena, layout, session->dtype, session->hidden,
+                session->intermediate, chunk_tokens,
+                session->device_prefill_norm, session->device_prefill_gate_up,
+                session->device_prefill_down,
+                session->device_deepseek_runtime_counters);
+            err = cudaGetLastError();
+            if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+          }
         }
         if (err == cudaSuccess) err = profile_stage_end(&mlp_ns);
       } else {

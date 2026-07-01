@@ -197,6 +197,23 @@ __global__ void hf_prefill_sparse_moe_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
     const uint16_t *norm_in, float *gate_up_tmp, float *down_out);
+__global__ void hf_deepseek_prefill_sparse_moe_route_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
+    const uint16_t *norm_in, uint16_t *route_scratch,
+    uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_prefill_sparse_moe_gate_up_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
+    const uint16_t *norm_in, uint16_t *route_scratch, float *gate_up_tmp);
+__global__ void hf_deepseek_prefill_sparse_moe_shared_gate_up_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
+    const uint16_t *norm_in, float *gate_up_tmp);
+__global__ void hf_deepseek_prefill_sparse_moe_down_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    uint32_t intermediate, uint32_t chunk_tokens, uint16_t *route_scratch,
+    float *gate_up_tmp, float *down_out);
 __global__ void hf_prefill_finish_kernel(uint32_t dtype, uint32_t hidden,
                                          uint32_t chunk_start,
                                          uint32_t chunk_tokens,
