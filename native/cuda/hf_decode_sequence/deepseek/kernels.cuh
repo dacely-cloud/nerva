@@ -12,6 +12,7 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
     uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v32_indexer_kv_encode_tokens_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
@@ -20,6 +21,7 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_tokens_kernel(
     uint32_t projection_input_stride, uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v32_indexer_weight_state_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
@@ -53,6 +55,7 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
     const uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     uint64_t *deepseek_runtime_counters);
 __global__ void hf_deepseek_v3_mla_cache_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,

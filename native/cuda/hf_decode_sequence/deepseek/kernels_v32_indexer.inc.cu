@@ -5,6 +5,7 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
     uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     uint64_t *deepseek_runtime_counters) {
   if (blockIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
@@ -25,8 +26,11 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
   }
 
   const uint32_t position = step_cursor == nullptr ? 0 : *step_cursor;
-  const uint32_t block = position / kDeepSeekV32IndexerKvBlockTokens;
-  if (block >= deepseek_indexer_kv_block_count) {
+  const uint32_t logical_block = position / kDeepSeekV32IndexerKvBlockTokens;
+  uint32_t physical_block = 0;
+  if (!deepseek_v32_packed_physical_block(
+          kv_block_table, kv_block_count, deepseek_indexer_kv_block_count,
+          logical_block, &physical_block)) {
     return;
   }
 
@@ -121,7 +125,7 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
       position % kDeepSeekV32IndexerKvBlockTokens;
   uint8_t *block_ptr = deepseek_indexer_kv +
                        deepseek_indexer_kv_offset_bytes +
-                       static_cast<uint64_t>(block) * page_bytes;
+                       static_cast<uint64_t>(physical_block) * page_bytes;
   const uint32_t tile_block_id =
       block_offset / kDeepSeekV32IndexerKvTileTokens;
   const uint32_t tile_block_offset =
@@ -168,6 +172,7 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_tokens_kernel(
     uint32_t projection_input_stride, uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     uint64_t *deepseek_runtime_counters) {
   const uint32_t local_token = blockIdx.x;
   if (local_token >= chunk_tokens || projection_input_stride < hidden) {
@@ -191,8 +196,11 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_tokens_kernel(
   if (position >= max_steps) {
     return;
   }
-  const uint32_t block = position / kDeepSeekV32IndexerKvBlockTokens;
-  if (block >= deepseek_indexer_kv_block_count) {
+  const uint32_t logical_block = position / kDeepSeekV32IndexerKvBlockTokens;
+  uint32_t physical_block = 0;
+  if (!deepseek_v32_packed_physical_block(
+          kv_block_table, kv_block_count, deepseek_indexer_kv_block_count,
+          logical_block, &physical_block)) {
     return;
   }
 
@@ -290,7 +298,7 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_tokens_kernel(
       position % kDeepSeekV32IndexerKvBlockTokens;
   uint8_t *block_ptr = deepseek_indexer_kv +
                        deepseek_indexer_kv_offset_bytes +
-                       static_cast<uint64_t>(block) * page_bytes;
+                       static_cast<uint64_t>(physical_block) * page_bytes;
   const uint32_t tile_block_id =
       block_offset / kDeepSeekV32IndexerKvTileTokens;
   const uint32_t tile_block_offset =
@@ -669,6 +677,7 @@ __global__ void hf_deepseek_v32_indexer_query_state_tokens_kernel(
 
 __device__ float deepseek_session_read_v32_indexer_kv_raw(
     const uint8_t *kv_cache, uint64_t kv_offset_bytes, uint32_t block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     const SequenceLayerLayout &layout, uint32_t position, uint32_t dim,
     float *scale_out) {
   if (scale_out != nullptr) {
@@ -678,8 +687,11 @@ __device__ float deepseek_session_read_v32_indexer_kv_raw(
   if (kv_cache == nullptr || head_dim == 0 || dim >= head_dim) {
     return 0.0f;
   }
-  const uint32_t block = position / kDeepSeekV32IndexerKvBlockTokens;
-  if (block >= block_count) {
+  const uint32_t logical_block = position / kDeepSeekV32IndexerKvBlockTokens;
+  uint32_t physical_block = 0;
+  if (!deepseek_v32_packed_physical_block(kv_block_table, kv_block_count,
+                                          block_count, logical_block,
+                                          &physical_block)) {
     return 0.0f;
   }
   const uint32_t scale_bytes =
@@ -705,7 +717,7 @@ __device__ float deepseek_session_read_v32_indexer_kv_raw(
           kDeepSeekV32IndexerKvTileHeadBytes +
       tile_store_offset;
   const uint8_t *block_ptr = kv_cache + kv_offset_bytes +
-                             static_cast<uint64_t>(block) * page_bytes;
+                             static_cast<uint64_t>(physical_block) * page_bytes;
   const uint8_t *scale_ptr =
       block_ptr +
       static_cast<uint64_t>(kDeepSeekV32IndexerKvBlockTokens) * head_dim +
@@ -725,6 +737,7 @@ __device__ uint32_t deepseek_session_select_v32_sparse_slots(
     const uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     int32_t *topk_slots, float *topk_scores,
     uint32_t *candidates_scored,
     unsigned long long *selection_hash_out) {
@@ -792,7 +805,8 @@ __device__ uint32_t deepseek_session_select_v32_sparse_slots(
           float k_scale = 0.0f;
           const float k_value = deepseek_session_read_v32_indexer_kv_raw(
               deepseek_indexer_kv, deepseek_indexer_kv_offset_bytes,
-              deepseek_indexer_kv_block_count, layout, slot, dim, &k_scale);
+              deepseek_indexer_kv_block_count, kv_block_count, kv_block_table,
+              layout, slot, dim, &k_scale);
           if (head == 0 && dim == 0) {
             slot_scale = k_scale;
           }
@@ -846,6 +860,7 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
     const uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
     uint64_t *deepseek_runtime_counters) {
   if (blockIdx.x != 0 || threadIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
@@ -862,6 +877,7 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
       layout, step_cursor, max_steps, deepseek_indexer_state,
       deepseek_indexer_state_offset_bytes, deepseek_indexer_kv,
       deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
+      kv_block_count, kv_block_table,
       topk_slots, topk_scores, &candidates_scored, &selection_hash);
   if (selected == 0) {
     return;

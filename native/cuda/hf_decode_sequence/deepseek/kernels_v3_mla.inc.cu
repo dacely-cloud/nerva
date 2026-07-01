@@ -57,8 +57,8 @@ __global__ void hf_deepseek_v3_mla_cache_encode_kernel(
   if (threadIdx.x == 0) {
     deepseek_session_write_v32_fp8_ds_mla_kv(
         deepseek_v32_mla_kv, deepseek_v32_mla_kv_offset_bytes,
-        deepseek_v32_mla_kv_block_count, layout, position, dtype,
-        kv_latent_norm, kv_a, rope_theta);
+        deepseek_v32_mla_kv_block_count, kv_block_table, kv_block_count,
+        layout, position, dtype, kv_latent_norm, kv_a, rope_theta);
   }
 }
 
@@ -189,8 +189,8 @@ __global__ void hf_deepseek_v3_mla_cache_encode_tokens_kernel(
   if (threadIdx.x == 0) {
     deepseek_session_write_v32_fp8_ds_mla_kv(
         deepseek_v32_mla_kv, deepseek_v32_mla_kv_offset_bytes,
-        deepseek_v32_mla_kv_block_count, layout, position, dtype,
-        kv_latent_norm, kv_a, rope_theta);
+        deepseek_v32_mla_kv_block_count, kv_block_table, kv_block_count,
+        layout, position, dtype, kv_latent_norm, kv_a, rope_theta);
   }
 }
 
@@ -237,6 +237,7 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
           layout, step_cursor, max_steps, deepseek_indexer_state,
           deepseek_indexer_state_offset_bytes, deepseek_indexer_kv,
           deepseek_indexer_kv_offset_bytes, deepseek_indexer_kv_block_count,
+          kv_block_count, kv_block_table,
           sparse_slots, sparse_scores, &sparse_candidates_scored,
           &sparse_selection_hash);
   const bool use_sparse_attention = sparse_attention_tokens != 0;

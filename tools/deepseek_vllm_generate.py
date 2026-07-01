@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-prefix-caching", action="store_true")
     parser.add_argument("--trust-remote-code", action="store_true", default=True)
     parser.add_argument("--enforce-eager", action="store_true")
+    parser.add_argument("--disable-flashinfer-autotune", action="store_true")
     parser.add_argument("--disable-log-stats", action="store_true", default=True)
     return parser.parse_args()
 
@@ -71,6 +72,7 @@ def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[s
         "status": "error",
         "schema": "nerva-vllm-generate-v1",
         "engine": "vllm",
+        "python": sys.executable,
         "error_type": type(exc).__name__,
         "error": str(exc),
         "traceback_tail": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[
@@ -89,6 +91,7 @@ def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[s
                 "warmup_runs": args.warmup_runs,
                 "dtype": args.dtype,
                 "enable_prefix_caching": args.enable_prefix_caching,
+                "enable_flashinfer_autotune": not args.disable_flashinfer_autotune,
                 "kernel": {
                     "linear_backend": args.linear_backend,
                     "moe_backend": args.moe_backend,
@@ -136,6 +139,8 @@ def run_generation(args: argparse.Namespace) -> None:
         engine_kwargs["moe_backend"] = args.moe_backend
     if args.attention_backend != "auto":
         engine_kwargs["attention_config"] = {"backend": args.attention_backend}
+    if args.disable_flashinfer_autotune:
+        engine_kwargs["enable_flashinfer_autotune"] = False
 
     llm = LLM(
         model=args.model,
@@ -197,6 +202,7 @@ def run_generation(args: argparse.Namespace) -> None:
                 "status": "ok",
                 "schema": "nerva-vllm-generate-v1",
                 "engine": "vllm",
+                "python": sys.executable,
                 "vllm_root": str(vllm_root),
                 "model": args.model,
                 "prompt_mode": prompt_mode,
@@ -209,6 +215,7 @@ def run_generation(args: argparse.Namespace) -> None:
                 "measured_runs": args.runs,
                 "warmup_runs": args.warmup_runs,
                 "enable_prefix_caching": args.enable_prefix_caching,
+                "enable_flashinfer_autotune": not args.disable_flashinfer_autotune,
                 "kernel": {
                     "linear_backend": args.linear_backend,
                     "moe_backend": args.moe_backend,

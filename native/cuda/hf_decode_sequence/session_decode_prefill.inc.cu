@@ -932,6 +932,7 @@ cudaError_t launch_deepseek_v3_single_layer_prefill_cache_path(
           session->device_deepseek_indexer_kv,
           deepseek_v32_indexer_kv_layer_offset_bytes(session, 0),
           deepseek_v32_indexer_kv_block_count(session, layout),
+          session->kv_block_count, session->device_kv_block_table,
           session->device_deepseek_runtime_counters);
       err = cudaGetLastError();
       if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;

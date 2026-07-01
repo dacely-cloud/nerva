@@ -642,6 +642,7 @@ __device__ bool deepseek_session_write_fp8_ds_mla_swa_kv(
 
 __device__ bool deepseek_session_write_v32_fp8_ds_mla_kv(
     uint8_t *kv_cache, uint64_t kv_offset_bytes, uint32_t block_count,
+    const uint32_t *kv_block_table, uint32_t kv_block_count,
     const SequenceLayerLayout &layout, uint32_t position, uint32_t dtype,
     const uint16_t *kv_latent_norm, const float *kv_a, float rope_theta) {
   if (kv_cache == nullptr || kv_latent_norm == nullptr || kv_a == nullptr ||
@@ -652,14 +653,17 @@ __device__ bool deepseek_session_write_v32_fp8_ds_mla_kv(
       layout.deepseek_qk_rope_head_dim != kDeepSeekV32PackedKvRopeValues) {
     return false;
   }
-  const uint32_t block = position / kDeepSeekV32PackedKvBlockTokens;
-  if (block >= block_count) {
+  const uint32_t logical_block = position / kDeepSeekV32PackedKvBlockTokens;
+  uint32_t physical_block = 0;
+  if (!deepseek_v32_packed_physical_block(
+          kv_block_table, kv_block_count, block_count, logical_block,
+          &physical_block)) {
     return false;
   }
   const uint32_t kv_pos = position % kDeepSeekV32PackedKvBlockTokens;
   uint8_t *row =
       kv_cache + kv_offset_bytes +
-      (static_cast<uint64_t>(block) * kDeepSeekV32PackedKvBlockTokens +
+      (static_cast<uint64_t>(physical_block) * kDeepSeekV32PackedKvBlockTokens +
        kv_pos) *
           kDeepSeekV32PackedKvTokenBytes;
   uint8_t *nope_ptr = row;

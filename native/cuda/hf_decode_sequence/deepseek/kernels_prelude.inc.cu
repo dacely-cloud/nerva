@@ -29,6 +29,45 @@ __device__ float deepseek_swiglu(float gate, float up, float swiglu_limit);
 __device__ bool deepseek_session_sparse_score_is_better(
     float candidate, int32_t slot, float current, int32_t current_slot);
 
+__device__ __forceinline__ bool deepseek_v32_packed_physical_block(
+    const uint32_t *kv_block_table, uint32_t kv_block_count,
+    uint32_t packed_block_count, uint32_t logical_packed_block,
+    uint32_t *physical_packed_block) {
+  if (physical_packed_block == nullptr ||
+      logical_packed_block >= packed_block_count) {
+    return false;
+  }
+  if (kv_block_table == nullptr) {
+    *physical_packed_block = logical_packed_block;
+    return true;
+  }
+  constexpr uint32_t normal_blocks_per_packed =
+      kDeepSeekV32PackedKvBlockTokens / kKvCacheBlockTokens;
+  const uint32_t logical_normal_base =
+      logical_packed_block * normal_blocks_per_packed;
+  if (normal_blocks_per_packed == 0 || logical_normal_base >= kv_block_count) {
+    return false;
+  }
+  const uint32_t available_normal_blocks =
+      min(normal_blocks_per_packed, kv_block_count - logical_normal_base);
+  const uint32_t physical_normal_base = kv_block_table[logical_normal_base];
+  if (physical_normal_base % normal_blocks_per_packed != 0) {
+    return false;
+  }
+  for (uint32_t offset = 1; offset < available_normal_blocks; ++offset) {
+    if (kv_block_table[logical_normal_base + offset] !=
+        physical_normal_base + offset) {
+      return false;
+    }
+  }
+  const uint32_t physical = physical_normal_base / normal_blocks_per_packed;
+  if (physical >= packed_block_count) {
+    return false;
+  }
+  *physical_packed_block = physical;
+  return true;
+}
+
 __device__ void deepseek_session_apply_v4_mhc_pre_state(
     const uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t position, float rms_eps, const float *layer_input,

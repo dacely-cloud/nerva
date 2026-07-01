@@ -143,6 +143,7 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
       session->device_projection_input, session->device_deepseek_indexer_kv,
       deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
       deepseek_v32_indexer_kv_block_count(session, layout),
+      session->kv_block_count, session->device_kv_block_table,
       session->device_deepseek_runtime_counters);
   err = cudaGetLastError();
   if (err != cudaSuccess) return err;
