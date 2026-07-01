@@ -5,8 +5,8 @@ use nerva_model::hf::tokenizer::{PromptFormat, decode_generated_text};
 use serde_json::{Value, json};
 
 use super::{
-    ApiError, AppState, GeneratedText, PromptInput, ReasoningMode, validate_functions_field,
-    validate_mcp_tools_field, validate_tool_choice_field,
+    ApiError, AppState, GeneratedText, PromptInput, ReasoningMode, model_is_available,
+    validate_functions_field, validate_mcp_tools_field, validate_tool_choice_field,
 };
 
 pub(crate) fn authorize(state: &AppState, request: &HttpRequest) -> Result<(), ApiError> {
@@ -30,7 +30,7 @@ pub(crate) fn require_known_model(state: &AppState, body: &Value) -> Result<(), 
     let Some(model) = body.get("model").and_then(Value::as_str) else {
         return Ok(());
     };
-    if model == state.config.model_id {
+    if model_is_available(state, model) {
         Ok(())
     } else {
         Err(ApiError::not_found(format!(

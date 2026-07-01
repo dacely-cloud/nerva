@@ -7,7 +7,10 @@ use nerva_model::hf::tokenizer::{
 };
 use serde_json::{Value, json};
 
-use super::{ApiError, AppState, authorize, require_known_model, string_any};
+use super::{
+    ApiError, AppState, authorize, delete_fine_tuned_model_alias, list_model_values,
+    model_record_value, require_known_model, string_any,
+};
 
 pub(crate) async fn health() -> HttpResponse {
     HttpResponse::Ok().body("OK")
@@ -57,12 +60,7 @@ pub(crate) async fn models(state: web::Data<AppState>, request: HttpRequest) -> 
     }
     HttpResponse::Ok().json(json!({
         "object": "list",
-        "data": [{
-            "id": state.config.model_id,
-            "object": "model",
-            "created": 0,
-            "owned_by": "nerva"
-        }]
+        "data": list_model_values(&state)
     }))
 }
 
@@ -75,17 +73,29 @@ pub(crate) async fn model(
         return error.into_response();
     }
     let requested = path.into_inner();
-    if requested != state.config.model_id {
-        return ApiError::not_found(format!(
+    match model_record_value(&state, &requested) {
+        Some(model) => HttpResponse::Ok().json(model),
+        None => ApiError::not_found(format!(
             "model '{requested}' is not served by this NERVA instance"
         ))
-        .into_response();
+        .into_response(),
     }
+}
+
+pub(crate) async fn delete_model(
+    state: web::Data<AppState>,
+    request: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if let Err(error) = authorize(&state, &request) {
+        return error.into_response();
+    }
+    let requested = path.into_inner();
+    let deleted = delete_fine_tuned_model_alias(&state, &requested);
     HttpResponse::Ok().json(json!({
-        "id": state.config.model_id,
+        "id": requested,
         "object": "model",
-        "created": 0,
-        "owned_by": "nerva"
+        "deleted": deleted
     }))
 }
 
@@ -146,16 +156,6 @@ pub(crate) async fn detokenize(
     response.unwrap_or_else(ApiError::into_response)
 }
 
-pub(crate) async fn unsupported_embeddings(
-    request: HttpRequest,
-    state: web::Data<AppState>,
-) -> HttpResponse {
-    if let Err(error) = authorize(&state, &request) {
-        return error.into_response();
-    }
-    ApiError::unsupported("embeddings require an embedding model backend; this NERVA build serves causal LM text generation only").into_response()
-}
-
 pub(crate) async fn unsupported_pooling(
     request: HttpRequest,
     state: web::Data<AppState>,
@@ -164,47 +164,6 @@ pub(crate) async fn unsupported_pooling(
         return error.into_response();
     }
     ApiError::unsupported("pooling, classify, score, and rerank require a pooling/ranking backend; this NERVA build serves causal LM text generation only").into_response()
-}
-
-pub(crate) async fn unsupported_audio(
-    request: HttpRequest,
-    state: web::Data<AppState>,
-) -> HttpResponse {
-    if let Err(error) = authorize(&state, &request) {
-        return error.into_response();
-    }
-    ApiError::unsupported("audio transcription and translation require an audio model backend; this NERVA build serves causal LM text generation only").into_response()
-}
-
-pub(crate) async fn unsupported_multimodal(
-    request: HttpRequest,
-    state: web::Data<AppState>,
-) -> HttpResponse {
-    if let Err(error) = authorize(&state, &request) {
-        return error.into_response();
-    }
-    ApiError::unsupported("image generation and image editing require a multimodal/image backend; this NERVA build serves causal LM text generation only").into_response()
-}
-
-pub(crate) async fn unsupported_moderations(
-    request: HttpRequest,
-    state: web::Data<AppState>,
-) -> HttpResponse {
-    if let Err(error) = authorize(&state, &request) {
-        return error.into_response();
-    }
-    ApiError::unsupported("moderations require a moderation model backend; this NERVA build serves causal LM text generation only").into_response()
-}
-
-pub(crate) async fn unsupported_fine_tuning(
-    request: HttpRequest,
-    state: web::Data<AppState>,
-) -> HttpResponse {
-    if let Err(error) = authorize(&state, &request) {
-        return error.into_response();
-    }
-    ApiError::unsupported("fine tuning jobs are not implemented in the NERVA inference server")
-        .into_response()
 }
 
 pub(crate) async fn unsupported_lora(

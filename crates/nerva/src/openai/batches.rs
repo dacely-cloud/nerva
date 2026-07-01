@@ -6,18 +6,21 @@ use serde_json::{Value, json};
 use crate::cli::args::{DEFAULT_TEMPERATURE, DEFAULT_TOP_P};
 
 use super::{
-    ApiError, AppState, BatchRecord, BatchRequestCounts, GenerateOptions, PromptInput,
-    ReasoningMode, append_response_to_conversation, apply_response_format_instruction, authorize,
-    chat_prompt_for_reasoning, completion_echo_prefix, completion_prompts, conversation_context,
-    empty_text_prompt, generate_text_batch_direct_sync, generate_text_direct_sync,
-    generated_metadata, insert_generated_file, lock_files, previous_response_context,
-    reject_unsupported_generation_options, request_conversation_id, request_echo, request_f32,
-    request_include_reasoning, request_max_tokens, request_metadata, request_n,
-    request_optional_string, request_reasoning_mode, request_response_format_instruction,
-    request_stop_strings, request_store, request_suffix, request_u32, request_u64_opt,
-    require_known_model, response_input_items, responses_prompt_for_reasoning,
-    shared_fork_batch_supported, split_generated_reasoning, store_response_if_requested,
-    unix_seconds, usage,
+    ApiError, AppState, BatchRecord, BatchRequestCounts, GenerateOptions, ImageTask, PromptInput,
+    ReasoningMode, VideoOperation, append_response_to_conversation,
+    apply_response_format_instruction, authorize, chat_prompt_for_reasoning,
+    completion_echo_prefix, completion_prompts, conversation_context,
+    create_audio_text_batch_response, create_embeddings_response, create_moderation_response,
+    create_speech_batch_response, create_video_batch_response, empty_text_prompt,
+    generate_text_batch_direct_sync, generate_text_direct_sync, generated_metadata,
+    image_response_value, insert_generated_file, lock_files, parse_image_json_request,
+    previous_response_context, reject_unsupported_generation_options, request_conversation_id,
+    request_echo, request_f32, request_include_reasoning, request_max_tokens, request_metadata,
+    request_model_id, request_n, request_optional_string, request_reasoning_mode,
+    request_response_format_instruction, request_stop_strings, request_store, request_suffix,
+    request_u32, request_u64_opt, require_known_model, response_input_items,
+    responses_prompt_for_reasoning, shared_fork_batch_supported, split_generated_reasoning,
+    store_response_if_requested, unix_seconds, usage,
 };
 
 pub(crate) async fn create_batch(
@@ -150,7 +153,20 @@ pub(crate) fn normalize_batch_endpoint(endpoint: &str) -> Result<String, ApiErro
         endpoint
     };
     match path {
-        "/v1/completions" | "/v1/chat/completions" | "/v1/responses" => Ok(path.to_string()),
+        "/v1/completions"
+        | "/v1/chat/completions"
+        | "/v1/responses"
+        | "/v1/embeddings"
+        | "/v1/moderations"
+        | "/v1/audio/transcriptions"
+        | "/v1/audio/translations"
+        | "/v1/audio/speech"
+        | "/v1/images/generations"
+        | "/v1/images/edits"
+        | "/v1/images/variations"
+        | "/v1/videos"
+        | "/v1/videos/edits"
+        | "/v1/videos/extensions" => Ok(path.to_string()),
         _ => Err(ApiError::unsupported(format!(
             "batch endpoint '{path}' is not implemented"
         ))),
@@ -315,19 +331,46 @@ fn execute_batch_generation_sync(
     endpoint: &str,
     body: &Value,
 ) -> Result<Value, ApiError> {
-    require_known_model(state, body)?;
-    reject_unsupported_generation_options(body)?;
     match endpoint {
-        "/v1/completions" => batch_completion_response_sync(state, body),
-        "/v1/chat/completions" => batch_chat_completion_response_sync(state, body),
-        "/v1/responses" => batch_response_sync(state, body),
+        "/v1/embeddings" => create_embeddings_response(state, body),
+        "/v1/moderations" => create_moderation_response(state, body),
+        "/v1/audio/transcriptions" => create_audio_text_batch_response(body, false),
+        "/v1/audio/translations" => create_audio_text_batch_response(body, true),
+        "/v1/audio/speech" => create_speech_batch_response(body),
+        "/v1/images/generations" => batch_image_response(body, ImageTask::Generation),
+        "/v1/images/edits" => batch_image_response(body, ImageTask::Edit),
+        "/v1/images/variations" => batch_image_response(body, ImageTask::Variation),
+        "/v1/videos" => create_video_batch_response(state, VideoOperation::Create, body),
+        "/v1/videos/edits" => create_video_batch_response(state, VideoOperation::Edit, body),
+        "/v1/videos/extensions" => create_video_batch_response(state, VideoOperation::Extend, body),
+        "/v1/completions" => {
+            require_known_model(state, body)?;
+            reject_unsupported_generation_options(body)?;
+            batch_completion_response_sync(state, body)
+        }
+        "/v1/chat/completions" => {
+            require_known_model(state, body)?;
+            reject_unsupported_generation_options(body)?;
+            batch_chat_completion_response_sync(state, body)
+        }
+        "/v1/responses" => {
+            require_known_model(state, body)?;
+            reject_unsupported_generation_options(body)?;
+            batch_response_sync(state, body)
+        }
         _ => Err(ApiError::unsupported(format!(
             "batch endpoint '{endpoint}' is not implemented"
         ))),
     }
 }
 
+fn batch_image_response(body: &Value, task: ImageTask) -> Result<Value, ApiError> {
+    let parsed = parse_image_json_request(task, body)?;
+    Ok(image_response_value(&parsed, unix_seconds()))
+}
+
 fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError> {
+    let response_model = request_model_id(state, body);
     let n = request_n(body)?;
     let prompts = completion_prompts(body)?;
     let max_tokens = request_max_tokens(state, body)?;
@@ -420,13 +463,14 @@ fn batch_completion_response_sync(state: &AppState, body: &Value) -> Result<Valu
         "id": state.next_response_id("cmpl"),
         "object": "text_completion",
         "created": created,
-        "model": state.config.model_id,
+        "model": response_model,
         "choices": choices,
         "usage": usage(prompt_tokens, completion_tokens)
     }))
 }
 
 fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError> {
+    let response_model = request_model_id(state, body);
     let n = request_n(body)?;
     let include_reasoning = request_include_reasoning(body)?;
     let reasoning_mode = request_reasoning_mode(state, body)?;
@@ -488,13 +532,14 @@ fn batch_chat_completion_response_sync(state: &AppState, body: &Value) -> Result
         "id": state.next_response_id("chatcmpl"),
         "object": "chat.completion",
         "created": unix_seconds(),
-        "model": state.config.model_id,
+        "model": response_model,
         "choices": choices,
         "usage": usage(prompt_tokens, completion_tokens)
     }))
 }
 
 fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError> {
+    let response_model = request_model_id(state, body);
     let store = request_store(body)?;
     let metadata = request_metadata(body)?;
     let previous_response_id = request_optional_string(body, "previous_response_id")?;
@@ -579,7 +624,7 @@ fn batch_response_sync(state: &AppState, body: &Value) -> Result<Value, ApiError
         "status": "completed",
         "error": null,
         "incomplete_details": null,
-        "model": state.config.model_id,
+        "model": response_model,
         "metadata": metadata.clone(),
         "store": store,
         "previous_response_id": previous_response_id,

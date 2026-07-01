@@ -6,15 +6,16 @@ use serde_json::{Value, json};
 use crate::cli::args::{DEFAULT_TEMPERATURE, DEFAULT_TOP_P};
 
 use super::{
-    ApiError, AppState, GenerateOptions, PromptInput, ReasoningMode, ResponseStreamOptions,
-    StreamKind, StreamMeta, append_response_to_conversation, apply_response_format_instruction,
-    augment_prompt_with_mcp_tool, authorize, chat_completion_request_messages,
-    chat_prompt_for_reasoning, completion_echo_prefix, completion_prompts, conversation_context,
-    empty_text_prompt, execute_request_mcp_tool, generate_text, generate_text_batch,
-    generate_text_stream, generated_metadata, mcp_tool_result_json, previous_response_context,
+    ApiError, AppState, GenerateOptions, McpToolExecution, PromptInput, ReasoningMode,
+    ResponseStreamOptions, StreamKind, StreamMeta, append_response_to_conversation,
+    apply_response_format_instruction, augment_prompt_with_mcp_tool, authorize,
+    chat_completion_request_messages, chat_prompt_for_reasoning, completion_echo_prefix,
+    completion_prompts, conversation_context, empty_text_prompt, execute_request_mcp_tool,
+    generate_text, generate_text_batch, generate_text_stream, generated_metadata,
+    mcp_approval_request_json, mcp_tool_result_json, previous_response_context,
     reject_unsupported_generation_options, reject_unsupported_generation_options_with_tools,
     request_chat_store, request_conversation_id, request_echo, request_f32,
-    request_include_reasoning, request_max_tokens, request_metadata, request_n,
+    request_include_reasoning, request_max_tokens, request_metadata, request_model_id, request_n,
     request_optional_string, request_reasoning_mode, request_response_format_instruction,
     request_stop_strings, request_store, request_stream, request_suffix, request_u32,
     request_u64_opt, require_known_model, response_input_items, responses_prompt_for_reasoning,
@@ -31,6 +32,7 @@ pub(crate) async fn completions(
     let response = async {
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
+        let response_model = request_model_id(&state, &body);
         reject_unsupported_generation_options(&body)?;
         let n = request_n(&body)?;
         let prompts = completion_prompts(&body)?;
@@ -78,7 +80,7 @@ pub(crate) async fn completions(
                 StreamMeta {
                     id: id.clone(),
                     created,
-                    model: state.config.model_id.clone(),
+                    model: response_model.clone(),
                     response: None,
                 },
             )
@@ -171,7 +173,7 @@ pub(crate) async fn completions(
             "id": id,
             "object": "text_completion",
             "created": created,
-            "model": state.config.model_id,
+            "model": response_model,
             "choices": choices,
             "usage": usage(prompt_tokens, completion_tokens)
         })))
@@ -189,6 +191,7 @@ pub(crate) async fn chat_completions(
     let response = async {
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
+        let response_model = request_model_id(&state, &body);
         reject_unsupported_generation_options_with_tools(&body)?;
         let n = request_n(&body)?;
         let store = request_chat_store(&body)?;
@@ -196,20 +199,45 @@ pub(crate) async fn chat_completions(
         let request_messages = chat_completion_request_messages(&body);
         let include_reasoning = request_include_reasoning(&body)?;
         let reasoning_mode = request_reasoning_mode(&state, &body)?;
-        let tool_result = execute_request_mcp_tool(state.clone(), &body).await?;
+        let tool_execution = execute_request_mcp_tool(state.clone(), &body).await?;
+        let created = unix_seconds();
+        let id = state.next_response_id("chatcmpl");
+        if let Some(McpToolExecution::ApprovalRequired(approval)) = tool_execution.as_ref() {
+            return Ok(HttpResponse::Ok().json(json!({
+                "id": id,
+                "object": "chat.completion",
+                "created": created,
+                "model": response_model,
+                "metadata": metadata,
+                "store": store,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [mcp_approval_request_json(approval)]
+                    },
+                    "logprobs": null,
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": usage(0, 0)
+            })));
+        }
+        let tool_result = match tool_execution.as_ref() {
+            Some(McpToolExecution::Completed(result)) => Some(result),
+            _ => None,
+        };
         let response_format_instruction = request_response_format_instruction(&body)?;
         let prompt = apply_response_format_instruction(
             match chat_prompt_for_reasoning(&body, reasoning_mode)? {
                 PromptInput::Text { text, format } => PromptInput::Text {
-                    text: augment_prompt_with_mcp_tool(text, tool_result.as_ref(), &body),
+                    text: augment_prompt_with_mcp_tool(text, tool_result, &body),
                     format,
                 },
                 prompt => prompt,
             },
             response_format_instruction.as_deref(),
         )?;
-        let created = unix_seconds();
-        let id = state.next_response_id("chatcmpl");
         let options = GenerateOptions {
             prompt,
             max_tokens: request_max_tokens(&state, &body)?,
@@ -238,7 +266,7 @@ pub(crate) async fn chat_completions(
                 StreamMeta {
                     id: id.clone(),
                     created,
-                    model: state.config.model_id.clone(),
+                    model: response_model.clone(),
                     response: None,
                 },
             )
@@ -274,14 +302,14 @@ pub(crate) async fn chat_completions(
             "id": id,
             "object": "chat.completion",
             "created": created,
-            "model": state.config.model_id,
+            "model": response_model,
             "metadata": metadata.clone(),
             "store": store,
             "choices": choices,
             "usage": usage(prompt_tokens, completion_tokens)
         });
         if let Some(tool_result) = tool_result {
-            response["mcp_tool_results"] = json!([mcp_tool_result_json(&tool_result)]);
+            response["mcp_tool_results"] = json!([mcp_tool_result_json(tool_result)]);
         }
         let response = store_chat_completion_if_requested(
             &state,
@@ -305,22 +333,49 @@ pub(crate) async fn responses(
     let response = async {
         authorize(&state, &request)?;
         require_known_model(&state, &body)?;
+        let response_model = request_model_id(&state, &body);
         reject_unsupported_generation_options_with_tools(&body)?;
         let store = request_store(&body)?;
         let metadata = request_metadata(&body)?;
         let previous_response_id = request_optional_string(&body, "previous_response_id")?;
         let conversation_id = request_conversation_id(&body)?;
-        let tool_result = execute_request_mcp_tool(state.clone(), &body).await?;
+        let input_items = response_input_items(&body);
+        let tool_execution = execute_request_mcp_tool(state.clone(), &body).await?;
+        if let Some(McpToolExecution::ApprovalRequired(approval)) = tool_execution.as_ref() {
+            let created = unix_seconds();
+            let id = state.next_response_id("resp");
+            let output = vec![mcp_approval_request_json(approval)];
+            let response_json = json!({
+                "id": id,
+                "object": "response",
+                "created_at": created,
+                "status": "completed",
+                "model": response_model,
+                "metadata": metadata,
+                "store": store,
+                "previous_response_id": previous_response_id,
+                "conversation": conversation_id.as_ref().map(|id| json!({"id": id})),
+                "output": output,
+                "output_text": "",
+                "usage": usage(0, 0)
+            });
+            let response_json =
+                store_response_if_requested(&state, response_json, input_items.clone(), store)?;
+            return Ok(HttpResponse::Ok().json(response_json));
+        }
+        let tool_result = match tool_execution.as_ref() {
+            Some(McpToolExecution::Completed(result)) => Some(result),
+            _ => None,
+        };
         let response_format_instruction = request_response_format_instruction(&body)?;
         let conversation_context = conversation_context(&state, conversation_id.as_deref())?;
         let previous_context = previous_response_context(&state, previous_response_id.as_deref())?;
-        let input_items = response_input_items(&body);
         let include_reasoning = request_include_reasoning(&body)?;
         let reasoning_mode = request_reasoning_mode(&state, &body)?;
         let mut prompt = apply_response_format_instruction(
             match responses_prompt_for_reasoning(&body, reasoning_mode)? {
                 PromptInput::Text { text, format } => PromptInput::Text {
-                    text: augment_prompt_with_mcp_tool(text, tool_result.as_ref(), &body),
+                    text: augment_prompt_with_mcp_tool(text, tool_result, &body),
                     format,
                 },
                 prompt => prompt,
@@ -370,7 +425,7 @@ pub(crate) async fn responses(
                 StreamMeta {
                     id: id.clone(),
                     created,
-                    model: state.config.model_id.clone(),
+                    model: response_model.clone(),
                     response: Some(ResponseStreamOptions {
                         store,
                         metadata,
@@ -390,7 +445,7 @@ pub(crate) async fn responses(
         let content_id = state.next_response_id("ct");
         let completion_tokens = generated.token_ids.len();
         let mut output = Vec::new();
-        if let Some(tool_result) = tool_result.as_ref() {
+        if let Some(tool_result) = tool_result {
             output.push(json!({
                 "id": state.next_response_id("mcp"),
                 "type": "mcp_call",
@@ -432,7 +487,7 @@ pub(crate) async fn responses(
             "status": "completed",
             "error": null,
             "incomplete_details": null,
-            "model": state.config.model_id,
+            "model": response_model,
             "metadata": metadata.clone(),
             "store": store,
             "previous_response_id": previous_response_id,

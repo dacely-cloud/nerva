@@ -124,7 +124,10 @@ pub(crate) struct ParsedFileUpload {
     pub(crate) content: Vec<u8>,
 }
 
-fn parse_file_upload(request: &HttpRequest, body: &[u8]) -> Result<ParsedFileUpload, ApiError> {
+pub(crate) fn parse_file_upload(
+    request: &HttpRequest,
+    body: &[u8],
+) -> Result<ParsedFileUpload, ApiError> {
     let content_type = request
         .headers()
         .get("content-type")
@@ -171,14 +174,14 @@ fn parse_file_upload(request: &HttpRequest, body: &[u8]) -> Result<ParsedFileUpl
     })
 }
 
-fn looks_like_json(body: &[u8]) -> bool {
+pub(crate) fn looks_like_json(body: &[u8]) -> bool {
     body.iter()
         .copied()
         .find(|byte| !byte.is_ascii_whitespace())
         .is_some_and(|byte| byte == b'{' || byte == b'[')
 }
 
-fn multipart_boundary(content_type: &str) -> Option<String> {
+pub(crate) fn multipart_boundary(content_type: &str) -> Option<String> {
     content_type
         .split(';')
         .map(str::trim)
@@ -233,7 +236,7 @@ pub(crate) fn parse_multipart_file_upload(
     })
 }
 
-fn disposition_param(disposition: &str, key: &str) -> Option<String> {
+pub(crate) fn disposition_param(disposition: &str, key: &str) -> Option<String> {
     let prefix = format!("{key}=");
     disposition
         .split(';')
@@ -263,7 +266,7 @@ fn file_content_type(filename: &str) -> &'static str {
     }
 }
 
-fn query_param(query: &str, name: &str) -> Option<String> {
+pub(crate) fn query_param(query: &str, name: &str) -> Option<String> {
     query.split('&').find_map(|part| {
         let (key, value) = part.split_once('=')?;
         (percent_decode_query(key) == name).then(|| percent_decode_query(value))
@@ -339,7 +342,7 @@ pub(crate) fn lock_files(
         .map_err(|_| ApiError::internal("file registry lock poisoned"))
 }
 
-fn file_json(record: &FileRecord) -> Value {
+pub(crate) fn file_json(record: &FileRecord) -> Value {
     json!({
         "id": record.id,
         "object": record.object,
