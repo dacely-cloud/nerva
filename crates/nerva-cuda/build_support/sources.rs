@@ -30,13 +30,13 @@ impl NativeCudaSources {
             "nerva_cuda_tiny_decode.cu",
             "nerva_cuda_tiered_attention.cu",
             "nerva_cuda_projection_bench.cu",
-            "nerva_cuda_deepseek_quant.cu",
-            "nerva_cuda_deepseek_router.cu",
-            "nerva_cuda_deepseek_mla.cu",
-            "nerva_cuda_deepseek_mhc.cu",
-            "nerva_cuda_deepseek_mhc_fused.cu",
-            "nerva_cuda_deepseek_kv.cu",
-            "nerva_cuda_deepseek_moe.cu",
+            "deepseek/nerva_cuda_deepseek_quant.cu",
+            "deepseek/nerva_cuda_deepseek_router.cu",
+            "deepseek/nerva_cuda_deepseek_mla.cu",
+            "deepseek/nerva_cuda_deepseek_mhc.cu",
+            "deepseek/nerva_cuda_deepseek_mhc_fused.cu",
+            "deepseek/nerva_cuda_deepseek_kv.cu",
+            "deepseek/nerva_cuda_deepseek_moe.cu",
             "nerva_cuda_experimental_rt.cu",
         ]
         .into_iter()
@@ -44,8 +44,8 @@ impl NativeCudaSources {
         .collect::<Vec<_>>();
         let header = native_dir.join("nerva_cuda_api.h");
         let headers = vec![
-            native_dir.join("deepseek_quant.cuh"),
-            native_dir.join("deepseek_router.cuh"),
+            native_dir.join("deepseek/deepseek_quant.cuh"),
+            native_dir.join("deepseek/deepseek_router.cuh"),
             native_dir.join("hf_decode_sequence/device_ops.cuh"),
             native_dir.join("hf_decode_sequence/deepseek/kernels.cuh"),
             native_dir.join("hf_decode_sequence/deepseek/kernels_helpers.inc.cu"),

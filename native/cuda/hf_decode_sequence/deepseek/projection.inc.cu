@@ -1,4 +1,4 @@
-#include "../../deepseek_quant.cuh"
+#include "../../deepseek/deepseek_quant.cuh"
 
 constexpr uint32_t kDeepSeekFp8ProjectionTokenTile = 4;
 constexpr uint32_t kDeepSeekFp8ProjectionRowTile = 8;

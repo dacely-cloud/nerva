@@ -1,5 +1,5 @@
-#include "../../deepseek_quant.cuh"
-#include "../../deepseek_router.cuh"
+#include "../../deepseek/deepseek_quant.cuh"
+#include "../../deepseek/deepseek_router.cuh"
 
 constexpr uint32_t kDeepSeekSessionMaxCompressHeadSize = 512;
 constexpr uint32_t kDeepSeekSessionMaxIndexerHeads = 128;
