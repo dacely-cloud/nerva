@@ -17,7 +17,7 @@ __device__ __forceinline__ uint64_t deepseek_moe_extra_scratch_base(
          static_cast<uint64_t>(intermediate) * 3u;
 }
 
-__device__ __forceinline__ float *deepseek_v4_moe_rank_ff(
+__device__ __forceinline__ float *deepseek_moe_rank_ff(
     float *scratch, const LayerScratch &s, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
     uint32_t rank) {
@@ -30,7 +30,7 @@ __device__ __forceinline__ float *deepseek_v4_moe_rank_ff(
          static_cast<uint64_t>(rank - 1u) * intermediate;
 }
 
-__device__ __forceinline__ float *deepseek_v4_moe_rank_down(
+__device__ __forceinline__ float *deepseek_moe_rank_down(
     float *scratch, const LayerScratch &s, uint32_t hidden,
     uint32_t attention_hidden, uint32_t kv_hidden, uint32_t intermediate,
     uint32_t top_k, uint32_t rank) {
@@ -334,6 +334,8 @@ __global__ void hf_deepseek_v3_sparse_moe_expert_gate_up_kernel(
   const uint32_t row = blockIdx.x;
   const uint32_t num_experts = layout.num_experts;
   const uint32_t moe_intermediate = layout.moe_intermediate;
+  float *rank_ff = deepseek_moe_rank_ff(
+      scratch, s, hidden, attention_hidden, kv_hidden, intermediate, rank);
   if (row >= moe_intermediate || num_experts == 0 ||
       moe_intermediate == 0 || moe_intermediate > intermediate) {
     return;
@@ -367,7 +369,7 @@ __global__ void hf_deepseek_v3_sparse_moe_expert_gate_up_kernel(
   gate_sum = block_sum(gate_sum);
   up_sum = block_sum(up_sum);
   if (threadIdx.x == 0) {
-    s.ff[row] =
+    rank_ff[row] =
         deepseek_swiglu(gate_sum, up_sum, layout.deepseek_swiglu_limit);
   }
 }
@@ -388,7 +390,7 @@ __global__ void hf_deepseek_v4_sparse_moe_expert_gate_up_kernel(
   const uint32_t row = blockIdx.x;
   const uint32_t num_experts = layout.num_experts;
   const uint32_t moe_intermediate = layout.moe_intermediate;
-  float *rank_ff = deepseek_v4_moe_rank_ff(
+  float *rank_ff = deepseek_moe_rank_ff(
       scratch, s, hidden, attention_hidden, kv_hidden, intermediate, rank);
   if (row >= moe_intermediate || num_experts == 0 ||
       moe_intermediate == 0 || moe_intermediate > intermediate ||
@@ -449,9 +451,9 @@ __global__ void hf_deepseek_v4_sparse_moe_expert_down_kernel(
   if (top_k == 0) {
     return;
   }
-  const float *rank_ff = deepseek_v4_moe_rank_ff(
+  const float *rank_ff = deepseek_moe_rank_ff(
       scratch, s, hidden, attention_hidden, kv_hidden, intermediate, rank);
-  float *rank_down = deepseek_v4_moe_rank_down(
+  float *rank_down = deepseek_moe_rank_down(
       scratch, s, hidden, attention_hidden, kv_hidden, intermediate, top_k,
       rank);
   if (row >= hidden || num_experts == 0 || moe_intermediate == 0 ||
@@ -478,7 +480,7 @@ __global__ void hf_deepseek_v4_sparse_moe_expert_down_kernel(
   }
 }
 
-__global__ void hf_deepseek_v4_sparse_moe_reduce_down_kernel(
+__global__ void hf_deepseek_sparse_moe_reduce_down_kernel(
     SequenceLayerLayout layout, uint32_t hidden, uint32_t attention_hidden,
     uint32_t kv_hidden, uint32_t intermediate, uint32_t *step_cursor,
     uint32_t max_steps, float *scratch) {
@@ -498,7 +500,7 @@ __global__ void hf_deepseek_v4_sparse_moe_reduce_down_kernel(
   }
   float sum = 0.0f;
   for (uint32_t rank = 0; rank < top_k; ++rank) {
-    const float *rank_down = deepseek_v4_moe_rank_down(
+    const float *rank_down = deepseek_moe_rank_down(
         scratch, s, hidden, attention_hidden, kv_hidden, intermediate, top_k,
         rank);
     sum += rank_down[row];
@@ -525,6 +527,15 @@ __global__ void hf_deepseek_v3_sparse_moe_expert_down_kernel(
   const uint32_t row = blockIdx.x;
   const uint32_t num_experts = layout.num_experts;
   const uint32_t moe_intermediate = layout.moe_intermediate;
+  const uint32_t top_k = layout.experts_per_token;
+  if (top_k == 0) {
+    return;
+  }
+  const float *rank_ff = deepseek_moe_rank_ff(
+      scratch, s, hidden, attention_hidden, kv_hidden, intermediate, rank);
+  float *rank_down = deepseek_moe_rank_down(
+      scratch, s, hidden, attention_hidden, kv_hidden, intermediate, top_k,
+      rank);
   if (row >= hidden || num_experts == 0 ||
       moe_intermediate == 0 || moe_intermediate > intermediate) {
     return;
@@ -541,11 +552,11 @@ __global__ void hf_deepseek_v3_sparse_moe_expert_down_kernel(
     down_sum += deepseek_fp8_rank3_scaled_weight(
                     arena, expert_down, expert_down_scale, hidden,
                     moe_intermediate, expert, row, col) *
-                s.ff[col];
+                rank_ff[col];
   }
   down_sum = block_sum(down_sum);
   if (threadIdx.x == 0) {
-    s.down[row] += expert_weight * down_sum;
+    rank_down[row] = expert_weight * down_sum;
   }
 }
 

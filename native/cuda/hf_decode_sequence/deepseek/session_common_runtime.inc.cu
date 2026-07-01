@@ -12,7 +12,7 @@ bool session_has_deepseek_layers(
   return false;
 }
 
-bool session_has_deepseek_v4_native_layers(
+bool session_needs_deepseek_aux_resources(
     const NervaCudaHfDecodeSequenceSession *session) {
   if (session == nullptr ||
       session->host_layouts.size() != session->layer_count) {
@@ -22,13 +22,18 @@ bool session_has_deepseek_v4_native_layers(
     if (layout_is_deepseek_v4_native(layout)) {
       return true;
     }
+    if (layout_is_native_deepseek_session(layout) &&
+        layout.mlp_kind == kMlpKindSparseMoe &&
+        layout.experts_per_token > 1u) {
+      return true;
+    }
   }
   return false;
 }
 
 cudaError_t initialize_deepseek_v4_attention_aux_resources(
     NervaCudaHfDecodeSequenceSession *session) {
-  if (!session_has_deepseek_v4_native_layers(session)) {
+  if (!session_needs_deepseek_aux_resources(session)) {
     return cudaSuccess;
   }
   for (uint32_t index = 0; index < kDeepSeekV4AttentionAuxStreamCount;

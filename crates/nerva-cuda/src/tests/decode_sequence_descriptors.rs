@@ -2919,16 +2919,15 @@ fn deepseek_v32_projection_scales_reach_sparse_decode_outputs() {
     );
 }
 
-#[test]
-fn deepseek_v32_sparse_moe_session_runs_through_sampling() {
-    let _guard = super::cuda_lock::cuda_test_lock();
-
+fn run_deepseek_v32_sparse_moe_descriptor(
+    experts_per_token: usize,
+) -> Option<(u32, u32, CudaHfDecodeSequenceSummary)> {
     let mut layer = tiny_deepseek_v32_descriptor_layer();
     layer.mlp_kind = CUDA_HF_MLP_SPARSE_MOE;
     layer.moe_intermediate = 4;
     layer.shared_expert_intermediate = 2;
     layer.num_experts = 2;
-    layer.experts_per_token = 1;
+    layer.experts_per_token = experts_per_token;
     layer.norm_topk_prob = true;
     layer.deepseek = layer.deepseek.map(|mut deepseek| {
         deepseek.flags |= CUDA_HF_DEEPSEEK_FLAG_MOE | CUDA_HF_DEEPSEEK_FLAG_ROUTER_BIAS;
@@ -2998,7 +2997,7 @@ fn deepseek_v32_sparse_moe_session_runs_through_sampling() {
 
     let created = config.create();
     if created.summary.status == SmokeStatus::Unavailable {
-        return;
+        return None;
     }
 
     assert_eq!(
@@ -3022,6 +3021,38 @@ fn deepseek_v32_sparse_moe_session_runs_through_sampling() {
     assert_eq!(summary.tokens.len(), 2);
     assert_eq!(summary.kv_tokens, 2);
     assert_eq!(summary.graph_replays, 2);
+    Some((
+        created.summary.deepseek_v4_attention_aux_streams,
+        created.summary.deepseek_v4_attention_events,
+        summary,
+    ))
+}
+
+#[test]
+fn deepseek_v32_sparse_moe_session_runs_through_sampling() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let Some((_, _, summary)) = run_deepseek_v32_sparse_moe_descriptor(1) else {
+        return;
+    };
+    assert_eq!(
+        summary.deepseek_v3_grouped_router_selections,
+        summary.graph_replays
+    );
+    assert_eq!(summary.deepseek_v4_bias_router_selections, 0);
+    assert_eq!(summary.deepseek_v4_hash_router_selections, 0);
+    assert!(summary.graph_nodes > 0);
+}
+
+#[test]
+fn deepseek_v32_sparse_moe_top2_parallel_experts_runs_through_sampling() {
+    let _guard = super::cuda_lock::cuda_test_lock();
+
+    let Some((aux_streams, aux_events, summary)) = run_deepseek_v32_sparse_moe_descriptor(2) else {
+        return;
+    };
+    assert_eq!(aux_streams, 3);
+    assert_eq!(aux_events, 4);
     assert_eq!(
         summary.deepseek_v3_grouped_router_selections,
         summary.graph_replays

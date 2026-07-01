@@ -539,34 +539,90 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
                                                       ? nullptr
                                                       : profile->mlp_ns);
     if (err != cudaSuccess) return err;
-    for (uint32_t rank = 0;
-         err == cudaSuccess && rank < layout.experts_per_token; ++rank) {
+    const uint32_t routed_top_k = layout.experts_per_token;
+    const bool parallel_sparse_experts =
+        routed_top_k > 1u &&
+        deepseek_v4_aux_ready(session, kDeepSeekV4AttentionAuxStreamCount,
+                              kDeepSeekV4AttentionEventCount);
+    if (parallel_sparse_experts) {
       err = deepseek_profile_begin_if(session, profile);
       if (err != cudaSuccess) return err;
-      hf_deepseek_v3_sparse_moe_expert_gate_up_kernel<<<
-          layout.moe_intermediate, kDecodeThreads, 0, session->stream>>>(
-          session->device_arena, layout, session->dtype, session->hidden,
-          attention_rows, kv_cache_width, session->intermediate, rank,
-          session->device_step, max_steps, session->device_scratch);
+      err = deepseek_v4_aux_fanout(session, kDeepSeekV4AttentionAuxStreamCount);
+      if (err != cudaSuccess) return err;
+      for (uint32_t rank = 0; rank < routed_top_k; ++rank) {
+        cudaStream_t expert_stream =
+            session->deepseek_v4_attention_aux_streams
+                [rank % kDeepSeekV4AttentionAuxStreamCount];
+        hf_deepseek_v3_sparse_moe_expert_gate_up_kernel<<<
+            layout.moe_intermediate, kDecodeThreads, 0, expert_stream>>>(
+            session->device_arena, layout, session->dtype, session->hidden,
+            attention_rows, kv_cache_width, session->intermediate, rank,
+            session->device_step, max_steps, session->device_scratch);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) return err;
+        hf_deepseek_v3_sparse_moe_expert_down_kernel<<<
+            session->hidden, kDecodeThreads, 0, expert_stream>>>(
+            session->device_arena, layout, session->dtype, session->hidden,
+            attention_rows, kv_cache_width, session->intermediate, rank,
+            session->device_step, max_steps, session->device_scratch);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) return err;
+      }
+      err = deepseek_v4_aux_join(session, kDeepSeekV4AttentionAuxStreamCount);
+      if (err != cudaSuccess) return err;
+      const uint32_t reduce_blocks =
+          (session->hidden + kDecodeThreads - 1u) / kDecodeThreads;
+      hf_deepseek_sparse_moe_reduce_down_kernel<<<
+          reduce_blocks, kDecodeThreads, 0, session->stream>>>(
+          layout, session->hidden, attention_rows, kv_cache_width,
+          session->intermediate, session->device_step, max_steps,
+          session->device_scratch);
       err = cudaGetLastError();
       if (err != cudaSuccess) return err;
       err = deepseek_profile_end_if(session, profile, profile == nullptr
                                                         ? nullptr
                                                         : profile->gate_up_projection_ns);
-      if (err != cudaSuccess) return err;
-      err = deepseek_profile_begin_if(session, profile);
-      if (err != cudaSuccess) return err;
-      hf_deepseek_v3_sparse_moe_expert_down_kernel<<<
-          session->hidden, kDecodeThreads, 0, session->stream>>>(
-          session->device_arena, layout, session->dtype, session->hidden,
-          attention_rows, kv_cache_width, session->intermediate, rank,
-          session->device_step, max_steps, session->device_scratch);
-      err = cudaGetLastError();
-      if (err != cudaSuccess) return err;
-      err = deepseek_profile_end_if(session, profile, profile == nullptr
-                                                        ? nullptr
-                                                        : profile->down_projection_ns);
+    } else {
+      for (uint32_t rank = 0;
+           err == cudaSuccess && rank < routed_top_k; ++rank) {
+        err = deepseek_profile_begin_if(session, profile);
+        if (err != cudaSuccess) return err;
+        hf_deepseek_v3_sparse_moe_expert_gate_up_kernel<<<
+            layout.moe_intermediate, kDecodeThreads, 0, session->stream>>>(
+            session->device_arena, layout, session->dtype, session->hidden,
+            attention_rows, kv_cache_width, session->intermediate, rank,
+            session->device_step, max_steps, session->device_scratch);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) return err;
+        err = deepseek_profile_end_if(session, profile, profile == nullptr
+                                                          ? nullptr
+                                                          : profile->gate_up_projection_ns);
+        if (err != cudaSuccess) return err;
+        err = deepseek_profile_begin_if(session, profile);
+        if (err != cudaSuccess) return err;
+        hf_deepseek_v3_sparse_moe_expert_down_kernel<<<
+            session->hidden, kDecodeThreads, 0, session->stream>>>(
+            session->device_arena, layout, session->dtype, session->hidden,
+            attention_rows, kv_cache_width, session->intermediate, rank,
+            session->device_step, max_steps, session->device_scratch);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) return err;
+        err = deepseek_profile_end_if(session, profile, profile == nullptr
+                                                          ? nullptr
+                                                          : profile->down_projection_ns);
+      }
+      if (err == cudaSuccess && routed_top_k > 1u) {
+        const uint32_t reduce_blocks =
+            (session->hidden + kDecodeThreads - 1u) / kDecodeThreads;
+        hf_deepseek_sparse_moe_reduce_down_kernel<<<
+            reduce_blocks, kDecodeThreads, 0, session->stream>>>(
+            layout, session->hidden, attention_rows, kv_cache_width,
+            session->intermediate, session->device_step, max_steps,
+            session->device_scratch);
+        err = cudaGetLastError();
+      }
     }
+    if (err != cudaSuccess) return err;
     if (err == cudaSuccess && layout.shared_expert_intermediate != 0) {
       err = deepseek_profile_begin_if(session, profile);
       if (err != cudaSuccess) return err;
@@ -1136,7 +1192,7 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       if (err != cudaSuccess) return err;
       const uint32_t reduce_blocks =
           (session->hidden + kDecodeThreads - 1u) / kDecodeThreads;
-      hf_deepseek_v4_sparse_moe_reduce_down_kernel<<<
+      hf_deepseek_sparse_moe_reduce_down_kernel<<<
           reduce_blocks, kDecodeThreads, 0, session->stream>>>(
           layout, session->hidden, attention_hidden, session->head_dim,
           session->intermediate, session->device_step, max_steps,
@@ -1179,7 +1235,7 @@ cudaError_t launch_deepseek_v4_swa_dense_projection_step(
       if (err == cudaSuccess && routed_top_k > 1u) {
         const uint32_t reduce_blocks =
             (session->hidden + kDecodeThreads - 1u) / kDecodeThreads;
-        hf_deepseek_v4_sparse_moe_reduce_down_kernel<<<
+        hf_deepseek_sparse_moe_reduce_down_kernel<<<
             reduce_blocks, kDecodeThreads, 0, session->stream>>>(
             layout, session->hidden, attention_hidden, session->head_dim,
             session->intermediate, session->device_step, max_steps,
