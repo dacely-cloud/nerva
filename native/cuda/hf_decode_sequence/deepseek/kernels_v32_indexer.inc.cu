@@ -6,7 +6,7 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
     uint64_t *deepseek_runtime_counters) {
-  if (blockIdx.x != 0 || threadIdx.x != 0 ||
+  if (blockIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
     return;
   }
@@ -31,43 +31,63 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
   }
 
   const uint32_t head_dim = layout.deepseek_index_head_dim;
-  float values[kDeepSeekSessionMaxCompressHeadSize];
-  float mean = 0.0f;
+  __shared__ float values[kDeepSeekSessionMaxCompressHeadSize];
+  __shared__ float mean;
+  __shared__ float inv_std;
+  __shared__ float scale;
   for (uint32_t row = 0; row < head_dim; ++row) {
     float sum = 0.0f;
-    for (uint32_t col = 0; col < hidden; ++col) {
+    for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
       sum += deepseek_fp8_scaled_weight(
                  arena, layout.deepseek_indexer_k,
                  layout.deepseek_indexer_k_scale, head_dim, hidden, row,
                  col) *
              encoded_to_f32(projection_input[col], dtype);
     }
-    values[row] = sum;
-    mean += sum;
+    sum = block_sum(sum);
+    if (threadIdx.x == 0) {
+      values[row] = sum;
+    }
   }
-  mean /= static_cast<float>(head_dim);
+  __syncthreads();
 
-  float variance = 0.0f;
-  for (uint32_t row = 0; row < head_dim; ++row) {
-    const float centered = values[row] - mean;
-    variance += centered * centered;
+  float mean_sum = 0.0f;
+  for (uint32_t row = threadIdx.x; row < head_dim; row += blockDim.x) {
+    mean_sum += values[row];
   }
-  const float inv_std =
-      rsqrtf(variance / static_cast<float>(head_dim) + 1.0e-6f);
-  for (uint32_t row = 0; row < head_dim; ++row) {
+  mean_sum = block_sum(mean_sum);
+  if (threadIdx.x == 0) {
+    mean = mean_sum / static_cast<float>(head_dim);
+  }
+  __syncthreads();
+
+  float variance_sum = 0.0f;
+  for (uint32_t row = threadIdx.x; row < head_dim; row += blockDim.x) {
+    const float centered = values[row] - mean;
+    variance_sum += centered * centered;
+  }
+  variance_sum = block_sum(variance_sum);
+  if (threadIdx.x == 0) {
+    inv_std =
+        rsqrtf(variance_sum / static_cast<float>(head_dim) + 1.0e-6f);
+  }
+  __syncthreads();
+
+  for (uint32_t row = threadIdx.x; row < head_dim; row += blockDim.x) {
     const float weight = f32_from_u16_slots(arena + layout.deepseek_indexer_k_norm,
                                             row);
     const float bias = f32_from_u16_slots(
         arena + layout.deepseek_indexer_k_norm_bias, row);
     values[row] = (values[row] - mean) * inv_std * weight + bias;
   }
+  __syncthreads();
 
   const uint32_t rope_dim =
       layout.deepseek_qk_rope_head_dim <= head_dim
           ? layout.deepseek_qk_rope_head_dim
           : 0u;
   const uint32_t rope_half = rope_dim / 2u;
-  for (uint32_t offset = 0; offset < rope_half; ++offset) {
+  for (uint32_t offset = threadIdx.x; offset < rope_half; offset += blockDim.x) {
     const uint32_t left = offset;
     const uint32_t right = offset + rope_half;
     const float left_value = values[left];
@@ -79,14 +99,18 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
         left_value, right_value, offset, rope_dim, position, rope_theta,
         true);
   }
+  __syncthreads();
 
-  float absmax = 0.0f;
-  for (uint32_t dim = 0; dim < head_dim; ++dim) {
-    values[dim] = deepseek_session_bf16_bits_to_f32(
-        deepseek_session_f32_to_bf16_bits(values[dim]));
-    absmax = fmaxf(absmax, fabsf(values[dim]));
+  if (threadIdx.x == 0) {
+    float absmax = 0.0f;
+    for (uint32_t dim = 0; dim < head_dim; ++dim) {
+      values[dim] = deepseek_session_bf16_bits_to_f32(
+          deepseek_session_f32_to_bf16_bits(values[dim]));
+      absmax = fmaxf(absmax, fabsf(values[dim]));
+    }
+    scale = exp2f(ceilf(log2f(fmaxf(absmax, 1.0e-4f) / 448.0f)));
   }
-  const float scale = exp2f(ceilf(log2f(fmaxf(absmax, 1.0e-4f) / 448.0f)));
+  __syncthreads();
 
   const uint32_t scale_bytes =
       ((head_dim + 127u) / 128u) * sizeof(float);
@@ -102,7 +126,7 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
       block_offset / kDeepSeekV32IndexerKvTileTokens;
   const uint32_t tile_block_offset =
       block_offset % kDeepSeekV32IndexerKvTileTokens;
-  for (uint32_t dim = 0; dim < head_dim; ++dim) {
+  for (uint32_t dim = threadIdx.x; dim < head_dim; dim += blockDim.x) {
     const float scaled = fminf(fmaxf(values[dim] / scale, -448.0f), 448.0f);
     const uint32_t tile_store_offset =
         (dim / kDeepSeekV32IndexerKvTileHeadBytes) *
@@ -123,11 +147,12 @@ __global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
       block_ptr +
       static_cast<uint64_t>(kDeepSeekV32IndexerKvBlockTokens) * head_dim +
       static_cast<uint64_t>(block_offset) * scale_bytes;
-  for (uint32_t scale_index = 0; scale_index < scale_bytes / sizeof(float);
-       ++scale_index) {
+  for (uint32_t scale_index = threadIdx.x;
+       scale_index < scale_bytes / sizeof(float);
+       scale_index += blockDim.x) {
     reinterpret_cast<float *>(scale_ptr)[scale_index] = scale;
   }
-  if (deepseek_runtime_counters != nullptr) {
+  if (threadIdx.x == 0 && deepseek_runtime_counters != nullptr) {
     atomicAdd(
         reinterpret_cast<unsigned long long *>(
             deepseek_runtime_counters +
@@ -182,8 +207,11 @@ __global__ void hf_deepseek_v32_indexer_weight_state_kernel(
     uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
     const uint16_t *projection_input, uint8_t *deepseek_indexer_state,
     uint64_t deepseek_indexer_state_offset_bytes) {
-  if (blockIdx.x != 0 || threadIdx.x != 0 ||
-      (step_cursor != nullptr && *step_cursor >= max_steps)) {
+  if ((step_cursor != nullptr && *step_cursor >= max_steps)) {
+    return;
+  }
+  const uint32_t head = blockIdx.x;
+  if (head >= layout.deepseek_index_n_heads) {
     return;
   }
   if (arena == nullptr || projection_input == nullptr ||
@@ -200,14 +228,15 @@ __global__ void hf_deepseek_v32_indexer_weight_state_kernel(
   auto *weights = reinterpret_cast<float *>(
       token_ptr +
       deepseek_v32_indexer_query_state_weights_offset_bytes(layout));
-  for (uint32_t head = 0; head < layout.deepseek_index_n_heads; ++head) {
-    float sum = 0.0f;
-    for (uint32_t col = 0; col < hidden; ++col) {
-      sum += encoded_to_f32(arena[layout.deepseek_indexer_weights +
-                                  static_cast<uint64_t>(head) * hidden + col],
-                            kDTypeBF16) *
-             encoded_to_f32(projection_input[col], dtype);
-    }
+  float sum = 0.0f;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    sum += encoded_to_f32(arena[layout.deepseek_indexer_weights +
+                                static_cast<uint64_t>(head) * hidden + col],
+                          kDTypeBF16) *
+           encoded_to_f32(projection_input[col], dtype);
+  }
+  sum = block_sum(sum);
+  if (threadIdx.x == 0) {
     weights[head] = sum;
   }
 }
