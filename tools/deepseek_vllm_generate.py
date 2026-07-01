@@ -38,7 +38,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--warmup-runs", type=int, default=1)
     parser.add_argument("--enable-prefix-caching", action="store_true")
-    parser.add_argument("--trust-remote-code", action="store_true", default=True)
+    trust_remote_code = parser.add_mutually_exclusive_group()
+    trust_remote_code.add_argument(
+        "--trust-remote-code",
+        dest="trust_remote_code",
+        action="store_true",
+        default=True,
+    )
+    trust_remote_code.add_argument(
+        "--no-trust-remote-code",
+        dest="trust_remote_code",
+        action="store_false",
+    )
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--disable-flashinfer-autotune", action="store_true")
     parser.add_argument(
@@ -95,6 +106,8 @@ def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[s
                 "runs": args.runs,
                 "warmup_runs": args.warmup_runs,
                 "dtype": args.dtype,
+                "gpu_memory_utilization": args.gpu_memory_utilization,
+                "trust_remote_code": args.trust_remote_code,
                 "enable_prefix_caching": args.enable_prefix_caching,
                 "enable_flashinfer_autotune": not args.disable_flashinfer_autotune,
                 "enforce_eager": args.enforce_eager,
@@ -174,19 +187,27 @@ def run_generation(args: argparse.Namespace) -> None:
     )
 
     tokenizer = llm.get_tokenizer()
-    prompt_token_ids = tokenizer.encode(prompt)
+    prompt_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
     outputs = None
     warmup_elapsed_ns: list[int] = []
     for _ in range(args.warmup_runs):
         started = time.perf_counter_ns()
-        outputs = llm.generate([prompt], sampling_params=sampling, use_tqdm=False)
+        outputs = llm.generate(
+            [{"prompt_token_ids": list(prompt_token_ids)}],
+            sampling_params=sampling,
+            use_tqdm=False,
+        )
         warmup_elapsed_ns.append(time.perf_counter_ns() - started)
 
     latency_samples_ns: list[int] = []
     total_elapsed_ns = 0
     for _ in range(args.runs):
         started = time.perf_counter_ns()
-        outputs = llm.generate([prompt], sampling_params=sampling, use_tqdm=False)
+        outputs = llm.generate(
+            [{"prompt_token_ids": list(prompt_token_ids)}],
+            sampling_params=sampling,
+            use_tqdm=False,
+        )
         elapsed_ns = time.perf_counter_ns() - started
         latency_samples_ns.append(elapsed_ns)
         total_elapsed_ns += elapsed_ns
@@ -223,6 +244,8 @@ def run_generation(args: argparse.Namespace) -> None:
                 "runs": args.runs,
                 "measured_runs": args.runs,
                 "warmup_runs": args.warmup_runs,
+                "gpu_memory_utilization": args.gpu_memory_utilization,
+                "trust_remote_code": args.trust_remote_code,
                 "enable_prefix_caching": args.enable_prefix_caching,
                 "enable_flashinfer_autotune": not args.disable_flashinfer_autotune,
                 "enforce_eager": args.enforce_eager,

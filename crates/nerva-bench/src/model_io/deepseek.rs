@@ -483,7 +483,7 @@ pub(crate) fn run_deepseek_vllm_benchmark_run(
     );
 
     let mut vllm_run = run_json_command(&vllm_command, &repo_root)?;
-    for fallback_options in deepseek_vllm_fallback_options() {
+    for fallback_options in deepseek_vllm_fallback_options(metadata.architecture) {
         if !vllm_deepseek_reference_retryable_failure(&vllm_run) {
             break;
         }
@@ -2538,6 +2538,8 @@ struct DeepSeekVllmCommandOptions {
     linear_backend: &'static str,
     moe_backend: &'static str,
     attention_backend: &'static str,
+    gpu_memory_utilization: &'static str,
+    trust_remote_code: bool,
     enforce_eager: bool,
     disable_flashinfer_autotune: bool,
     deep_gemm_warmup: Option<&'static str>,
@@ -2551,6 +2553,8 @@ impl Default for DeepSeekVllmCommandOptions {
             linear_backend: "auto",
             moe_backend: "auto",
             attention_backend: "auto",
+            gpu_memory_utilization: "0.9",
+            trust_remote_code: true,
             enforce_eager: false,
             disable_flashinfer_autotune: false,
             deep_gemm_warmup: None,
@@ -2560,31 +2564,54 @@ impl Default for DeepSeekVllmCommandOptions {
     }
 }
 
-fn deepseek_vllm_fallback_options() -> [DeepSeekVllmCommandOptions; 3] {
-    [
+fn deepseek_vllm_fallback_options(
+    architecture: HfArchitectureKind,
+) -> Vec<DeepSeekVllmCommandOptions> {
+    let mut options = vec![
         DeepSeekVllmCommandOptions {
             linear_backend: "triton",
             moe_backend: "triton",
             attention_backend: "auto",
+            gpu_memory_utilization: "0.9",
+            trust_remote_code: false,
             ..DeepSeekVllmCommandOptions::default()
         },
         DeepSeekVllmCommandOptions {
             linear_backend: "triton",
             moe_backend: "triton",
-            attention_backend: "FLASHINFER_MLA_SPARSE_SM120",
-            ..DeepSeekVllmCommandOptions::default()
-        },
-        DeepSeekVllmCommandOptions {
-            linear_backend: "triton",
-            moe_backend: "triton",
-            attention_backend: "FLASHINFER_MLA_SPARSE_SM120",
+            attention_backend: "auto",
+            gpu_memory_utilization: "0.55",
+            trust_remote_code: false,
             enforce_eager: true,
             disable_flashinfer_autotune: true,
             deep_gemm_warmup: Some("skip"),
             runs: 1,
             warmup_runs: 0,
         },
-    ]
+    ];
+    if matches!(architecture, HfArchitectureKind::DeepSeekV32) {
+        options.push(DeepSeekVllmCommandOptions {
+            linear_backend: "triton",
+            moe_backend: "triton",
+            attention_backend: "FLASHINFER_MLA_SPARSE_SM120",
+            gpu_memory_utilization: "0.9",
+            trust_remote_code: false,
+            ..DeepSeekVllmCommandOptions::default()
+        });
+        options.push(DeepSeekVllmCommandOptions {
+            linear_backend: "triton",
+            moe_backend: "triton",
+            attention_backend: "FLASHINFER_MLA_SPARSE_SM120",
+            gpu_memory_utilization: "0.55",
+            trust_remote_code: false,
+            enforce_eager: true,
+            disable_flashinfer_autotune: true,
+            deep_gemm_warmup: Some("skip"),
+            runs: 1,
+            warmup_runs: 0,
+        });
+    }
+    options
 }
 
 fn repo_root() -> PathBuf {
@@ -2666,6 +2693,8 @@ fn deepseek_vllm_generate_command_with_options(
         "0".to_string(),
         "--dtype".to_string(),
         "bfloat16".to_string(),
+        "--gpu-memory-utilization".to_string(),
+        options.gpu_memory_utilization.to_string(),
         "--linear-backend".to_string(),
         options.linear_backend.to_string(),
         "--moe-backend".to_string(),
@@ -2677,6 +2706,11 @@ fn deepseek_vllm_generate_command_with_options(
         "--warmup-runs".to_string(),
         options.warmup_runs.to_string(),
     ];
+    command.push(if options.trust_remote_code {
+        "--trust-remote-code".to_string()
+    } else {
+        "--no-trust-remote-code".to_string()
+    });
     if options.enforce_eager {
         command.push("--enforce-eager".to_string());
     }
@@ -2832,6 +2866,8 @@ fn vllm_deepseek_reference_retryable_failure(run: &DeepSeekCommandRun) -> bool {
     }
     let evidence = command_failure_evidence(run);
     evidence.contains("Unknown SF transformation")
+        || evidence.contains("configuration_deepseek.py")
+        || evidence.contains("CUDA out of memory")
         || (evidence.contains("deep_gemm")
             && evidence.contains("transform_sf_into_required_layout"))
         || (evidence.contains("get_paged_mqa_logits_metadata")
@@ -2858,10 +2894,12 @@ fn command_failure_evidence(run: &DeepSeekCommandRun) -> String {
 
 fn vllm_options_json(options: DeepSeekVllmCommandOptions) -> String {
     format!(
-        "{{\"linear_backend\":\"{}\",\"moe_backend\":\"{}\",\"attention_backend\":\"{}\",\"enforce_eager\":{},\"disable_flashinfer_autotune\":{},\"deep_gemm_warmup\":{},\"runs\":{},\"warmup_runs\":{}}}",
+        "{{\"linear_backend\":\"{}\",\"moe_backend\":\"{}\",\"attention_backend\":\"{}\",\"gpu_memory_utilization\":{},\"trust_remote_code\":{},\"enforce_eager\":{},\"disable_flashinfer_autotune\":{},\"deep_gemm_warmup\":{},\"runs\":{},\"warmup_runs\":{}}}",
         json_escape(options.linear_backend),
         json_escape(options.moe_backend),
         json_escape(options.attention_backend),
+        options.gpu_memory_utilization,
+        options.trust_remote_code,
         options.enforce_eager,
         options.disable_flashinfer_autotune,
         json_opt_string(options.deep_gemm_warmup),
@@ -3290,7 +3328,7 @@ fn skip_json_ws(bytes: &[u8], mut index: usize) -> usize {
 mod tests {
     use super::{
         DeepSeekCommandRun, command_failure_diagnosis, find_first_json_string_field,
-        vllm_benchmark_failure_status,
+        vllm_benchmark_failure_status, vllm_deepseek_reference_retryable_failure,
     };
 
     #[test]
@@ -3321,6 +3359,28 @@ mod tests {
             vllm_benchmark_failure_status(&run),
             "vllm_reference_unsupported"
         );
+    }
+
+    #[test]
+    fn deepseek_vllm_benchmark_retries_local_fixture_and_memory_failures() {
+        let missing_remote_code = DeepSeekCommandRun {
+            status: 1,
+            json: r#"{"status":"error","error_type":"OSError","error":"checkpoint does not appear to have a file named configuration_deepseek.py"}"#.to_string(),
+            stdout_tail: String::new(),
+            stderr_tail: String::new(),
+        };
+        assert!(vllm_deepseek_reference_retryable_failure(
+            &missing_remote_code
+        ));
+
+        let oom = DeepSeekCommandRun {
+            status: 1,
+            json: r#"{"status":"error","error_type":"RuntimeError","error":"Engine core initialization failed"}"#.to_string(),
+            stdout_tail: String::new(),
+            stderr_tail: "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB"
+                .to_string(),
+        };
+        assert!(vllm_deepseek_reference_retryable_failure(&oom));
     }
 }
 
