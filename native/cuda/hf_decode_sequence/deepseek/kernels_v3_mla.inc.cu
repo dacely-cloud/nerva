@@ -492,6 +492,346 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
   }
 }
 
+__global__ void hf_deepseek_v3_mla_query_latent_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t heads,
+    const float *q, float *q_nope_latent) {
+  const uint32_t head = blockIdx.x;
+  if (head >= heads || q == nullptr || q_nope_latent == nullptr ||
+      layout.w_v == kMissingOffset) {
+    return;
+  }
+  const uint32_t kv_lora_rank = layout.deepseek_kv_lora_rank;
+  const uint32_t qk_nope = layout.deepseek_qk_nope_head_dim;
+  const uint32_t qk_rope = layout.deepseek_qk_rope_head_dim;
+  const uint32_t v_head = layout.deepseek_v_head_dim;
+  const uint32_t qk_head_dim = qk_nope + qk_rope;
+  if (kv_lora_rank == 0 || qk_nope == 0 || qk_head_dim == 0 ||
+      v_head == 0) {
+    return;
+  }
+  const bool bf16_storage = layout.deepseek_storage == kDeepSeekStorageBf16;
+  if (!bf16_storage && layout.deepseek_kv_b_scale == kMissingOffset) {
+    return;
+  }
+  const uint32_t kv_b_cols = kv_lora_rank;
+  const uint8_t *kv_b_weight =
+      reinterpret_cast<const uint8_t *>(arena + layout.w_v);
+  const uint16_t *kv_b_scale =
+      bf16_storage ? nullptr : arena + layout.deepseek_kv_b_scale;
+  const uint32_t kv_b_scale_cols = (kv_b_cols + 127u) / 128u;
+  float *head_latent =
+      q_nope_latent + static_cast<uint64_t>(head) * kv_lora_rank;
+  for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
+       latent += blockDim.x) {
+    float sum = 0.0f;
+    uint32_t active_scale_row = UINT32_MAX;
+    float active_scale = 0.0f;
+    for (uint32_t nope = 0; nope < qk_nope; ++nope) {
+      const uint32_t row = head * (qk_nope + v_head) + nope;
+      const uint32_t scale_row = row / 128u;
+      if (!bf16_storage && scale_row != active_scale_row) {
+        active_scale_row = scale_row;
+        active_scale =
+            f32_from_u16_slots(kv_b_scale,
+                               scale_row * kv_b_scale_cols + latent / 128u);
+      }
+      const float weight =
+          bf16_storage
+              ? deepseek_bf16_weight(arena, layout.w_v,
+                                     heads * (qk_nope + v_head),
+                                     kv_b_cols, row, latent)
+              : nerva::deepseek::f8_e4m3fn_bits_to_f32(
+                    kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols +
+                                latent]) *
+                    active_scale;
+      sum += q[head * qk_head_dim + nope] * weight;
+    }
+    head_latent[latent] = sum;
+  }
+}
+
+__global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t heads, uint32_t *step_cursor,
+    uint32_t max_steps, float rope_theta, const float *q,
+    const float *q_nope_latent, uint16_t *kv_keys, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint32_t attention_chunks,
+    float *partial_latent, float *partial_m, float *partial_l,
+    const int32_t *sparse_topk_slots,
+    const uint32_t *sparse_topk_count,
+    uint64_t *deepseek_runtime_counters) {
+  __shared__ uint32_t position_shared;
+  __shared__ uint32_t attention_tokens_shared;
+  if (threadIdx.x == 0) {
+    position_shared = step_cursor == nullptr ? 0 : *step_cursor;
+    const bool has_precomputed_sparse =
+        sparse_topk_slots != nullptr && sparse_topk_count != nullptr;
+    attention_tokens_shared =
+        has_precomputed_sparse
+            ? min(*sparse_topk_count, kDeepSeekSessionMaxSparseTopK)
+            : position_shared + 1u;
+  }
+  __syncthreads();
+
+  const uint32_t head = blockIdx.x;
+  const uint32_t selected_slot = blockIdx.y;
+  const uint32_t position = position_shared;
+  if (head >= heads || selected_slot >= attention_chunks ||
+      attention_chunks == 0 || position >= max_steps ||
+      partial_latent == nullptr || partial_m == nullptr ||
+      partial_l == nullptr || q == nullptr || q_nope_latent == nullptr ||
+      kv_keys == nullptr) {
+    return;
+  }
+
+  const uint32_t kv_lora_rank = layout.deepseek_kv_lora_rank;
+  const uint32_t qk_nope = layout.deepseek_qk_nope_head_dim;
+  const uint32_t qk_rope = layout.deepseek_qk_rope_head_dim;
+  const uint32_t v_head = layout.deepseek_v_head_dim;
+  const uint32_t qk_head_dim = qk_nope + qk_rope;
+  const uint32_t kv_cache_width = kv_lora_rank + qk_rope;
+  if (heads == 0 || kv_lora_rank == 0 || qk_nope == 0 || qk_rope == 0 ||
+      v_head == 0 || qk_head_dim == 0 || layout.w_v == kMissingOffset) {
+    return;
+  }
+  const bool bf16_storage = layout.deepseek_storage == kDeepSeekStorageBf16;
+  if (!bf16_storage && layout.deepseek_kv_b_scale == kMissingOffset) {
+    return;
+  }
+
+  const uint64_t partial_slot =
+      static_cast<uint64_t>(head) * attention_chunks + selected_slot;
+  const uint32_t attention_tokens = attention_tokens_shared;
+  const uint32_t chunk_start =
+      selected_slot * kDecodeAttentionChunkTokens;
+  if (chunk_start >= attention_tokens) {
+    if (threadIdx.x == 0) {
+      partial_m[partial_slot] = -INFINITY;
+      partial_l[partial_slot] = 0.0f;
+    }
+    return;
+  }
+  const uint32_t chunk_end =
+      min(chunk_start + kDecodeAttentionChunkTokens, attention_tokens);
+
+  extern __shared__ float shared[];
+  float *latent_output = shared;
+  float *q_rope = shared + kv_lora_rank;
+  const float *head_q_nope_latent =
+      q_nope_latent + static_cast<uint64_t>(head) * kv_lora_rank;
+  for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
+       latent += blockDim.x) {
+    latent_output[latent] = 0.0f;
+  }
+  const uint32_t rope_half = qk_rope / 2u;
+  for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
+    float q_pe = q[head * qk_head_dim + qk_nope + dim];
+    if (rope_half != 0) {
+      const uint32_t offset = dim % rope_half;
+      q_pe = deepseek_rope_value_serial(
+          q[head * qk_head_dim + qk_nope + offset],
+          q[head * qk_head_dim + qk_nope + offset + rope_half],
+          offset, qk_rope, position, rope_theta, dim >= rope_half, layout);
+    }
+    q_rope[dim] = q_pe;
+  }
+  __syncthreads();
+
+  const bool use_sparse_attention =
+      sparse_topk_slots != nullptr && sparse_topk_count != nullptr;
+  const float softmax_scale = deepseek_mla_attention_scale(layout, qk_head_dim);
+  float local_m = -INFINITY;
+  float local_l = 0.0f;
+  for (uint32_t attention_index = chunk_start; attention_index < chunk_end;
+       ++attention_index) {
+    uint32_t token = attention_index;
+    if (use_sparse_attention) {
+      const int32_t sparse_slot = sparse_topk_slots[attention_index];
+      if (sparse_slot < 0) {
+        continue;
+      }
+      token = static_cast<uint32_t>(sparse_slot);
+    }
+    if (token > position) {
+      continue;
+    }
+    const uint64_t token_base =
+        kv_cache_token_base(layer_index, kv_block_count, kv_block_table,
+                            token, kv_cache_width, 0);
+    float score_part = 0.0f;
+    for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
+         latent += blockDim.x) {
+      score_part += head_q_nope_latent[latent] *
+                    encoded_to_f32(kv_keys[token_base + latent], dtype);
+    }
+    for (uint32_t dim = threadIdx.x; dim < qk_rope; dim += blockDim.x) {
+      score_part += q_rope[dim] *
+                    encoded_to_f32(kv_keys[token_base + kv_lora_rank + dim],
+                                   dtype);
+    }
+    const float score = block_sum(score_part) * softmax_scale;
+    const float next_m = fmaxf(local_m, score);
+    const float old_scale = local_l == 0.0f ? 0.0f : expf(local_m - next_m);
+    const float new_scale = expf(score - next_m);
+    for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
+         latent += blockDim.x) {
+      latent_output[latent] =
+          latent_output[latent] * old_scale +
+          encoded_to_f32(kv_keys[token_base + latent], dtype) * new_scale;
+    }
+    local_l = local_l * old_scale + new_scale;
+    local_m = next_m;
+  }
+
+  if (threadIdx.x == 0) {
+    partial_m[partial_slot] = local_m;
+    partial_l[partial_slot] = local_l;
+    if (head == 0 && deepseek_runtime_counters != nullptr) {
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterRawAttentionTokensScanned),
+          static_cast<unsigned long long>(chunk_end - chunk_start));
+    }
+  }
+  for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
+       latent += blockDim.x) {
+    partial_latent[partial_slot * kv_lora_rank + latent] =
+        latent_output[latent];
+  }
+}
+
+__global__ void hf_deepseek_v3_mla_attention_reduce_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t heads, uint32_t *step_cursor, uint32_t max_steps,
+    uint32_t attention_chunks, const float *partial_latent,
+    const float *partial_m, const float *partial_l,
+    uint16_t *projection_input, uint64_t *deepseek_runtime_counters,
+    uint32_t record_sparse_attention) {
+  __shared__ uint32_t position_shared;
+  if (threadIdx.x == 0) {
+    position_shared = step_cursor == nullptr ? 0 : *step_cursor;
+  }
+  __syncthreads();
+
+  const uint32_t head = blockIdx.x;
+  const uint32_t position = position_shared;
+  const uint32_t kv_lora_rank = layout.deepseek_kv_lora_rank;
+  const uint32_t qk_nope = layout.deepseek_qk_nope_head_dim;
+  const uint32_t v_head = layout.deepseek_v_head_dim;
+  if (head >= heads || position >= max_steps || attention_chunks == 0 ||
+      kv_lora_rank == 0 || qk_nope == 0 || v_head == 0 ||
+      partial_latent == nullptr || partial_m == nullptr ||
+      partial_l == nullptr || projection_input == nullptr ||
+      layout.w_v == kMissingOffset) {
+    return;
+  }
+  const bool bf16_storage = layout.deepseek_storage == kDeepSeekStorageBf16;
+  if (!bf16_storage && layout.deepseek_kv_b_scale == kMissingOffset) {
+    return;
+  }
+
+  extern __shared__ float shared[];
+  float *chunk_weights = shared;
+  float *latent_output = shared + attention_chunks;
+  if (threadIdx.x == 0) {
+    float global_m = -INFINITY;
+    float global_l = 0.0f;
+    for (uint32_t chunk = 0; chunk < attention_chunks; ++chunk) {
+      const uint64_t slot =
+          static_cast<uint64_t>(head) * attention_chunks + chunk;
+      const float chunk_l = partial_l[slot];
+      if (chunk_l <= 0.0f || !isfinite(chunk_l)) {
+        continue;
+      }
+      const float chunk_m = partial_m[slot];
+      const float next_m = fmaxf(global_m, chunk_m);
+      const float old_scale =
+          global_l == 0.0f ? 0.0f : expf(global_m - next_m);
+      const float new_scale = expf(chunk_m - next_m);
+      global_l = global_l * old_scale + chunk_l * new_scale;
+      global_m = next_m;
+    }
+    for (uint32_t chunk = 0; chunk < attention_chunks; ++chunk) {
+      const uint64_t slot =
+          static_cast<uint64_t>(head) * attention_chunks + chunk;
+      const float chunk_l = partial_l[slot];
+      if (global_l > 0.0f && isfinite(global_l) && chunk_l > 0.0f &&
+          isfinite(chunk_l)) {
+        chunk_weights[chunk] = expf(partial_m[slot] - global_m) / global_l;
+      } else {
+        chunk_weights[chunk] = 0.0f;
+      }
+    }
+  }
+  __syncthreads();
+
+  for (uint32_t latent = threadIdx.x; latent < kv_lora_rank;
+       latent += blockDim.x) {
+    float value = 0.0f;
+    for (uint32_t chunk = 0; chunk < attention_chunks; ++chunk) {
+      const float weight = chunk_weights[chunk];
+      if (weight != 0.0f) {
+        const uint64_t slot =
+            static_cast<uint64_t>(head) * attention_chunks + chunk;
+        value += partial_latent[slot * kv_lora_rank + latent] * weight;
+      }
+    }
+    latent_output[latent] = value;
+  }
+  __syncthreads();
+
+  const uint32_t kv_b_cols = kv_lora_rank;
+  const uint8_t *kv_b_weight =
+      reinterpret_cast<const uint8_t *>(arena + layout.w_v);
+  const uint16_t *kv_b_scale =
+      bf16_storage ? nullptr : arena + layout.deepseek_kv_b_scale;
+  const uint32_t kv_b_scale_cols = (kv_b_cols + 127u) / 128u;
+  for (uint32_t value = threadIdx.x; value < v_head; value += blockDim.x) {
+    const uint32_t row = head * (qk_nope + v_head) + qk_nope + value;
+    float sum = 0.0f;
+    const uint32_t row_scale_base = (row / 128u) * kv_b_scale_cols;
+    for (uint32_t block_start = 0; block_start < kv_lora_rank;
+         block_start += 128u) {
+      const uint32_t block_end = min(block_start + 128u, kv_lora_rank);
+      const float scale =
+          bf16_storage
+              ? 1.0f
+              : f32_from_u16_slots(kv_b_scale,
+                                   row_scale_base + block_start / 128u);
+      for (uint32_t latent = block_start; latent < block_end; ++latent) {
+        const float weight =
+            bf16_storage
+                ? deepseek_bf16_weight(arena, layout.w_v,
+                                       heads * (qk_nope + v_head),
+                                       kv_b_cols, row, latent)
+                : nerva::deepseek::f8_e4m3fn_bits_to_f32(
+                      kv_b_weight[static_cast<uint64_t>(row) * kv_b_cols +
+                                  latent]) *
+                      scale;
+        sum += latent_output[latent] * weight;
+      }
+    }
+    const uint16_t encoded = f32_to_encoded(sum, dtype);
+    projection_input[head * v_head + value] = encoded;
+    const bool full_output_hash = heads <= 4;
+    if (record_sparse_attention != 0 &&
+        (full_output_hash || head == 0) &&
+        deepseek_runtime_counters != nullptr) {
+      const unsigned long long term =
+          (static_cast<unsigned long long>(position) + 1ull) * 1315423911ull ^
+          (static_cast<unsigned long long>(head) + 1ull) * 2654435761ull ^
+          (static_cast<unsigned long long>(value) + 1ull) * 97531ull ^
+          static_cast<unsigned long long>(encoded);
+      atomicAdd(
+          reinterpret_cast<unsigned long long *>(
+              deepseek_runtime_counters +
+              kDeepSeekRuntimeCounterSparseAttentionOutputHash),
+          term);
+    }
+  }
+}
+
 __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t heads, uint32_t max_steps, float rope_theta,

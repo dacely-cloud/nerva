@@ -666,6 +666,16 @@ uint64_t layout_deepseek_v3_value_rows(const SequenceLayerLayout &layout,
   return rows == 0 ? fallback_attention_hidden : rows;
 }
 
+uint64_t layout_deepseek_v3_latent_rows(const SequenceLayerLayout &layout,
+                                        uint64_t fallback_attention_hidden) {
+  if (!layout_is_deepseek_v3_mla(layout)) return fallback_attention_hidden;
+  const uint64_t qk_head_dim = layout_deepseek_v3_qk_head_dim(layout);
+  if (qk_head_dim == 0) return fallback_attention_hidden;
+  const uint64_t heads = fallback_attention_hidden / qk_head_dim;
+  const uint64_t rows = sat_mul_u64(heads, layout.deepseek_kv_lora_rank);
+  return rows == 0 ? fallback_attention_hidden : rows;
+}
+
 uint64_t layer_attention_workspace_rows(const SequenceLayerLayout &layout,
                                         uint64_t attention_hidden) {
   if (layout_is_deepseek_v4_native(layout)) {
@@ -675,6 +685,7 @@ uint64_t layer_attention_workspace_rows(const SequenceLayerLayout &layout,
   uint64_t rows = layout_deepseek_v3_q_rows(layout, attention_hidden);
   rows = std::max(rows, layout_deepseek_v3_kv_b_rows(layout, attention_hidden));
   rows = std::max(rows, layout_deepseek_v3_value_rows(layout, attention_hidden));
+  rows = std::max(rows, layout_deepseek_v3_latent_rows(layout, attention_hidden));
   return std::max(rows, attention_hidden);
 }
 

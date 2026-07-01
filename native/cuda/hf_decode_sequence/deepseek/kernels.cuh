@@ -124,6 +124,25 @@ __global__ void hf_deepseek_v3_mla_attention_encode_kernel(
     uint32_t deepseek_indexer_kv_block_count,
     const int32_t *sparse_topk_slots, const uint32_t *sparse_topk_count,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v3_mla_query_latent_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t heads,
+    const float *q, float *q_nope_latent);
+__global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t heads, uint32_t *step_cursor,
+    uint32_t max_steps, float rope_theta, const float *q,
+    const float *q_nope_latent, uint16_t *kv_keys, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint32_t attention_chunks,
+    float *partial_latent, float *partial_m, float *partial_l,
+    const int32_t *sparse_topk_slots, const uint32_t *sparse_topk_count,
+    uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v3_mla_attention_reduce_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t heads, uint32_t *step_cursor, uint32_t max_steps,
+    uint32_t attention_chunks, const float *partial_latent,
+    const float *partial_m, const float *partial_l,
+    uint16_t *projection_input, uint64_t *deepseek_runtime_counters,
+    uint32_t record_sparse_attention);
 __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t heads, uint32_t max_steps, float rope_theta,

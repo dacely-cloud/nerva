@@ -122,7 +122,7 @@ cudaError_t launch_cublas_layer_session_step(
         layout_deepseek_kv_cache_width(layout, kv_hidden));
     if (is_deepseek_v3) {
       err = launch_deepseek_v3_mla_projection_step(
-          session, layout, layer_index, max_steps);
+          session, layout, layer_index, max_steps, attention_chunks);
     } else if (is_deepseek_v4_native) {
       err = launch_deepseek_v4_swa_dense_projection_step(
           session, layout, layer_index, max_steps, prompt_token_count);
@@ -447,7 +447,8 @@ cudaError_t profile_cublas_layer_session_step(
           &norm_ns};
       if (err == cudaSuccess && is_deepseek_v3) {
         err = launch_deepseek_v3_mla_projection_step(
-            session, layout, layer_index, max_steps, &deepseek_profile);
+            session, layout, layer_index, max_steps, attention_chunks,
+            &deepseek_profile);
       } else if (err == cudaSuccess) {
         err = launch_deepseek_v4_swa_dense_projection_step(
             session, layout, layer_index, max_steps, prompt_token_count,

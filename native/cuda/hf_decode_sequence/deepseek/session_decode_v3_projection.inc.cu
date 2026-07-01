@@ -1,6 +1,6 @@
 cudaError_t launch_deepseek_v3_mla_projection_step(
     NervaCudaHfDecodeSequenceSession *session, const SequenceLayerLayout &layout,
-    uint32_t layer_index, uint32_t max_steps,
+    uint32_t layer_index, uint32_t max_steps, uint32_t attention_chunks,
     const DeepseekDecodeProfileBuckets *profile = nullptr) {
   if (!layout_is_deepseek_v3_mla(layout) ||
       layout.w_q == kMissingOffset ||
@@ -304,34 +304,86 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
     err = cudaGetLastError();
     if (err != cudaSuccess) return err;
   }
-  const size_t mla_attention_shared_bytes =
+  const size_t mla_attention_serial_shared_bytes =
       (static_cast<size_t>(kv_lora_rank) * 2u + qk_rope) * sizeof(float) +
       (has_v32_sparse_attention && !has_precomputed_v32_sparse_attention
            ? static_cast<size_t>(kDeepSeekSparseTopKSlotCapacity) *
                  (sizeof(int32_t) + sizeof(float))
            : 0u);
-  hf_deepseek_v3_mla_attention_encode_kernel<<<
-      session->heads, kDecodeThreads, mla_attention_shared_bytes,
-      session->stream>>>(
-      session->device_arena, layout, layer_index, session->dtype,
-      session->heads, session->device_step, max_steps, session->rope_theta,
-      scratch.q, session->device_kv_keys, session->kv_block_count,
-      session->device_kv_block_table, session->device_projection_input,
-      reinterpret_cast<const uint8_t *>(session->device_deepseek_indexer_state),
-      deepseek_v32_indexer_query_state_layer_offset_bytes(session,
-                                                          layer_index),
-      session->device_deepseek_indexer_kv,
-      deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
-      deepseek_v32_indexer_kv_block_count(session, layout),
-      has_precomputed_v32_sparse_attention
-          ? session->device_deepseek_sparse_topk_slots
-          : nullptr,
-      has_precomputed_v32_sparse_attention
-          ? session->device_deepseek_sparse_topk_count
-          : nullptr,
-      session->device_deepseek_runtime_counters);
-  err = cudaGetLastError();
-  if (err != cudaSuccess) return err;
+  const size_t mla_attention_chunk_shared_bytes =
+      (static_cast<size_t>(kv_lora_rank) + qk_rope) * sizeof(float);
+  const bool use_chunked_mla_attention =
+      attention_chunks != 0 &&
+      session->device_decode_attention_values != nullptr &&
+      session->device_decode_attention_m != nullptr &&
+      session->device_decode_attention_l != nullptr &&
+      (!has_v32_sparse_attention || has_precomputed_v32_sparse_attention);
+  if (use_chunked_mla_attention) {
+    hf_deepseek_v3_mla_query_latent_kernel<<<
+        session->heads, kDecodeThreads, 0, session->stream>>>(
+        session->device_arena, layout, session->heads, scratch.q,
+        scratch.attn);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+
+    const dim3 chunk_grid(session->heads, attention_chunks);
+    hf_deepseek_v3_mla_attention_chunk_kernel<<<
+        chunk_grid, kDecodeThreads, mla_attention_chunk_shared_bytes,
+        session->stream>>>(
+        session->device_arena, layout, layer_index, session->dtype,
+        session->heads, session->device_step, max_steps, session->rope_theta,
+        scratch.q, scratch.attn, session->device_kv_keys, session->kv_block_count,
+        session->device_kv_block_table, attention_chunks,
+        session->device_decode_attention_values,
+        session->device_decode_attention_m, session->device_decode_attention_l,
+        has_precomputed_v32_sparse_attention
+            ? session->device_deepseek_sparse_topk_slots
+            : nullptr,
+        has_precomputed_v32_sparse_attention
+            ? session->device_deepseek_sparse_topk_count
+            : nullptr,
+        session->device_deepseek_runtime_counters);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+
+    const size_t reduce_shared_bytes =
+        (static_cast<size_t>(attention_chunks) + kv_lora_rank) * sizeof(float);
+    hf_deepseek_v3_mla_attention_reduce_kernel<<<
+        session->heads, kDecodeThreads, reduce_shared_bytes,
+        session->stream>>>(
+        session->device_arena, layout, session->dtype, session->heads,
+        session->device_step, max_steps, attention_chunks,
+        session->device_decode_attention_values,
+        session->device_decode_attention_m, session->device_decode_attention_l,
+        session->device_projection_input,
+        session->device_deepseek_runtime_counters,
+        has_precomputed_v32_sparse_attention ? 1u : 0u);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+  } else {
+    hf_deepseek_v3_mla_attention_encode_kernel<<<
+        session->heads, kDecodeThreads, mla_attention_serial_shared_bytes,
+        session->stream>>>(
+        session->device_arena, layout, layer_index, session->dtype,
+        session->heads, session->device_step, max_steps, session->rope_theta,
+        scratch.q, session->device_kv_keys, session->kv_block_count,
+        session->device_kv_block_table, session->device_projection_input,
+        reinterpret_cast<const uint8_t *>(session->device_deepseek_indexer_state),
+        deepseek_v32_indexer_query_state_layer_offset_bytes(session,
+                                                            layer_index),
+        session->device_deepseek_indexer_kv,
+        deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
+        deepseek_v32_indexer_kv_block_count(session, layout),
+        has_precomputed_v32_sparse_attention
+            ? session->device_deepseek_sparse_topk_slots
+            : nullptr,
+        has_precomputed_v32_sparse_attention
+            ? session->device_deepseek_sparse_topk_count
+            : nullptr,
+        session->device_deepseek_runtime_counters);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+  }
   err = deepseek_profile_end_if(session, profile, profile == nullptr
                                                     ? nullptr
                                                     : profile->attention_ns);

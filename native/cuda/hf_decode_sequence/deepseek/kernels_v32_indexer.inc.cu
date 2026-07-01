@@ -1040,6 +1040,8 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
       sparse_topk_score_workspace != nullptr &&
       sparse_topk_score_capacity >= candidate_tokens;
   if (has_score_workspace) {
+    __shared__ float reduce_scores[kDecodeThreads];
+    __shared__ int32_t reduce_slots[kDecodeThreads];
     const uint64_t token_bytes =
         deepseek_v32_indexer_query_state_token_bytes(layout);
     const uint8_t *token_ptr =
@@ -1060,44 +1062,54 @@ __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
     }
     __syncthreads();
 
-    if (threadIdx.x != 0) {
-      return;
-    }
-    float topk_scores[kDeepSeekSessionMaxSparseTopK];
-    for (uint32_t rank = 0; rank < topk_limit; ++rank) {
-      sparse_topk_slots[rank] = -1;
-      topk_scores[rank] = -INFINITY;
-    }
-    for (uint32_t slot = 0; slot < candidate_tokens; ++slot) {
-      const float score = sparse_topk_score_workspace[slot];
-      const int32_t slot_i32 = static_cast<int32_t>(slot);
-      for (uint32_t rank = 0; rank < topk_limit; ++rank) {
-        if (!deepseek_session_sparse_score_is_better(
-                score, slot_i32, topk_scores[rank],
-                sparse_topk_slots[rank])) {
-          continue;
-        }
-        for (uint32_t shift = topk_limit - 1u; shift > rank; --shift) {
-          sparse_topk_slots[shift] = sparse_topk_slots[shift - 1u];
-          topk_scores[shift] = topk_scores[shift - 1u];
-        }
-        sparse_topk_slots[rank] = slot_i32;
-        topk_scores[rank] = score;
-        break;
-      }
-    }
     unsigned long long selection_hash = 0ull;
     uint32_t selected = 0;
     for (uint32_t rank = 0; rank < topk_limit; ++rank) {
-      if (sparse_topk_slots[rank] < 0) {
-        continue;
+      float thread_best_score = -INFINITY;
+      int32_t thread_best_slot = -1;
+      for (uint32_t slot = threadIdx.x; slot < candidate_tokens;
+           slot += blockDim.x) {
+        const float score = sparse_topk_score_workspace[slot];
+        const int32_t slot_i32 = static_cast<int32_t>(slot);
+        if (deepseek_session_sparse_score_is_better(
+                score, slot_i32, thread_best_score, thread_best_slot)) {
+          thread_best_score = score;
+          thread_best_slot = slot_i32;
+        }
       }
-      ++selected;
-      selection_hash +=
-          (static_cast<unsigned long long>(position) + 1ull) *
-              1315423911ull ^
-          (static_cast<unsigned long long>(rank) + 1ull) * 2654435761ull ^
-          (static_cast<unsigned long long>(sparse_topk_slots[rank]) + 1ull);
+      reduce_scores[threadIdx.x] = thread_best_score;
+      reduce_slots[threadIdx.x] = thread_best_slot;
+      __syncthreads();
+      for (uint32_t stride = blockDim.x / 2u; stride != 0; stride >>= 1u) {
+        if (threadIdx.x < stride) {
+          const float other_score = reduce_scores[threadIdx.x + stride];
+          const int32_t other_slot = reduce_slots[threadIdx.x + stride];
+          if (deepseek_session_sparse_score_is_better(
+                  other_score, other_slot, reduce_scores[threadIdx.x],
+                  reduce_slots[threadIdx.x])) {
+            reduce_scores[threadIdx.x] = other_score;
+            reduce_slots[threadIdx.x] = other_slot;
+          }
+        }
+        __syncthreads();
+      }
+      if (threadIdx.x == 0) {
+        const int32_t best_slot = reduce_slots[0];
+        sparse_topk_slots[rank] = best_slot;
+        if (best_slot >= 0) {
+          sparse_topk_score_workspace[best_slot] = -INFINITY;
+          ++selected;
+          selection_hash +=
+              (static_cast<unsigned long long>(position) + 1ull) *
+                  1315423911ull ^
+              (static_cast<unsigned long long>(rank) + 1ull) * 2654435761ull ^
+              (static_cast<unsigned long long>(best_slot) + 1ull);
+        }
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x != 0) {
+      return;
     }
     if (selected == 0) {
       return;
