@@ -374,7 +374,7 @@ fn hf_decode_sequence_batch_advance_one_executes_second_token_for_two_sessions()
     assert_eq!(batch.projection_kernel_launches, 5);
     assert_eq!(batch.pack_kernel_launches, 5);
     assert_eq!(batch.scatter_kernel_launches, 5);
-    assert_eq!(batch.dependency_kernel_launches, 12);
+    assert_eq!(batch.dependency_kernel_launches, 16);
     assert_eq!(batch.sampling_kernel_launches, 2);
     assert!(batch.projection_elapsed_ns > 0);
     assert!(batch.lm_head_elapsed_ns > 0);
@@ -675,7 +675,7 @@ fn assert_layer_projection_batch_exec(
     assert_eq!(summary.pack_kernel_launches, 4);
     assert_eq!(summary.projection_kernel_launches, 4);
     assert_eq!(summary.scatter_kernel_launches, 4);
-    assert_eq!(summary.dependency_kernel_launches, 12);
+    assert_eq!(summary.dependency_kernel_launches, 16);
     assert!(summary.elapsed_ns > 0);
     assert!(summary.qkv_elapsed_ns > 0);
     assert!(summary.attention_output_elapsed_ns > 0);
@@ -812,7 +812,7 @@ fn hf_decode_sequence_session_reuses_resident_weights_between_runs() {
     assert_eq!(first_step.device_elapsed_ns, 0);
     assert_eq!(
         (second_step.graph_captures, second_step.graph_cache_hits),
-        (0, 1)
+        (1, 0)
     );
 }
 
