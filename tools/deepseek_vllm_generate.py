@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument(
+        "--kv-cache-dtype",
+        default=None,
+        help="vLLM kv_cache_dtype (e.g. fp8, fp8_ds_mla); omitted when unset",
+    )
     parser.add_argument("--vllm-root", default="/root/vllm")
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
@@ -168,6 +173,7 @@ def error_payload(args: argparse.Namespace | None, exc: BaseException) -> dict[s
                 "runs": args.runs,
                 "warmup_runs": args.warmup_runs,
                 "dtype": args.dtype,
+                "kv_cache_dtype": args.kv_cache_dtype,
                 "gpu_memory_utilization": args.gpu_memory_utilization,
                 "trust_remote_code": args.trust_remote_code,
                 "enable_prefix_caching": args.enable_prefix_caching,
@@ -229,6 +235,8 @@ def run_generation(args: argparse.Namespace) -> None:
     from vllm import LLM, SamplingParams
 
     engine_kwargs: dict[str, Any] = {}
+    if args.kv_cache_dtype is not None:
+        engine_kwargs["kv_cache_dtype"] = args.kv_cache_dtype
     if args.linear_backend != "auto":
         engine_kwargs["linear_backend"] = args.linear_backend
     if args.moe_backend != "auto":
@@ -317,6 +325,7 @@ def run_generation(args: argparse.Namespace) -> None:
                 "prompt_token_ids": [int(token) for token in prompt_token_ids],
                 "max_model_len": args.max_model_len,
                 "max_tokens": args.max_tokens,
+                "kv_cache_dtype": args.kv_cache_dtype,
                 "runs": args.runs,
                 "measured_runs": args.runs,
                 "warmup_runs": args.warmup_runs,

@@ -91,7 +91,12 @@ fn weight_layout_requires_exact_declared_dtype() {
     assert!(plan_hf_weight_layout(&metadata).is_err());
 
     metadata.torch_dtype = Some(DType::U8);
-    assert!(plan_hf_weight_layout(&metadata).is_err());
+    let plan = plan_hf_weight_layout(&metadata).unwrap();
+    assert_eq!(plan.dtype, DType::U8);
+    assert_eq!(plan.blocks.len(), 291);
+    assert_eq!(plan.static_weight_bytes, 262_148_096);
+    assert_eq!(plan.per_layer_weight_bytes, 177_217_536);
+    assert_eq!(plan.total_weight_bytes, 5_933_109_248);
 }
 
 #[test]

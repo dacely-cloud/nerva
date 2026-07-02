@@ -120,8 +120,8 @@ fn fullsize_v4_swa_expected_token(position: usize, normalized_k: f32) -> Vec<f32
     let mut values = vec![normalized_k; qk_nope + qk_rope];
     let rope_half = qk_rope / 2;
     for offset in 0..rope_half {
-        let left = qk_nope + offset;
-        let right = left + rope_half;
+        let left = qk_nope + offset * 2;
+        let right = left + 1;
         let left_value = values[left];
         let right_value = values[right];
         values[left] = deepseek_rope_value_reference(
@@ -2279,8 +2279,8 @@ fn declared_deepseek_v4_descriptor_footprint_counts_storage_widths_and_hc_blocks
             blocks: 1,
             gpu_resident_blocks: 1,
             gpu_staged_blocks: 0,
-            weight_bytes: 1306,
-            gpu_resident_weight_bytes: 1306,
+            weight_bytes: 1440,
+            gpu_resident_weight_bytes: 1440,
             gpu_staged_weight_bytes: 0,
             descriptor_hash: 1,
         }),
@@ -2290,7 +2290,7 @@ fn declared_deepseek_v4_descriptor_footprint_counts_storage_widths_and_hc_blocks
 
     let footprint = estimate_sequence_footprint(&request).unwrap();
 
-    assert_eq!(footprint.resident_weight_bytes, 1306);
+    assert_eq!(footprint.resident_weight_bytes, 1440);
     assert_eq!(footprint.layout_bytes, 632);
     assert_eq!(footprint.resident_kv_bytes, 2992);
 }
@@ -2301,7 +2301,7 @@ fn declared_deepseek_v4_descriptor_run_reaches_native_execution_guard() {
 
     let deepseek_layer = tiny_deepseek_v4_descriptor_layer();
     let layers = [deepseek_layer];
-    let weight_storage = vec![0u16; 1306 / 2];
+    let weight_storage = vec![0u16; 1440 / 2];
     let weight_blocks = [CudaHfDecodeSequenceWeightBlock {
         host_source: weight_storage.as_ptr(),
         source_file: core::ptr::null(),
@@ -2310,7 +2310,7 @@ fn declared_deepseek_v4_descriptor_run_reaches_native_execution_guard() {
         block_id: 1,
         block_version: 1,
         offset_bytes: 0,
-        bytes: 1306,
+        bytes: 1440,
         strategy: CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT,
         reserved: 0,
     }];
@@ -2336,8 +2336,8 @@ fn declared_deepseek_v4_descriptor_run_reaches_native_execution_guard() {
             blocks: 1,
             gpu_resident_blocks: 1,
             gpu_staged_blocks: 0,
-            weight_bytes: 1306,
-            gpu_resident_weight_bytes: 1306,
+            weight_bytes: 1440,
+            gpu_resident_weight_bytes: 1440,
             gpu_staged_weight_bytes: 0,
             descriptor_hash: hash_weight_blocks(&weight_blocks),
         }),
@@ -2351,7 +2351,7 @@ fn declared_deepseek_v4_descriptor_run_reaches_native_execution_guard() {
     }
 
     assert_eq!(summary.status, SmokeStatus::Failed);
-    assert_eq!(summary.planned_footprint.resident_weight_bytes, 1306);
+    assert_eq!(summary.planned_footprint.resident_weight_bytes, 1440);
     assert_eq!(summary.planned_weight_descriptor_count, 1);
     assert_eq!(
         summary.planned_weight_descriptor_hash,
@@ -5169,21 +5169,21 @@ fn deepseek_v4_layout_plan_names_compressor_and_indexer_offsets() {
     assert_eq!(plan.deepseek_kv_a_scale, 402);
     assert_eq!(plan.k_norm, 403);
     assert_eq!(plan.w_o, 405);
-    assert_eq!(plan.deepseek_o_a_scale, 409);
-    assert_eq!(plan.deepseek_o_b, 410);
-    assert_eq!(plan.deepseek_o_b_scale, 418);
-    assert_eq!(plan.deepseek_compressor_ape, 419);
-    assert_eq!(plan.deepseek_compressor_wkv, 451);
-    assert_eq!(plan.deepseek_compressor_wgate, 467);
-    assert_eq!(plan.deepseek_compressor_norm, 483);
-    assert_eq!(plan.deepseek_indexer_q, 485);
-    assert_eq!(plan.deepseek_indexer_q_scale, 487);
-    assert_eq!(plan.deepseek_indexer_compressor_ape, 488);
-    assert_eq!(plan.deepseek_indexer_compressor_wkv, 520);
-    assert_eq!(plan.deepseek_indexer_compressor_wgate, 536);
-    assert_eq!(plan.deepseek_indexer_compressor_norm, 552);
-    assert_eq!(plan.deepseek_indexer_weights, 554);
-    assert_eq!(plan.rms_mlp, 558);
+    assert_eq!(plan.deepseek_o_a_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
+    assert_eq!(plan.deepseek_o_b, 413);
+    assert_eq!(plan.deepseek_o_b_scale, 421);
+    assert_eq!(plan.deepseek_compressor_ape, 422);
+    assert_eq!(plan.deepseek_compressor_wkv, 454);
+    assert_eq!(plan.deepseek_compressor_wgate, 486);
+    assert_eq!(plan.deepseek_compressor_norm, 518);
+    assert_eq!(plan.deepseek_indexer_q, 520);
+    assert_eq!(plan.deepseek_indexer_q_scale, 522);
+    assert_eq!(plan.deepseek_indexer_compressor_ape, 523);
+    assert_eq!(plan.deepseek_indexer_compressor_wkv, 555);
+    assert_eq!(plan.deepseek_indexer_compressor_wgate, 587);
+    assert_eq!(plan.deepseek_indexer_compressor_norm, 619);
+    assert_eq!(plan.deepseek_indexer_weights, 621);
+    assert_eq!(plan.rms_mlp, 625);
     assert_eq!(plan.deepseek_indexer_k, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_eq!(plan.deepseek_kv_b_scale, CUDA_HF_SEQUENCE_MISSING_OFFSET);
     assert_eq!(plan.layout_bytes, 688);
