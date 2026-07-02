@@ -93,6 +93,11 @@ constexpr uint32_t kSharedWarpGqaTileTokens = kKvCacheBlockTokens;
 constexpr uint32_t kSharedWarpGqaTileElements =
     kSharedWarpGqaTileTokens * kSharedWarpGqaHeadDimMax;
 constexpr uint32_t kChunkedDecodeAttentionThreshold = 128;
+// Smallest chunk-count bucket used once the chunked decode-attention path is
+// active. The live chunk count is rounded up to a power-of-two bucket so the
+// captured decode CUDA graph stays valid across a range of cursors instead of
+// being re-captured on the hot path every chunk-tokens of context growth.
+constexpr uint32_t kChunkedDecodeAttentionMinChunks = 4;
 constexpr uint64_t kMissingOffset = UINT64_MAX;
 constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ull;
 constexpr uint64_t kFnvPrime = 0x00000100000001b3ull;

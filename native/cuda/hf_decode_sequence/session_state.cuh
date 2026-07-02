@@ -63,6 +63,7 @@ struct NervaCudaHfDecodeSequenceSession {
   uint64_t decode_attention_values_bytes = 0;
   uint64_t decode_attention_stats_bytes = 0;
   uint32_t decode_attention_max_chunks = 0;
+  uint64_t device_memory_bandwidth_bps = 0;
   uint64_t decode_q_bytes = 0;
   uint64_t decode_seq_len_bytes = 0;
   uint64_t linear_gdn_conv_state_bytes = 0;

@@ -683,6 +683,7 @@ typedef struct NervaCudaHfDecodeSequenceSessionCreateResult {
   uint64_t h2d_bytes;
   uint64_t sync_calls;
   uint64_t hot_path_allocations;
+  uint64_t device_memory_bandwidth_bps;
 } NervaCudaHfDecodeSequenceSessionCreateResult;
 
 typedef struct NervaCudaHfDecodeSequenceSessionForkSharedWeightsRequest {

@@ -48,6 +48,8 @@ pub struct CudaHfDecodeSequenceSessionCreateSummary {
     pub h2d_bytes: u64,
     pub sync_calls: u64,
     pub hot_path_allocations: u64,
+    /// Theoretical peak device memory bandwidth in bytes/s (0 if unknown).
+    pub device_memory_bandwidth_bps: u64,
     pub error: Option<String>,
 }
 
@@ -162,6 +164,7 @@ pub(crate) fn create_summary_from_result(
         h2d_bytes: out.h2d_bytes,
         sync_calls: out.sync_calls,
         hot_path_allocations: out.hot_path_allocations,
+        device_memory_bandwidth_bps: out.device_memory_bandwidth_bps,
         error: (return_code != 0 || out.status != 0)
             .then(|| create_error(out, device_free_memory_bytes)),
     }

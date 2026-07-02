@@ -53,6 +53,7 @@ pub(super) fn failed_create_summary(
         h2d_bytes: 0,
         sync_calls: 0,
         hot_path_allocations: 0,
+        device_memory_bandwidth_bps: 0,
         error: Some(error),
     }
 }
