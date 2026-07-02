@@ -31,3 +31,4 @@ Thumbs.db
 models/
 artifacts/
 tmp_artifacts/
+.claude/worktrees/

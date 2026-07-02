@@ -197,10 +197,79 @@ __global__ void hf_prefill_sparse_moe_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
     const uint16_t *norm_in, float *gate_up_tmp, float *down_out);
+// Expert-grouped tiling scratch appended after the route ids/weights inside
+// the prefill FF buffer for the tiled sparse-MoE prefill path. All offsets
+// are in uint32 units from the start of the route scratch.
+constexpr uint32_t kDeepSeekPrefillMoePairTile = 64;
+
+struct DeepSeekPrefillMoeTileScratch {
+  uint32_t routed_pairs;        // chunk_tokens * top_k
+  uint32_t shared_pairs;        // chunk_tokens if the shared expert is active
+  uint64_t counter_offset;      // tile_count (1 u32)
+  uint64_t pair_list_offset;    // expert-grouped, tile-padded pair list
+  uint64_t pair_list_capacity;  // u32 slots reserved for the pair list
+  uint64_t tile_meta_offset;    // 2 u32 per tile: {expert, pair base}
+  uint64_t tile_capacity;       // upper bound on the tile count
+  uint64_t staging_offset;      // f32 staging for the down pass (16B aligned)
+};
+
+__host__ __device__ inline DeepSeekPrefillMoeTileScratch
+deepseek_prefill_moe_tile_scratch(uint32_t chunk_tokens, uint32_t top_k,
+                                  uint32_t num_experts, uint32_t has_shared) {
+  DeepSeekPrefillMoeTileScratch scratch;
+  scratch.routed_pairs = chunk_tokens * top_k;
+  scratch.shared_pairs = has_shared != 0 ? chunk_tokens : 0u;
+  const uint64_t route_u32 = 2ull * scratch.routed_pairs;
+  scratch.counter_offset = route_u32;
+  scratch.pair_list_offset = route_u32 + 4u;
+  const uint64_t routed_capacity =
+      static_cast<uint64_t>(scratch.routed_pairs) +
+      static_cast<uint64_t>(num_experts) * kDeepSeekPrefillMoePairTile;
+  const uint64_t shared_capacity =
+      has_shared != 0 ? static_cast<uint64_t>(scratch.shared_pairs) +
+                            kDeepSeekPrefillMoePairTile
+                      : 0ull;
+  scratch.pair_list_capacity = routed_capacity + shared_capacity;
+  scratch.tile_meta_offset =
+      scratch.pair_list_offset + scratch.pair_list_capacity;
+  const uint64_t routed_tiles =
+      (scratch.routed_pairs + kDeepSeekPrefillMoePairTile - 1u) /
+          kDeepSeekPrefillMoePairTile +
+      num_experts;
+  const uint64_t shared_tiles =
+      has_shared != 0
+          ? (scratch.shared_pairs + kDeepSeekPrefillMoePairTile - 1u) /
+                    kDeepSeekPrefillMoePairTile +
+                1u
+          : 0ull;
+  scratch.tile_capacity = routed_tiles + shared_tiles;
+  const uint64_t staging =
+      scratch.tile_meta_offset + 2ull * scratch.tile_capacity;
+  scratch.staging_offset = (staging + 3ull) & ~3ull;
+  return scratch;
+}
+
 __global__ void hf_deepseek_prefill_sparse_moe_router_logits_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t chunk_tokens, const uint16_t *norm_in,
     float *router_logits_tokens);
+__global__ void hf_deepseek_prefill_sparse_moe_build_pairs_kernel(
+    SequenceLayerLayout layout, uint32_t chunk_tokens, uint32_t has_shared,
+    uint16_t *route_scratch);
+__global__ void hf_deepseek_prefill_sparse_moe_gate_up_tiles_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
+    uint32_t has_shared, const uint16_t *norm_in, uint16_t *route_scratch,
+    float *gate_up_tmp);
+__global__ void hf_deepseek_prefill_sparse_moe_down_tiles_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t hidden,
+    uint32_t intermediate, uint32_t chunk_tokens, uint32_t has_shared,
+    uint32_t slab_base, uint32_t slab_rows, uint32_t slab_stride,
+    uint16_t *route_scratch, const float *gate_up_tmp);
+__global__ void hf_deepseek_prefill_sparse_moe_down_combine_kernel(
+    SequenceLayerLayout layout, uint32_t hidden, uint32_t chunk_tokens,
+    uint32_t has_shared, uint32_t slab_base, uint32_t slab_rows,
+    uint32_t slab_stride, uint16_t *route_scratch, float *down_out);
 __global__ void hf_deepseek_prefill_sparse_moe_route_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
