@@ -21,6 +21,42 @@ __global__ void hf_deepseek_ff_encode_kernel(
   }
 }
 
+// Attention-residual add + MLP norm with the decode path's rounding: the
+// attention output projection is rounded to the model dtype before the
+// residual add, mirroring hf_deepseek_residual_mlp_norm_encode_kernel.
+__global__ void hf_deepseek_prefill_mlp_norm_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t norm_weight_dtype, uint32_t hidden, uint32_t chunk_start,
+    uint32_t chunk_tokens, float rms_eps, const uint16_t *hidden_in,
+    float *attn_projection, uint16_t *norm_out) {
+  const uint32_t local_token = blockIdx.x;
+  if (local_token >= chunk_tokens) {
+    return;
+  }
+  const uint64_t global_token = chunk_start + local_token;
+  const uint16_t *input = hidden_in + global_token * hidden;
+  float *residual =
+      attn_projection + static_cast<uint64_t>(local_token) * hidden;
+  uint16_t *out = norm_out + static_cast<uint64_t>(local_token) * hidden;
+  float mean_square = 0.0f;
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    const float value = f32_to_model_dtype(residual[index], dtype) +
+                        encoded_to_f32(input[index], dtype);
+    residual[index] = value;
+    mean_square += value * value;
+  }
+  mean_square = block_sum(mean_square);
+  const float scale =
+      rsqrtf(mean_square / static_cast<float>(hidden) + rms_eps);
+  for (uint32_t index = threadIdx.x; index < hidden; index += blockDim.x) {
+    out[index] = f32_to_encoded(
+        residual[index] * scale *
+            norm_weight_to_f32(arena + layout.rms_mlp, index,
+                               norm_weight_dtype),
+        dtype);
+  }
+}
+
 __global__ void hf_deepseek_prefill_ff_split_kernel(
     SequenceLayerLayout layout, uint32_t dtype, uint32_t intermediate,
     uint32_t chunk_tokens, const float *gate, const float *up,

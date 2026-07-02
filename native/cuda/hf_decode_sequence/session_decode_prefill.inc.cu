@@ -1252,13 +1252,24 @@ cudaError_t launch_deepseek_prefill_sparse_moe_split(
   const size_t shared_one_reduce = slots * threads * sizeof(float);
   const size_t shared_two_reduce = shared_one_reduce * 2u;
 
-  hf_deepseek_prefill_sparse_moe_route_kernel<<<
-      chunk_tokens, threads, 0, session->stream>>>(
+  float *router_logits_tokens = session->device_prefill_gate_up;
+  const dim3 router_grid(layout.num_experts, chunk_tokens);
+  hf_deepseek_prefill_sparse_moe_router_logits_kernel<<<
+      router_grid, threads, 0, session->stream>>>(
       session->device_arena, layout, session->dtype, session->hidden,
-      session->intermediate, chunk_tokens, session->device_prefill_norm,
-      session->device_prefill_ff, session->device_deepseek_runtime_counters);
+      chunk_tokens, session->device_prefill_norm, router_logits_tokens);
   cudaError_t err = cudaGetLastError();
   if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+
+  if (err == cudaSuccess) {
+    hf_deepseek_prefill_sparse_moe_route_kernel<<<
+        chunk_tokens, threads, 0, session->stream>>>(
+        session->device_arena, layout, session->dtype, session->hidden,
+        session->intermediate, chunk_tokens, router_logits_tokens,
+        session->device_prefill_ff, session->device_deepseek_runtime_counters);
+    err = cudaGetLastError();
+    if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+  }
 
   if (err == cudaSuccess) {
     const dim3 grid(ceil_div_u32(layout.moe_intermediate, row_tile),
@@ -1584,8 +1595,8 @@ cudaError_t launch_deepseek_v3_session_prefill(
 
       if (err == cudaSuccess) err = profile_stage_begin();
       if (err == cudaSuccess) {
-        hf_prefill_mlp_norm_kernel<<<chunk_tokens, kDecodeThreads, 0,
-                                     session->stream>>>(
+        hf_deepseek_prefill_mlp_norm_kernel<<<chunk_tokens, kDecodeThreads, 0,
+                                              session->stream>>>(
             session->device_arena, layout, session->dtype,
             deepseek_norm_weight_dtype(layout), session->hidden,
             chunk_start, chunk_tokens, session->rms_eps, hidden_in,

@@ -67,14 +67,45 @@ __device__ __forceinline__ void deepseek_prefill_moe_reduce_slots(
   __syncthreads();
 }
 
+// Router logits with the same per-expert column partition and block
+// reduction as the decode-path hf_deepseek_v3_sparse_moe_router_logits_kernel
+// so prefill and decode select identical experts on near-tie logits.
+__global__ void hf_deepseek_prefill_sparse_moe_router_logits_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t hidden, uint32_t chunk_tokens, const uint16_t *norm_in,
+    float *router_logits_tokens) {
+  const uint32_t expert = blockIdx.x;
+  const uint32_t token = blockIdx.y;
+  const uint32_t num_experts = layout.num_experts;
+  if (token >= chunk_tokens || arena == nullptr || norm_in == nullptr ||
+      router_logits_tokens == nullptr ||
+      layout.w_router == kMissingOffset || num_experts == 0 ||
+      expert >= num_experts) {
+    return;
+  }
+  const uint16_t *token_norm = norm_in + static_cast<uint64_t>(token) * hidden;
+  const uint64_t row =
+      layout.w_router + static_cast<uint64_t>(expert) * hidden;
+  float sum = 0.0f;
+  for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
+    sum += encoded_to_f32(arena[row + col], kDTypeBF16) *
+           encoded_to_f32(token_norm[col], dtype);
+  }
+  sum = block_sum(sum);
+  if (threadIdx.x == 0) {
+    router_logits_tokens[static_cast<uint64_t>(token) * num_experts + expert] =
+        sum;
+  }
+}
+
 __global__ void hf_deepseek_prefill_sparse_moe_route_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t intermediate, uint32_t chunk_tokens,
-    const uint16_t *norm_in, uint16_t *route_scratch,
+    const float *router_logits_tokens, uint16_t *route_scratch,
     uint64_t *deepseek_runtime_counters) {
   const uint32_t token = blockIdx.x;
-  if (token >= chunk_tokens || arena == nullptr || norm_in == nullptr ||
-      route_scratch == nullptr) {
+  if (token >= chunk_tokens || arena == nullptr ||
+      router_logits_tokens == nullptr || route_scratch == nullptr) {
     return;
   }
 
@@ -107,18 +138,11 @@ __global__ void hf_deepseek_prefill_sparse_moe_route_kernel(
     return;
   }
 
-  const uint16_t *token_norm =
-      norm_in + static_cast<uint64_t>(token) * hidden;
   for (uint32_t expert = threadIdx.x; expert < num_experts;
        expert += blockDim.x) {
-    const uint64_t router_row =
-        layout.w_router + static_cast<uint64_t>(expert) * hidden;
-    float sum = 0.0f;
-    for (uint32_t col = 0; col < hidden; ++col) {
-      sum += encoded_to_f32(arena[router_row + col], kDTypeBF16) *
-             encoded_to_f32(token_norm[col], dtype);
-    }
-    router_logits[expert] = sum;
+    router_logits[expert] =
+        router_logits_tokens[static_cast<uint64_t>(token) * num_experts +
+                             expert];
   }
 
   const bool has_router_bias =
