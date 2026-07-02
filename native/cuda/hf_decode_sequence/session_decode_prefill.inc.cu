@@ -1213,6 +1213,48 @@ cudaError_t deepseek_prefill_project_tokens(
       session->dtype, rows, cols, tokens, block_rows, block_cols, output);
 }
 
+static bool deepseek_prefill_sparse_moe_has_shared_expert(
+    const SequenceLayerLayout &layout) {
+  return layout.shared_expert_intermediate != 0 &&
+         layout.w_shared_expert_gate != kMissingOffset &&
+         layout.w_shared_expert_up != kMissingOffset &&
+         layout.w_shared_expert_down != kMissingOffset;
+}
+
+// Slab stride (rows of hidden per down-staging pass) for the expert-grouped
+// tiled sparse-MoE prefill path; 0 when the prefill FF buffer cannot host
+// the pair list, tile metadata, and at least one 64-row staging slab after
+// the route ids/weights.
+static uint32_t deepseek_prefill_sparse_moe_tiled_slab_stride(
+    const NervaCudaHfDecodeSequenceSession *session,
+    const SequenceLayerLayout &layout, uint32_t chunk_tokens) {
+  if (layout.num_experts > kSparseMoeExpertsMax) {
+    return 0;
+  }
+  const bool has_shared =
+      deepseek_prefill_sparse_moe_has_shared_expert(layout);
+  const DeepSeekPrefillMoeTileScratch tile_scratch =
+      deepseek_prefill_moe_tile_scratch(chunk_tokens,
+                                        layout.experts_per_token,
+                                        layout.num_experts,
+                                        has_shared ? 1u : 0u);
+  if (tile_scratch.tile_capacity > 65535u) {
+    return 0;
+  }
+  const uint64_t staging_slots =
+      static_cast<uint64_t>(tile_scratch.routed_pairs) +
+      tile_scratch.shared_pairs;
+  const uint64_t ff_u32 = session->prefill_ff_bytes / sizeof(uint32_t);
+  if (staging_slots == 0 || ff_u32 <= tile_scratch.staging_offset) {
+    return 0;
+  }
+  uint64_t rows = (ff_u32 - tile_scratch.staging_offset) / staging_slots;
+  rows = std::min<uint64_t>(rows, session->hidden);
+  rows -= rows % kDeepSeekPrefillMoePairTile;
+  return rows >= kDeepSeekPrefillMoePairTile ? static_cast<uint32_t>(rows)
+                                             : 0u;
+}
+
 bool deepseek_prefill_sparse_moe_split_supported(
     const NervaCudaHfDecodeSequenceSession *session,
     const SequenceLayerLayout &layout, uint32_t chunk_tokens) {
@@ -1245,7 +1287,11 @@ bool deepseek_prefill_sparse_moe_split_supported(
   const uint64_t route_slots = sat_mul_u64(chunk_tokens, top_k);
   const uint64_t route_bytes =
       sat_mul_u64(route_slots, sizeof(uint32_t) + sizeof(float));
-  return route_bytes <= session->prefill_ff_bytes;
+  if (route_bytes > session->prefill_ff_bytes) {
+    return false;
+  }
+  return deepseek_prefill_sparse_moe_tiled_slab_stride(session, layout,
+                                                       chunk_tokens) != 0;
 }
 
 cudaError_t launch_deepseek_prefill_sparse_moe_split(
@@ -1257,41 +1303,20 @@ cudaError_t launch_deepseek_prefill_sparse_moe_split(
     return cudaErrorInvalidValue;
   }
   constexpr uint32_t threads = kDecodeThreads;
-  constexpr uint32_t row_tile = 8;
-  constexpr uint32_t token_tile = 2;
-  constexpr uint32_t slots = row_tile * token_tile;
-  const size_t shared_one_reduce = slots * threads * sizeof(float);
-  const size_t shared_two_reduce = shared_one_reduce * 2u;
-
   const bool has_shared_expert =
-      layout.shared_expert_intermediate != 0 &&
-      layout.w_shared_expert_gate != kMissingOffset &&
-      layout.w_shared_expert_up != kMissingOffset &&
-      layout.w_shared_expert_down != kMissingOffset;
-
-  // Expert-grouped tiled path: requires room in the prefill FF buffer (after
-  // the route ids/weights) for the pair list, tile metadata, and at least one
-  // 64-row slab of f32 down staging. Falls back to the legacy per-token
-  // kernels when the scratch does not fit.
+      deepseek_prefill_sparse_moe_has_shared_expert(layout);
   const DeepSeekPrefillMoeTileScratch tile_scratch =
       deepseek_prefill_moe_tile_scratch(chunk_tokens,
                                         layout.experts_per_token,
                                         layout.num_experts,
                                         has_shared_expert ? 1u : 0u);
-  const uint64_t staging_slots =
-      static_cast<uint64_t>(tile_scratch.routed_pairs) +
-      tile_scratch.shared_pairs;
-  const uint64_t ff_u32 = session->prefill_ff_bytes / sizeof(uint32_t);
-  uint32_t slab_stride = 0;
-  if (ff_u32 > tile_scratch.staging_offset && staging_slots != 0) {
-    uint64_t rows = (ff_u32 - tile_scratch.staging_offset) / staging_slots;
-    rows = std::min<uint64_t>(rows, session->hidden);
-    rows -= rows % kDeepSeekPrefillMoePairTile;
-    slab_stride = static_cast<uint32_t>(rows);
+  const uint32_t slab_stride = deepseek_prefill_sparse_moe_tiled_slab_stride(
+      session, layout, chunk_tokens);
+  if (slab_stride == 0) {
+    return cudaErrorInvalidValue;
   }
-  const bool use_tiled = slab_stride >= kDeepSeekPrefillMoePairTile &&
-                         layout.num_experts <= kSparseMoeExpertsMax &&
-                         tile_scratch.tile_capacity <= 65535u;
+  const uint32_t tile_grid_y =
+      static_cast<uint32_t>(tile_scratch.tile_capacity);
 
   float *router_logits_tokens = session->device_prefill_gate_up;
   const dim3 router_grid(layout.num_experts, chunk_tokens);
@@ -1312,98 +1337,55 @@ cudaError_t launch_deepseek_prefill_sparse_moe_split(
     if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
   }
 
-  if (use_tiled) {
-    const uint32_t tile_grid_y =
-        static_cast<uint32_t>(tile_scratch.tile_capacity);
-    if (err == cudaSuccess) {
-      hf_deepseek_prefill_sparse_moe_build_pairs_kernel<<<
-          1, threads, 0, session->stream>>>(
-          layout, chunk_tokens, has_shared_expert ? 1u : 0u,
-          session->device_prefill_ff);
-      err = cudaGetLastError();
-      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
-    }
-    if (err == cudaSuccess) {
-      const uint32_t gate_rows =
-          std::max(layout.moe_intermediate,
-                   has_shared_expert ? layout.shared_expert_intermediate : 0u);
-      const dim3 gate_grid(
-          ceil_div_u32(gate_rows, kDeepSeekPrefillMoePairTile), tile_grid_y);
-      hf_deepseek_prefill_sparse_moe_gate_up_tiles_kernel<<<
-          gate_grid, threads, 0, session->stream>>>(
-          session->device_arena, layout, session->dtype, session->hidden,
-          session->intermediate, chunk_tokens, has_shared_expert ? 1u : 0u,
-          session->device_prefill_norm, session->device_prefill_ff,
-          session->device_prefill_gate_up);
-      err = cudaGetLastError();
-      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
-    }
-    for (uint32_t slab_base = 0;
-         err == cudaSuccess && slab_base < session->hidden;
-         slab_base += slab_stride) {
-      const uint32_t slab_rows =
-          std::min(slab_stride, session->hidden - slab_base);
-      const dim3 down_grid(
-          ceil_div_u32(slab_rows, kDeepSeekPrefillMoePairTile), tile_grid_y);
-      hf_deepseek_prefill_sparse_moe_down_tiles_kernel<<<
-          down_grid, threads, 0, session->stream>>>(
-          session->device_arena, layout, session->hidden,
-          session->intermediate, chunk_tokens, has_shared_expert ? 1u : 0u,
-          slab_base, slab_rows, slab_stride, session->device_prefill_ff,
-          session->device_prefill_gate_up);
-      err = cudaGetLastError();
-      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
-      if (err == cudaSuccess) {
-        const dim3 combine_grid(ceil_div_u32(slab_rows, threads),
-                                chunk_tokens);
-        hf_deepseek_prefill_sparse_moe_down_combine_kernel<<<
-            combine_grid, threads, 0, session->stream>>>(
-            layout, session->hidden, chunk_tokens,
-            has_shared_expert ? 1u : 0u, slab_base, slab_rows, slab_stride,
-            session->device_prefill_ff, session->device_prefill_down);
-        err = cudaGetLastError();
-        if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
-      }
-    }
-    return err;
-  }
-
   if (err == cudaSuccess) {
-    const dim3 grid(ceil_div_u32(layout.moe_intermediate, row_tile),
-                    ceil_div_u32(chunk_tokens, token_tile),
-                    layout.experts_per_token);
-    hf_deepseek_prefill_sparse_moe_gate_up_kernel<<<
-        grid, threads, shared_two_reduce, session->stream>>>(
-        session->device_arena, layout, session->dtype, session->hidden,
-        session->intermediate, chunk_tokens, session->device_prefill_norm,
-        session->device_prefill_ff, session->device_prefill_gate_up);
+    hf_deepseek_prefill_sparse_moe_build_pairs_kernel<<<
+        1, threads, 0, session->stream>>>(
+        layout, chunk_tokens, has_shared_expert ? 1u : 0u,
+        session->device_prefill_ff);
     err = cudaGetLastError();
     if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
   }
-
-  if (err == cudaSuccess && has_shared_expert) {
-    const dim3 shared_grid(ceil_div_u32(layout.shared_expert_intermediate,
-                                        row_tile),
-                           ceil_div_u32(chunk_tokens, token_tile));
-    hf_deepseek_prefill_sparse_moe_shared_gate_up_kernel<<<
-        shared_grid, threads, shared_two_reduce, session->stream>>>(
+  if (err == cudaSuccess) {
+    const uint32_t gate_rows =
+        std::max(layout.moe_intermediate,
+                 has_shared_expert ? layout.shared_expert_intermediate : 0u);
+    const dim3 gate_grid(
+        ceil_div_u32(gate_rows, kDeepSeekPrefillMoePairTile), tile_grid_y);
+    hf_deepseek_prefill_sparse_moe_gate_up_tiles_kernel<<<
+        gate_grid, threads, 0, session->stream>>>(
         session->device_arena, layout, session->dtype, session->hidden,
-        session->intermediate, chunk_tokens, session->device_prefill_norm,
+        session->intermediate, chunk_tokens, has_shared_expert ? 1u : 0u,
+        session->device_prefill_norm, session->device_prefill_ff,
         session->device_prefill_gate_up);
     err = cudaGetLastError();
     if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
   }
-
-  if (err == cudaSuccess) {
-    const dim3 down_grid(ceil_div_u32(session->hidden, row_tile),
-                         ceil_div_u32(chunk_tokens, token_tile));
-    hf_deepseek_prefill_sparse_moe_down_kernel<<<
-        down_grid, threads, shared_one_reduce, session->stream>>>(
-        session->device_arena, layout, session->hidden, session->intermediate,
-        chunk_tokens, session->device_prefill_ff,
-        session->device_prefill_gate_up, session->device_prefill_down);
+  for (uint32_t slab_base = 0;
+       err == cudaSuccess && slab_base < session->hidden;
+       slab_base += slab_stride) {
+    const uint32_t slab_rows =
+        std::min(slab_stride, session->hidden - slab_base);
+    const dim3 down_grid(
+        ceil_div_u32(slab_rows, kDeepSeekPrefillMoePairTile), tile_grid_y);
+    hf_deepseek_prefill_sparse_moe_down_tiles_kernel<<<
+        down_grid, threads, 0, session->stream>>>(
+        session->device_arena, layout, session->hidden,
+        session->intermediate, chunk_tokens, has_shared_expert ? 1u : 0u,
+        slab_base, slab_rows, slab_stride, session->device_prefill_ff,
+        session->device_prefill_gate_up);
     err = cudaGetLastError();
     if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    if (err == cudaSuccess) {
+      const dim3 combine_grid(ceil_div_u32(slab_rows, threads),
+                              chunk_tokens);
+      hf_deepseek_prefill_sparse_moe_down_combine_kernel<<<
+          combine_grid, threads, 0, session->stream>>>(
+          layout, session->hidden, chunk_tokens,
+          has_shared_expert ? 1u : 0u, slab_base, slab_rows, slab_stride,
+          session->device_prefill_ff, session->device_prefill_down);
+      err = cudaGetLastError();
+      if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+    }
   }
   return err;
 }
