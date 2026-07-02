@@ -115,6 +115,40 @@ impl NativeCudaSources {
         for header in &self.headers {
             println!("cargo:rerun-if-changed={}", header.display());
         }
+        // The lists above are the compiled translation units and their pinned
+        // headers, but the real device code is spread across many `.inc.cu`
+        // fragments that are `#include`d into those units. A manual allowlist
+        // silently goes stale whenever a new fragment is added, so the native
+        // library would not rebuild when only an included fragment changed.
+        // Recursively watch the whole native/cuda tree so any device-source
+        // edit forces a rebuild.
+        print_native_source_rerun_directives(&self.native_dir);
+    }
+}
+
+fn print_native_source_rerun_directives(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            print_native_source_rerun_directives(&path);
+            continue;
+        }
+        let is_native_source = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| matches!(ext, "cu" | "cuh" | "h" | "hpp" | "cc" | "cpp" | "inc"))
+            .unwrap_or(false)
+            || path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.ends_with(".inc.cu"))
+                .unwrap_or(false);
+        if is_native_source {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
     }
 }
 
