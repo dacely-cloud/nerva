@@ -987,9 +987,20 @@ cudaError_t launch_deepseek_v3_single_layer_prefill_cache_path(
     }
 
     if (err == cudaSuccess && indexer_tokens != 0) {
-      const dim3 query_grid(layout.deepseek_index_n_heads, indexer_tokens);
+      const uint32_t query_heads_per_block =
+          deepseek_v32_indexer_query_heads_per_block(
+              layout.deepseek_index_head_dim, kDecodeThreads);
+      const uint32_t query_head_blocks =
+          (layout.deepseek_index_n_heads + query_heads_per_block - 1u) /
+          query_heads_per_block;
+      const size_t query_shared_bytes =
+          q_lora_rank <= kDeepSeekV32IndexerQueryStageMaxCols
+              ? static_cast<size_t>(q_lora_rank) * sizeof(float)
+              : 0u;
+      const dim3 query_grid(query_head_blocks, indexer_tokens);
       hf_deepseek_v32_indexer_query_state_tokens_kernel<<<
-          query_grid, kDecodeThreads, 0, session->stream>>>(
+          query_grid, kDecodeThreads, query_shared_bytes,
+          session->stream>>>(
           session->device_arena, layout, session->dtype, q_lora_rank,
           chunk_start, indexer_tokens, session->max_context_tokens,
           session->rope_theta, session->device_prefill_attn, q_lora_rank,
@@ -1552,9 +1563,20 @@ cudaError_t launch_deepseek_v3_session_prefill(
         if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
       }
       if (err == cudaSuccess && use_sparse_prefill_topk) {
-        const dim3 query_grid(layout.deepseek_index_n_heads, chunk_tokens);
+        const uint32_t query_heads_per_block =
+            deepseek_v32_indexer_query_heads_per_block(
+                layout.deepseek_index_head_dim, kDecodeThreads);
+        const uint32_t query_head_blocks =
+            (layout.deepseek_index_n_heads + query_heads_per_block - 1u) /
+            query_heads_per_block;
+        const size_t query_shared_bytes =
+            q_lora_rank <= kDeepSeekV32IndexerQueryStageMaxCols
+                ? static_cast<size_t>(q_lora_rank) * sizeof(float)
+                : 0u;
+        const dim3 query_grid(query_head_blocks, chunk_tokens);
         hf_deepseek_v32_indexer_query_state_tokens_kernel<<<
-            query_grid, kDecodeThreads, 0, session->stream>>>(
+            query_grid, kDecodeThreads, query_shared_bytes,
+            session->stream>>>(
             session->device_arena, layout, session->dtype, q_lora_rank,
             chunk_start, chunk_tokens, session->max_context_tokens,
             session->rope_theta, q_norm_tokens, q_lora_rank,
@@ -1645,19 +1667,44 @@ cudaError_t launch_deepseek_v3_session_prefill(
         if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
       }
       if (err == cudaSuccess) {
-        const size_t shared_bytes =
-            (static_cast<size_t>(kv_lora_rank) * 2u + qk_rope) *
-            sizeof(float);
-        const dim3 grid(chunk_tokens, session->heads);
-        hf_deepseek_v3_mla_attention_tokens_kernel<<<
-            grid, kDecodeThreads, shared_bytes, session->stream>>>(
-            session->device_arena, layout, layer_index, session->dtype,
-            session->heads, session->max_context_tokens, session->rope_theta,
-            chunk_start, chunk_tokens, session->device_prefill_qkv, q_rows,
-            session->device_kv_keys, session->kv_block_count,
-            session->device_kv_block_table, session->device_prefill_attn,
-            value_rows, sparse_topk_slots, sparse_topk_stride,
-            sparse_topk_counts, session->device_deepseek_runtime_counters);
+        const bool grouped_attention =
+            kv_lora_rank <=
+                kDeepSeekMlaPrefillMaxLatentSlots * kDecodeThreads &&
+            qk_rope <= kDecodeThreads;
+        if (grouped_attention) {
+          const size_t shared_bytes =
+              static_cast<size_t>(kDeepSeekMlaPrefillHeadGroup) *
+              kv_lora_rank * sizeof(float);
+          const dim3 grid(chunk_tokens,
+                          (session->heads + kDeepSeekMlaPrefillHeadGroup -
+                           1u) /
+                              kDeepSeekMlaPrefillHeadGroup);
+          hf_deepseek_v3_mla_attention_tokens_grouped_kernel<<<
+              grid, kDecodeThreads, shared_bytes, session->stream>>>(
+              session->device_arena, layout, layer_index, session->dtype,
+              session->heads, session->max_context_tokens,
+              session->rope_theta, chunk_start, chunk_tokens,
+              session->device_prefill_qkv, q_rows, session->device_kv_keys,
+              session->kv_block_count, session->device_kv_block_table,
+              session->device_prefill_attn, value_rows, sparse_topk_slots,
+              sparse_topk_stride, sparse_topk_counts,
+              session->device_deepseek_runtime_counters);
+        } else {
+          const size_t shared_bytes =
+              (static_cast<size_t>(kv_lora_rank) * 2u + qk_rope) *
+              sizeof(float);
+          const dim3 grid(chunk_tokens, session->heads);
+          hf_deepseek_v3_mla_attention_tokens_kernel<<<
+              grid, kDecodeThreads, shared_bytes, session->stream>>>(
+              session->device_arena, layout, layer_index, session->dtype,
+              session->heads, session->max_context_tokens,
+              session->rope_theta, chunk_start, chunk_tokens,
+              session->device_prefill_qkv, q_rows, session->device_kv_keys,
+              session->kv_block_count, session->device_kv_block_table,
+              session->device_prefill_attn, value_rows, sparse_topk_slots,
+              sparse_topk_stride, sparse_topk_counts,
+              session->device_deepseek_runtime_counters);
+        }
         err = cudaGetLastError();
         if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
       }

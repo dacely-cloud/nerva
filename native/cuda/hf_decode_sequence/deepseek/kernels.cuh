@@ -5,6 +5,39 @@
 #include <cuda_runtime.h>
 #include <stdint.h>
 
+// Number of MLA heads processed by one block of the grouped batched-prefill
+// attention kernel. Each block reads the latent KV history once and reuses
+// it for the whole head group.
+constexpr uint32_t kDeepSeekMlaPrefillHeadGroup = 8;
+// Maximum number of latent slots owned by a single thread in the grouped
+// batched-prefill attention kernel (requires
+// kv_lora_rank <= kDeepSeekMlaPrefillMaxLatentSlots * blockDim.x).
+constexpr uint32_t kDeepSeekMlaPrefillMaxLatentSlots = 2;
+// Number of attention tokens scored per block-reduction round in the
+// grouped batched-prefill attention kernel.
+constexpr uint32_t kDeepSeekMlaPrefillTokensPerIter = 4;
+// Maximum number of warps per block supported by the reduction buffers of
+// the grouped batched-prefill attention kernel.
+constexpr uint32_t kDeepSeekMlaPrefillMaxWarps = 8;
+// Maximum number of indexer query heads processed by one block of
+// hf_deepseek_v32_indexer_query_state_tokens_kernel.
+constexpr uint32_t kDeepSeekV32IndexerQueryHeadsPerBlock = 2;
+// Maximum q_lora_rank staged in dynamic shared memory by
+// hf_deepseek_v32_indexer_query_state_tokens_kernel.
+constexpr uint32_t kDeepSeekV32IndexerQueryStageMaxCols = 4096;
+
+__host__ __device__ __forceinline__ uint32_t
+deepseek_v32_indexer_query_heads_per_block(uint32_t index_head_dim,
+                                           uint32_t block_threads) {
+  if (index_head_dim == 0 || index_head_dim > block_threads) {
+    return 1u;
+  }
+  const uint32_t fit = block_threads / index_head_dim;
+  return fit < kDeepSeekV32IndexerQueryHeadsPerBlock
+             ? fit
+             : kDeepSeekV32IndexerQueryHeadsPerBlock;
+}
+
 __global__ void hf_deepseek_v32_indexer_kv_project_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
@@ -168,6 +201,15 @@ __global__ void hf_deepseek_v3_mla_attention_reduce_kernel(
     uint16_t *projection_input, uint64_t *deepseek_runtime_counters,
     uint32_t record_sparse_attention);
 __global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
+    uint32_t dtype, uint32_t heads, uint32_t max_steps, float rope_theta,
+    uint32_t chunk_start, uint32_t chunk_tokens, const float *q_tokens,
+    uint32_t q_stride, uint16_t *kv_keys, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint16_t *attn_out,
+    uint32_t attn_stride, const int32_t *sparse_topk_slots,
+    uint32_t sparse_topk_stride, const uint32_t *sparse_topk_count,
+    uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v3_mla_attention_tokens_grouped_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
     uint32_t dtype, uint32_t heads, uint32_t max_steps, float rope_theta,
     uint32_t chunk_start, uint32_t chunk_tokens, const float *q_tokens,
