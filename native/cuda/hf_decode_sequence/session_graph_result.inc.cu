@@ -255,6 +255,7 @@ void fill_create_result(const NervaCudaHfDecodeSequenceSession *session,
   out->pinned_host_bytes = session->slots_bytes + session->load_staging_bytes;
   out->h2d_bytes = session->h2d_bytes;
   out->sync_calls = session->setup_sync_calls + 1;
+  out->device_memory_bandwidth_bps = session->device_memory_bandwidth_bps;
 }
 
 int fail(NervaCudaHfDecodeSequenceSessionCreateResult *out, cudaError_t err,

@@ -81,6 +81,29 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     device_free_before_alloc = 0;
     device_total_before_alloc = 0;
   }
+  // Theoretical peak device memory bandwidth used as the decode roofline. The
+  // reported memory clock is the effective data rate (e.g. LPDDR5X/GDDR MT/s),
+  // so peak = data_rate_hz * (bus_bits / 8) with no extra DDR doubling. A timed
+  // device-to-device memcpy under-saturates this bus and would understate the
+  // roofline, so we take the hardware figure instead. Zero means unknown, in
+  // which case the CLI simply omits the hardware-limit annotation.
+  int device_memory_clock_khz = 0;
+  int device_memory_bus_bits = 0;
+  if (cudaDeviceGetAttribute(&device_memory_clock_khz,
+                             cudaDevAttrMemoryClockRate, 0) != cudaSuccess) {
+    device_memory_clock_khz = 0;
+    cudaGetLastError();
+  }
+  if (cudaDeviceGetAttribute(&device_memory_bus_bits,
+                             cudaDevAttrGlobalMemoryBusWidth, 0) != cudaSuccess) {
+    device_memory_bus_bits = 0;
+    cudaGetLastError();
+  }
+  const uint64_t device_memory_bandwidth_bps =
+      (device_memory_clock_khz > 0 && device_memory_bus_bits > 0)
+          ? static_cast<uint64_t>(device_memory_clock_khz) * 1000ull *
+                (static_cast<uint64_t>(device_memory_bus_bits) / 8ull)
+          : 0ull;
 
   auto *session = new (std::nothrow) NervaCudaHfDecodeSequenceSession();
   if (session == nullptr) {
@@ -88,6 +111,7 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     out->failure_stage = kCreateStageSessionAlloc;
     return -1;
   }
+  session->device_memory_bandwidth_bps = device_memory_bandwidth_bps;
   const uint64_t hidden = request->hidden;
   const uint64_t attention_hidden = request->heads * request->head_dim;
   const uint64_t kv_hidden = request->kv_heads * request->head_dim;

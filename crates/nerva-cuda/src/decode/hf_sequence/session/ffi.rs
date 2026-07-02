@@ -92,6 +92,7 @@ pub(crate) struct NervaCudaHfDecodeSequenceSessionCreateResult {
     pub(crate) h2d_bytes: u64,
     pub(crate) sync_calls: u64,
     pub(crate) hot_path_allocations: u64,
+    pub(crate) device_memory_bandwidth_bps: u64,
 }
 
 #[repr(C)]

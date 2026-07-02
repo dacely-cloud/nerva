@@ -925,9 +925,27 @@ uint32_t decode_attention_chunks_for_cursor(
       session_has_deepseek_layers(session)
           ? kDeepSeekMlaDecodeAttentionChunkTokens
           : kDecodeAttentionChunkTokens;
-  const uint32_t chunks =
-      ceil_div_u32(kv_tokens, chunk_tokens);
-  return std::min(chunks, session->decode_attention_max_chunks);
+  const uint32_t chunks = ceil_div_u32(kv_tokens, chunk_tokens);
+  // The experimental RT sparse path selects pages by comparing this exact dense
+  // count against experimental_rt_pages, so leave it untouched when RT decode is
+  // enabled and only bucket the default dense path below.
+  if (session->experimental_rt_decode_enabled != 0) {
+    return std::min(chunks, session->decode_attention_max_chunks);
+  }
+  // Round the live chunk count up to a power-of-two bucket. The captured decode
+  // CUDA graph bakes grid.y = attention_chunks, so returning the exact live
+  // count (ceil(kv_tokens / chunk_tokens)) invalidates the cached graph every
+  // chunk_tokens of context growth and forces a hot-path re-capture. Bucketing
+  // turns that per-chunk re-capture into a geometric one (at 256, 512, 1024,
+  // ... KV tokens) while over-provisioning by at most 2x. Chunks whose token
+  // range is beyond the current cursor self-mask to a zero partial in
+  // hf_layer_attention_chunk_kernel and are skipped by the reduce, so the
+  // bucketed count produces bit-identical attention output.
+  uint32_t bucket = kChunkedDecodeAttentionMinChunks;
+  while (bucket < chunks) {
+    bucket <<= 1u;
+  }
+  return std::min(bucket, session->decode_attention_max_chunks);
 }
 
 uint32_t decode_head_threads_for_session(

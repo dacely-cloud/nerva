@@ -204,13 +204,16 @@ where
         }
         tokens.extend(summary.tokens.iter().copied());
         let observed = summary.tokens.len();
-        progress(HfCudaDeviceSessionChunkProgress::from_summary(
+        let mut chunk_progress = HfCudaDeviceSessionChunkProgress::from_summary(
             tokens.len(),
             requested_tokens,
             chunk_index,
             hit_stop,
             &summary,
-        ));
+        );
+        chunk_progress.device_memory_bandwidth_bps =
+            session.create_summary.device_memory_bandwidth_bps;
+        progress(chunk_progress);
         summaries.push(summary);
         queue.drain_all();
         if hit_stop {

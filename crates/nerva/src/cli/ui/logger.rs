@@ -344,6 +344,17 @@ impl NervaCliLoggerInner {
             ),
             metric(self.color, "avg", avg_rate, Tone::Cyan),
             metric(self.color, "inst", inst_rate, Tone::Green),
+            metric(
+                self.color,
+                "bw",
+                format::weight_bandwidth(
+                    progress.resident_weight_bytes,
+                    progress.observed.max(1) as u64,
+                    Duration::from_nanos(progress.wall_ns.max(1)),
+                    progress.device_memory_bandwidth_bps,
+                ),
+                Tone::Green,
+            ),
         ];
         if progress.chunk_requested > 1 {
             fields.push(metric(
@@ -660,6 +671,17 @@ impl NervaCliLoggerInner {
             self.color,
             "throughput",
             format::tokens_per_s(stats.tokens, Duration::from_nanos(stats.wall_ns.max(1))),
+            Tone::Green,
+        ));
+        self.print_plain_report_block_line(report_kv_line(
+            self.color,
+            "memory bandwidth",
+            format::weight_bandwidth(
+                output.stream.create.resident_weight_bytes,
+                stats.tokens as u64,
+                Duration::from_nanos(stats.wall_ns.max(1)),
+                output.stream.create.device_memory_bandwidth_bps,
+            ),
             Tone::Green,
         ));
         self.print_plain_report_block_line(report_kv_line(
