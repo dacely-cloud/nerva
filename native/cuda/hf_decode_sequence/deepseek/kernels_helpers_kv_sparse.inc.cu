@@ -114,6 +114,7 @@ __device__ bool deepseek_session_write_fp8_ds_mla_swa_kv(
   return true;
 }
 
+// Block-cooperative: every thread of the block must call this.
 __device__ bool deepseek_session_write_v32_fp8_ds_mla_kv(
     uint8_t *kv_cache, uint64_t kv_offset_bytes, uint32_t block_count,
     const uint32_t *kv_block_table, uint32_t kv_block_count,
@@ -149,7 +150,9 @@ __device__ bool deepseek_session_write_v32_fp8_ds_mla_kv(
   constexpr uint32_t kScaleBlockValues = 128;
   constexpr uint32_t kScaleCount =
       kDeepSeekV32PackedKvNopeBytes / kScaleBlockValues;
-  for (uint32_t scale_index = 0; scale_index < kScaleCount; ++scale_index) {
+  __shared__ float v32_kv_scales[kScaleCount];
+  for (uint32_t scale_index = threadIdx.x; scale_index < kScaleCount;
+       scale_index += blockDim.x) {
     const uint32_t start = scale_index * kScaleBlockValues;
     float absmax = 0.0f;
     for (uint32_t dim = 0; dim < kScaleBlockValues; ++dim) {
@@ -161,18 +164,21 @@ __device__ bool deepseek_session_write_v32_fp8_ds_mla_kv(
     const float raw = fmaxf(absmax, 1.0e-4f) / 448.0f;
     const float scale = exp2f(ceilf(log2f(raw)));
     scale_ptr[scale_index] = scale;
-    for (uint32_t dim = 0; dim < kScaleBlockValues; ++dim) {
-      const uint32_t source_dim = start + dim;
-      const float value = encoded_to_f32(kv_latent_norm[source_dim], dtype);
-      const float quant_input = deepseek_session_bf16_bits_to_f32(
-          deepseek_session_f32_to_bf16_bits(value));
-      const float scaled = fminf(fmaxf(quant_input / scale, -448.0f), 448.0f);
-      nope_ptr[source_dim] =
-          deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
-    }
+    v32_kv_scales[scale_index] = scale;
+  }
+  __syncthreads();
+  for (uint32_t dim = threadIdx.x; dim < kDeepSeekV32PackedKvNopeBytes;
+       dim += blockDim.x) {
+    const float scale = v32_kv_scales[dim / kScaleBlockValues];
+    const float value = encoded_to_f32(kv_latent_norm[dim], dtype);
+    const float quant_input = deepseek_session_bf16_bits_to_f32(
+        deepseek_session_f32_to_bf16_bits(value));
+    const float scaled = fminf(fmaxf(quant_input / scale, -448.0f), 448.0f);
+    nope_ptr[dim] = deepseek_session_f32_to_f8_e4m3fn_bits_nearest(scaled);
   }
 
-  for (uint32_t dim = 0; dim < kDeepSeekV32PackedKvRopeValues; ++dim) {
+  for (uint32_t dim = threadIdx.x; dim < kDeepSeekV32PackedKvRopeValues;
+       dim += blockDim.x) {
     float value = kv_a[kDeepSeekV32PackedKvNopeBytes + dim];
     if ((kDeepSeekV32PackedKvRopeValues & 1u) == 0u) {
       const uint32_t even = dim & ~1u;
@@ -322,8 +328,166 @@ __device__ bool deepseek_session_sparse_score_is_better(
          (candidate == current && slot >= 0 && slot < current_slot);
 }
 
-__device__ void deepseek_session_sparse_sort_desc(float *scores, int32_t *slots,
-                                                  uint32_t sort_size) {
+// Monotone map from float to uint32 so larger scores map to larger unsigned
+// values; packed with the bitwise-inverted slot so one u64 key orders by
+// (score desc, slot asc).
+__device__ __forceinline__ uint64_t deepseek_session_topk_key(float score,
+                                                              uint32_t slot) {
+  const uint32_t bits = __float_as_uint(score);
+  const uint32_t ordered =
+      (bits & 0x80000000u) != 0u ? ~bits : (bits | 0x80000000u);
+  return (static_cast<uint64_t>(ordered) << 32) |
+         static_cast<uint64_t>(~slot);
+}
+
+// Block-cooperative exact top-k over a score workspace: selects the
+// `topk_limit` best (score desc, slot asc) finite-scored slots out of
+// scores[0..candidate_count) and writes them, in that order, to out_slots.
+// Returns the number of slots written (uniform across the block). Must be
+// called by every thread of a single block.
+__device__ uint32_t deepseek_session_topk_select_from_scores(
+    const float *scores, uint32_t candidate_count, uint32_t topk_limit,
+    int32_t *out_slots) {
+  constexpr uint32_t kRadixBits = 11;
+  constexpr uint32_t kRadixBins = 1u << kRadixBits;
+  constexpr uint32_t kKeyCapacity = 4096;
+  __shared__ uint32_t topk_hist[kRadixBins];
+  __shared__ uint64_t topk_keys[kKeyCapacity];
+  __shared__ uint32_t compacted_shared;
+  __shared__ uint64_t prefix_shared;
+  __shared__ uint32_t need_shared;
+  __shared__ int32_t resolved_shift_shared;
+  __shared__ uint32_t selected_shared;
+
+  if (threadIdx.x == 0) {
+    compacted_shared = 0;
+    prefix_shared = 0;
+    need_shared = topk_limit;
+    resolved_shift_shared = -1;
+  }
+  __syncthreads();
+
+  // Refine an 11-bit digit at a time until everything at or above the
+  // threshold digit fits in shared memory. Keys are unique (the slot index
+  // occupies the low bits) and slot indices are dense, so the loop always
+  // resolves before running out of digits.
+  for (int32_t shift = 64 - kRadixBits;
+       resolved_shift_shared < 0 && shift >= 0; shift -= kRadixBits) {
+    for (uint32_t bin = threadIdx.x; bin < kRadixBins; bin += blockDim.x) {
+      topk_hist[bin] = 0;
+    }
+    __syncthreads();
+    const uint64_t prefix = prefix_shared;
+    const uint64_t prefix_mask =
+        shift + kRadixBits >= 64 ? 0ull
+                                 : (~0ull << (shift + kRadixBits));
+    for (uint32_t slot = threadIdx.x; slot < candidate_count;
+         slot += blockDim.x) {
+      const float score = scores[slot];
+      if (!isfinite(score)) {
+        continue;
+      }
+      const uint64_t key = deepseek_session_topk_key(score, slot);
+      if ((key & prefix_mask) != prefix) {
+        continue;
+      }
+      atomicAdd(topk_hist + ((key >> shift) & (kRadixBins - 1u)), 1u);
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+      uint32_t cumulative = 0;
+      int32_t threshold_bin = -1;
+      for (int32_t bin = kRadixBins - 1; bin >= 0; --bin) {
+        const uint32_t next = cumulative + topk_hist[bin];
+        if (next >= need_shared) {
+          threshold_bin = bin;
+          break;
+        }
+        cumulative = next;
+      }
+      if (threshold_bin < 0) {
+        // Fewer finite candidates than requested: take everything matching
+        // the current prefix.
+        resolved_shift_shared = shift;
+      } else if (cumulative + topk_hist[threshold_bin] <=
+                     kKeyCapacity - compacted_shared ||
+                 shift == 0) {
+        prefix_shared |= static_cast<uint64_t>(threshold_bin) << shift;
+        resolved_shift_shared = shift;
+      } else {
+        // Threshold digit too crowded; candidates strictly above it are
+        // final selections (compacted below), then descend into the digit.
+        prefix_shared |= static_cast<uint64_t>(threshold_bin) << shift;
+        need_shared -= cumulative;
+      }
+    }
+    __syncthreads();
+    if (resolved_shift_shared < 0) {
+      const uint64_t descent_prefix = prefix_shared;
+      const uint64_t descent_mask =
+          shift + kRadixBits >= 64 ? 0ull
+                                   : (~0ull << (shift + kRadixBits));
+      for (uint32_t slot = threadIdx.x; slot < candidate_count;
+           slot += blockDim.x) {
+        const float score = scores[slot];
+        if (!isfinite(score)) {
+          continue;
+        }
+        const uint64_t key = deepseek_session_topk_key(score, slot);
+        if ((key & descent_mask) != (descent_prefix & descent_mask)) {
+          continue;
+        }
+        if ((key >> shift) > (descent_prefix >> shift)) {
+          const uint32_t index = atomicAdd(&compacted_shared, 1u);
+          if (index < kKeyCapacity) {
+            topk_keys[index] = key;
+          }
+        }
+      }
+      __syncthreads();
+    }
+  }
+
+  // Compact everything at or above the resolved threshold digit under the
+  // same higher-level prefix; descended-level finalists are already stashed.
+  {
+    const int32_t shift =
+        resolved_shift_shared < 0 ? 0 : resolved_shift_shared;
+    const uint64_t threshold = prefix_shared;
+    const uint64_t prefix_mask =
+        shift + kRadixBits >= 64 ? 0ull
+                                 : (~0ull << (shift + kRadixBits));
+    for (uint32_t slot = threadIdx.x; slot < candidate_count;
+         slot += blockDim.x) {
+      const float score = scores[slot];
+      if (!isfinite(score)) {
+        continue;
+      }
+      const uint64_t key = deepseek_session_topk_key(score, slot);
+      if ((key & prefix_mask) == (threshold & prefix_mask) &&
+          (key >> shift) >= (threshold >> shift)) {
+        const uint32_t index = atomicAdd(&compacted_shared, 1u);
+        if (index < kKeyCapacity) {
+          topk_keys[index] = key;
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  uint32_t compacted = compacted_shared;
+  if (compacted > kKeyCapacity) {
+    compacted = kKeyCapacity;
+  }
+  uint32_t sort_size = 1;
+  while (sort_size < compacted) {
+    sort_size <<= 1u;
+  }
+  for (uint32_t index = compacted + threadIdx.x; index < sort_size;
+       index += blockDim.x) {
+    topk_keys[index] = 0;
+  }
+  __syncthreads();
   for (uint32_t width = 2u; width <= sort_size; width <<= 1u) {
     for (uint32_t stride = width >> 1u; stride != 0u; stride >>= 1u) {
       for (uint32_t index = threadIdx.x; index < sort_size;
@@ -333,23 +497,28 @@ __device__ void deepseek_session_sparse_sort_desc(float *scores, int32_t *slots,
           continue;
         }
         const bool descending = (index & width) == 0u;
-        const float left_score = scores[index];
-        const int32_t left_slot = slots[index];
-        const float right_score = scores[other];
-        const int32_t right_slot = slots[other];
-        const bool left_before_right = deepseek_session_sparse_score_is_better(
-            left_score, left_slot, right_score, right_slot);
-        const bool swap = descending ? !left_before_right : left_before_right;
-        if (swap) {
-          scores[index] = right_score;
-          slots[index] = right_slot;
-          scores[other] = left_score;
-          slots[other] = left_slot;
+        const uint64_t left = topk_keys[index];
+        const uint64_t right = topk_keys[other];
+        if (descending ? (left < right) : (left > right)) {
+          topk_keys[index] = right;
+          topk_keys[other] = left;
         }
       }
       __syncthreads();
     }
   }
+
+  if (threadIdx.x == 0) {
+    selected_shared = compacted < topk_limit ? compacted : topk_limit;
+  }
+  __syncthreads();
+  const uint32_t selected = selected_shared;
+  for (uint32_t rank = threadIdx.x; rank < selected; rank += blockDim.x) {
+    out_slots[rank] =
+        static_cast<int32_t>(~static_cast<uint32_t>(topk_keys[rank]));
+  }
+  __syncthreads();
+  return selected;
 }
 
 __device__ uint32_t deepseek_session_select_v4_c4_sparse_slots(

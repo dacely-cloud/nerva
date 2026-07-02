@@ -1,4 +1,5 @@
 use crate::deepseek_quant::ffi::{NervaCudaDeepSeekQuantSmokeResult, run_deepseek_quant_smoke};
+use crate::deepseek_quant::fp8::f32_to_f8_e4m3fn_bits;
 use crate::deepseek_quant::inv_rope::{
     CudaDeepSeekFusedInvRopeFp8QuantSummary, deepseek_fused_inv_rope_fp8_quant,
 };
@@ -183,7 +184,7 @@ fn reference_inv_rope_fp8_quant(
                     let dim = chunk * quant_group_size + offset;
                     let quantized = (value / scale).clamp(-448.0, 448.0);
                     fp8[token * heads_per_group * head_dim + head * head_dim + dim] =
-                        f32_to_f8_e4m3fn_bits_nearest(quantized);
+                        f32_to_f8_e4m3fn_bits(quantized);
                 }
             }
         }
@@ -223,39 +224,6 @@ fn rotated_value(
     } else {
         value * cos - partner * sin
     }
-}
-
-fn f32_to_f8_e4m3fn_bits_nearest(value: f32) -> u8 {
-    let mut best_bits = 0u8;
-    let mut best_diff = value.abs();
-    for bits in 0..=0xfeu8 {
-        let candidate = f8_e4m3fn_bits_to_f32(bits);
-        if !candidate.is_finite() {
-            continue;
-        }
-        let diff = (value - candidate).abs();
-        if diff < best_diff {
-            best_diff = diff;
-            best_bits = bits;
-        }
-    }
-    best_bits
-}
-
-fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
-    let sign = if bits & 0x80 != 0 { -1.0 } else { 1.0 };
-    let exp = (bits >> 3) & 0x0f;
-    let frac = bits & 0x07;
-    if exp == 0 {
-        if frac == 0 {
-            return sign * 0.0;
-        }
-        return sign * ((frac as f32) * 0.125) * 2f32.powi(-6);
-    }
-    if exp == 0x0f && frac == 0x07 {
-        return f32::NAN;
-    }
-    sign * (1.0 + (frac as f32) * 0.125) * 2f32.powi(exp as i32 - 7)
 }
 
 fn scale_slices_close(actual: &[f32], expected: &[f32], tolerance: f32) -> bool {

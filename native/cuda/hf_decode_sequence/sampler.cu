@@ -9,6 +9,9 @@ constexpr uint32_t kSequenceId = 1;
 constexpr uint32_t kCompletionDeviceComplete = 1;
 constexpr uint32_t kDecodeSampleThreads = 1024;
 constexpr uint32_t kSamplerTopKMax = 128;
+constexpr uint32_t kSamplerRadixBits = 11;
+constexpr uint32_t kSamplerRadixBins = 1u << kSamplerRadixBits;
+constexpr uint32_t kSamplerCandidateCapacity = 1024;
 
 bool sampler_isfinite(float value) { return isfinite(value) != 0; }
 
@@ -34,6 +37,31 @@ __device__ bool sampler_candidate_better(float lhs_value, uint32_t lhs_index,
                                          uint32_t rhs_index) {
   return lhs_value > rhs_value ||
          (lhs_value == rhs_value && lhs_index < rhs_index);
+}
+
+// Monotone map from float to uint32 so that larger floats map to larger
+// unsigned keys. Packs with the bitwise-inverted index so one u64 key orders
+// by (value desc, index asc).
+__device__ __forceinline__ uint32_t sampler_ordered_bits(float value) {
+  const uint32_t bits = __float_as_uint(value);
+  return (bits & 0x80000000u) != 0u ? ~bits : (bits | 0x80000000u);
+}
+
+__device__ __forceinline__ uint64_t sampler_candidate_key(float value,
+                                                          uint32_t index) {
+  return (static_cast<uint64_t>(sampler_ordered_bits(value)) << 32) |
+         static_cast<uint64_t>(~index);
+}
+
+__device__ __forceinline__ float sampler_key_value(uint64_t key) {
+  const uint32_t ordered = static_cast<uint32_t>(key >> 32);
+  const uint32_t bits =
+      (ordered & 0x80000000u) != 0u ? (ordered & 0x7fffffffu) : ~ordered;
+  return __uint_as_float(bits);
+}
+
+__device__ __forceinline__ uint32_t sampler_key_index(uint64_t key) {
+  return ~static_cast<uint32_t>(key);
 }
 
 __global__ void hf_decode_final_head_sample_kernel(
@@ -126,58 +154,196 @@ __global__ void hf_decode_final_head_sample_kernel(
       sampled_index_shared = best_indices[0];
     }
   } else {
+    // Exact top-k selection by (value desc, index asc) via radix refinement
+    // over 64-bit candidate keys, instead of k full vocab rescans.
+    __shared__ uint32_t key_hist[kSamplerRadixBins];
+    __shared__ uint64_t candidate_keys[kSamplerCandidateCapacity];
+    __shared__ uint32_t candidate_count_shared;
+    __shared__ uint64_t key_prefix_shared;
+    __shared__ uint32_t need_shared;
+    __shared__ int32_t resolved_shift_shared;
     const uint32_t requested_top_k =
         top_k == 0 ? kSamplerTopKMax
                    : (top_k < kSamplerTopKMax ? top_k : kSamplerTopKMax);
     const uint32_t candidate_count =
         requested_top_k < vocab_size ? requested_top_k : vocab_size;
-    for (uint32_t rank = 0; rank < candidate_count; ++rank) {
-      float best_value = -INFINITY;
-      uint32_t best_index = UINT32_MAX;
-      for (uint32_t index = threadIdx.x; index < vocab_size; index += blockDim.x) {
-        bool selected = false;
-        for (uint32_t prior = 0; prior < rank; ++prior) {
-          selected = selected || top_indices[prior] == index;
-        }
-        if (selected) {
+
+    if (threadIdx.x == 0) {
+      candidate_count_shared = 0;
+      key_prefix_shared = 0;
+      need_shared = candidate_count;
+      resolved_shift_shared = -1;
+    }
+    __syncthreads();
+
+    // Refine an 11-bit digit at a time (64 = 6 levels) until the candidates
+    // sharing the running prefix fit in shared memory. Keys are unique (the
+    // index occupies the low bits), so this always terminates.
+    for (int32_t shift = 64 - kSamplerRadixBits;
+         resolved_shift_shared < 0 && shift >= 0;
+         shift -= kSamplerRadixBits) {
+      for (uint32_t bin = threadIdx.x; bin < kSamplerRadixBins;
+           bin += blockDim.x) {
+        key_hist[bin] = 0;
+      }
+      __syncthreads();
+      const uint64_t prefix = key_prefix_shared;
+      const uint64_t prefix_mask =
+          shift + kSamplerRadixBits >= 64
+              ? 0ull
+              : (~0ull << (shift + kSamplerRadixBits));
+      for (uint32_t index = threadIdx.x; index < vocab_size;
+           index += blockDim.x) {
+        const float value = scores[index];
+        if (!isfinite(value)) {
           continue;
         }
-        const float value = scores[index];
-        if (isfinite(value) &&
-            sampler_candidate_better(value, index, best_value, best_index)) {
-          best_value = value;
-          best_index = index;
+        const uint64_t key = sampler_candidate_key(value, index);
+        if ((key & prefix_mask) != prefix) {
+          continue;
+        }
+        atomicAdd(key_hist + ((key >> shift) & (kSamplerRadixBins - 1u)), 1u);
+      }
+      __syncthreads();
+      if (threadIdx.x == 0) {
+        uint32_t cumulative = 0;
+        int32_t threshold_bin = -1;
+        for (int32_t bin = kSamplerRadixBins - 1; bin >= 0; --bin) {
+          const uint32_t next = cumulative + key_hist[bin];
+          if (next >= need_shared) {
+            threshold_bin = bin;
+            break;
+          }
+          cumulative = next;
+        }
+        if (threshold_bin < 0) {
+          // Fewer finite candidates than requested: take everything with the
+          // current prefix.
+          resolved_shift_shared = shift;
+        } else if (cumulative + key_hist[threshold_bin] <=
+                       kSamplerCandidateCapacity ||
+                   shift == 0) {
+          // Everything at or above the threshold digit fits (or keys are
+          // fully resolved); stop refining.
+          key_prefix_shared =
+              key_prefix_shared |
+              (static_cast<uint64_t>(threshold_bin) << shift);
+          resolved_shift_shared = shift;
+        } else {
+          // Threshold digit is too crowded; descend into it.
+          key_prefix_shared =
+              key_prefix_shared |
+              (static_cast<uint64_t>(threshold_bin) << shift);
+          need_shared -= cumulative;
+          // Candidates strictly above the threshold digit are final
+          // selections; stash them now so the deeper levels only track the
+          // contested bin. They are fewer than `need`, which is <= capacity.
+          // (Compacted below, outside this single-thread section.)
         }
       }
-      best_values[threadIdx.x] = best_value;
-      best_indices[threadIdx.x] = best_index;
       __syncthreads();
-      for (uint32_t stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) {
-          const float other_value = best_values[threadIdx.x + stride];
-          const uint32_t other_index = best_indices[threadIdx.x + stride];
-          if (sampler_candidate_better(other_value, other_index,
-                                       best_values[threadIdx.x],
-                                       best_indices[threadIdx.x])) {
-            best_values[threadIdx.x] = other_value;
-            best_indices[threadIdx.x] = other_index;
+      if (resolved_shift_shared < 0) {
+        // Compact finalists strictly above the refined prefix at this level.
+        const uint64_t prefix = key_prefix_shared;
+        const uint64_t prefix_mask =
+            shift + kSamplerRadixBits >= 64
+                ? 0ull
+                : (~0ull << (shift + kSamplerRadixBits));
+        const uint64_t digit_mask = ~0ull << shift;
+        for (uint32_t index = threadIdx.x; index < vocab_size;
+             index += blockDim.x) {
+          const float value = scores[index];
+          if (!isfinite(value)) {
+            continue;
+          }
+          const uint64_t key = sampler_candidate_key(value, index);
+          if ((key & prefix_mask) != (prefix & prefix_mask)) {
+            continue;
+          }
+          if ((key & digit_mask) > (prefix & digit_mask)) {
+            const uint32_t slot = atomicAdd(&candidate_count_shared, 1u);
+            if (slot < kSamplerCandidateCapacity) {
+              candidate_keys[slot] = key;
+            }
           }
         }
         __syncthreads();
       }
-      if (threadIdx.x == 0) {
-        if (best_indices[0] == UINT32_MAX || !isfinite(best_values[0])) {
-          selected_count_shared = rank;
-        } else {
-          top_values[rank] = best_values[0];
-          top_indices[rank] = best_indices[0];
-          selected_count_shared = rank + 1;
+    }
+
+    // Compact every candidate whose digit at the resolved level is at or
+    // above the threshold digit, under the same higher-level prefix.
+    // Finalists from descended levels were already stashed above.
+    {
+      const int32_t shift =
+          resolved_shift_shared < 0 ? 0 : resolved_shift_shared;
+      const uint64_t threshold = key_prefix_shared;
+      const uint64_t prefix_mask =
+          shift + kSamplerRadixBits >= 64
+              ? 0ull
+              : (~0ull << (shift + kSamplerRadixBits));
+      for (uint32_t index = threadIdx.x; index < vocab_size;
+           index += blockDim.x) {
+        const float value = scores[index];
+        if (!isfinite(value)) {
+          continue;
+        }
+        const uint64_t key = sampler_candidate_key(value, index);
+        if ((key & prefix_mask) == (threshold & prefix_mask) &&
+            (key >> shift) >= (threshold >> shift)) {
+          const uint32_t slot = atomicAdd(&candidate_count_shared, 1u);
+          if (slot < kSamplerCandidateCapacity) {
+            candidate_keys[slot] = key;
+          }
         }
       }
       __syncthreads();
-      if (selected_count_shared != rank + 1) {
-        break;
+    }
+
+    // Pad to a power of two and bitonic-sort descending (key order already
+    // encodes value desc, index asc).
+    uint32_t compacted = candidate_count_shared;
+    if (compacted > kSamplerCandidateCapacity) {
+      compacted = kSamplerCandidateCapacity;
+    }
+    uint32_t sort_size = 1;
+    while (sort_size < compacted) {
+      sort_size <<= 1;
+    }
+    for (uint32_t slot = compacted + threadIdx.x; slot < sort_size;
+         slot += blockDim.x) {
+      candidate_keys[slot] = 0;
+    }
+    __syncthreads();
+    for (uint32_t width = 2; width <= sort_size; width <<= 1) {
+      for (uint32_t stride = width >> 1; stride != 0; stride >>= 1) {
+        for (uint32_t index = threadIdx.x; index < sort_size;
+             index += blockDim.x) {
+          const uint32_t other = index ^ stride;
+          if (other <= index) {
+            continue;
+          }
+          const bool descending = (index & width) == 0;
+          const uint64_t left = candidate_keys[index];
+          const uint64_t right = candidate_keys[other];
+          if (descending ? (left < right) : (left > right)) {
+            candidate_keys[index] = right;
+            candidate_keys[other] = left;
+          }
+        }
+        __syncthreads();
       }
+    }
+
+    const uint32_t selected =
+        compacted < candidate_count ? compacted : candidate_count;
+    for (uint32_t rank = threadIdx.x; rank < selected; rank += blockDim.x) {
+      const uint64_t key = candidate_keys[rank];
+      top_values[rank] = sampler_key_value(key);
+      top_indices[rank] = sampler_key_index(key);
+    }
+    if (threadIdx.x == 0) {
+      selected_count_shared = selected;
     }
     __syncthreads();
     if (threadIdx.x == 0) {

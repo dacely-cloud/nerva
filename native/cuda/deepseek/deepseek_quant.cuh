@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <math.h>
 #include <stdint.h>
@@ -9,6 +10,13 @@ namespace deepseek {
 
 __device__ __forceinline__ float e8m0_exponent_bits_to_f32(uint8_t bits) {
   return __uint_as_float(static_cast<uint32_t>(bits) << 23);
+}
+
+// Round-to-nearest-even f32 -> e4m3fn with finite saturation, matching the
+// hardware cvt instruction vLLM uses. NaN maps to 0x7f.
+__device__ __forceinline__ uint8_t f32_to_f8_e4m3fn_bits(float value) {
+  return static_cast<uint8_t>(
+      __nv_cvt_float_to_fp8(value, __NV_SATFINITE, __NV_E4M3));
 }
 
 __device__ __forceinline__ float f8_e4m3fn_bits_to_f32(uint8_t bits) {

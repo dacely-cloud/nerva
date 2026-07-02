@@ -5,10 +5,13 @@
 #include <cuda_runtime.h>
 #include <stdint.h>
 
-__global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
+__global__ void hf_deepseek_v32_indexer_kv_project_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t hidden, uint32_t *step_cursor, uint32_t max_steps,
-    float rope_theta, const uint16_t *projection_input,
+    const uint16_t *projection_input, float *projected_values);
+__global__ void hf_deepseek_v32_indexer_kv_encode_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t *step_cursor,
+    uint32_t max_steps, float rope_theta, const float *projected_values,
     uint8_t *deepseek_indexer_kv,
     uint64_t deepseek_indexer_kv_offset_bytes,
     uint32_t deepseek_indexer_kv_block_count,
@@ -54,6 +57,16 @@ __global__ void hf_deepseek_v32_indexer_query_state_tokens_kernel(
     uint32_t qr_norm_stride, uint8_t *deepseek_indexer_state,
     uint64_t deepseek_indexer_state_offset_bytes,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_v32_sparse_score_kernel(
+    SequenceLayerLayout layout, uint32_t *step_cursor, uint32_t max_steps,
+    const uint8_t *deepseek_indexer_state,
+    uint64_t deepseek_indexer_state_offset_bytes,
+    const uint8_t *deepseek_indexer_kv,
+    uint64_t deepseek_indexer_kv_offset_bytes,
+    uint32_t deepseek_indexer_kv_block_count,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    float *sparse_topk_score_workspace,
+    uint32_t sparse_topk_score_capacity);
 __global__ void hf_deepseek_v32_sparse_topk_select_kernel(
     SequenceLayerLayout layout, uint32_t *step_cursor, uint32_t max_steps,
     const uint8_t *deepseek_indexer_state,

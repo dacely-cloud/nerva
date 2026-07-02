@@ -147,25 +147,7 @@ __global__ void mxfp4_e2m1_block_dequant_dynamic_kernel(
 }
 
 __device__ uint8_t f32_to_f8_e4m3fn_bits_nearest(float value) {
-  if (!isfinite(value)) {
-    return value < 0.0f ? 0xfeu : 0x7eu;
-  }
-  uint8_t best_bits = 0;
-  float best_diff = fabsf(value);
-  for (uint32_t bits = 0; bits <= 0xfeu; ++bits) {
-    const uint8_t candidate_bits = static_cast<uint8_t>(bits);
-    const float candidate =
-        nerva::deepseek::f8_e4m3fn_bits_to_f32(candidate_bits);
-    if (!isfinite(candidate)) {
-      continue;
-    }
-    const float diff = fabsf(value - candidate);
-    if (diff < best_diff) {
-      best_diff = diff;
-      best_bits = candidate_bits;
-    }
-  }
-  return best_bits;
+  return nerva::deepseek::f32_to_f8_e4m3fn_bits(value);
 }
 
 __global__ void fused_inv_rope_fp8_quant_kernel(

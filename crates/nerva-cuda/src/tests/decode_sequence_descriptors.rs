@@ -28,6 +28,7 @@ use crate::decode::hf_sequence::weight_plan::{
     CUDA_HF_WEIGHT_STRATEGY_GPU_RESIDENT, CudaHfDecodeSequenceWeightBlock,
     CudaHfDecodeSequenceWeightPlan, hash_weight_blocks,
 };
+use crate::deepseek_quant::fp8::f32_to_f8_e4m3fn_bits;
 use crate::smoke::status::SmokeStatus;
 
 use super::decode_sequence_descriptor_blocks::{
@@ -62,42 +63,6 @@ fn f32_values_from_le_bytes(bytes: &[u8]) -> Vec<f32> {
         .chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
-}
-
-fn f32_to_f8_e4m3fn_bits_nearest(value: f32) -> u8 {
-    if value.is_nan() {
-        return 0x7f;
-    }
-    let mut best_bits = 0u8;
-    let mut best_error = f32::INFINITY;
-    for bits in 0u8..=254 {
-        let candidate = f8_e4m3fn_bits_to_f32(bits);
-        if candidate.is_nan() {
-            continue;
-        }
-        let error = (candidate - value).abs();
-        if error < best_error || (error == best_error && bits < best_bits) {
-            best_error = error;
-            best_bits = bits;
-        }
-    }
-    best_bits
-}
-
-fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
-    let sign = if bits & 0x80 == 0 { 1.0 } else { -1.0 };
-    let exp = (bits >> 3) & 0x0f;
-    let frac = bits & 0x07;
-    if exp == 0 {
-        if frac == 0 {
-            return sign * 0.0;
-        }
-        return sign * ((frac as f32) * 0.125) * 2.0f32.powi(-6);
-    }
-    if exp == 0x0f && frac == 0x07 {
-        return f32::NAN;
-    }
-    sign * (1.0 + (frac as f32) * 0.125) * 2.0f32.powi(exp as i32 - 7)
 }
 
 fn deepseek_sparse_attention_output_hash_head0(values: &[f32]) -> u64 {
@@ -236,7 +201,7 @@ fn expected_deepseek_v4_fp8_ds_mla_page(
             for (dim, value) in kv.iter().enumerate().take(end).skip(start) {
                 let quant_input = bf16_to_f32(f32_to_bf16_bits(*value));
                 let scaled = (quant_input / scale).clamp(-448.0, 448.0);
-                expected[data_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+                expected[data_base + dim] = f32_to_f8_e4m3fn_bits(scaled);
             }
         }
         for (dim, value) in kv.iter().enumerate().take(qk_nope + qk_rope).skip(qk_nope) {
@@ -303,7 +268,7 @@ fn expected_deepseek_v4_indexer_fp8_page(
             for (dim, value) in kv.iter().enumerate().take(end).skip(start) {
                 let quant_input = bf16_to_f32(f32_to_bf16_bits(*value));
                 let scaled = (quant_input / scale).clamp(-448.0, 448.0);
-                expected[data_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+                expected[data_base + dim] = f32_to_f8_e4m3fn_bits(scaled);
             }
         }
     }
@@ -814,7 +779,7 @@ fn deepseek_v3_mla_snapshot_matches_vllm_latent_cache_row() {
     for dim in 0..2usize {
         weight_storage[plan.k_norm as usize + dim] = f32_to_bf16_bits(1.0);
     }
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
     for row in 0..3usize {
         let absolute = plan.w_k as usize * 2 + row * hidden;
         let slot = absolute / 2;
@@ -968,7 +933,7 @@ fn deepseek_v3_mla_snapshot_matches_fullsize_vllm_cache_page() {
     for dim in 0..kv_lora {
         weight_storage[plan.k_norm as usize + dim] = f32_to_bf16_bits(1.0);
     }
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
     for row in 0..(kv_lora + qk_rope) {
         write_arena_byte(&mut weight_storage, plan.w_k, row * hidden, one_fp8);
     }
@@ -1121,7 +1086,7 @@ fn deepseek_v32_mla_snapshot_matches_runtime_fp8_ds_mla_page() {
     for dim in 0..kv_lora {
         write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
     }
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
     for row in 0..(kv_lora + qk_rope) {
         write_arena_byte(&mut weight_storage, plan.w_k, row * hidden, one_fp8);
     }
@@ -1211,7 +1176,7 @@ fn deepseek_v32_mla_snapshot_matches_runtime_fp8_ds_mla_page() {
 
     let mut expected = vec![0u8; page_bytes];
     let scale = 1.0f32 / 256.0;
-    let nope_byte = f32_to_f8_e4m3fn_bits_nearest(256.0);
+    let nope_byte = f32_to_f8_e4m3fn_bits(256.0);
     expected[..512].fill(nope_byte);
     for scale_index in 0..4usize {
         let offset = 512 + scale_index * core::mem::size_of::<f32>();
@@ -1300,7 +1265,7 @@ fn deepseek_v32_indexer_snapshot_matches_vllm_paged_fp8_k_cache_layout() {
             1.0,
         );
     }
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
     for row in 0..(kv_lora + qk_rope) {
         write_arena_byte(&mut weight_storage, plan.w_k, row * hidden, one_fp8);
     }
@@ -1312,8 +1277,8 @@ fn deepseek_v32_indexer_snapshot_matches_vllm_paged_fp8_k_cache_layout() {
             1.0,
         );
     }
-    let pos_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
-    let neg_fp8 = f32_to_f8_e4m3fn_bits_nearest(-1.0);
+    let pos_fp8 = f32_to_f8_e4m3fn_bits(1.0);
+    let neg_fp8 = f32_to_f8_e4m3fn_bits(-1.0);
     for row in 0..index_head_dim {
         let value = if row % 2 == 0 { pos_fp8 } else { neg_fp8 };
         write_arena_byte(
@@ -1403,8 +1368,8 @@ fn deepseek_v32_indexer_snapshot_matches_vllm_paged_fp8_k_cache_layout() {
     let mut expected = vec![0u8; page_bytes];
     let value_bytes = 64 * index_head_dim;
     let scale = 1.0f32 / 256.0;
-    let pos_quant = f32_to_f8_e4m3fn_bits_nearest(256.0);
-    let neg_quant = f32_to_f8_e4m3fn_bits_nearest(-256.0);
+    let pos_quant = f32_to_f8_e4m3fn_bits(256.0);
+    let neg_quant = f32_to_f8_e4m3fn_bits(-256.0);
     for dim in 0..index_head_dim {
         let tile_store_offset = (dim / 16) * 16 * 16 + dim % 16;
         expected[tile_store_offset] = if dim % 2 == 0 { pos_quant } else { neg_quant };
@@ -1460,10 +1425,10 @@ fn deepseek_v32_indexer_query_state_matches_vllm_quantized_query_and_weights() {
         write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
     }
 
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
-    let neg_one_fp8 = f32_to_f8_e4m3fn_bits_nearest(-1.0);
-    let half_fp8 = f32_to_f8_e4m3fn_bits_nearest(0.5);
-    let neg_half_fp8 = f32_to_f8_e4m3fn_bits_nearest(-0.5);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
+    let neg_one_fp8 = f32_to_f8_e4m3fn_bits(-1.0);
+    let half_fp8 = f32_to_f8_e4m3fn_bits(0.5);
+    let neg_half_fp8 = f32_to_f8_e4m3fn_bits(-0.5);
     write_arena_byte(&mut weight_storage, plan.w_q, 0, one_fp8);
     write_arena_byte(&mut weight_storage, plan.w_q, hidden, one_fp8);
     write_arena_f32(&mut weight_storage, plan.deepseek_q_a_scale, 1.0);
@@ -1562,10 +1527,10 @@ fn deepseek_v32_indexer_query_state_matches_vllm_quantized_query_and_weights() {
 
     let mut expected = vec![0u8; token_bytes];
     expected[..query_bytes].copy_from_slice(&[
-        f32_to_f8_e4m3fn_bits_nearest(256.0),
-        f32_to_f8_e4m3fn_bits_nearest(-256.0),
-        f32_to_f8_e4m3fn_bits_nearest(128.0),
-        f32_to_f8_e4m3fn_bits_nearest(-128.0),
+        f32_to_f8_e4m3fn_bits(256.0),
+        f32_to_f8_e4m3fn_bits(-256.0),
+        f32_to_f8_e4m3fn_bits(128.0),
+        f32_to_f8_e4m3fn_bits(-128.0),
     ]);
     expected[q_scale_offset..q_scale_offset + 4].copy_from_slice(&(1.0f32 / 256.0).to_le_bytes());
     expected[weights_offset..weights_offset + 4].copy_from_slice(&(1.0f32 / 256.0).to_le_bytes());
@@ -1628,7 +1593,7 @@ fn deepseek_v32_sparse_topk_selects_same_slots_as_vllm_decode_scorer() {
         write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
     }
 
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
     for row in 0..4usize {
         write_arena_byte(&mut weight_storage, plan.w_q, row * hidden + row, one_fp8);
     }
@@ -1644,7 +1609,7 @@ fn deepseek_v32_sparse_topk_selects_same_slots_as_vllm_decode_scorer() {
             &mut weight_storage,
             plan.w_v,
             4 + col,
-            f32_to_f8_e4m3fn_bits_nearest(weight),
+            f32_to_f8_e4m3fn_bits(weight),
         );
     }
     write_arena_f32(&mut weight_storage, plan.deepseek_kv_b_scale, 1.0);
@@ -1803,7 +1768,7 @@ fn deepseek_v32_sparse_mla_output_matches_vllm_flashmla_topk2_reference() {
         write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
     }
 
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
     for row in 0..4usize {
         write_arena_byte(&mut weight_storage, plan.w_q, row * hidden + row, one_fp8);
     }
@@ -1819,7 +1784,7 @@ fn deepseek_v32_sparse_mla_output_matches_vllm_flashmla_topk2_reference() {
             &mut weight_storage,
             plan.w_v,
             4 + col,
-            f32_to_f8_e4m3fn_bits_nearest(weight),
+            f32_to_f8_e4m3fn_bits(weight),
         );
     }
     write_arena_f32(&mut weight_storage, plan.deepseek_kv_b_scale, 2.0);
@@ -2632,7 +2597,7 @@ fn deepseek_v32_decode_output_projection_scale_reaches_logits() {
             write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
         }
 
-        let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+        let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
         write_arena_f32(&mut weight_storage, plan.deepseek_q_a_scale, 1.0);
         write_arena_f32(&mut weight_storage, plan.deepseek_q_b_scale, 1.0);
         write_arena_f32(&mut weight_storage, plan.deepseek_kv_a_scale, 1.0);
@@ -2783,7 +2748,7 @@ fn deepseek_v32_projection_scales_reach_sparse_decode_outputs() {
             write_arena_f32(&mut weight_storage, plan.k_norm + (dim * 2) as u64, 1.0);
         }
 
-        let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+        let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
         for row in 0..4usize {
             write_arena_byte(&mut weight_storage, plan.w_q, row * hidden + row, one_fp8);
             write_arena_byte(&mut weight_storage, plan.w_k, row * hidden + row, one_fp8);
@@ -2819,7 +2784,7 @@ fn deepseek_v32_projection_scales_reach_sparse_decode_outputs() {
                 &mut weight_storage,
                 plan.w_v,
                 4 + col,
-                f32_to_f8_e4m3fn_bits_nearest(weight),
+                f32_to_f8_e4m3fn_bits(weight),
             );
         }
         for (col, weight) in [-2.0f32, -1.0, 2.0, 1.0].into_iter().enumerate() {
@@ -2827,7 +2792,7 @@ fn deepseek_v32_projection_scales_reach_sparse_decode_outputs() {
                 &mut weight_storage,
                 plan.w_v,
                 col,
-                f32_to_f8_e4m3fn_bits_nearest(weight),
+                f32_to_f8_e4m3fn_bits(weight),
             );
         }
         write_arena_f32(&mut weight_storage, plan.deepseek_kv_b_scale, 2.0);
@@ -3252,7 +3217,7 @@ fn deepseek_v4_swa_dense_snapshot_matches_nonzero_fp8_ds_mla_page() {
             f32_to_bf16_bits(1.0),
         );
     }
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
     write_descriptor_byte(
         &mut weight_storage,
         plan.w_k,
@@ -3424,7 +3389,7 @@ fn deepseek_v4_swa_dense_snapshot_matches_fullsize_fp8_ds_mla_page() {
             f32_to_bf16_bits(1.0),
         );
     }
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
     for row in 0..head_dim {
         write_descriptor_byte(
             &mut weight_storage,
@@ -3701,7 +3666,7 @@ fn fill_tiny_v4_swa_sparse_moe_descriptor(
     write_arena_byte(storage, shared_up_scale, 0, scale);
     write_arena_byte(storage, shared_down_scale, 0, scale);
     if shared_payload {
-        let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+        let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
         for row in 0..SHARED_INTERMEDIATE {
             for col in 0..HIDDEN {
                 write_arena_byte(
@@ -5522,7 +5487,7 @@ fn create_tiny_deepseek_mla_cache_session(
             }
         }
     }
-    let one_fp8 = f32_to_f8_e4m3fn_bits_nearest(1.0);
+    let one_fp8 = f32_to_f8_e4m3fn_bits(1.0);
     for row in 0..3usize {
         write_arena_byte(&mut weight_storage, plan.w_k, row * hidden, one_fp8);
     }

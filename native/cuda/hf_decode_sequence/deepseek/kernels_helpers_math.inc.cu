@@ -276,25 +276,7 @@ __device__ __forceinline__ float deepseek_session_bf16_bits_to_f32(
 
 __device__ uint8_t deepseek_session_f32_to_f8_e4m3fn_bits_nearest(
     float value) {
-  if (isnan(value)) {
-    return 0x7fu;
-  }
-  uint8_t best_bits = 0;
-  float best_error = INFINITY;
-  for (uint32_t bits = 0; bits <= 254u; ++bits) {
-    const float candidate =
-        nerva::deepseek::f8_e4m3fn_bits_to_f32(static_cast<uint8_t>(bits));
-    if (isnan(candidate)) {
-      continue;
-    }
-    const float error = fabsf(candidate - value);
-    if (error < best_error ||
-        (error == best_error && bits < static_cast<uint32_t>(best_bits))) {
-      best_error = error;
-      best_bits = static_cast<uint8_t>(bits);
-    }
-  }
-  return best_bits;
+  return nerva::deepseek::f32_to_f8_e4m3fn_bits(value);
 }
 
 __device__ __forceinline__ uint8_t deepseek_session_encode_e8m0_scale(

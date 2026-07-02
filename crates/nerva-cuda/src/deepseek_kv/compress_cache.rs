@@ -3,6 +3,7 @@ use crate::deepseek_kv::ffi::{
     NervaCudaDeepSeekCompressNormRopeFp8CacheResult, run_deepseek_compress_norm_rope_fp8_cache,
 };
 use crate::deepseek_kv::summary::CudaDeepSeekCompressNormRopeFp8CacheSummary;
+use crate::deepseek_quant::fp8::f32_to_f8_e4m3fn_bits;
 use crate::smoke::ffi::CUDA_ERROR_NO_DEVICE;
 use crate::smoke::status::SmokeStatus;
 
@@ -403,7 +404,7 @@ fn write_reference_e8m0_cache(
         for dim in start..end.min(nope) {
             let quant_input = bf16_to_f32(f32_to_bf16_bits(normed[dim]));
             let scaled = (quant_input / scale).clamp(-input.fp8_max, input.fp8_max);
-            kv_cache[data_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+            kv_cache[data_base + dim] = f32_to_f8_e4m3fn_bits(scaled);
         }
     }
     kv_cache[scale_base + nope / input.quant_block as usize] = 0;
@@ -436,7 +437,7 @@ fn write_reference_f32_scale_cache(
     kv_cache[scale_base..scale_base + size_of::<f32>()].copy_from_slice(&scale.to_ne_bytes());
     for (dim, value) in bf16_rotated.iter().copied().enumerate() {
         let scaled = (value / scale).clamp(-input.fp8_max, input.fp8_max);
-        kv_cache[data_base + dim] = f32_to_f8_e4m3fn_bits_nearest(scaled);
+        kv_cache[data_base + dim] = f32_to_f8_e4m3fn_bits(scaled);
     }
 }
 
@@ -484,42 +485,6 @@ fn bf16_to_f32(bits: u16) -> f32 {
 
 fn encode_e8m0_scale(scale: f32) -> u8 {
     (scale.log2().ceil() as i32 + 127).clamp(0, 255) as u8
-}
-
-fn f32_to_f8_e4m3fn_bits_nearest(value: f32) -> u8 {
-    if value.is_nan() {
-        return 0x7f;
-    }
-    let mut best_bits = 0u8;
-    let mut best_error = f32::INFINITY;
-    for bits in 0u8..=254 {
-        let candidate = f8_e4m3fn_bits_to_f32(bits);
-        if candidate.is_nan() {
-            continue;
-        }
-        let error = (candidate - value).abs();
-        if error < best_error || (error == best_error && bits < best_bits) {
-            best_error = error;
-            best_bits = bits;
-        }
-    }
-    best_bits
-}
-
-fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
-    let sign = if bits & 0x80 == 0 { 1.0 } else { -1.0 };
-    let exp = (bits >> 3) & 0x0f;
-    let frac = bits & 0x07;
-    if exp == 0 {
-        if frac == 0 {
-            return sign * 0.0;
-        }
-        return sign * ((frac as f32) * 0.125) * 2.0f32.powi(-6);
-    }
-    if exp == 0x0f && frac == 0x07 {
-        return f32::NAN;
-    }
-    sign * (1.0 + (frac as f32) * 0.125) * 2.0f32.powi(exp as i32 - 7)
 }
 
 fn f32_to_mxfp4_e2m1_nibble_nearest(value: f32) -> u8 {

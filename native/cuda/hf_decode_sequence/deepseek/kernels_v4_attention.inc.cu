@@ -143,13 +143,7 @@ __global__ void hf_deepseek_v4_compressed_indexer_sparse_topk_select_kernel(
     int32_t *sparse_topk_slots, uint32_t *sparse_topk_count,
     float *sparse_topk_score_workspace, uint32_t sparse_topk_score_capacity,
     uint64_t *deepseek_runtime_counters) {
-  __shared__ float reduce_scores[kDecodeThreads];
-  __shared__ int32_t reduce_slots[kDecodeThreads];
   __shared__ float indexer_weights[kDeepSeekSessionMaxIndexerHeads];
-  __shared__ float sort_scores[4096];
-  __shared__ int32_t sort_slots[4096];
-  __shared__ uint32_t sort_selected;
-  __shared__ unsigned long long sort_hash;
 
   if (blockIdx.x != 0 ||
       (step_cursor != nullptr && *step_cursor >= max_steps)) {
@@ -315,127 +309,19 @@ __global__ void hf_deepseek_v4_compressed_indexer_sparse_topk_select_kernel(
     }
     __syncthreads();
 
-    if (topk_limit <= kDeepSeekSessionMaxSparseTopK &&
-        compressed_attention_tokens <= 4096u) {
-      const uint32_t sort_size =
-          compressed_attention_tokens <= 1024u ? 1024u : 4096u;
-      for (uint32_t slot = threadIdx.x; slot < sort_size; slot += blockDim.x) {
-        if (slot < compressed_attention_tokens) {
-          sort_scores[slot] = sparse_topk_score_workspace[slot];
-          sort_slots[slot] = static_cast<int32_t>(slot);
-        } else {
-          sort_scores[slot] = -INFINITY;
-          sort_slots[slot] = -1;
-        }
-      }
-      __syncthreads();
-
-      deepseek_session_sparse_sort_desc(sort_scores, sort_slots, sort_size);
-
-      if (threadIdx.x == 0) {
-        uint32_t selected = 0;
-        unsigned long long selection_hash = 0ull;
-        for (uint32_t rank = 0; rank < topk_limit; ++rank) {
-          if (sort_slots[rank] < 0 || !isfinite(sort_scores[rank])) {
-            continue;
-          }
-          ++selected;
-          selection_hash +=
-              (static_cast<unsigned long long>(position) + 1ull) *
-                  1315423911ull ^
-              (static_cast<unsigned long long>(rank) + 1ull) *
-                  2654435761ull ^
-              (static_cast<unsigned long long>(sort_slots[rank]) + 1ull);
-        }
-        sort_selected = selected;
-        sort_hash = selection_hash;
-        *sparse_topk_count = selected;
-      }
-      __syncthreads();
-
-      for (uint32_t rank = threadIdx.x; rank < sort_selected;
-           rank += blockDim.x) {
-        sparse_topk_slots[rank] = sort_slots[rank];
-      }
-      __syncthreads();
-
-      if (threadIdx.x != 0 || sort_selected == 0) {
-        return;
-      }
-      if (deepseek_runtime_counters != nullptr) {
-        atomicAdd(
-            reinterpret_cast<unsigned long long *>(
-                deepseek_runtime_counters +
-                kDeepSeekRuntimeCounterSparseTopkSelections),
-            1ull);
-        atomicAdd(
-            reinterpret_cast<unsigned long long *>(
-                deepseek_runtime_counters +
-                kDeepSeekRuntimeCounterSparseTopkSlotsSelected),
-            static_cast<unsigned long long>(sort_selected));
-        atomicAdd(
-            reinterpret_cast<unsigned long long *>(
-                deepseek_runtime_counters +
-                kDeepSeekRuntimeCounterSparseTopkCandidatesScored),
-            static_cast<unsigned long long>(compressed_attention_tokens));
-        atomicAdd(
-            reinterpret_cast<unsigned long long *>(
-                deepseek_runtime_counters +
-                kDeepSeekRuntimeCounterSparseTopkSelectionHash),
-            sort_hash);
-      }
-      return;
-    }
-
-    unsigned long long selection_hash = 0ull;
-    uint32_t selected = 0;
-    for (uint32_t rank = 0; rank < topk_limit; ++rank) {
-      float thread_best_score = -INFINITY;
-      int32_t thread_best_slot = -1;
-      for (uint32_t slot = threadIdx.x; slot < compressed_attention_tokens;
-           slot += blockDim.x) {
-        const float score = sparse_topk_score_workspace[slot];
-        const int32_t slot_i32 = static_cast<int32_t>(slot);
-        if (deepseek_session_sparse_score_is_better(
-                score, slot_i32, thread_best_score, thread_best_slot)) {
-          thread_best_score = score;
-          thread_best_slot = slot_i32;
-        }
-      }
-      reduce_scores[threadIdx.x] = thread_best_score;
-      reduce_slots[threadIdx.x] = thread_best_slot;
-      __syncthreads();
-      for (uint32_t stride = blockDim.x / 2u; stride != 0; stride >>= 1u) {
-        if (threadIdx.x < stride) {
-          const float other_score = reduce_scores[threadIdx.x + stride];
-          const int32_t other_slot = reduce_slots[threadIdx.x + stride];
-          if (deepseek_session_sparse_score_is_better(
-                  other_score, other_slot, reduce_scores[threadIdx.x],
-                  reduce_slots[threadIdx.x])) {
-            reduce_scores[threadIdx.x] = other_score;
-            reduce_slots[threadIdx.x] = other_slot;
-          }
-        }
-        __syncthreads();
-      }
-      if (threadIdx.x == 0) {
-        const int32_t best_slot = reduce_slots[0];
-        sparse_topk_slots[rank] = best_slot;
-        if (best_slot >= 0) {
-          sparse_topk_score_workspace[best_slot] = -INFINITY;
-          ++selected;
-          selection_hash +=
-              (static_cast<unsigned long long>(position) + 1ull) *
-                  1315423911ull ^
-              (static_cast<unsigned long long>(rank) + 1ull) *
-                  2654435761ull ^
-              (static_cast<unsigned long long>(best_slot) + 1ull);
-        }
-      }
-      __syncthreads();
-    }
+    const uint32_t selected = deepseek_session_topk_select_from_scores(
+        sparse_topk_score_workspace, compressed_attention_tokens, topk_limit,
+        sparse_topk_slots);
+    __syncthreads();
     if (threadIdx.x != 0 || selected == 0) {
       return;
+    }
+    unsigned long long selection_hash = 0ull;
+    for (uint32_t rank = 0; rank < selected; ++rank) {
+      selection_hash +=
+          (static_cast<unsigned long long>(position) + 1ull) * 1315423911ull ^
+          (static_cast<unsigned long long>(rank) + 1ull) * 2654435761ull ^
+          (static_cast<unsigned long long>(sparse_topk_slots[rank]) + 1ull);
     }
     *sparse_topk_count = selected;
     if (deepseek_runtime_counters != nullptr) {

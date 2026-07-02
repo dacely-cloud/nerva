@@ -165,25 +165,7 @@ __device__ __forceinline__ void megamoe_reduce_slots(float (&values)[Slots],
 }
 
 __device__ uint8_t f32_to_f8_e4m3fn_nearest(float value) {
-  if (!isfinite(value)) {
-    return 0x7fu;
-  }
-  uint8_t best_bits = 0;
-  float best_diff = INFINITY;
-  for (uint32_t bits = 0; bits < 256; ++bits) {
-    const uint8_t candidate_bits = static_cast<uint8_t>(bits);
-    const float candidate =
-        nerva::deepseek::f8_e4m3fn_bits_to_f32(candidate_bits);
-    if (!isfinite(candidate)) {
-      continue;
-    }
-    const float diff = fabsf(candidate - value);
-    if (diff < best_diff) {
-      best_diff = diff;
-      best_bits = candidate_bits;
-    }
-  }
-  return best_bits;
+  return nerva::deepseek::f32_to_f8_e4m3fn_bits(value);
 }
 
 __device__ uint32_t ceil_e8m0_exponent_for_scale(float scale) {

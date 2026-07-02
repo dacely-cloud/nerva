@@ -4,6 +4,7 @@ use crate::deepseek_quant::dequant::{
     deepseek_fp8_e4m3fn_f32_scale_encoded_matvec, deepseek_fp8_e4m3fn_f32_scale_matvec,
     deepseek_mxfp4_e2m1_e8m0_dequant,
 };
+use crate::deepseek_quant::fp8::f32_to_f8_e4m3fn_bits;
 use crate::deepseek_quant::inv_rope::{
     CudaDeepSeekFusedInvRopeFp8QuantSummary, deepseek_fused_inv_rope_fp8_quant,
 };
@@ -230,7 +231,7 @@ fn reference_inv_rope_fp8_quant(
                 for (offset, value) in rotated.iter().enumerate() {
                     let dim = chunk * quant_group_size + offset;
                     fp8[token * heads_per_group * head_dim + head * head_dim + dim] =
-                        f32_to_f8_e4m3fn_bits_nearest((value / scale).clamp(-448.0, 448.0));
+                        f32_to_f8_e4m3fn_bits((value / scale).clamp(-448.0, 448.0));
                 }
             }
         }
@@ -271,23 +272,6 @@ fn rotated_value(
     }
 }
 
-fn f32_to_f8_e4m3fn_bits_nearest(value: f32) -> u8 {
-    let mut best_bits = 0u8;
-    let mut best_diff = value.abs();
-    for bits in 0..=0xfeu8 {
-        let candidate = f8_e4m3fn_bits_to_f32(bits);
-        if !candidate.is_finite() {
-            continue;
-        }
-        let diff = (value - candidate).abs();
-        if diff < best_diff {
-            best_diff = diff;
-            best_bits = bits;
-        }
-    }
-    best_bits
-}
-
 fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
     let sign = if bits & 0x80 != 0 { -1.0 } else { 1.0 };
     let exp = (bits >> 3) & 0x0f;
@@ -302,6 +286,81 @@ fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
         return f32::NAN;
     }
     sign * (1.0 + (frac as f32) * 0.125) * 2f32.powi(exp as i32 - 7)
+}
+
+#[test]
+fn f32_to_f8_e4m3fn_bits_round_trips_every_code() {
+    // Every representable e4m3fn value must encode back to its own code.
+    // 0x00 decodes to +0.0 and 0x80 to -0.0, so the signed-zero codes
+    // round-trip too; 0x7f decodes to NaN, which encodes back to 0x7f.
+    // 0xff (negative NaN) is outside the encoder's output range and is
+    // excluded from the sweep.
+    for code in 0u8..=0xfe {
+        let value = f8_e4m3fn_bits_to_f32(code);
+        assert_eq!(
+            f32_to_f8_e4m3fn_bits(value),
+            code,
+            "code {code:#04x} value {value}"
+        );
+    }
+}
+
+#[test]
+fn f32_to_f8_e4m3fn_bits_breaks_ties_to_even_mantissa() {
+    // For each adjacent pair of same-sign fp8 values, the exact midpoint
+    // (representable in f32: adjacent grid values need at most 4 mantissa
+    // bits, so their sum and half-sum are exact) must round to whichever
+    // code has an even mantissa (bit 0 clear). Consecutive codes always
+    // differ in bit 0, so exactly one side of each tie is even.
+    for (start, end) in [(0x00u8, 0x7du8), (0x80u8, 0xfdu8)] {
+        for low in start..=end {
+            let high = low + 1;
+            let mid = (f8_e4m3fn_bits_to_f32(low) + f8_e4m3fn_bits_to_f32(high)) / 2.0;
+            let expected = if low & 1 == 0 { low } else { high };
+            assert_eq!(
+                f32_to_f8_e4m3fn_bits(mid),
+                expected,
+                "pair ({low:#04x}, {high:#04x}) midpoint {mid}"
+            );
+        }
+    }
+}
+
+#[test]
+fn f32_to_f8_e4m3fn_bits_handles_special_and_subnormal_values() {
+    // NaN (any payload) maps to the canonical NaN code.
+    assert_eq!(f32_to_f8_e4m3fn_bits(f32::NAN), 0x7f);
+    assert_eq!(f32_to_f8_e4m3fn_bits(-f32::NAN), 0x7f);
+    // Saturate-to-finite: infinities and out-of-range magnitudes clamp to
+    // +/-448 (0x7e / 0xfe).
+    assert_eq!(f32_to_f8_e4m3fn_bits(f32::INFINITY), 0x7e);
+    assert_eq!(f32_to_f8_e4m3fn_bits(f32::NEG_INFINITY), 0xfe);
+    assert_eq!(f32_to_f8_e4m3fn_bits(449.0), 0x7e);
+    assert_eq!(f32_to_f8_e4m3fn_bits(-449.0), 0xfe);
+    assert_eq!(f32_to_f8_e4m3fn_bits(448.0), 0x7e);
+    // 464 is the exact tie between 448 (mantissa 6, even) and the
+    // non-existent 480 (mantissa 7, odd): ties-to-even keeps 448.
+    assert_eq!(f32_to_f8_e4m3fn_bits(464.0), 0x7e);
+    // Signed zeros keep their sign bit.
+    assert_eq!(f32_to_f8_e4m3fn_bits(0.0), 0x00);
+    assert_eq!(f32_to_f8_e4m3fn_bits(-0.0), 0x80);
+    // Subnormal grid: step 2^-9 for codes 0x01..=0x07.
+    // 2^-10 = 0.5 * 2^-9 is the exact tie between 0 (quantum 0, even) and
+    // 2^-9 (quantum 1, odd): ties-to-even picks 0.
+    assert_eq!(f32_to_f8_e4m3fn_bits(2f32.powi(-10)), 0x00);
+    assert_eq!(f32_to_f8_e4m3fn_bits(-(2f32.powi(-10))), 0x80);
+    // 3 * 2^-10 = 1.5 * 2^-9 is the exact tie between 2^-9 (quantum 1, odd)
+    // and 2^-8 (quantum 2, even): ties-to-even picks 2^-8 (code 0x02).
+    assert_eq!(f32_to_f8_e4m3fn_bits(3.0 * 2f32.powi(-10)), 0x02);
+    // 5 * 2^-10 = 2.5 * 2^-9 ties between quantum 2 (even) and 3 (odd):
+    // ties-to-even stays at 2^-8 (code 0x02).
+    assert_eq!(f32_to_f8_e4m3fn_bits(5.0 * 2f32.powi(-10)), 0x02);
+    // 2^-9 is exactly the smallest positive subnormal (code 0x01).
+    assert_eq!(f32_to_f8_e4m3fn_bits(2f32.powi(-9)), 0x01);
+    // 15 * 2^-10 = 7.5 * 2^-9 ties between the largest subnormal
+    // (quantum 7, odd) and the smallest normal 2^-6 (quantum 8, even):
+    // ties-to-even promotes to the normal 0x08.
+    assert_eq!(f32_to_f8_e4m3fn_bits(15.0 * 2f32.powi(-10)), 0x08);
 }
 
 #[test]

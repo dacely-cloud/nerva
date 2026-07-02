@@ -81,11 +81,22 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
 
   err = deepseek_profile_begin_if(session, profile);
   if (err != cudaSuccess) return err;
+  const uint32_t indexer_kv_rows = layout.deepseek_index_head_dim;
+  if (indexer_kv_rows != 0) {
+    hf_deepseek_v32_indexer_kv_project_kernel<<<indexer_kv_rows,
+                                                kDecodeThreads, 0,
+                                                session->stream>>>(
+        session->device_arena, layout, session->dtype, session->hidden,
+        session->device_step, max_steps, session->device_projection_input,
+        scratch.attn);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+  }
   hf_deepseek_v32_indexer_kv_encode_kernel<<<1, kDecodeThreads, 0,
                                               session->stream>>>(
-      session->device_arena, layout, session->dtype, session->hidden,
-      session->device_step, max_steps, session->rope_theta,
-      session->device_projection_input, session->device_deepseek_indexer_kv,
+      session->device_arena, layout, session->device_step, max_steps,
+      session->rope_theta, scratch.attn,
+      session->device_deepseek_indexer_kv,
       deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
       deepseek_v32_indexer_kv_block_count(session, layout),
       session->kv_block_count, session->device_kv_block_table,
@@ -285,7 +296,29 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
       session->device_deepseek_sparse_topk_slots != nullptr &&
       session->device_deepseek_sparse_topk_count != nullptr;
   if (has_precomputed_v32_sparse_attention) {
-    hf_deepseek_v32_sparse_topk_select_kernel<<<1, kDecodeThreads, 0,
+    const uint32_t sparse_score_capacity = static_cast<uint32_t>(
+        session->deepseek_sparse_topk_scores_bytes / sizeof(float));
+    const uint32_t sparse_score_blocks =
+        ceil_div_u32(sparse_score_capacity, kDecodeThreads);
+    if (sparse_score_blocks != 0) {
+      hf_deepseek_v32_sparse_score_kernel<<<sparse_score_blocks,
+                                            kDecodeThreads, 0,
+                                            session->stream>>>(
+          layout, session->device_step, max_steps,
+          reinterpret_cast<const uint8_t *>(
+              session->device_deepseek_indexer_state),
+          deepseek_v32_indexer_query_state_layer_offset_bytes(session,
+                                                              layer_index),
+          session->device_deepseek_indexer_kv,
+          deepseek_v32_indexer_kv_layer_offset_bytes(session, layer_index),
+          deepseek_v32_indexer_kv_block_count(session, layout),
+          session->kv_block_count, session->device_kv_block_table,
+          session->device_deepseek_sparse_topk_scores,
+          sparse_score_capacity);
+      err = cudaGetLastError();
+      if (err != cudaSuccess) return err;
+    }
+    hf_deepseek_v32_sparse_topk_select_kernel<<<1, kDecodeNormThreads, 0,
                                                  session->stream>>>(
         layout, session->device_step, max_steps,
         reinterpret_cast<const uint8_t *>(session->device_deepseek_indexer_state),
@@ -298,8 +331,7 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
         session->device_deepseek_sparse_topk_slots,
         session->device_deepseek_sparse_topk_count,
         session->device_deepseek_sparse_topk_scores,
-        static_cast<uint32_t>(session->deepseek_sparse_topk_scores_bytes /
-                              sizeof(float)),
+        sparse_score_capacity,
         session->device_deepseek_runtime_counters);
     err = cudaGetLastError();
     if (err != cudaSuccess) return err;

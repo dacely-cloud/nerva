@@ -55,12 +55,10 @@ __global__ void hf_deepseek_v3_mla_cache_encode_kernel(
     kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
   }
   __syncthreads();
-  if (threadIdx.x == 0) {
-    deepseek_session_write_v32_fp8_ds_mla_kv(
-        deepseek_v32_mla_kv, deepseek_v32_mla_kv_offset_bytes,
-        deepseek_v32_mla_kv_block_count, kv_block_table, kv_block_count,
-        layout, position, dtype, kv_latent_norm, kv_a, rope_theta);
-  }
+  deepseek_session_write_v32_fp8_ds_mla_kv(
+      deepseek_v32_mla_kv, deepseek_v32_mla_kv_offset_bytes,
+      deepseek_v32_mla_kv_block_count, kv_block_table, kv_block_count,
+      layout, position, dtype, kv_latent_norm, kv_a, rope_theta);
 }
 
 __global__ void hf_deepseek_rms_norm_encoded_tokens_kernel(
@@ -189,12 +187,10 @@ __global__ void hf_deepseek_v3_mla_cache_encode_tokens_kernel(
     kv_keys[write_base + kv_lora_rank + dim] = f32_to_encoded(value, dtype);
   }
   __syncthreads();
-  if (threadIdx.x == 0) {
-    deepseek_session_write_v32_fp8_ds_mla_kv(
-        deepseek_v32_mla_kv, deepseek_v32_mla_kv_offset_bytes,
-        deepseek_v32_mla_kv_block_count, kv_block_table, kv_block_count,
-        layout, position, dtype, kv_latent_norm, kv_a, rope_theta);
-  }
+  deepseek_session_write_v32_fp8_ds_mla_kv(
+      deepseek_v32_mla_kv, deepseek_v32_mla_kv_offset_bytes,
+      deepseek_v32_mla_kv_block_count, kv_block_table, kv_block_count,
+      layout, position, dtype, kv_latent_norm, kv_a, rope_theta);
 }
 
 __global__ void hf_deepseek_v3_mla_attention_encode_kernel(

@@ -5,6 +5,7 @@ use crate::deepseek_moe::prepare::{
 };
 use crate::deepseek_moe::probe::deepseek_moe_smoke;
 use crate::deepseek_moe::summary::CudaDeepSeekMoeSummary;
+use crate::deepseek_quant::fp8::f32_to_f8_e4m3fn_bits;
 use crate::smoke::status::SmokeStatus;
 
 #[test]
@@ -431,7 +432,7 @@ fn reference_megamoe_prepare(
                     let hidden = start + offset;
                     if hidden < hidden_size {
                         let value = hidden_states[token * hidden_size + hidden] / scale;
-                        x_fp8[token * hidden_size + hidden] = f32_to_f8_e4m3fn_nearest(value);
+                        x_fp8[token * hidden_size + hidden] = f32_to_f8_e4m3fn_bits(value);
                     }
                 }
             }
@@ -622,26 +623,6 @@ fn ceil_e8m0_exponent(scale: f32) -> u8 {
         exp = exp.saturating_add(1);
     }
     exp.clamp(1, 254)
-}
-
-fn f32_to_f8_e4m3fn_nearest(value: f32) -> u8 {
-    if !value.is_finite() {
-        return 0x7f;
-    }
-    let mut best_bits = 0u8;
-    let mut best_diff = f32::INFINITY;
-    for bits in 0u8..=u8::MAX {
-        let candidate = f8_e4m3fn_bits_to_f32(bits);
-        if !candidate.is_finite() {
-            continue;
-        }
-        let diff = (candidate - value).abs();
-        if diff < best_diff {
-            best_diff = diff;
-            best_bits = bits;
-        }
-    }
-    best_bits
 }
 
 fn f8_e4m3fn_bits_to_f32(bits: u8) -> f32 {
