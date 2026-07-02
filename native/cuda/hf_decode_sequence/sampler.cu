@@ -221,7 +221,7 @@ __global__ void hf_decode_final_head_sample_kernel(
           // current prefix.
           resolved_shift_shared = shift;
         } else if (cumulative + key_hist[threshold_bin] <=
-                       kSamplerCandidateCapacity ||
+                       kSamplerCandidateCapacity - candidate_count_shared ||
                    shift == 0) {
           // Everything at or above the threshold digit fits (or keys are
           // fully resolved); stop refining.
