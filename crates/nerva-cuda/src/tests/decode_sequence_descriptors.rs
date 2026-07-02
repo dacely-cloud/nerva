@@ -350,6 +350,20 @@ fn write_arena_nibble(
     write_arena_byte(storage, arena_offset, byte_offset, value);
 }
 
+fn write_descriptor_f32(
+    storage: &mut [u16],
+    arena_offset: u64,
+    hidden: usize,
+    vocab_size: usize,
+    index: usize,
+    value: f32,
+) {
+    let bits = value.to_bits();
+    let slot = arena_offset + (index as u64) * 2;
+    write_descriptor_u16(storage, slot, hidden, vocab_size, bits as u16);
+    write_descriptor_u16(storage, slot + 1, hidden, vocab_size, (bits >> 16) as u16);
+}
+
 fn write_arena_f32(storage: &mut [u16], arena_offset: u64, value: f32) {
     let bits = value.to_bits();
     storage[arena_offset as usize] = bits as u16;
@@ -4259,14 +4273,16 @@ fn deepseek_v4_compressed_snapshot_matches_fullsize_nonzero_fp8_ds_mla_page() {
             f32_to_bf16_bits(1.0),
         );
     }
+    // Compressor wkv is stored as f32 (two u16 slots per element).
     let state_width = 2 * head_dim;
     for row in 0..state_width {
-        write_descriptor_u16(
+        write_descriptor_f32(
             &mut weight_storage,
-            plan.deepseek_compressor_wkv + (row * hidden) as u64,
+            plan.deepseek_compressor_wkv,
             hidden,
             vocab_size,
-            f32_to_bf16_bits(1.0),
+            row * hidden,
+            1.0,
         );
     }
 
@@ -4428,13 +4444,15 @@ fn deepseek_v4_c128_compressed_snapshot_matches_fullsize_fp8_ds_mla_page() {
             f32_to_bf16_bits(1.0),
         );
     }
+    // Compressor wkv is stored as f32 (two u16 slots per element).
     for row in 0..head_dim {
-        write_descriptor_u16(
+        write_descriptor_f32(
             &mut weight_storage,
-            plan.deepseek_compressor_wkv + (row * hidden) as u64,
+            plan.deepseek_compressor_wkv,
             hidden,
             vocab_size,
-            f32_to_bf16_bits(1.0),
+            row * hidden,
+            1.0,
         );
     }
 

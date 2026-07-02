@@ -42,15 +42,13 @@ __global__ void hf_deepseek_v4_compressor_state_kernel(
   float score_sum = 0.0f;
   for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
     const float input_value = encoded_to_f32(projection_input[col], dtype);
-    kv_sum += encoded_to_f32(
-                  arena[layout.deepseek_compressor_wkv +
-                        static_cast<uint64_t>(row) * hidden + col],
-                  kDTypeBF16) *
+    kv_sum += f32_from_u16_slots(
+                  arena + layout.deepseek_compressor_wkv,
+                  static_cast<uint64_t>(row) * hidden + col) *
               input_value;
-    score_sum += encoded_to_f32(
-                     arena[layout.deepseek_compressor_wgate +
-                           static_cast<uint64_t>(row) * hidden + col],
-                     kDTypeBF16) *
+    score_sum += f32_from_u16_slots(
+                     arena + layout.deepseek_compressor_wgate,
+                     static_cast<uint64_t>(row) * hidden + col) *
                  input_value;
   }
   kv_sum = block_sum(kv_sum);
@@ -497,15 +495,13 @@ __global__ void hf_deepseek_v4_indexer_state_kernel(
   float score_sum = 0.0f;
   for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
     const float input_value = encoded_to_f32(projection_input[col], dtype);
-    kv_sum += encoded_to_f32(
-                  arena[layout.deepseek_indexer_compressor_wkv +
-                        static_cast<uint64_t>(row) * hidden + col],
-                  kDTypeBF16) *
+    kv_sum += f32_from_u16_slots(
+                  arena + layout.deepseek_indexer_compressor_wkv,
+                  static_cast<uint64_t>(row) * hidden + col) *
               input_value;
-    score_sum += encoded_to_f32(
-                     arena[layout.deepseek_indexer_compressor_wgate +
-                           static_cast<uint64_t>(row) * hidden + col],
-                     kDTypeBF16) *
+    score_sum += f32_from_u16_slots(
+                     arena + layout.deepseek_indexer_compressor_wgate,
+                     static_cast<uint64_t>(row) * hidden + col) *
                  input_value;
   }
   kv_sum = block_sum(kv_sum);

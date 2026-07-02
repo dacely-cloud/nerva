@@ -620,6 +620,18 @@ fn push_deepseek_v4_layer_blocks(
     index_head_dim: usize,
     hash_layers: usize,
 ) -> Result<()> {
+    // The CUDA decode arena packs the attention norm ahead of the mHC blocks
+    // (pack_deepseek_layer pushes rms_attn before pack_deepseek_v4_attention);
+    // shard-backed uploads place tensors at running manifest offsets, so this
+    // block order must match the arena layout exactly.
+    push_block(
+        blocks,
+        WeightBlockRole::AttentionNorm,
+        layer,
+        metadata.hidden_size,
+        1,
+        DType::BF16,
+    )?;
     for (role, rows, cols) in [
         (WeightBlockRole::DeepSeekV4HcAttnBase, mix_hc, 1),
         (WeightBlockRole::DeepSeekV4HcAttnFn, mix_hc, hc_dim),
@@ -630,14 +642,6 @@ fn push_deepseek_v4_layer_blocks(
     ] {
         push_block(blocks, role, layer, rows, cols, DType::F32)?;
     }
-    push_block(
-        blocks,
-        WeightBlockRole::AttentionNorm,
-        layer,
-        metadata.hidden_size,
-        1,
-        DType::BF16,
-    )?;
     push_deepseek_v4_attention_blocks(
         blocks,
         metadata,

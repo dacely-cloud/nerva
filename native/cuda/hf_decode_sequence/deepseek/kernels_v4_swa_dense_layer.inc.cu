@@ -103,15 +103,13 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
         float score_sum = 0.0f;
         for (uint32_t col = 0; col < hidden; ++col) {
           const float input_value = encoded_to_f32(projection_input[col], dtype);
-          kv_sum += encoded_to_f32(
-                        arena[layout.deepseek_compressor_wkv +
-                              static_cast<uint64_t>(row) * hidden + col],
-                        kDTypeBF16) *
+          kv_sum += f32_from_u16_slots(
+                        arena + layout.deepseek_compressor_wkv,
+                        static_cast<uint64_t>(row) * hidden + col) *
                     input_value;
-          score_sum += encoded_to_f32(
-                           arena[layout.deepseek_compressor_wgate +
-                                 static_cast<uint64_t>(row) * hidden + col],
-                           kDTypeBF16) *
+          score_sum += f32_from_u16_slots(
+                           arena + layout.deepseek_compressor_wgate,
+                           static_cast<uint64_t>(row) * hidden + col) *
                        input_value;
         }
         const float ape =
@@ -158,15 +156,13 @@ __global__ void hf_deepseek_v4_swa_dense_layer_kernel(
         float score_sum = 0.0f;
         for (uint32_t col = 0; col < hidden; ++col) {
           const float input_value = encoded_to_f32(projection_input[col], dtype);
-          kv_sum += encoded_to_f32(
-                        arena[layout.deepseek_indexer_compressor_wkv +
-                              static_cast<uint64_t>(row) * hidden + col],
-                        kDTypeBF16) *
+          kv_sum += f32_from_u16_slots(
+                        arena + layout.deepseek_indexer_compressor_wkv,
+                        static_cast<uint64_t>(row) * hidden + col) *
                     input_value;
-          score_sum += encoded_to_f32(
-                           arena[layout.deepseek_indexer_compressor_wgate +
-                                 static_cast<uint64_t>(row) * hidden + col],
-                           kDTypeBF16) *
+          score_sum += f32_from_u16_slots(
+                           arena + layout.deepseek_indexer_compressor_wgate,
+                           static_cast<uint64_t>(row) * hidden + col) *
                        input_value;
         }
         const float ape =
