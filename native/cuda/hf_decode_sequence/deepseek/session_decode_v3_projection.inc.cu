@@ -64,14 +64,19 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
           kDTypeBF16, 0.0f, scratch.k);
     }
   } else {
-    err = launch_deepseek_fp8_f32_scale_dual_encoded_matvec_varrows(
+    err = launch_deepseek_fp8_f32_scale_encoded_matvec(
         session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_q),
         deepseek_scale_ptr(session->device_arena, layout.deepseek_q_a_scale),
-        deepseek_fp8_ptr(session->device_arena, layout.w_k),
-        deepseek_scale_ptr(session->device_arena, layout.deepseek_kv_a_scale),
         session->device_projection_input, session->dtype, q_lora_rank,
-        kv_a_rows, session->hidden, block_rows, block_cols, scratch.q,
-        scratch.k);
+        session->hidden, block_rows, block_cols, scratch.q);
+    if (err == cudaSuccess) {
+      err = launch_deepseek_fp8_f32_scale_encoded_matvec(
+          session->stream, deepseek_fp8_ptr(session->device_arena, layout.w_k),
+          deepseek_scale_ptr(session->device_arena,
+                             layout.deepseek_kv_a_scale),
+          session->device_projection_input, session->dtype, kv_a_rows,
+          session->hidden, block_rows, block_cols, scratch.k);
+    }
   }
   if (err != cudaSuccess) return err;
   err = deepseek_profile_end_if(session, profile, profile == nullptr
@@ -167,16 +172,22 @@ cudaError_t launch_deepseek_v3_mla_projection_step(
             q_lora_rank, 1, kDTypeBF16, 0.0f, scratch.attn);
       }
     } else {
-      err = launch_deepseek_fp8_f32_scale_dual_encoded_matvec_varrows(
+      err = launch_deepseek_fp8_f32_scale_encoded_matvec(
           session->stream,
           deepseek_fp8_ptr(session->device_arena, layout.deepseek_q_b),
           deepseek_scale_ptr(session->device_arena, layout.deepseek_q_b_scale),
-          deepseek_fp8_ptr(session->device_arena, layout.deepseek_indexer_q),
-          deepseek_scale_ptr(session->device_arena,
-                             layout.deepseek_indexer_q_scale),
           session->device_projection_input, session->dtype, q_rows,
-          indexer_query_rows, q_lora_rank, block_rows, block_cols, scratch.q,
-          scratch.attn);
+          q_lora_rank, block_rows, block_cols, scratch.q);
+      if (err == cudaSuccess) {
+        err = launch_deepseek_fp8_f32_scale_encoded_matvec(
+            session->stream,
+            deepseek_fp8_ptr(session->device_arena, layout.deepseek_indexer_q),
+            deepseek_scale_ptr(session->device_arena,
+                               layout.deepseek_indexer_q_scale),
+            session->device_projection_input, session->dtype,
+            indexer_query_rows, q_lora_rank, block_rows, block_cols,
+            scratch.attn);
+      }
     }
     if (err != cudaSuccess) return err;
     err = deepseek_profile_end_if(session, profile, profile == nullptr

@@ -44,16 +44,6 @@ cudaError_t launch_deepseek_fp8_f32_scale_dual_encoded_matvec_from_arena(
     const uint16_t *input, uint32_t input_dtype, uint32_t rows, uint32_t cols,
     uint32_t block_rows, uint32_t block_cols, float *output_a,
     float *output_b) {
-  const bool a_float_scale = (scale_a_offset & 1ull) == 0ull;
-  const bool b_float_scale = (scale_b_offset & 1ull) == 0ull;
-  if (a_float_scale && b_float_scale) {
-    return launch_deepseek_fp8_f32_scale_dual_encoded_matvec(
-        stream, deepseek_fp8_ptr(arena, weight_a_offset),
-        deepseek_scale_ptr(arena, scale_a_offset),
-        deepseek_fp8_ptr(arena, weight_b_offset),
-        deepseek_scale_ptr(arena, scale_b_offset), input, input_dtype, rows,
-        cols, block_rows, block_cols, output_a, output_b);
-  }
   cudaError_t err = launch_deepseek_fp8_f32_scale_encoded_matvec_from_arena(
       stream, arena, weight_a_offset, scale_a_offset, input, input_dtype, rows,
       cols, block_rows, block_cols, output_a);
