@@ -571,17 +571,22 @@ __global__ void hf_deepseek_prefill_sparse_moe_kernel(
     token_down[row] = 0.0f;
   }
 
-  for (uint32_t expert = threadIdx.x; expert < num_experts;
-       expert += blockDim.x) {
+  // Same column partition and block reduction as the decode router-logits
+  // kernel so near-tie expert selections agree between prefill and decode.
+  for (uint32_t expert = 0; expert < num_experts; ++expert) {
     const uint64_t router_row =
         layout.w_router + static_cast<uint64_t>(expert) * hidden;
     float sum = 0.0f;
-    for (uint32_t col = 0; col < hidden; ++col) {
+    for (uint32_t col = threadIdx.x; col < hidden; col += blockDim.x) {
       sum += encoded_to_f32(arena[router_row + col], kDTypeBF16) *
              encoded_to_f32(token_norm[col], dtype);
     }
-    router_logits[expert] = sum;
+    sum = block_sum(sum);
+    if (threadIdx.x == 0) {
+      router_logits[expert] = sum;
+    }
   }
+  __syncthreads();
 
   const bool has_router_bias =
       (layout.deepseek_flags & kDeepSeekFlagRouterBias) != 0;

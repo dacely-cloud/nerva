@@ -30,3 +30,4 @@ Thumbs.db
 .bench/
 models/
 artifacts/
+tmp_artifacts/
