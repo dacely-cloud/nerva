@@ -1203,6 +1203,35 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_advance(
         out->experimental_rt_selector_launches += session->layer_count;
       }
     }
+    // On-device early stop. The batch launches run_count per-token graph replays
+    // back-to-back, and EOS is otherwise only detected on the host after the
+    // whole batch, so a stop token produced mid-batch still forwards the model
+    // through every remaining replay (each a full decode step whose output is
+    // then discarded). When a stop token is possible, observe the token this
+    // replay produced and stop launching once it is EOS. The expensive
+    // projections are cuBLASLt graph nodes that a replay cannot skip on a device
+    // predicate, so breaking the host launch loop is what actually avoids the
+    // wasted device work. At batch-one decode latency the per-token sync only
+    // adds a sub-millisecond relaunch bubble the async batch would otherwise
+    // hide, and the no-stop-token path keeps the fully async batched behavior.
+    if (err == cudaSuccess && session->active_has_eos_token != 0) {
+      err = cudaStreamSynchronize(session->stream);
+      out->sync_calls += 1;
+      if (err == cudaSuccess) {
+        err = cudaMemcpy(&session->host_slots[current_position],
+                         &session->device_slots[current_position],
+                         sizeof(NervaCudaSyntheticTokenSlot),
+                         cudaMemcpyDeviceToHost);
+        out->d2h_bytes += sizeof(NervaCudaSyntheticTokenSlot);
+      }
+      if (err == cudaSuccess &&
+          session->host_slots[current_position].completion ==
+              kCompletionDeviceComplete &&
+          session->host_slots[current_position].token ==
+              session->active_eos_token) {
+        break;
+      }
+    }
   }
   if (err == cudaSuccess && run_count != 0)
     err = cudaEventRecord(session->device_stop, session->stream);
