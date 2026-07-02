@@ -913,8 +913,7 @@ uint32_t decode_attention_chunks_for_cursor(
   const uint32_t kv_tokens = cursor >= session->max_context_tokens
                                  ? session->max_context_tokens
                                  : cursor + 1u;
-  if (kv_tokens <= kChunkedDecodeAttentionThreshold ||
-      session->decode_attention_max_chunks == 0 ||
+  if (session->decode_attention_max_chunks == 0 ||
       session->device_decode_attention_values == nullptr ||
       session->device_decode_attention_m == nullptr ||
       session->device_decode_attention_l == nullptr ||
@@ -927,20 +926,30 @@ uint32_t decode_attention_chunks_for_cursor(
           : kDecodeAttentionChunkTokens;
   const uint32_t chunks = ceil_div_u32(kv_tokens, chunk_tokens);
   // The experimental RT sparse path selects pages by comparing this exact dense
-  // count against experimental_rt_pages, so leave it untouched when RT decode is
-  // enabled and only bucket the default dense path below.
+  // count against experimental_rt_pages, and its monolithic threshold gates when
+  // the sparse selector may engage, so preserve that behavior exactly when RT
+  // decode is enabled.
   if (session->experimental_rt_decode_enabled != 0) {
+    if (kv_tokens <= kChunkedDecodeAttentionThreshold) {
+      return 0;
+    }
     return std::min(chunks, session->decode_attention_max_chunks);
   }
-  // Round the live chunk count up to a power-of-two bucket. The captured decode
-  // CUDA graph bakes grid.y = attention_chunks, so returning the exact live
-  // count (ceil(kv_tokens / chunk_tokens)) invalidates the cached graph every
-  // chunk_tokens of context growth and forces a hot-path re-capture. Bucketing
-  // turns that per-chunk re-capture into a geometric one (at 256, 512, 1024,
-  // ... KV tokens) while over-provisioning by at most 2x. Chunks whose token
-  // range is beyond the current cursor self-mask to a zero partial in
-  // hf_layer_attention_chunk_kernel and are skipped by the reduce, so the
-  // bucketed count produces bit-identical attention output.
+  // Dense path: use the bucketed chunked attention from the very first decode
+  // token, even below the old monolithic threshold. The captured decode CUDA
+  // graph bakes grid.y = attention_chunks, and the graph-match keys on that
+  // count, so any change to it forces a hot-path re-capture (~one fully stalled
+  // token). Two things mattered: (1) returning the exact live count re-captured
+  // every chunk_tokens of context growth, and (2) starting monolithic (count 0)
+  // and switching to chunked once kv crossed 128 re-captured once mid-decode --
+  // and on a short generation that crosses 128 near EOS that single stall
+  // dominates the per-token latency. Rounding up to a power-of-two bucket and
+  // never using the monolithic decode path means batch 0 captures the chunked
+  // graph once (the same single capture the monolithic path already paid) and
+  // every later batch is a cache hit until kv crosses the next bucket (256, 512,
+  // ...). Chunks whose token range is beyond the current cursor self-mask to a
+  // zero partial in the attention-chunk kernels and are skipped by the reduce,
+  // so the bucketed count produces bit-identical attention output.
   uint32_t bucket = kChunkedDecodeAttentionMinChunks;
   while (bucket < chunks) {
     bucket <<= 1u;
