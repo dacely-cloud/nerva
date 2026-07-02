@@ -5,20 +5,41 @@
 #include <cuda_runtime.h>
 #include <stdint.h>
 
-// Number of MLA heads processed by one block of the grouped batched-prefill
-// attention kernel. Each block reads the latent KV history once and reuses
-// it for the whole head group.
-constexpr uint32_t kDeepSeekMlaPrefillHeadGroup = 8;
-// Maximum number of latent slots owned by a single thread in the grouped
-// batched-prefill attention kernel (requires
-// kv_lora_rank <= kDeepSeekMlaPrefillMaxLatentSlots * blockDim.x).
-constexpr uint32_t kDeepSeekMlaPrefillMaxLatentSlots = 2;
-// Number of attention tokens scored per block-reduction round in the
-// grouped batched-prefill attention kernel.
-constexpr uint32_t kDeepSeekMlaPrefillTokensPerIter = 4;
-// Maximum number of warps per block supported by the reduction buffers of
-// the grouped batched-prefill attention kernel.
-constexpr uint32_t kDeepSeekMlaPrefillMaxWarps = 8;
+// Unified MLA flash-attention family (shared by decode and batched
+// prefill). One block covers one query position and a fixed tile of
+// kDeepSeekMlaFaHeadTile heads; KV is staged in fixed ascending tiles of
+// kDeepSeekMlaFaTokenTile tokens so the per-row arithmetic is identical for
+// any launch shape.
+constexpr uint32_t kDeepSeekMlaFaHeadTile = 16;
+constexpr uint32_t kDeepSeekMlaFaTokenTile = 64;
+constexpr uint32_t kDeepSeekMlaFaWarps = 8;
+// KV latent dims served by the bf16 MMA kernel (all DeepSeek V3/V3.2
+// checkpoints); other dims take the generic fallback kernel.
+constexpr uint32_t kDeepSeekMlaFaLora = 512;
+constexpr uint32_t kDeepSeekMlaFaRope = 64;
+constexpr uint32_t kDeepSeekMlaFaWidth = kDeepSeekMlaFaLora + kDeepSeekMlaFaRope;
+// Shared-memory row strides (halves) padded to keep ldmatrix bank-conflict
+// free: 584 * 2B = 73 * 16B (odd multiple of 16B).
+constexpr uint32_t kDeepSeekMlaFaSmemStride = kDeepSeekMlaFaWidth + 8;
+constexpr uint32_t kDeepSeekMlaFaPStride = kDeepSeekMlaFaTokenTile + 8;
+// Tokens absorbed per block by the query-latent and V-projection kernels;
+// each output element stays a private serial dot product so the group size
+// cannot change any value.
+constexpr uint32_t kDeepSeekMlaQLatentTokensPerBlock = 8;
+constexpr uint32_t kDeepSeekMlaQLatentMaxHeadDim = 256;
+constexpr uint32_t kDeepSeekMlaVProjMaxLora = kDeepSeekMlaFaLora;
+// Query positions processed per attention sub-launch in the batched prefill
+// path (bounds the (token, head) latent staging buffers).
+constexpr uint32_t kDeepSeekMlaAttentionSubChunkTokens = 128;
+
+__host__ __device__ __forceinline__ uint32_t deepseek_mla_fa_smem_bytes() {
+  return (kDeepSeekMlaFaHeadTile * kDeepSeekMlaFaSmemStride +
+          kDeepSeekMlaFaTokenTile * kDeepSeekMlaFaSmemStride +
+          kDeepSeekMlaFaHeadTile * kDeepSeekMlaFaPStride) *
+             2u +
+         kDeepSeekMlaFaHeadTile * kDeepSeekMlaFaWarps * 4u +
+         kDeepSeekMlaFaTokenTile * 4u;
+}
 // Maximum number of indexer query heads processed by one block of
 // hf_deepseek_v32_indexer_query_state_tokens_kernel.
 constexpr uint32_t kDeepSeekV32IndexerQueryHeadsPerBlock = 2;
@@ -168,56 +189,34 @@ __global__ void hf_deepseek_v3_mla_cache_encode_tokens_kernel(
     uint8_t *deepseek_v32_mla_kv,
     uint64_t deepseek_v32_mla_kv_offset_bytes,
     uint32_t deepseek_v32_mla_kv_block_count);
-__global__ void hf_deepseek_v3_mla_attention_encode_kernel(
-    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
-    uint32_t dtype, uint32_t heads, uint32_t *step_cursor,
-    uint32_t max_steps, float rope_theta, const float *q,
-    uint16_t *kv_keys, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint16_t *projection_input,
-    const uint8_t *deepseek_indexer_state,
-    uint64_t deepseek_indexer_state_offset_bytes,
-    const uint8_t *deepseek_indexer_kv,
-    uint64_t deepseek_indexer_kv_offset_bytes,
-    uint32_t deepseek_indexer_kv_block_count,
-    const int32_t *sparse_topk_slots, const uint32_t *sparse_topk_count,
-    uint64_t *deepseek_runtime_counters);
-__global__ void hf_deepseek_v3_mla_query_latent_kernel(
-    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype, uint32_t heads,
-    const float *q, float *q_nope_latent);
-__global__ void hf_deepseek_v3_mla_attention_chunk_kernel(
-    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
-    uint32_t dtype, uint32_t heads, uint32_t *step_cursor,
-    uint32_t max_steps, float rope_theta, const float *q,
-    const float *q_nope_latent, uint16_t *kv_keys, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint32_t attention_chunks,
-    float *partial_latent, float *partial_m, float *partial_l,
-    const int32_t *sparse_topk_slots, const uint32_t *sparse_topk_count,
-    uint64_t *deepseek_runtime_counters);
-__global__ void hf_deepseek_v3_mla_attention_reduce_kernel(
+__global__ void hf_deepseek_mla_q_latent_tokens_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t heads, uint32_t *step_cursor, uint32_t max_steps,
-    uint32_t attention_chunks, const float *partial_latent,
-    const float *partial_m, const float *partial_l,
-    uint16_t *projection_input, uint64_t *deepseek_runtime_counters,
-    uint32_t record_sparse_attention);
-__global__ void hf_deepseek_v3_mla_attention_tokens_kernel(
-    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
-    uint32_t dtype, uint32_t heads, uint32_t max_steps, float rope_theta,
-    uint32_t chunk_start, uint32_t chunk_tokens, const float *q_tokens,
-    uint32_t q_stride, uint16_t *kv_keys, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint16_t *attn_out,
-    uint32_t attn_stride, const int32_t *sparse_topk_slots,
+    uint32_t chunk_start, uint32_t token_count, float rope_theta,
+    const float *q_tokens, uint32_t q_stride, uint16_t *q_latent);
+__global__ void hf_deepseek_mla_fa_tile_kernel(
+    SequenceLayerLayout layout, uint32_t layer_index, uint32_t heads,
+    uint32_t *step_cursor, uint32_t max_steps, uint32_t chunk_start,
+    uint32_t token_count, const uint16_t *q_latent, const uint16_t *kv_keys,
+    uint32_t kv_block_count, const uint32_t *kv_block_table,
+    uint16_t *attn_latent, const int32_t *sparse_topk_slots,
     uint32_t sparse_topk_stride, const uint32_t *sparse_topk_count,
     uint64_t *deepseek_runtime_counters);
-__global__ void hf_deepseek_v3_mla_attention_tokens_grouped_kernel(
-    uint16_t *arena, SequenceLayerLayout layout, uint32_t layer_index,
-    uint32_t dtype, uint32_t heads, uint32_t max_steps, float rope_theta,
-    uint32_t chunk_start, uint32_t chunk_tokens, const float *q_tokens,
-    uint32_t q_stride, uint16_t *kv_keys, uint32_t kv_block_count,
-    const uint32_t *kv_block_table, uint16_t *attn_out,
-    uint32_t attn_stride, const int32_t *sparse_topk_slots,
-    uint32_t sparse_topk_stride, const uint32_t *sparse_topk_count,
+__global__ void hf_deepseek_mla_fa_generic_kernel(
+    SequenceLayerLayout layout, uint32_t layer_index, uint32_t dtype,
+    uint32_t heads, uint32_t *step_cursor, uint32_t max_steps,
+    uint32_t chunk_start, uint32_t token_count, const uint16_t *q_latent,
+    const uint16_t *kv_keys, uint32_t kv_block_count,
+    const uint32_t *kv_block_table, uint16_t *attn_latent,
+    const int32_t *sparse_topk_slots, uint32_t sparse_topk_stride,
+    const uint32_t *sparse_topk_count,
     uint64_t *deepseek_runtime_counters);
+__global__ void hf_deepseek_mla_v_proj_tokens_kernel(
+    uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
+    uint32_t heads, uint32_t *step_cursor, uint32_t max_steps,
+    uint32_t chunk_start, uint32_t token_count, const uint16_t *attn_latent,
+    uint16_t *attn_out, uint32_t attn_stride,
+    uint64_t *deepseek_runtime_counters, uint32_t record_sparse_attention);
 __global__ void hf_deepseek_residual_mlp_norm_encode_kernel(
     uint16_t *arena, SequenceLayerLayout layout, uint32_t dtype,
     uint32_t norm_weight_dtype, uint32_t hidden, uint32_t attention_hidden,

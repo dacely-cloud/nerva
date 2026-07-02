@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <string>
 #include <unordered_map>

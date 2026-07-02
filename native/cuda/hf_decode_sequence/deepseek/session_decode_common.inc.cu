@@ -154,3 +154,95 @@ cudaError_t deepseek_v4_aux_join(
   }
   return cudaSuccess;
 }
+
+// Launches the unified MLA attention family (query-latent absorption,
+// flash-attention over the shared latent KV cache, per-head V projection)
+// for `token_count` query positions. Decode calls this with token_count == 1
+// and step_cursor == session->device_step; the batched prefill path calls it
+// per sub-chunk with step_cursor == nullptr and positions derived from
+// chunk_start + blockIdx. The same kernels run in both cases, so the
+// per-(position, head) arithmetic is identical by construction.
+cudaError_t launch_deepseek_mla_unified_attention(
+    NervaCudaHfDecodeSequenceSession *session,
+    const SequenceLayerLayout &layout, uint32_t layer_index,
+    uint32_t *step_cursor, uint32_t max_steps, uint32_t chunk_start,
+    uint32_t token_count, const float *q_tokens, uint32_t q_stride,
+    uint16_t *attn_out, uint32_t attn_stride,
+    const int32_t *sparse_topk_slots, uint32_t sparse_topk_stride,
+    const uint32_t *sparse_topk_count, uint32_t record_sparse_attention) {
+  if (token_count == 0 || token_count > kDeepSeekMlaAttentionSubChunkTokens ||
+      session->device_deepseek_mla_q_latent == nullptr ||
+      session->device_deepseek_mla_attn_latent == nullptr) {
+    return cudaErrorInvalidValue;
+  }
+  const uint32_t kv_lora_rank = layout.deepseek_kv_lora_rank;
+  const uint32_t qk_rope = layout.deepseek_qk_rope_head_dim;
+  uint16_t *q_latent = session->device_deepseek_mla_q_latent;
+  uint16_t *attn_latent = session->device_deepseek_mla_attn_latent;
+
+  const uint32_t token_groups =
+      ceil_div_u32(token_count, kDeepSeekMlaQLatentTokensPerBlock);
+  const dim3 latent_grid(session->heads, token_groups);
+  hf_deepseek_mla_q_latent_tokens_kernel<<<latent_grid, kDecodeThreads, 0,
+                                           session->stream>>>(
+      session->device_arena, layout, session->dtype, session->heads,
+      step_cursor, max_steps, chunk_start, token_count, session->rope_theta,
+      q_tokens, q_stride, q_latent);
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) return err;
+
+  bool mma_path = kv_lora_rank == kDeepSeekMlaFaLora &&
+                  qk_rope == kDeepSeekMlaFaRope &&
+                  session->dtype == kDTypeBF16;
+  if (mma_path) {
+    static std::once_flag mla_fa_smem_once;
+    static cudaError_t mla_fa_smem_status = cudaSuccess;
+    std::call_once(mla_fa_smem_once, [] {
+      mla_fa_smem_status = cudaFuncSetAttribute(
+          hf_deepseek_mla_fa_tile_kernel,
+          cudaFuncAttributeMaxDynamicSharedMemorySize,
+          static_cast<int>(deepseek_mla_fa_smem_bytes()));
+    });
+    if (mla_fa_smem_status != cudaSuccess) {
+      mma_path = false;
+    }
+  }
+  if (mma_path) {
+    const dim3 fa_grid(token_count,
+                       ceil_div_u32(session->heads, kDeepSeekMlaFaHeadTile));
+    hf_deepseek_mla_fa_tile_kernel<<<fa_grid, kDecodeThreads,
+                                     deepseek_mla_fa_smem_bytes(),
+                                     session->stream>>>(
+        layout, layer_index, session->heads, step_cursor, max_steps,
+        chunk_start, token_count, q_latent, session->device_kv_keys,
+        session->kv_block_count, session->device_kv_block_table, attn_latent,
+        sparse_topk_slots, sparse_topk_stride, sparse_topk_count,
+        session->device_deepseek_runtime_counters);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+  } else {
+    const size_t generic_shared_bytes =
+        (static_cast<size_t>(kv_lora_rank) * 2u + qk_rope) * sizeof(float);
+    const dim3 fa_grid(token_count, session->heads);
+    hf_deepseek_mla_fa_generic_kernel<<<fa_grid, kDecodeThreads,
+                                        generic_shared_bytes,
+                                        session->stream>>>(
+        layout, layer_index, session->dtype, session->heads, step_cursor,
+        max_steps, chunk_start, token_count, q_latent,
+        session->device_kv_keys, session->kv_block_count,
+        session->device_kv_block_table, attn_latent, sparse_topk_slots,
+        sparse_topk_stride, sparse_topk_count,
+        session->device_deepseek_runtime_counters);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+  }
+
+  const dim3 vproj_grid(session->heads, token_groups);
+  hf_deepseek_mla_v_proj_tokens_kernel<<<vproj_grid, kDecodeThreads, 0,
+                                         session->stream>>>(
+      session->device_arena, layout, session->dtype, session->heads,
+      step_cursor, max_steps, chunk_start, token_count, attn_latent, attn_out,
+      attn_stride, session->device_deepseek_runtime_counters,
+      record_sparse_attention);
+  return cudaGetLastError();
+}

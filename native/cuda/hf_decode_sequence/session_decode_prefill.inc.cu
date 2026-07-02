@@ -1648,47 +1648,32 @@ cudaError_t launch_deepseek_v3_session_prefill(
         err = cudaGetLastError();
         if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
       }
-      if (err == cudaSuccess) {
-        const bool grouped_attention =
-            kv_lora_rank <=
-                kDeepSeekMlaPrefillMaxLatentSlots * kDecodeThreads &&
-            qk_rope <= kDecodeThreads;
-        if (grouped_attention) {
-          const size_t shared_bytes =
-              static_cast<size_t>(kDeepSeekMlaPrefillHeadGroup) *
-              kv_lora_rank * sizeof(float);
-          const dim3 grid(chunk_tokens,
-                          (session->heads + kDeepSeekMlaPrefillHeadGroup -
-                           1u) /
-                              kDeepSeekMlaPrefillHeadGroup);
-          hf_deepseek_v3_mla_attention_tokens_grouped_kernel<<<
-              grid, kDecodeThreads, shared_bytes, session->stream>>>(
-              session->device_arena, layout, layer_index, session->dtype,
-              session->heads, session->max_context_tokens,
-              session->rope_theta, chunk_start, chunk_tokens,
-              session->device_prefill_qkv, q_rows, session->device_kv_keys,
-              session->kv_block_count, session->device_kv_block_table,
-              session->device_prefill_attn, value_rows, sparse_topk_slots,
-              sparse_topk_stride, sparse_topk_counts,
-              session->device_deepseek_runtime_counters);
-        } else {
-          const size_t shared_bytes =
-              (static_cast<size_t>(kv_lora_rank) * 2u + qk_rope) *
-              sizeof(float);
-          const dim3 grid(chunk_tokens, session->heads);
-          hf_deepseek_v3_mla_attention_tokens_kernel<<<
-              grid, kDecodeThreads, shared_bytes, session->stream>>>(
-              session->device_arena, layout, layer_index, session->dtype,
-              session->heads, session->max_context_tokens,
-              session->rope_theta, chunk_start, chunk_tokens,
-              session->device_prefill_qkv, q_rows, session->device_kv_keys,
-              session->kv_block_count, session->device_kv_block_table,
-              session->device_prefill_attn, value_rows, sparse_topk_slots,
-              sparse_topk_stride, sparse_topk_counts,
-              session->device_deepseek_runtime_counters);
-        }
-        err = cudaGetLastError();
-        if (err == cudaSuccess && out != nullptr) out->kernel_launches += 1;
+      // Unified MLA attention family (same kernels as the decode step, so
+      // the per-(position, head) numerics match decode by construction),
+      // launched over sub-chunks bounded by the latent staging buffers.
+      for (uint32_t sub_start = 0;
+           err == cudaSuccess && sub_start < chunk_tokens;
+           sub_start += kDeepSeekMlaAttentionSubChunkTokens) {
+        const uint32_t sub_tokens = std::min(
+            kDeepSeekMlaAttentionSubChunkTokens, chunk_tokens - sub_start);
+        err = launch_deepseek_mla_unified_attention(
+            session, layout, layer_index, nullptr,
+            session->max_context_tokens, chunk_start + sub_start, sub_tokens,
+            session->device_prefill_qkv +
+                static_cast<uint64_t>(sub_start) * q_rows,
+            q_rows,
+            session->device_prefill_attn +
+                static_cast<uint64_t>(sub_start) * value_rows,
+            value_rows,
+            sparse_topk_slots == nullptr
+                ? nullptr
+                : sparse_topk_slots +
+                      static_cast<uint64_t>(sub_start) * sparse_topk_stride,
+            sparse_topk_stride,
+            sparse_topk_counts == nullptr ? nullptr
+                                          : sparse_topk_counts + sub_start,
+            0u);
+        if (err == cudaSuccess && out != nullptr) out->kernel_launches += 3;
       }
       if (err == cudaSuccess) err = profile_stage_end(&attention_ns);
 

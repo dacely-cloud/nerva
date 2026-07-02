@@ -294,6 +294,8 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
       &session->deepseek_mhc_comb_mix_bytes);
   bool has_deepseek_layout = false;
   bool has_deepseek_sparse_topk_layout = false;
+  uint32_t deepseek_mla_max_width = 0;
+  uint32_t deepseek_mla_max_rank = 0;
   for (const SequenceLayerLayout &layout : layouts) {
     if (layout.deepseek_mode != 0) {
       has_deepseek_layout = true;
@@ -304,6 +306,13 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
          layout.deepseek_index_topk != 0)) {
       has_deepseek_sparse_topk_layout = true;
     }
+    if (layout_is_deepseek_v3_mla(layout)) {
+      deepseek_mla_max_width =
+          std::max(deepseek_mla_max_width, layout.deepseek_kv_lora_rank +
+                                               layout.deepseek_qk_rope_head_dim);
+      deepseek_mla_max_rank =
+          std::max(deepseek_mla_max_rank, layout.deepseek_kv_lora_rank);
+    }
   }
   if (has_deepseek_sparse_topk_layout) {
     session->deepseek_sparse_topk_slots_bytes =
@@ -312,6 +321,16 @@ extern "C" int nerva_cuda_hf_decode_sequence_session_create(
     session->deepseek_sparse_topk_count_bytes = sizeof(uint32_t);
     session->deepseek_sparse_topk_scores_bytes =
         static_cast<uint64_t>(request->max_context_tokens) * sizeof(float);
+  }
+  if (deepseek_mla_max_width != 0) {
+    // Latent staging for the unified MLA attention family: one encoded row
+    // per (token, head) for the absorbed query and the attended latent.
+    session->deepseek_mla_q_latent_bytes =
+        static_cast<uint64_t>(kDeepSeekMlaAttentionSubChunkTokens) *
+        request->heads * deepseek_mla_max_width * sizeof(uint16_t);
+    session->deepseek_mla_attn_latent_bytes =
+        static_cast<uint64_t>(kDeepSeekMlaAttentionSubChunkTokens) *
+        request->heads * deepseek_mla_max_rank * sizeof(uint16_t);
   }
   if (has_deepseek_layout || session->deepseek_compressor_state_bytes != 0 ||
       session->deepseek_v32_mla_kv_bytes != 0 ||

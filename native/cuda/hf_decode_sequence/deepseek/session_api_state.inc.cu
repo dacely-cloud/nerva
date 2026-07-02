@@ -22,6 +22,9 @@ void copy_deepseek_session_byte_fields(
       source->deepseek_sparse_topk_count_bytes;
   session->deepseek_sparse_topk_scores_bytes =
       source->deepseek_sparse_topk_scores_bytes;
+  session->deepseek_mla_q_latent_bytes = source->deepseek_mla_q_latent_bytes;
+  session->deepseek_mla_attn_latent_bytes =
+      source->deepseek_mla_attn_latent_bytes;
   session->deepseek_runtime_counters_bytes =
       source->deepseek_runtime_counters_bytes;
 }
@@ -123,6 +126,22 @@ cudaError_t allocate_deepseek_session_device_state(
     err = cudaMalloc(
         reinterpret_cast<void **>(&session->device_deepseek_sparse_topk_scores),
         session->deepseek_sparse_topk_scores_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_mla_q_latent_bytes != 0) {
+    if (failure_stage != nullptr) {
+      *failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    }
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_mla_q_latent),
+        session->deepseek_mla_q_latent_bytes);
+  }
+  if (err == cudaSuccess && session->deepseek_mla_attn_latent_bytes != 0) {
+    if (failure_stage != nullptr) {
+      *failure_stage = kCreateStageDeepSeekCompressedKvAlloc;
+    }
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&session->device_deepseek_mla_attn_latent),
+        session->deepseek_mla_attn_latent_bytes);
   }
   if (err == cudaSuccess && session->deepseek_runtime_counters_bytes != 0) {
     if (failure_stage != nullptr) {
